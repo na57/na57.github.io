@@ -1,0 +1,104 @@
+---
+import { getCollection } from 'astro:content';
+import { projects } from '../data/projects';
+
+const posts = await getCollection('blog', ({ data }) => !data.draft);
+
+// —— 标签云：统计频次，字号随频次缩放 ——
+const tagCounts = new Map<string, number>();
+for (const p of posts) {
+  for (const t of p.data.tags) tagCounts.set(t, (tagCounts.get(t) ?? 0) + 1);
+}
+const tags = [...tagCounts.entries()].sort((a, b) => b[1] - a[1]);
+const maxTag = Math.max(1, ...tags.map(([, c]) => c));
+const tagSize = (c: number) => (0.8 + (c / maxTag) * 0.95).toFixed(2); // rem
+
+// —— 发布频率热力图：年 × 月 矩阵 ——
+const monthCounts = new Map<string, number>(); // "YYYY-M" => 篇数
+let minYear = 9999;
+let maxYear = 0;
+for (const p of posts) {
+  const d = p.data.date;
+  const y = d.getFullYear();
+  const m = d.getMonth() + 1;
+  if (y < minYear) minYear = y;
+  if (y > maxYear) maxYear = y;
+  const key = `${y}-${m}`;
+  monthCounts.set(key, (monthCounts.get(key) ?? 0) + 1);
+}
+const years: number[] = [];
+for (let y = minYear; y <= maxYear; y++) years.push(y);
+const months = Array.from({ length: 12 }, (_, i) => i + 1);
+const maxMonth = Math.max(1, ...monthCounts.values());
+const cellCount = (y: number, m: number) => monthCounts.get(`${y}-${m}`) ?? 0;
+const cellPct = (c: number) => Math.round((c / maxMonth) * 100);
+---
+
+<aside class="sidebar">
+  <!-- 标签云 -->
+  <section class="widget">
+    <h3 class="widget-title">标签云</h3>
+    <div class="tagcloud">
+      {
+        tags.map(([t, c]) => (
+          <a
+            class="cloud-tag"
+            href={`/tags/${encodeURIComponent(t)}/`}
+            style={`font-size:${tagSize(c)}rem`}
+            title={`${c} 篇`}
+          >
+            {t}
+          </a>
+        ))
+      }
+    </div>
+  </section>
+
+  <!-- 发布频率热力图（年 × 月） -->
+  <section class="widget">
+    <h3 class="widget-title">发布频率</h3>
+    <div class="heatmap" style={`--cols:${years.length}`}>
+      <div class="hm-corner"></div>
+      {years.map((y) => <div class="hm-year">{y}</div>)}
+      {
+        months.map((m) => (
+          <Fragment>
+            <div class="hm-month">{m}月</div>
+            {years.map((y) => {
+              const c = cellCount(y, m);
+              return (
+                <div
+                  class="hm-cell"
+                  title={`${y}年${m}月 · ${c} 篇`}
+                  style={`--p:${cellPct(c)}`}
+                >
+                  {c > 0 ? c : ''}
+                </div>
+              );
+            })}
+          </Fragment>
+        ))
+      }
+    </div>
+    <p class="hm-caption">颜色越深，当月发布越多</p>
+  </section>
+
+  <!-- 我的项目 -->
+  <section class="widget">
+    <h3 class="widget-title">我的项目</h3>
+    {
+      projects.length === 0 ? (
+        <p class="widget-empty">（敬请期待）</p>
+      ) : (
+        <ul class="project-list">
+          {projects.map((p) => (
+            <li>
+              <a href={p.url} target="_blank" rel="noopener noreferrer">{p.name}</a>
+              {p.desc && <span class="project-desc">{p.desc}</span>}
+            </li>
+          ))}
+        </ul>
+      )
+    }
+  </section>
+</aside>
