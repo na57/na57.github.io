@@ -11,6 +11,8 @@ const blog = defineCollection({
     updated: z.coerce.date().optional(),
     tags: z.array(z.string()).default([]),
     draft: z.boolean().default(false),
+    // 链接型文章：填写后访问该 URL 会立即跳转到外部原文（用于聚合公众号等已有文章）
+    redirect: z.string().optional(),
   }),
 });
 
