@@ -7,8 +7,8 @@ export async function GET(context: APIContext) {
     (a, b) => b.data.date.valueOf() - a.data.date.valueOf()
   );
   return rss({
-    title: 'nagu.cc',
-    description: '一个用 Astro 构建的纯静态技术博客',
+    title: 'na57.log',
+    description: 'na57 的技术札记 —— 数据治理、AI、安全，以及家乡的人和事。',
     site: context.site!,
     items: posts.map((post) => ({
       title: post.data.title,
