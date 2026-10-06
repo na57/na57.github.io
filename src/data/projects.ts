@@ -11,7 +11,7 @@ export interface Project {
 export const projects: Project[] = [
   {
     name: 'PIOC',
-    url: 'https://github.com/na57/pioc',
+    url: 'https://nagu.cc/pioc',
     desc: '基于 3A（AI Native、AI Powered、All in One）的个人智慧运行中心',
   },
   {
