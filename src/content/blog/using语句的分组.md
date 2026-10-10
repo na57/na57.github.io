@@ -4,6 +4,7 @@ description: "在写一个类的时候,我们一般都会用到很多\"using\"�
 date: 2005-03-23
 redirect: "https://www.cnblogs.com/na57/archive/2005/03/23/124187.html"
 tags: ["博客园"]
+archive: true
 ---
 
 > 本文发布于博客园，正在跳转到原文…

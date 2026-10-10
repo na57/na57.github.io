@@ -4,6 +4,7 @@ description: "最近开始学习.NET 2.0了，才开始就被问题困扰了....
 date: 2006-04-02
 redirect: "https://www.cnblogs.com/na57/archive/2006/04/02/364905.html"
 tags: ["博客园"]
+archive: true
 ---
 
 > 本文发布于博客园，正在跳转到原文…

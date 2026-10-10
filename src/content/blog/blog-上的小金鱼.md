@@ -4,6 +4,7 @@ description: "意外中,在论坛发现一条可爱的小金鱼,它可以放到B
 date: 2005-01-14
 redirect: "https://www.cnblogs.com/na57/archive/2005/01/14/92075.html"
 tags: ["博客园"]
+archive: true
 ---
 
 > 本文发布于博客园，正在跳转到原文…

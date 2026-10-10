@@ -4,6 +4,7 @@ description: "此文摘自IBM developerWorks原文请看：What is AspectJ使用
 date: 2005-01-26
 redirect: "https://www.cnblogs.com/na57/archive/2005/01/26/97619.html"
 tags: ["博客园"]
+archive: true
 ---
 
 > 本文发布于博客园，正在跳转到原文…

@@ -4,6 +4,7 @@ description: "我在安装过程中,出现以下错误: DotNetNuke Upgrade Error
 date: 2005-04-04
 redirect: "https://www.cnblogs.com/na57/archive/2005/04/04/132040.html"
 tags: ["博客园"]
+archive: true
 ---
 
 > 本文发布于博客园，正在跳转到原文…

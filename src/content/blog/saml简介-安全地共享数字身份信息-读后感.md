@@ -4,6 +4,7 @@ description: "原文:http://dev2dev.bea.com.cn/techdoc/20060919883.html关于多
 date: 2006-09-20
 redirect: "https://www.cnblogs.com/na57/archive/2006/09/20/509479.html"
 tags: ["博客园"]
+archive: true
 ---
 
 > 本文发布于博客园，正在跳转到原文…

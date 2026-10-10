@@ -4,6 +4,7 @@ description: "VWD虽然有很多好用的功能,但是它还是有一些不尽�
 date: 2005-05-23
 redirect: "https://www.cnblogs.com/na57/archive/2005/05/23/161075.html"
 tags: ["博客园"]
+archive: true
 ---
 
 > 本文发布于博客园，正在跳转到原文…

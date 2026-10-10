@@ -4,6 +4,7 @@ description: "今天打开电脑，看到IE多了个菜单项——“网址”�
 date: 2005-01-05
 redirect: "https://www.cnblogs.com/na57/archive/2005/01/05/86734.html"
 tags: ["博客园"]
+archive: true
 ---
 
 > 本文发布于博客园，正在跳转到原文…

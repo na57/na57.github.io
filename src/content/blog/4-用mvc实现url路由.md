@@ -4,6 +4,7 @@ description: "用MVC实现URL路由原文：http://quickstarts.asp.net/3-5-exten
 date: 2008-05-06
 redirect: "https://www.cnblogs.com/na57/archive/2008/05/06/1185409.html"
 tags: ["博客园"]
+archive: true
 ---
 
 > 本文发布于博客园，正在跳转到原文…

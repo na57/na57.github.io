@@ -4,6 +4,7 @@ description: "为了使用CNBLOG上的服务器端ConfirmDialog,我自己做了�
 date: 2005-04-11
 redirect: "https://www.cnblogs.com/na57/archive/2005/04/11/135758.html"
 tags: ["博客园"]
+archive: true
 ---
 
 > 本文发布于博客园，正在跳转到原文…

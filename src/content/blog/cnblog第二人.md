@@ -4,6 +4,7 @@ description: "自从CNBLOGS搞出了积分和排名以后,我就一直很好奇:
 date: 2005-03-24
 redirect: "https://www.cnblogs.com/na57/archive/2005/03/24/124842.html"
 tags: ["博客园"]
+archive: true
 ---
 
 > 本文发布于博客园，正在跳转到原文…

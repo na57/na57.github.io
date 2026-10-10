@@ -4,6 +4,7 @@ description: "开发过程中,总感觉写Property是件无聊的事情 -- VS.NE
 date: 2005-03-30
 redirect: "https://www.cnblogs.com/na57/archive/2005/03/30/128829.html"
 tags: ["博客园"]
+archive: true
 ---
 
 > 本文发布于博客园，正在跳转到原文…

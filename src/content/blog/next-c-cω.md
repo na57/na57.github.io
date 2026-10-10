@@ -4,6 +4,7 @@ description: "今天看到Microsoft Research有了个新的东西：Cω这是C#�
 date: 2005-01-28
 redirect: "https://www.cnblogs.com/na57/archive/2005/01/28/98594.html"
 tags: ["博客园"]
+archive: true
 ---
 
 > 本文发布于博客园，正在跳转到原文…

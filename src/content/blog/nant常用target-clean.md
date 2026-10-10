@@ -4,6 +4,7 @@ description: "此Target用于清除NAnt生成的文件。首先，需要添加�
 date: 2006-03-26
 redirect: "https://www.cnblogs.com/na57/archive/2006/03/26/359483.html"
 tags: ["博客园"]
+archive: true
 ---
 
 > 本文发布于博客园，正在跳转到原文…

@@ -4,6 +4,7 @@ description: "以前受引用路径的苦受的太多了，经常因为引用路
 date: 2006-02-15
 redirect: "https://www.cnblogs.com/na57/archive/2006/02/15/330989.html"
 tags: ["博客园"]
+archive: true
 ---
 
 > 本文发布于博客园，正在跳转到原文…

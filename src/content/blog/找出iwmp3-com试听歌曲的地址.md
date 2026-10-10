@@ -4,6 +4,7 @@ description: "爱玩音乐网是个很不错的在线听歌的地方，他提供
 date: 2005-02-26
 redirect: "https://www.cnblogs.com/na57/archive/2005/02/26/109459.html"
 tags: ["博客园"]
+archive: true
 ---
 
 > 本文发布于博客园，正在跳转到原文…

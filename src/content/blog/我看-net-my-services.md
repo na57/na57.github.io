@@ -4,6 +4,7 @@ description: "什么是.Net My Services？ 《.Net My Services 精解》上的�
 date: 2005-01-25
 redirect: "https://www.cnblogs.com/na57/archive/2005/01/25/96868.html"
 tags: ["博客园"]
+archive: true
 ---
 
 > 本文发布于博客园，正在跳转到原文…

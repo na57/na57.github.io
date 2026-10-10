@@ -4,6 +4,7 @@ description: "最近在配置GeoServer中的FeatherType的时候，出现一个�
 date: 2007-01-24
 redirect: "https://www.cnblogs.com/na57/archive/2007/01/24/628771.html"
 tags: ["博客园"]
+archive: true
 ---
 
 > 本文发布于博客园，正在跳转到原文…

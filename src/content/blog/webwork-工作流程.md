@@ -4,6 +4,7 @@ description: "WebWork 工作流程 1、处理客户端提交的请求客户端�
 date: 2005-03-12
 redirect: "https://www.cnblogs.com/na57/archive/2005/03/12/117246.html"
 tags: ["博客园"]
+archive: true
 ---
 
 > 本文发布于博客园，正在跳转到原文…

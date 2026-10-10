@@ -11,6 +11,8 @@ const blog = defineCollection({
     updated: z.coerce.date().optional(),
     tags: z.array(z.string()).default([]),
     draft: z.boolean().default(false),
+    // 归档：设为 true 后文章从首页/标签页/RSS 等列表消失，但独立页仍会生成、可直接通过 URL 访问
+    archive: z.boolean().default(false),
     // 链接型文章：填写后访问该 URL 会立即跳转到外部原文（用于聚合公众号等已有文章）
     redirect: z.string().optional(),
     // 多链接入口：填写后文章页会渲染成「选择链接」落地页，由用户自行挑选

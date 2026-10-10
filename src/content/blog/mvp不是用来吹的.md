@@ -4,6 +4,7 @@ description: "今天在博客堂看到一篇名为俺这两年的帖子，其臭
 date: 2005-09-20
 redirect: "https://www.cnblogs.com/na57/archive/2005/09/20/240412.html"
 tags: ["博客园"]
+archive: true
 ---
 
 > 本文发布于博客园，正在跳转到原文…

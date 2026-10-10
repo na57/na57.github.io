@@ -4,6 +4,7 @@ description: "不错的想法，失败的产品——PropertySet PropertySet确�
 date: 2005-11-19
 redirect: "https://www.cnblogs.com/na57/archive/2005/11/19/280073.html"
 tags: ["博客园"]
+archive: true
 ---
 
 > 本文发布于博客园，正在跳转到原文…

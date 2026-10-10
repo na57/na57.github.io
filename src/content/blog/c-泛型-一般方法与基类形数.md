@@ -4,6 +4,7 @@ description: "在C#泛型当中,有一种用法叫做一般方法,其用法如�
 date: 2005-06-01
 redirect: "https://www.cnblogs.com/na57/archive/2005/06/01/165648.html"
 tags: ["博客园"]
+archive: true
 ---
 
 > 本文发布于博客园，正在跳转到原文…

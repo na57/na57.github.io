@@ -4,6 +4,7 @@ description: "经常可以在一些XML文件（特别是RSS）里面看到dc:tit
 date: 2006-05-23
 redirect: "https://www.cnblogs.com/na57/archive/2006/05/23/407434.html"
 tags: ["博客园"]
+archive: true
 ---
 
 > 本文发布于博客园，正在跳转到原文…

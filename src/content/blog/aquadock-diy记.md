@@ -4,6 +4,7 @@ description: "首先要庆祝一下,本BLOG在GOOGLE中文搜索中，关键词\
 date: 2005-01-25
 redirect: "https://www.cnblogs.com/na57/archive/2005/01/25/97111.html"
 tags: ["博客园"]
+archive: true
 ---
 
 > 本文发布于博客园，正在跳转到原文…

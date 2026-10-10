@@ -4,6 +4,7 @@ description: "FileUpload用于实现Web端的文件上传。其主页是：http:
 date: 2006-03-02
 redirect: "https://www.cnblogs.com/na57/archive/2006/03/02/340754.html"
 tags: ["博客园"]
+archive: true
 ---
 
 > 本文发布于博客园，正在跳转到原文…

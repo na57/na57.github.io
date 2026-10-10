@@ -4,6 +4,7 @@ description: "Hibernate的缓存Hibernate的缓存主要实现在net.sf.hibernat
 date: 2005-01-30
 redirect: "https://www.cnblogs.com/na57/archive/2005/01/30/99517.html"
 tags: ["博客园"]
+archive: true
 ---
 
 > 本文发布于博客园，正在跳转到原文…

@@ -4,6 +4,7 @@ description: "给这个类做了一下注释，不是很详细，而且还有一
 date: 2005-01-28
 redirect: "https://www.cnblogs.com/na57/archive/2005/01/28/98919.html"
 tags: ["博客园"]
+archive: true
 ---
 
 > 本文发布于博客园，正在跳转到原文…

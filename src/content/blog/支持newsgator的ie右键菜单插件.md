@@ -4,6 +4,7 @@ description: "我这人向来都比较懒，不太愿意改变自己的生活习
 date: 2006-02-17
 redirect: "https://www.cnblogs.com/na57/archive/2006/02/17/332841.html"
 tags: ["博客园"]
+archive: true
 ---
 
 > 本文发布于博客园，正在跳转到原文…

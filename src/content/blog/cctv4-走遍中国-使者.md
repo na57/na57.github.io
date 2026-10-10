@@ -4,6 +4,7 @@ description: "2月5日，CCTV4《走遍中国》栏目播出了一期关于纳�
 date: 2005-02-17
 redirect: "https://www.cnblogs.com/na57/archive/2005/02/17/105249.html"
 tags: ["博客园"]
+archive: true
 ---
 
 > 本文发布于博客园，正在跳转到原文…

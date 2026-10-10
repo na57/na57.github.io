@@ -4,6 +4,7 @@ description: "原文：http://www.ondotnet.com/pub/a/dotnet/2004/01/19/longhorn.
 date: 2005-01-26
 redirect: "https://www.cnblogs.com/na57/archive/2005/01/26/97859.html"
 tags: ["博客园"]
+archive: true
 ---
 
 > 本文发布于博客园，正在跳转到原文…

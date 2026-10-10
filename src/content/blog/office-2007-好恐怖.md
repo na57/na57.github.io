@@ -4,6 +4,7 @@ description: "微软已经出了Office 2007的Preview了，Office已经不像以
 date: 2006-02-17
 redirect: "https://www.cnblogs.com/na57/archive/2006/02/17/332316.html"
 tags: ["博客园"]
+archive: true
 ---
 
 > 本文发布于博客园，正在跳转到原文…

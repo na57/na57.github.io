@@ -4,6 +4,7 @@ description: "http://kb.csdn.net/java/Articles/200506/73d1c56b-ebae-4431-9210-fd
 date: 2006-03-26
 redirect: "https://www.cnblogs.com/na57/archive/2006/03/26/359377.html"
 tags: ["博客园"]
+archive: true
 ---
 
 > 本文发布于博客园，正在跳转到原文…

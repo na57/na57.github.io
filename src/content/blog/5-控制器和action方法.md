@@ -4,6 +4,7 @@ description: "控制器和Action方法原文：http://quickstarts.asp.net/3-5-ex
 date: 2008-05-06
 redirect: "https://www.cnblogs.com/na57/archive/2008/05/06/1185418.html"
 tags: ["博客园"]
+archive: true
 ---
 
 > 本文发布于博客园，正在跳转到原文…

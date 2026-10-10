@@ -4,6 +4,7 @@ description: "JAAS关注用户认证和授权,它把应用中的这两个方面(
 date: 2005-10-26
 redirect: "https://www.cnblogs.com/na57/archive/2005/10/26/262346.html"
 tags: ["博客园"]
+archive: true
 ---
 
 > 本文发布于博客园，正在跳转到原文…

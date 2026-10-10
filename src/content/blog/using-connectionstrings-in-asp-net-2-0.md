@@ -4,6 +4,7 @@ description: "ASP.NET 2.0为开发者提供了专门的存放数据库连接字�
 date: 2005-05-24
 redirect: "https://www.cnblogs.com/na57/archive/2005/05/24/161098.html"
 tags: ["博客园"]
+archive: true
 ---
 
 > 本文发布于博客园，正在跳转到原文…

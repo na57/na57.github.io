@@ -4,6 +4,7 @@ description: "DameK UltraBlue 是一个很好用的桌面辅助软件，特别�
 date: 2005-01-13
 redirect: "https://www.cnblogs.com/na57/archive/2005/01/13/91537.html"
 tags: ["博客园"]
+archive: true
 ---
 
 > 本文发布于博客园，正在跳转到原文…

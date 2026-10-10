@@ -4,6 +4,7 @@ description: "XWork核心概念http://www.opensymphony.com/xwork/wikidocs/Core%2
 date: 2005-03-12
 redirect: "https://www.cnblogs.com/na57/archive/2005/03/12/117356.html"
 tags: ["博客园"]
+archive: true
 ---
 
 > 本文发布于博客园，正在跳转到原文…

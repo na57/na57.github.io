@@ -4,6 +4,7 @@ description: "Roles类中有一个GetRole(Guid roleID, bool cacheable)方法，�
 date: 2006-04-11
 redirect: "https://www.cnblogs.com/na57/archive/2006/04/11/372030.html"
 tags: ["博客园"]
+archive: true
 ---
 
 > 本文发布于博客园，正在跳转到原文…

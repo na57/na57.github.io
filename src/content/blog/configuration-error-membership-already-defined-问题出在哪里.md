@@ -4,6 +4,7 @@ description: "最近牛头一直出现这样一个错误： Server Error in '/' 
 date: 2006-03-26
 redirect: "https://www.cnblogs.com/na57/archive/2006/03/26/359380.html"
 tags: ["博客园"]
+archive: true
 ---
 
 > 本文发布于博客园，正在跳转到原文…

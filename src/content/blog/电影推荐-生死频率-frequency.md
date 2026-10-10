@@ -4,6 +4,7 @@ description: "最近看完《寻秦记》又看《我和僵尸有个约会3》�
 date: 2005-02-01
 redirect: "https://www.cnblogs.com/na57/archive/2005/02/01/100260.html"
 tags: ["博客园"]
+archive: true
 ---
 
 > 本文发布于博客园，正在跳转到原文…

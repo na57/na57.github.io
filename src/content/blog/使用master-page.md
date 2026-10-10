@@ -4,6 +4,7 @@ description: ".NET 2.0 都出来很长时间了，我到今天才开始学习使
 date: 2006-03-31
 redirect: "https://www.cnblogs.com/na57/archive/2006/03/31/363148.html"
 tags: ["博客园"]
+archive: true
 ---
 
 > 本文发布于博客园，正在跳转到原文…

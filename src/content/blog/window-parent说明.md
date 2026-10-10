@@ -4,6 +4,7 @@ description: "window.parent能获取一个框架的父窗口或父框架。顶�
 date: 2005-04-14
 redirect: "https://www.cnblogs.com/na57/archive/2005/04/14/137272.html"
 tags: ["博客园"]
+archive: true
 ---
 
 > 本文发布于博客园，正在跳转到原文…

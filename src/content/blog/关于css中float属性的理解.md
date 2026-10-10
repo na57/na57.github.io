@@ -4,6 +4,7 @@ description: "首先,必须知道两件事: 1. 浏览器事按照HTML代码中�
 date: 2006-11-02
 redirect: "https://www.cnblogs.com/na57/archive/2006/11/02/548465.html"
 tags: ["博客园"]
+archive: true
 ---
 
 > 本文发布于博客园，正在跳转到原文…

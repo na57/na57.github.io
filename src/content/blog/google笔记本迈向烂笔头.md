@@ -4,6 +4,7 @@ description: "曾经为了方便做笔记而写了“烂笔头”的程序代码
 date: 2007-12-04
 redirect: "https://www.cnblogs.com/na57/archive/2007/12/04/982202.html"
 tags: ["博客园"]
+archive: true
 ---
 
 > 本文发布于博客园，正在跳转到原文…

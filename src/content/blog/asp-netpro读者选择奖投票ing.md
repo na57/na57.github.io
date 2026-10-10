@@ -4,6 +4,7 @@ description: "来为自己喜欢的工具投上一票吧.http://www.aspnetpro.co
 date: 2005-03-23
 redirect: "https://www.cnblogs.com/na57/archive/2005/03/23/124095.html"
 tags: ["博客园"]
+archive: true
 ---
 
 > 本文发布于博客园，正在跳转到原文…

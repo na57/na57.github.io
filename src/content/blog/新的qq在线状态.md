@@ -4,6 +4,7 @@ description: "以前有段日子QQ在线状态图标不可以用了，让人觉�
 date: 2005-03-01
 redirect: "https://www.cnblogs.com/na57/archive/2005/03/01/110787.html"
 tags: ["博客园"]
+archive: true
 ---
 
 > 本文发布于博客园，正在跳转到原文…

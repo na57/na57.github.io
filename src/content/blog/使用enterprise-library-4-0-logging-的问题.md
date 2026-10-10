@@ -4,6 +4,7 @@ description: "将应用程序日志写近数据库里面遇到了如下的错误
 date: 2009-09-08
 redirect: "https://www.cnblogs.com/na57/archive/2009/09/08/1562572.html"
 tags: ["博客园"]
+archive: true
 ---
 
 > 本文发布于博客园，正在跳转到原文…

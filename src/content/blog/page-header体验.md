@@ -4,6 +4,7 @@ description: "在2.0里,Page类加了Header属性,用于表示HTML里的Head标�
 date: 2005-06-22
 redirect: "https://www.cnblogs.com/na57/archive/2005/06/22/179258.html"
 tags: ["博客园"]
+archive: true
 ---
 
 > 本文发布于博客园，正在跳转到原文…
