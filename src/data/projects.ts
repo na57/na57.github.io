@@ -10,6 +10,11 @@ export interface Project {
 
 export const projects: Project[] = [
   {
+    name: '音乐常识',
+    url: 'https://nagu.cc/music-theory/',
+    desc: '零基础乐理交互学习网页：AI 整理的乐理知识，配套试听音频与小测验自测',
+  },
+  {
     name: 'PIOC',
     url: 'https://nagu.cc/pioc',
     desc: '基于 3A（AI Native、AI Powered、All in One）的个人智慧运行中心',
