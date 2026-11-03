@@ -1,0 +1,780 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第14章 混合网络中的推理 · PGM 互动讲义</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+<nav class="topbar">
+  <div class="topbar-inner">
+    <span class="brand"><a href="index.html" style="color:inherit">← 学习地图</a></span>
+    <span class="crumb">阶段二 · 推理 / 第14章</span>
+  </div>
+</nav>
+
+<div class="wrap">
+
+  <div class="lecture-head">
+    <span class="ch-label">CHAPTER 14 · 推理</span>
+    <h1>混合网络中的推理</h1>
+    <p class="lead">离散开关和连续读数住在一起：表格装不下，高斯算不动，只能"拆开算、再缝回去"。</p>
+  </div>
+
+  <!-- 本章定位 -->
+  <div class="position-bar">
+    <strong>本章在主线上的位置：</strong>Ch7 给了纯连续的高斯网络，Ch9–12 给了纯离散的推理 → <u>现实世界离散与连续混杂，CLG 是唯一半解析的落脚点，但闭包在消元时会被打破</u> → 动态系统（Ch15）的切换卡尔曼滤波正是混合网络的时序版。<br>
+    第14章回答主线上的第十四个问题：<strong>当网络里同时有离散变量和连续变量时，第 9 章的消去算法还能用吗？在哪里会断？</strong>
+    <div class="map-inline">
+      <span class="node">Ch7 高斯网络（纯连续）</span><span class="arrow">→</span>
+      <span class="node here">Ch14 混合网络（离散+连续）</span><span class="arrow">→</span>
+      <span class="node">Ch15 动态网络（切换系统是它的时序版）</span><span class="arrow">→</span>
+      <span class="node">Ch19 EM（混合模型的学习入口）</span>
+    </div>
+  </div>
+
+  <!-- 学习目标 -->
+  <div class="objectives">
+    <h4>🎯 学完本章，合上书你应该能：</h4>
+    <ol>
+      <li>解释"把连续变量离散化"为什么是个陷阱（精度与参数量的两难）</li>
+      <li>写出 CLG（条件线性高斯）模型的两条结构性限制，并说明它如何用"表格化的高斯"表示</li>
+      <li>手算一个"离散开关 → 连续读数"网络的后验概率与边缘分布的均值、方差</li>
+      <li>说清消去连续变量为什么会打破 CLG 闭包（混合分量爆炸），以及弱边缘化如何用矩匹配止血</li>
+      <li>说出强边缘化对消去顺序的约束，以及 EP / 采样各自的近似思路</li>
+    </ol>
+  </div>
+
+  <div class="lecture">
+
+    <!-- 推导主线 -->
+    <div class="figure">
+      <div class="mermaid">
+flowchart LR
+  A["现实模型离散连续混杂<br>温度与开关同框"] --> B["直接离散化连续变量<br>精度与参数量两难"]
+  B --> C["CLG：离散父 + 线性高斯子<br>表格化的混合表示"]
+  C --> D["消元试试<br>消离散安全 消连续出事"]
+  D --> E["混合高斯分量爆炸<br>CLG 闭包被打破"]
+  E --> F["代价：弱边缘化矩匹配止血<br>或放弃精确转近似"]
+  classDef hot fill:#fbeedd,stroke:#c4651f,stroke-width:2.5px,color:#c4651f;
+  classDef danger fill:#fae9e7,stroke:#b03a2e,stroke-width:2.5px,color:#b03a2e;
+  class C hot;
+  class E,F danger;
+      </div>
+      <div class="caption">本章推导主线：CLG 是唯一让"消元还保持解析形式"的折中，但闭包只在部分消去顺序下成立。终点（红色）是本章账单：一般混合网络没有精确多项式算法。</div>
+    </div>
+
+    <!-- ============ 14.1 ============ -->
+    <h2><span class="sec-no">14.1</span>为什么"先离散化再套老算法"是个陷阱</h2>
+
+    <p>前几章的世界很整齐：要么全离散（BN/MN，Ch3–4），要么全连续（高斯网络，Ch7）。现实不整齐：<strong>疾病</strong>（离散）影响<strong>血压</strong>（连续）；<strong>市场体制</strong>（离散：牛市/熊市）影响<strong>收益率</strong>（连续）；<strong>地形类型</strong>（离散）影响<strong>激光雷达读数</strong>（连续）。这种网络叫<span class="term">混合网络</span>（Hybrid Network）。</p>
+
+    <p>第一直觉：把连续变量切成区间，全部变离散，然后直接用第 9 章的变量消去。这个方案有两副毒药，必须选一副：</p>
+
+    <ul>
+      <li><strong>切得粗</strong>：10 个区间。每个条件概率表确实小，但"血压在 120–140 之间"这种分辨率的模型对诊断毫无意义——误差是建模时就锁死的。</li>
+      <li><strong>切得细</strong>：1000 个区间。一个连续变量带两个离散父节点，CPD 就是几千行；两个连续变量相邻，因子表直接爆炸到百万项。第 9 章教的"复杂度随诱导宽度指数增长"在这里以"区间数"为底数炸开。</li>
+    </ul>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 混合网络的本质困难</span>
+      <p>离散变量的消去是<strong>求和</strong>，连续变量的消去是<strong>积分</strong>——混合网络要求在同一套消息传递里同时做这两件事。求和产出表格，积分产出函数；表格和函数相乘之后是什么数据结构？这就是本章全部技术问题的源头。</p>
+    </div>
+
+    <div class="box idea">
+      <span class="box-tag">💡 出路预告</span>
+      <p>唯一的希望：找到一类连续分布，使"乘积、积分、边缘化"的结果<strong>仍在这类分布里</strong>（封闭性）。第 7 章已经给过答案：高斯分布。于是本章的核心策略是——<strong>连续部分全程保持高斯，离散部分全程保持表格，交互处用"表格索引的高斯"缝合</strong>。这就是 CLG。</p>
+    </div>
+
+    <!-- 回忆卡片 14.1 -->
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 14.1-1</div>
+              <div class="q-text">混合网络为什么难？用"求和 vs 积分"一句话说清。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              离散消元是求和、产出表格；连续消元是积分、产出函数；混合网络要求消息在两种数据结构之间来回转换，没有统一的封闭表示。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 14.1-2</div>
+              <div class="q-text">"把连续变量离散化"方案的两副毒药分别是什么？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              切得粗：分辨率误差建模时锁死；切得细：因子表随区间数爆炸，消去复杂度以区间数为底数指数增长。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 14.2 ============ -->
+    <h2><span class="sec-no">14.2</span>CLG：表格化的线性高斯，混合世界的"最大公约数"</h2>
+
+    <p>第 7 章学过：纯高斯网络里所有操作（条件化、边缘化、乘积）都封闭于高斯。<span class="term">条件线性高斯</span>（Conditional Linear Gaussian, CLG）把这个性质扩展到混合网络，代价是两条结构性限制：</p>
+
+    <div class="box insight">
+      <span class="box-tag">✅ CLG 的两条家规</span>
+      <p>① <strong>离散变量不能有连续父节点</strong>（离散变量的 CPD 只依赖离散父母，就是普通表格）；<br>
+      ② <strong>连续变量给定父母后是线性高斯</strong>：均值是连续父母的线性函数，方差固定；离散父母的作用只是"切换参数"——每个离散父母配置一套 (斜率, 截距, 方差)。</p>
+    </div>
+
+    <p>形式上，连续变量 X 的 CPD 是：</p>
+
+    <div class="formula">P(X | D = d, Y₁…Yₖ) = 𝒩( β₀<sup>(d)</sup> + β₁<sup>(d)</sup>y₁ + … + βₖ<sup>(d)</sup>yₖ ; σ²<sup>(d)</sup> )</div>
+
+    <p>其中 D 是离散父母，Y 是连续父母。注意上标 (d)：<strong>每个离散配置 d 一套高斯参数</strong>——这就是"表格化的高斯"：表格的行不再是概率数，而是高斯参数组。家规①同样关键：若允许离散变量有连续父（比如用 sigmoid 把连续值压成概率），连续变量边缘化时就再也回不到高斯，封闭性立刻死亡。</p>
+
+    <h3>例 1：一个最小 CLG 网络</h3>
+    <div class="figure">
+      <div class="mermaid">
+flowchart LR
+  D["D 机器状态<br>离散 正常或老化"] --> X["X 温度读数<br>连续"]
+  classDef hot fill:#fbeedd,stroke:#c4651f,stroke-width:2.5px,color:#c4651f;
+  class X hot;
+      </div>
+      <div class="caption">图 14.1 最小混合网络：离散父 D 切换连续子 X 的高斯参数。D 无连续父（家规①满足），X 的 CPD 是线性高斯（家规②满足）。</div>
+    </div>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>d</th><th>P(D=d)</th><th>X 的分布（本例无连续父母，故只有截距）</th></tr>
+        <tr><td>正常</td><td>0.4</td><td>𝒩(0, 1)</td></tr>
+        <tr><td>老化</td><td>0.6</td><td>𝒩(3, 1)</td></tr>
+      </table>
+    </div>
+
+    <p>X 的边缘分布是什么？<strong>不再是高斯</strong>——它是两个高斯的加权混合（<span class="term">混合高斯</span>，Gaussian Mixture）：0.4·𝒩(0,1) + 0.6·𝒩(3,1)，一个双峰分布。这是本章第一个要记住的事实：<strong>CLG 网络里连续变量的边缘分布天然是混合高斯</strong>。</p>
+
+    <h3>连续变量作父的 CLG：一次完整手算与消去后的分裂</h3>
+
+    <p>例 1 的 X 只有离散父，CPD 退化为"每行一个截距"。家规②的完整形态是连续变量<strong>还可以有连续父</strong>——这时"线性高斯"四个字才真正登场。下面用两个变量把 (a) CPD 长什么样、(b) 消去连续父、(c) 消去离散父各算一遍，看两种消去的命运有何不同。</p>
+
+    <p><strong>(a) 两变量 CLG：均值随父线性走，方差雷打不动。</strong>设 X ~ 𝒩(μₓ, σₓ²) = 𝒩(2, 1)，Y 以 X 为（连续）父：</p>
+
+    <div class="formula">Y | X = x ~ 𝒩( 3x + 1 , 4 ) ，即 p(y | x) = 𝒩( y ; 3x + 1, 4 )</div>
+
+    <p>条件均值 E[Y | x] = 3x + 1 是父取值的<strong>线性函数</strong>，条件方差 Var(Y | x) = 4 与 x <strong>无关</strong>——"线性"说的是均值随父线性变化，"高斯"说的是钟形与胖瘦固定。代入三个父取值：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>父取值 x</th><th>条件均值 E[Y | x] = 3x + 1</th><th>条件方差 Var(Y | x)</th></tr>
+        <tr><td>0</td><td>1</td><td>4</td></tr>
+        <tr><td>2</td><td>7</td><td>4</td></tr>
+        <tr><td>4</td><td>13</td><td>4</td></tr>
+      </table>
+    </div>
+
+    <p><strong>(b) 消去连续父 X：风平浪静。</strong>对 p(y | x)·p(x) 做积分。第 7 章的封闭性保证"高斯 × 高斯再积分"仍是高斯，所以只需算出 Y 的前两阶矩：</p>
+
+    <div class="formula">p(y) = ∫ p(y | x) · p(x) dx = ∫ 𝒩( y ; 3x + 1, 4 ) · 𝒩( x ; 2, 1 ) dx</div>
+    <div class="formula">E[Y] = 3·E[X] + 1 = 3×2 + 1 = 7</div>
+    <div class="formula">Var(Y) = 3²·Var(X) + 4 = 9×1 + 4 = 13</div>
+    <div class="formula">p(y) = 𝒩( 7, 13 )</div>
+
+    <p>一般地，Y | X ~ 𝒩(aX + b, σ²) 且 X ~ 𝒩(μₓ, σₓ²) 蕴含 Y ~ 𝒩(aμₓ + b, a²σₓ² + σ²)：<strong>高斯对"边缘化连续变量"封闭，消去连续父后仍是单一高斯</strong>——均值 aμₓ + b，方差 a²σₓ² + σ²。这是好消息。</p>
+
+    <p><strong>(c) 消去离散父 D：一分为二。</strong>现在给 Y 再加一个离散父 D ∈ {d⁰, d¹}，P(d⁰) = P(d¹) = 0.5，每个离散配置一套高斯参数：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>d</th><th>P(D = d)</th><th>Y | X = x, D = d 的分布</th></tr>
+        <tr><td>d⁰</td><td>0.5</td><td>𝒩(3x + 1, 4)</td></tr>
+        <tr><td>d¹</td><td>0.5</td><td>𝒩(x − 2, 1)</td></tr>
+      </table>
+    </div>
+
+    <p>对 D 求和消去：</p>
+
+    <div class="formula">p(y | x) = 0.5·𝒩( y ; 3x + 1, 4 ) + 0.5·𝒩( y ; x − 2, 1 )</div>
+
+    <p>这是<strong>两分量的混合高斯</strong>——还能精确写出，但已经不具有 CLG 的形式。证据藏在矩里。混合均值恰好仍是 x 的线性函数：</p>
+
+    <div class="formula">E[Y | x] = 0.5·(3x + 1) + 0.5·(x − 2) = 2x − 0.5</div>
+
+    <p>但混合方差要用 E[Y²] − E[Y]² 推。先算二阶矩（高斯 𝒩(μ, σ²) 有 E[Y²] = σ² + μ²，故两个分量分别贡献 4 + (3x+1)² = 9x² + 6x + 5 与 1 + (x−2)² = x² − 4x + 5）：</p>
+
+    <div class="formula">E[Y² | x] = 0.5·(9x² + 6x + 5) + 0.5·(x² − 4x + 5) = 5x² + x + 5</div>
+    <div class="formula">Var(Y | x) = E[Y² | x] − E[Y | x]² = (5x² + x + 5) − (2x − 0.5)² = x² + 3x + 4.75</div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 方差不再是常数 = CLG 形式死亡</span>
+      <p>Var(Y | x) = x² + 3x + 4.75 <strong>随 x 变化</strong>，直接违反家规②"给定父母后条件方差为常数"的形式要求。也就是说：CLG 对消去连续父封闭，对消去离散父<strong>不封闭</strong>。每消去一个离散变量，高斯分量数可能翻倍——k 个离散变量消完，一个因子要携带 2<sup>k</sup> 个分量。这正是 14.4 节"闭包灾难"的微观现场，也是第 9 章变量消去搬到混合网络上会变难的根源。</p>
+    </div>
+
+    <div class="box idea">
+      <span class="box-tag">💡 一句话记住</span>
+      <p>高斯怕离散父：消去连续父风平浪静（还是一只钟），消去离散父分身乏术（变成一群钟）。</p>
+    </div>
+
+    <!-- 回忆卡片 14.2 -->
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 14.2-1</div>
+              <div class="q-text">CLG 的两条结构性限制是什么？为什么第一条（离散无连续父）不能放松？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              ①离散变量只有离散父；②连续变量给定父是线性高斯。放松①后连续父被积分掉时离散子的分布不再是表格×高斯，封闭性死亡。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 14.2-2</div>
+              <div class="q-text">CLG 网络中连续变量的边缘分布是什么形状？为什么？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              混合高斯：离散父的每个配置贡献一个高斯分量，权重是离散配置的概率。例 1 中 X 的边缘是 0.4·𝒩(0,1)+0.6·𝒩(3,1)，双峰。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 14.3 ============ -->
+    <h2><span class="sec-no">14.3</span>手算一个混合网络的完整推理：观测连续值，更新离散信念</h2>
+
+    <p>接着例 1：现在<strong>观测到温度读数 X = 2</strong>。问：机器老化的概率是多少？这是混合网络最典型的查询——连续证据更新离散信念。</p>
+
+    <p><strong>第一步：写出似然</strong>。观测 X=2 在两个假设下的密度（正态密度公式 𝒩(x; μ, σ²) = (1/√(2πσ²))·e<sup>−(x−μ)²/(2σ²)</sup>）：</p>
+    <ul>
+      <li>P(X=2 | 正常) = (1/√(2π))·e<sup>−(2−0)²/2</sup> = (1/√(2π))·e<sup>−2</sup> ≈ 0.3989 × 0.1353 ≈ <strong>0.0540</strong></li>
+      <li>P(X=2 | 老化) = (1/√(2π))·e<sup>−(2−3)²/2</sup> = (1/√(2π))·e<sup>−0.5</sup> ≈ 0.3989 × 0.6065 ≈ <strong>0.2420</strong></li>
+    </ul>
+
+    <p><strong>第二步：乘先验</strong>。</p>
+    <ul>
+      <li>正常：0.4 × 0.0540 = <strong>0.0216</strong></li>
+      <li>老化：0.6 × 0.2420 = <strong>0.1452</strong></li>
+    </ul>
+
+    <p><strong>第三步：归一化</strong>。总和 = 0.0216 + 0.1452 = 0.1668。</p>
+    <ul>
+      <li>P(老化 | X=2) = 0.1452 / 0.1668 ≈ <strong>0.87</strong></li>
+      <li>P(正常 | X=2) ≈ 0.13</li>
+    </ul>
+
+    <p>读数 2 离老化中心 3 更近，后验从先验的 0.6 翻到 0.87——贝叶斯更新的机制与离散情形完全一样，只是把"表格查数"换成了"高斯密度求值"。</p>
+
+    <h3>例 2：混合高斯的矩——弱边缘化的预习</h3>
+    <p>不观测任何东西时，X 的边缘（混合高斯）的均值和方差是多少？用<span class="term">全期望公式</span>与<span class="term">全方差公式</span>：</p>
+
+    <div class="formula">E[X] = E<sub>D</sub>[ E[X|D] ] ，  Var(X) = E<sub>D</sub>[Var(X|D)] + Var<sub>D</sub>(E[X|D])</div>
+
+    <p><strong>均值</strong>：E[X] = 0.4×0 + 0.6×3 = <strong>1.8</strong>。</p>
+    <p><strong>方差</strong>（两项分开算）：</p>
+    <ul>
+      <li>组内项 E[Var(X|D)] = 0.4×1 + 0.6×1 = 1</li>
+      <li>组间项 Var(E[X|D])：E[X|D] 以 0.4 概率取 0、0.6 概率取 3，均值为 1.8，故 Var = 0.4×(0−1.8)² + 0.6×(3−1.8)² = 0.4×3.24 + 0.6×1.44 = 1.296 + 0.864 = 2.16</li>
+      <li>Var(X) = 1 + 2.16 = <strong>3.16</strong></li>
+    </ul>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>这个双峰混合分布，可以用单个高斯 𝒩(1.8, 3.16) 来"冒充"——均值和方差完全一致，丢掉的只是形状（双峰性）。这个操作叫<span class="term">矩匹配</span>（Moment Matching），它就是 14.4 节弱边缘化的全部内容，也是整个混合网络精确推理失败后的止血钳。</p>
+    </div>
+
+    <!-- 回忆卡片 14.3 -->
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 14.3-1</div>
+              <div class="q-text">例 1 中观测 X=2 后，P(老化|X=2) 怎么算出来？三步各是什么？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              ①算两个高斯密度（0.0540 / 0.2420）；②乘先验（0.0216 / 0.1452）；③归一化得 0.87。机制与离散贝叶斯更新相同，只把查表换成密度求值。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 14.3-2</div>
+              <div class="q-text">写出全方差公式，并说出矩匹配保留什么、丢掉什么。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              Var(X) = E[Var(X|D)] + Var(E[X|D])。矩匹配用单高斯替代混合高斯，保留均值与方差，丢掉分布形状（如双峰性）。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 14.4 ============ -->
+    <h2><span class="sec-no">14.4</span>消元的闭包灾难：为什么精确推理在 CLG 上也会死</h2>
+
+    <p>现在把 CLG 网络交给第 9 章的变量消去。逐个检查两种消去：</p>
+
+    <h3>消去离散变量：安全</h3>
+    <p>对离散变量求和，相当于把若干"表格行 × 高斯"按权重相加。结果是<strong>混合高斯</strong>——不是纯高斯，但仍然是可以精确表示的有限对象（分量数 = 被消变量的取值数 × 原有分量数）。坏消息藏在"分量数"里：<strong>每消一个离散变量，高斯分量的数量可能翻倍</strong>。</p>
+
+    <h3>消去连续变量：看位置</h3>
+    <p>如果被消的连续变量只和连续变量打交道（线性高斯之间），积分是解析的，结果仍是高斯——安全。但如果它有离散"亲属"（比如它是某个连续子的父，而该子还有离散父），积分之后落到离散变量上的因子就是<strong>每个离散配置一个不同的高斯</strong>——混合高斯爬上离散因子，分量随消去步数指数增长。</p>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ CLG 闭包的真实边界</span>
+      <p>CLG 对"条件化连续证据"封闭，对"消去连续变量"<strong>不封闭</strong>：消元会把高斯混合传染到越来越多的因子上，k 步之后一个因子要携带 2<sup>k</sup> 个高斯分量。这就是"混合网络上精确推理一般不可行"的精确含义——不是算法没想到，是<em>表示本身</em>指数膨胀。</p>
+    </div>
+
+    <h3>止血方案一：弱边缘化（Weak Marginalization）</h3>
+    <p>既然分量爆炸，就定期"坍缩"：把一个有 m 个分量的混合高斯，用矩匹配（例 2 的全期望/全方差公式）压回单个高斯，再继续消元。这叫<span class="term">弱边缘化</span>（Weak Marginalization）：</p>
+    <ul>
+      <li><strong>保留</strong>：分布的前两阶矩（均值、方差/协方差）；</li>
+      <li><strong>丢弃</strong>：分布的形状（多峰性、偏度）。</li>
+    </ul>
+    <p>代价是严格说结果不再精确——它是对真实消息的最好单高斯近似（在 KL 意义下，单高斯内矩匹配就是最优）。</p>
+
+    <h3>止血方案二：强边缘化（Strong Marginalization）</h3>
+    <p>换个思路：<strong>先消完所有连续变量</strong>，让网络塌缩成纯离散网络，再用第 9/10 章的离散算法收工。这要求道德化、三角化之后，<strong>不存在离散-连续混合的团</strong>——即图结构上离散与连续区域本来就近乎分离。多数真实模型不满足，所以强边缘化是奢侈品，能用则用。</p>
+
+    <h3>止血方案三：干脆近似</h3>
+    <ul>
+      <li><strong>采样</strong>（接 Ch12）：Gibbs 采样天然适配混合网络——离散变量的条件分布是表格，连续变量的条件分布在 CLG 下是高斯，两种条件都好采样。</li>
+      <li><strong>期望传播</strong>（Expectation Propagation, EP）：每条混合高斯消息立即投影回单高斯再往下传，相当于"每步都做弱边缘化"的消息传递版。</li>
+      <li><strong>假设密度滤波</strong>（Assumed Density Filtering）：在线场景下，每步推理后把信念投影回简单分布族——第 15 章切换卡尔曼滤波的标准做法。</li>
+    </ul>
+
+    <!-- 回忆卡片 14.4 -->
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 14.4-1</div>
+              <div class="q-text">CLG 精确推理失败的根本原因是什么？（不是"算法慢"）</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              表示膨胀：消去连续变量会把混合高斯传染到因子上，分量数随消去步数指数增长，CLG 对这类消元不封闭。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 14.4-2</div>
+              <div class="q-text">弱边缘化与强边缘化各是什么？各自的适用条件？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              弱：矩匹配把混合高斯压回单高斯（保两阶矩、丢形状），任何 CLG 都能用但不精确。强：先消完全部连续变量再做离散推理，要求三角化后无离散-连续混合团。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 概念卡 ============ -->
+    <h2><span class="sec-no">🃏</span>概念卡：本章概念的一分钟画像</h2>
+    <p>翻面前先自问：这个概念我能用一句话讲清楚吗？</p>
+    <div class="flip-grid">
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 1</div>
+            <div class="q-text">混合网络（Hybrid Network）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">同时含离散变量与连续变量的概率图模型。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">现实系统本来就混杂：疾病与血压、体制与收益率、地形与读数。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">一栋楼里住两户人家：一家说"表格话"，一家说"函数话"，消息翻译不过来。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为离散化连续变量就能套老算法——精度与参数量不可兼得。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">金融体制模型、机器人传感、医学监护；Ch15 切换动态系统。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 2</div>
+            <div class="q-text">条件线性高斯（Conditional Linear Gaussian, CLG）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">离散变量只有离散父；连续变量给定父母为线性高斯，离散父切换参数。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">让混合网络在"条件化连续证据"下保持解析可算。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">一张表格，每行不是概率而是一套高斯参数。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为 CLG 对所有推理操作封闭——它对消去连续变量不封闭。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">混合网络建模的第一选择；Ch15 切换卡尔曼滤波的基础。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 3</div>
+            <div class="q-text">混合高斯（Gaussian Mixture）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">若干高斯分布的加权和：∑ wᵢ·𝒩(μᵢ, σᵢ²)，权重和为 1。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">CLG 中连续变量的边缘分布天然是混合高斯（每个离散配置一个分量）。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">多座山叠在一起：每座山一个高斯，权重决定山的高度占比。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为混合高斯仍是高斯——双峰分布没有单高斯的形状。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">本章推理的中间表示；Ch19 EM 的经典应用场景。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 4</div>
+            <div class="q-text">弱边缘化（Weak Marginalization）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">用矩匹配把混合高斯消息坍缩为单高斯：保留前两阶矩，丢弃形状。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">消元过程中混合分量指数爆炸，必须定期压缩表示。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">给多峰分布拍一张"平均照"：中心对、胖瘦对，山峰细节没了。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为它精确——它是单高斯族内的最优近似，不是真消息。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">CLG 消元；EP 与假设密度滤波每一步都在做它。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 5</div>
+            <div class="q-text">强边缘化（Strong Marginalization）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">先消去全部连续变量（解析积分），塌缩成纯离散网络后再做离散推理。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">避开混合因子的表示膨胀，保持全程精确。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">先让说"函数话"的住户全部退租，楼里只剩一种语言。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为总能用——要求三角化后无离散-连续混合团，多数模型不满足。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">离散区与连续区近乎分离的模型；消去顺序设计的理论上限。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 6</div>
+            <div class="q-text">期望传播（Expectation Propagation, EP）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">消息传递中每条复杂消息（如混合高斯）立即矩匹配投影回简单族再继续。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">把"弱边缘化"嵌入消息传递循环，得到可控的近似推理。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">快递中转站：每站都把奇形怪状的包裹重新打包成标准箱。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为投影无代价——每次投影丢形状信息，顺序与频率影响精度。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">混合网络与 Ch11 置信传播的衔接；Ch15 切换系统滤波。</span></div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- ============ 分层习题 ============ -->
+    <h2><span class="sec-no">📝</span>分层习题</h2>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>判断对错：<strong>CLG 网络中，连续变量的边缘分布仍然是高斯分布。</strong>说明理由。</div>
+      <details>
+        <summary>提示</summary>
+        <p>回想例 1：D 有两个取值时，X 的边缘长什么样？</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">错。连续变量若有离散父（或离散祖先），边缘分布是混合高斯：每个离散配置贡献一个高斯分量。例 1 中 X 的边缘是 0.4·𝒩(0,1)+0.6·𝒩(3,1)，双峰，显然不是高斯。只有纯连续（且线性高斯）子网络里边缘才是高斯。</div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>判断对错：<strong>CLG 限制"离散变量不能有连续父节点"只是为了建模方便，放松它对推理没有本质影响。</strong></div>
+      <details>
+        <summary>提示</summary>
+        <p>放松后，连续父被积分消去时，离散子的分布会变成什么？</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">错。若离散子有连续父（如 sigmoid CPD），消去连续父时需要对 sigmoid×高斯 积分——无解析解，且结果无法用"表格 × 高斯"表示，CLG 的封闭表示当场死亡。这条限制是封闭性的承重墙，不是审美偏好。</div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>CLG 网络：D ∈ {0,1}，P(D=1)=0.3；X|D=0 ~ 𝒩(10, 4)，X|D=1 ~ 𝒩(20, 4)。观测 X=16。手算 P(D=1 | X=16)。（提示：e<sup>−4.5</sup> ≈ 0.0111，e<sup>−2</sup> ≈ 0.1353，1/√(2π·4) ≈ 0.1995）</div>
+      <details>
+        <summary>提示</summary>
+        <p>先算两个密度值，再乘先验、归一化。注意方差是 4，指数里除以 2σ²=8。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p>密度：P(X=16|D=0) = 0.1995·e<sup>−(16−10)²/8</sup> = 0.1995·e<sup>−4.5</sup> ≈ 0.1995×0.0111 ≈ 0.00221。</p>
+          <p>P(X=16|D=1) = 0.1995·e<sup>−(16−20)²/8</sup> = 0.1995·e<sup>−2</sup> ≈ 0.1995×0.1353 ≈ 0.02700。</p>
+          <p>乘先验：D=0：0.7×0.00221 = 0.00155；D=1：0.3×0.02700 = 0.00810。</p>
+          <p>归一化：P(D=1|X=16) = 0.00810 / (0.00155+0.00810) = 0.00810/0.00965 ≈ <strong>0.84</strong>。读数 16 离 D=1 的中心 20 更近，后验从 0.3 翻到 0.84。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>同上网络，不观测任何证据。手算 X 边缘分布的均值与方差，并写出矩匹配后的单高斯近似。</div>
+      <details>
+        <summary>提示</summary>
+        <p>全期望 + 全方差：组内项 + 组间项。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p>E[X] = 0.7×10 + 0.3×20 = 7+6 = <strong>13</strong>。</p>
+          <p>组内：E[Var(X|D)] = 0.7×4+0.3×4 = 4。</p>
+          <p>组间：E[X|D] 以 0.7 取 10、0.3 取 20，均值 13：Var = 0.7×(10−13)² + 0.3×(20−13)² = 0.7×9 + 0.3×9 = 9。</p>
+          <p>Var(X) = 4 + 9 = <strong>13</strong>。矩匹配近似：𝒩(13, 13)。真实的边缘是双峰混合，近似丢掉了双峰性。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l3">L3 建模应用</span>ICU 监护：病人感染状态 I（离散：无/轻/重）影响心率 H（连续）与血氧 O（连续）；H 还受病人基础心率 B（连续）影响。设计 CLG 模型：(1) 画图并写出 H、O 的 CPD 形式；(2) 指出该结构里哪个消去顺序会引爆混合分量；(3) 给出一个可落地的推理方案。</div>
+      <details>
+        <summary>提示</summary>
+        <p>谁当离散父、谁当连续父？消 B 时会发生什么？弱边缘化或采样能怎么救场？</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p>(1) 图：I → H，I → O，B → H。CPD：P(I) 为表格；H | I=i, B=b ~ 𝒩(αᵢ + βᵢ·b, σᵢ²)（三个感染等级三套参数）；O | I=i ~ 𝒩(μᵢ, τᵢ²)。满足 CLG 两条家规（I 无连续父）。</p>
+          <p>(2) 若先消去 B：H 的因子里含 I 与 B，对 B 积分后落到 I 的因子上是混合高斯（每个 i 一个分量）；继续消去含连续变量的因子会让分量随 I 的配置数翻倍。消去顺序 B→H→O 且在 I 之前消连续变量，即触发表示膨胀。</p>
+          <p>(3) 落地方案：对 I 的每个取值做条件化（网络变成关于 B,H,O 的纯高斯网络，可用第 7 章精确推理），再按 P(I) 与证据似然加权合并——这里 I 只有 3 个取值，"枚举离散 + 高斯解析"的混合策略精确且便宜。若离散变量多（几十个），则改用弱边缘化（EP）或 Gibbs 采样。</p>
+        </div>
+      </details>
+    </div>
+
+    <!-- ============ 本章自测 ============ -->
+    <h2><span class="sec-no">✍️</span>本章自测</h2>
+    <p class="quiz-hint">点击选项判分，答错会给出原因。</p>
+
+    <div class="quiz-block" data-answer="c">
+      <div class="q-no">自测 1</div>
+      <div class="q-stem">混合网络推理的本质困难是：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 连续变量没有概率分布</li>
+        <li data-opt="b">B. 离散变量的 CPD 太大</li>
+        <li data-opt="c">C. 消元要在求和（产表格）与积分（产函数）之间切换，缺乏统一的封闭表示</li>
+        <li data-opt="d">D. 混合网络无法因子分解</li>
+      </ul>
+      <div class="quiz-explain">选 C。因子分解照常成立（D 错）；连续变量有密度函数（A 错）；B 只是症状不是病根。真正的难点是消息在"表格"与"函数"两种数据结构之间没有封闭形式。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 2</div>
+      <div class="q-stem">CLG 模型的结构性限制是：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 连续变量不能有离散父节点</li>
+        <li data-opt="b">B. 离散变量不能有连续父节点，且连续变量给定父母后是线性高斯</li>
+        <li data-opt="c">C. 所有变量方差必须相同</li>
+        <li data-opt="d">D. 离散变量只能是二元的</li>
+      </ul>
+      <div class="quiz-explain">选 B。两条家规缺一不可：离散有连续父会破坏封闭性；连续子必须线性高斯才能解析积分。A 说反了——连续变量恰恰<em>可以</em>有离散父（切换参数）。C、D 都是编造的限制。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="a">
+      <div class="q-no">自测 3</div>
+      <div class="q-stem">在 CLG 网络中消去一个与离散变量"沾亲"的连续变量，后果是：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 混合高斯爬上离散因子，分量数随消去步数指数增长</li>
+        <li data-opt="b">B. 结果仍是单个高斯，只是均值改变</li>
+        <li data-opt="c">C. 离散变量的取值数翻倍</li>
+        <li data-opt="d">D. 网络不再是贝叶斯网络</li>
+      </ul>
+      <div class="quiz-explain">选 A。这就是 CLG 闭包被打破的精确机制：每个离散配置对应不同高斯，因子要携带的分量数 2^k 爆炸。B 只在纯连续线性高斯区域成立；C、D 是对机制的误解。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="d">
+      <div class="q-no">自测 4</div>
+      <div class="q-stem">弱边缘化保留什么、丢弃什么？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 保留分布形状，丢弃均值</li>
+        <li data-opt="b">B. 保留所有高阶矩，丢弃方差</li>
+        <li data-opt="c">C. 保留混合分量数，丢弃权重</li>
+        <li data-opt="d">D. 保留均值与方差（前两阶矩），丢弃多峰性等形状信息</li>
+      </ul>
+      <div class="quiz-explain">选 D。矩匹配用单高斯冒充混合高斯：中心（均值）与胖瘦（方差）与真消息一致，但双峰被抹平。A、B、C 都把保留/丢弃的对象说反或编造。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 5</div>
+      <div class="q-stem">强边缘化可行的条件是：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 网络中没有离散变量</li>
+        <li data-opt="b">B. 道德化三角化后不存在离散-连续混合团，能先消完全部连续变量</li>
+        <li data-opt="c">C. 连续变量方差都相等</li>
+        <li data-opt="d">D. 观测证据全是离散的</li>
+      </ul>
+      <div class="quiz-explain">选 B。强边缘化 = 先解析积分掉全部连续变量、退化为纯离散问题；前提是消去过程不制造混合团。A 是退化情形（纯高斯网络不需要"强边缘化"这个策略）；C、D 与该策略的适用性无关。</div>
+    </div>
+
+    <!-- ============ 三句话复述 ============ -->
+    <div class="retell">
+      <h3>🗣️ 用自己的话，三句话讲完本章</h3>
+      <p class="retell-sub">对着空气（或室友）说出这三句。说卡壳的那句，回去重读对应小节。</p>
+      <details>
+        <summary>句1：这章解决什么问题？——</summary>
+        <div class="retell-answer">参考答案：现实网络离散与连续混杂，离散化方案精度与参数量不可兼得，需要能在两类变量间做推理的表示与算法。</div>
+      </details>
+      <details>
+        <summary>句2：核心机制是什么？——</summary>
+        <div class="retell-answer">参考答案：CLG 用"离散无连续父 + 连续子线性高斯"换来"表格化的高斯"表示，条件化连续证据可精确进行；但消去连续变量会让混合高斯分量指数爆炸、打破闭包，于是用弱边缘化（矩匹配）、强边缘化（顺序约束）或 EP/采样止血。</div>
+      </details>
+      <details>
+        <summary>句3：它和前后章怎么分工？——</summary>
+        <div class="retell-answer">参考答案：Ch7 管纯连续、Ch9–12 管纯离散，本章管两者交界；Ch15 的切换动态系统是混合网络的时序版，Ch19 的 EM 则回答混合模型的参数从哪学来。</div>
+      </details>
+    </div>
+
+    <!-- ============ 复习计划 ============ -->
+    <div class="review-plan">
+      <h3>🔁 间隔复习计划</h3>
+      <p>回忆本身比重读有效 10 倍。到点只做一件事：翻卡 + 重做标记题。</p>
+      <table>
+        <tr><th>时间点</th><th>复习内容</th><th>预计用时</th></tr>
+        <tr><td>第 1 天</td><td>概念卡 1–6 全部 + 回忆卡 14.2-1、14.3-2、14.4-1</td><td>10 分钟</td></tr>
+        <tr><td>第 3 天</td><td>概念卡 2、4、5（CLG/弱/强边缘化）+ 重做自测错题 + L2 第 1 题</td><td>8 分钟</td></tr>
+        <tr><td>第 7 天</td><td>三句话复述出声说一遍 + 回忆卡 14.1-1、14.4-2</td><td>10 分钟</td></tr>
+        <tr><td>第 15 天</td><td>只做合上书挑战；六条全过则本章毕业，卡在哪条就重读对应小节</td><td>15 分钟</td></tr>
+      </table>
+    </div>
+
+    <!-- 合上书挑战 -->
+    <div class="final-challenge">
+      <h3>📕 合上书挑战</h3>
+      <p class="fc-sub">现在关掉这个页面（或遮住屏幕），拿一张纸，凭记忆完成以下任务。全部做完再回来核对——这是本章真正的毕业考试。</p>
+      <ol id="challenge-list">
+        <li><span class="fc-check"></span>写出 CLG 的两条家规，并各用一句话解释为什么不能放松</li>
+        <li><span class="fc-check"></span>手算例 1 的后验：P(老化|X=2)，从密度值算到 0.87</li>
+        <li><span class="fc-check"></span>写出全方差公式，手算例 2 的 Var(X)=3.16，并说出矩匹配丢了什么</li>
+        <li><span class="fc-check"></span>画出"消去连续变量 → 混合分量爆炸"的机制示意（谁传染谁、分量怎么翻倍）</li>
+        <li><span class="fc-check"></span>对比弱边缘化与强边缘化：定义、保留什么、适用条件</li>
+        <li><span class="fc-check"></span>回答本章的主线问题：混合网络的消去算法在哪里会断、为什么？（一句话）</li>
+      </ol>
+    </div>
+
+    <div class="complete-zone">
+      <button class="btn-complete" id="btn-complete" onclick="markDone()">✓ 我已完成本章（含合上书挑战）</button>
+    </div>
+
+    <div class="chapter-nav">
+      <a href="chapter-13.html"><span class="nav-dir">← 上一章</span>第13章 MAP 推理</a>
+      <a href="chapter-15.html" class="next"><span class="nav-dir">下一章 →</span>第15章 动态网络中的推理</a>
+    </div>
+
+  </div>
+</div>
+
+<footer class="footer">
+  <div class="wrap">第14章 混合网络中的推理 · PGM 互动讲义 · 基于 Koller &amp; Friedman (2009)</div>
+</footer>
+
+<script src="assets/mermaid.min.js"></script>
+<script>
+mermaid.initialize({
+  startOnLoad: true,
+  theme: "base",
+  themeVariables: {
+    primaryColor: "#e3edf7",
+    primaryBorderColor: "#1d5f9e",
+    primaryTextColor: "#1d5f9e",
+    lineColor: "#5c554b",
+    secondaryColor: "#fbeedd",
+    tertiaryColor: "#f5f1e8",
+    fontFamily: "-apple-system, PingFang SC, sans-serif",
+    fontSize: "14px"
+  },
+  flowchart: { curve: "linear", htmlLabels: false }
+});
+</script>
+<script>
+// 自测题逻辑
+document.querySelectorAll(".quiz-block").forEach(block => {
+  const answer = block.dataset.answer;
+  const explain = block.querySelector(".quiz-explain");
+  block.querySelectorAll(".quiz-opts li").forEach(li => {
+    li.addEventListener("click", () => {
+      const opts = block.querySelectorAll(".quiz-opts li");
+      opts.forEach(o => o.classList.add("disabled"));
+      if (li.dataset.opt === answer) {
+        li.classList.add("correct");
+      } else {
+        li.classList.add("wrong");
+        block.querySelector(`[data-opt="${answer}"]`).classList.add("correct");
+      }
+      explain.classList.add("show");
+    });
+  });
+});
+
+// 合上书清单打勾
+document.querySelectorAll("#challenge-list li").forEach(li => {
+  li.addEventListener("click", () => li.classList.toggle("checked"));
+});
+
+// 完成标记 → localStorage（第14章）
+const KEY = "pgm_progress_v1";
+function loadProgress() {
+  try { return JSON.parse(localStorage.getItem(KEY)) || {}; } catch (e) { return {}; }
+}
+const progress = loadProgress();
+const btn = document.getElementById("btn-complete");
+if (progress[14] && progress[14].done) {
+  btn.textContent = "✓ 已完成 · 再次点击重置";
+  btn.classList.add("done");
+}
+function markDone() {
+  const p = loadProgress();
+  if (p[14] && p[14].done) {
+    delete p[14];
+    btn.textContent = "✓ 我已完成本章（含合上书挑战）";
+    btn.classList.remove("done");
+  } else {
+    p[14] = { done: true, completedAt: Date.now(), reviewsDone: 0 };
+    btn.textContent = "✓ 已完成 · 复习提醒已开启";
+    btn.classList.add("done");
+  }
+  localStorage.setItem(KEY, JSON.stringify(p));
+}
+</script>
+
+</body>
+</html>

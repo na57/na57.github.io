@@ -1,0 +1,755 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第20章 马尔可夫网络学习 · PGM 互动讲义</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+<nav class="topbar">
+  <div class="topbar-inner">
+    <span class="brand"><a href="index.html" style="color:inherit">← 学习地图</a></span>
+    <span class="crumb">阶段三 · 学习 / 第20章</span>
+  </div>
+</nav>
+
+<div class="wrap">
+
+  <div class="lecture-head">
+    <span class="ch-label">CHAPTER 20 · 学习</span>
+    <h1>马尔可夫网络学习</h1>
+    <p class="lead">无向模型的 Z(θ) 把一切变难：梯度要算期望，结构学习要算配分。本章讲怎么绕。</p>
+  </div>
+
+  <!-- 本章定位 -->
+  <div class="position-bar">
+    <strong>本章在主线上的位置：</strong>第17章享受有向模型的计数红利并在结尾预警"无向模型没有闭式解" → <u>本章兑现那张账单：logZ(θ) 耦合让参数学习必须迭代、结构学习评分不可分解</u> → 之后进入因果推断（Ch21）与决策（Ch22–23）。<br>
+    第20章回答主线问题：<strong>当模型是无向的（马尔可夫网络 / CRF）时，参数与结构怎么学？为什么几乎每种方法都可以理解为"绕开 logZ(θ)"？</strong>
+    <div class="map-inline">
+      <span class="node">Ch17 有向参数学习（计数）</span><span class="arrow">→</span>
+      <span class="node">Ch18 结构学习（评分可分解）</span><span class="arrow">→</span>
+      <span class="node">Ch19 不完全数据（EM）</span><span class="arrow">→</span>
+      <span class="node here">Ch20 马尔可夫网络学习（绕开 logZ）</span><span class="arrow">→</span>
+      <span class="node">Ch21 因果推断基础</span>
+    </div>
+  </div>
+
+  <!-- 学习目标 -->
+  <div class="objectives">
+    <h4>🎯 学完本章，合上书你应该能：</h4>
+    <ol>
+      <li>写出对数线性 MN 的对数似然与梯度公式，指出 logZ(θ) 如何让参数互相耦合</li>
+      <li>说出 MN 似然是凹函数（无局部最优）但无闭式解这个"好消息坏消息对"</li>
+      <li>对一个 2 节点小模型手算 Z、模型期望 E_θ[f] 与一步梯度方向</li>
+      <li>写出伪似然公式，解释它如何把全局归一化拆成局部归一化</li>
+      <li>讲透 CRF：为什么条件化之后 Z 变成每个样本的局部量、链式结构如何前向-后向求解</li>
+      <li>解释 MN 结构学习为什么评分不可分解，L1 正则如何充当"软删边"</li>
+    </ol>
+  </div>
+
+  <div class="lecture">
+
+    <!-- 推导主线 -->
+    <div class="figure">
+      <div class="mermaid">
+flowchart LR
+  A["第17章的反面对照：<br>模型换成无向"] --> B["logZ(θ) 全局耦合<br>似然不可分解"]
+  B --> C["梯度 = 数据计数<br>− M·模型期望（要推理）"]
+  C --> D["绕行方案一：<br>伪似然 / 对比散度"]
+  C --> E["绕行方案二：CRF<br>条件化使 Z 变局部"]
+  D --> F["结构学习：评分不可分解<br>L1 正则软删边"]
+  E --> F
+  F --> G["代价：每步都要推理或采样<br>规模一大全部变近似"]
+  classDef hot fill:#fbeedd,stroke:#c4651f,stroke-width:2.5px,color:#c4651f;
+  classDef danger fill:#fae9e7,stroke:#b03a2e,stroke-width:2.5px,color:#b03a2e;
+  class B hot;
+  class G danger;
+      </div>
+      <div class="caption">本章推导主线：一切困难从 logZ(θ)（橙色）出发，一切技术都是绕开它的方案；终点（红色）是绕不开的账单——推理或采样成为学习的内循环。</div>
+    </div>
+
+    <!-- ============ 20.1 ============ -->
+    <h2><span class="sec-no">20.1</span>为什么难：logZ(θ) 把参数耦成一团</h2>
+
+    <p>回忆第4章：马尔可夫网络用对数线性形式写为 P(x) = (1/Z(θ))·exp(Σᵢ θᵢ fᵢ(x))，其中 fᵢ 是<span class="term">特征</span>（Feature），θᵢ 是其权重。M 条完整数据的对数似然：</p>
+
+    <div class="formula">ℓ(θ : D) = ∑<sub>m</sub> ∑<sub>i</sub> θᵢ fᵢ(x⁽ᵐ⁾) − M · log Z(θ)</div>
+
+    <p>前一项是"数据特征计数"，按样本、按特征分解，好算。全部麻烦在第二项：<span class="term">配分函数</span> Z(θ) = Σ<sub>x</sub> exp(Σᵢ θᵢfᵢ(x)) <strong>依赖所有参数</strong>，而且要对全体赋值求和——第17章结尾预告的"耦合"就在这里：每个 θᵢ 都被拽进同一个全局归一化，"分别令导数为零"得到互相纠缠的方程组，<strong>无闭式解</strong>。</p>
+
+    <p>看梯度更清楚：</p>
+
+    <div class="formula">∂ℓ/∂θᵢ = ∑<sub>m</sub> fᵢ(x⁽ᵐ⁾) − M · E<sub>θ</sub>[fᵢ(X)]</div>
+
+    <p>第一项：<strong>数据中特征 i 出现了多少次</strong>（数一下就行）。第二项：<strong>当前模型认为特征 i 应该出现多少次</strong>——模型分布下的期望，算它要做一次推理（第9–11章）。梯度的方向异常优美：<strong>把每个特征的"模型预期"拉向"数据现实"</strong>，不动时就是 MLE（矩匹配）。但每走一步梯度，都要先解一个推理问题。</p>
+
+    <div class="box insight">
+      <span class="cc-k" style="display:inline-block;margin-right:.4em">✅ 好消息坏消息对</span>
+      <p>坏消息：无闭式解，必须迭代，且每步内嵌推理。好消息：<strong>ℓ(θ) 是 θ 的凹函数</strong>——没有局部最优，迭代收敛到的就是全局最优（对比第19章 EM 的多峰困境）。MN 参数学习难在"每一步贵"，不难在"会迷路"。</p>
+    </div>
+
+    <h3>例 1：最小模型完整手算</h3>
+    <p>两个二元变量 X—Y，一条边，一个特征 f = 1[X=Y]（"两者一致"），当前参数 θ = ln 2（即一致时势函数 e<sup>θ</sup> = 2，不一致时 1）。枚举 4 种赋值：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>赋值 (X,Y)</th><th>f</th><th>未归一化权重 e<sup>θf</sup></th></tr>
+        <tr><td>(0,0)</td><td>1</td><td>2</td></tr>
+        <tr><td>(0,1)</td><td>0</td><td>1</td></tr>
+        <tr><td>(1,0)</td><td>0</td><td>1</td></tr>
+        <tr><td>(1,1)</td><td>1</td><td>2</td></tr>
+      </table>
+    </div>
+
+    <p><strong>Z = 2+1+1+2 = 6</strong>；模型期望 E_θ[f] = P(X=Y) = (2+2)/6 = <strong>2/3 ≈ 0.667</strong>。若数据中一致的比例是 0.8，则梯度 = 0.8 − 0.667 = <strong>+0.133</strong>（每条样本平均）——θ 应该增大，模型确实"低估"了一致性。若数据比例是 0.5，梯度为负，θ 减小。<strong>方向永远由"数据 vs 模型预期"的差给出。</strong></p>
+
+    <!-- 回忆卡片 20.1 -->
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 20.1-1</div>
+              <div class="q-text">写出 MN 对数似然梯度，指出哪一项难算、为什么。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              ∂ℓ/∂θᵢ = Σₘfᵢ(x⁽ᵐ⁾) − M·E_θ[fᵢ]。难在第二项：模型分布下的特征期望，需要在当前模型里做推理（或采样估计）才能算。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 20.1-2</div>
+              <div class="q-text">例 1 中 θ=ln2 时 Z 与 E_θ[f] 各是多少？数据一致比例 0.8 时梯度方向？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              Z = 2+1+1+2 = 6；E_θ[f] = 4/6 = 2/3 ≈ 0.667。梯度 = 0.8 − 0.667 = +0.133 &gt; 0，θ 增大（模型低估了一致性）。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 20.2 ============ -->
+    <h2><span class="sec-no">20.2</span>绕行方案一：伪似然、Piecewise 与对比散度</h2>
+
+    <p>既然全局 Z 太贵，能不能把"全局归一化"拆成一堆"局部归一化"？<span class="term">伪似然</span>（Pseudo-Likelihood）正是这个思路：不建模联合 P(x)，改为建模每个变量给定其邻居的条件分布，然后相乘：</p>
+
+    <div class="formula">ℓ<sub>PL</sub>(θ) = ∑<sub>m</sub> ∑<sub>i</sub> log P(xᵢ⁽ᵐ⁾ | x<sub>−i</sub>⁽ᵐ⁾ ; θ)</div>
+
+    <p>关键：P(xᵢ | x<sub>−i</sub>) 只依赖 i 的<span class="term">马尔可夫毯</span>（邻居），其归一化只对<strong>单个变量的取值</strong>求和——二元变量就是 2 项相加，便宜至极。全局 Z 被拆成 n 个局部小 Z，彻底驯服。</p>
+
+    <p><strong>例 1 续算</strong>：P(X=1 | Y=1) = e<sup>θ·1</sup> / (e<sup>θ·0</sup> + e<sup>θ·1</sup>) = 2/(1+2) = <strong>2/3</strong>；P(X=1 | Y=0) = 1/(1+2) = <strong>1/3</strong>。若数据中 Y=1 时 X=1 占 0.8，伪似然会推高 θ——与全似然同向，但全程没碰 Z=6 那个全局量。</p>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 伪似然 ≠ 似然</span>
+      <p>条件概率的乘积一般不等于联合分布，伪似然是一个"代理目标"。好消息：它在一致性上有理论保证（样本趋于无穷时收敛到真参数）；坏消息：小样本下可能比真 MLE 差，且不能直接用来比较结构。</p>
+    </div>
+
+    <p>两个近亲，各一句话：</p>
+    <ul>
+      <li><strong>Piecewise / 条件似然</strong>：把图切成小块，每块内部精确归一化、块间近似独立——伪似然是"块 = 单变量马尔可夫毯"的极端情形，块越大越接近真似然、越贵。</li>
+      <li><span class="term">对比散度</span>（Contrastive Divergence, CD）：回到全似然梯度，但把"模型期望"换成<strong>从数据出发只跑 k 步 MCMC 的采样期望</strong>：Δθ ∝ f(x<sub>data</sub>) − f(x<sub>sampled</sub>)。k 小到 1 都常常够用——RBM/深度玻尔兹曼机的标配训练法。</li>
+    </ul>
+
+    <!-- 回忆卡片 20.2 -->
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 20.2-1</div>
+              <div class="q-text">写出伪似然公式，并解释它如何绕开全局 Z。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              ℓ_PL = ΣₘΣᵢ log P(xᵢ⁽ᵐ⁾|x₋ᵢ⁽ᵐ⁾;θ)。每个局部条件只涉马尔可夫毯，归一化只对单变量取值求和——全局 Z 拆成 n 个局部小 Z。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 20.2-2</div>
+              <div class="q-text">对比散度如何近似全似然梯度中的模型期望项？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              用"从数据样本出发只跑 k 步 MCMC"得到的采样点的特征值代替模型期望：Δθ ∝ f(x_data) − f(x_sampled)，避免精确推理。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 20.3 ============ -->
+    <h2><span class="sec-no">20.3</span>绕行方案二：CRF——条件化让 Z 变局部（本章最该讲透）</h2>
+
+    <p>大量真实任务其实是<strong>判别式</strong>的：给定输入 X，预测输出 Y——词性标注、图像分割、实体识别。这时我们根本不需要建模 P(X)，只需要 P(Y|X)。<span class="term">条件随机场</span>（Conditional Random Field, CRF）就是"MN 的条件版"：</p>
+
+    <div class="formula">P(Y | X) = <span class="frac"><span class="num-part">1</span><span class="den-part">Z(X)</span></span> exp( ∑<sub>i</sub> θᵢ fᵢ(Y, X) )，其中 Z(X) = ∑<sub>y</sub> exp( ∑<sub>i</sub> θᵢ fᵢ(y, X) )</div>
+
+    <p>看 Z(X) 和生成式 MN 的 Z 差在哪：生成式的 Z 要对 <strong>X 和 Y 的全体赋值</strong>求和；CRF 的 Z(X) 里 <strong>X 是给定的</strong>，只对 Y 求和。这带来两个决定性变化：</p>
+
+    <ol>
+      <li><strong>Z 变成"每个样本的局部量"</strong>：对数似然 ℓ = Σₘ [Σᵢ θᵢfᵢ(y⁽ᵐ⁾,x⁽ᵐ⁾) − log Z(x⁽ᵐ⁾)]，每个样本贡献自己的一项，互不耦合——<strong>恢复了按样本分解</strong>，样本间可以并行。</li>
+      <li><strong>链式结构上 Z 精确可算</strong>：Y 排成链（序列标注的典型结构）时，对 y 求和可以用<span class="term">前向-后向算法</span>（Forward-Backward，HMM 同款动态规划）在线性时间完成——不用枚举指数级序列。</li>
+    </ol>
+
+    <p>梯度同样变成"数据计数 − 每样本局部期望"：</p>
+
+    <div class="formula">∂ℓ/∂θᵢ = ∑<sub>m</sub> [ fᵢ(y⁽ᵐ⁾, x⁽ᵐ⁾) − E<sub>P(Y|x⁽ᵐ⁾)</sub>[fᵢ] ]</div>
+
+    <div class="box idea">
+      <span class="box-tag">💡 为什么这是全章最该带走的洞见</span>
+      <p>CRF 没有发明新数学，它只是换了一个问题：<strong>不建模输入的分布，配分函数就从"全局怪物"缩成"每样本的局部和"</strong>。生成式（MN）要学整个世界 P(X,Y)，判别式（CRF）只学分界线 P(Y|X)——目标小了，Z 就驯服了。这也是"生成式 vs 判别式"之争在 PGM 里的精确形态。</p>
+    </div>
+
+    <p><strong>例：NER 一瞥</strong>。给句子"云南大学位于昆明"标注实体序列 Y₁…Y₆。特征如 f = 1[Y_t = 地名 且 X_t = "昆明"]、转移特征 g = 1[Y_t = 人名 且 Y_{t+1} = 机构名]。Y 是链 → 前向-后向算 Z(x) 与每个位置的边际 → 梯度可算 → 梯度上升求解。整条流水线没有一步需要枚举 6 个标签的全组合。</p>
+
+    <h3>链上 CRF 的前向-后向：把 Z(x) 亲手算出来</h3>
+
+    <p>"前向-后向线性可算"这句话到此为止还只是承诺。现在拿一条最小的 3 节点链，把 Z(x) 和每个位置的边际从头到尾手算一遍——算完你会发现，这套递推你其实已经学过。</p>
+
+    <p><strong>设定</strong>：链 Y₁—Y₂—Y₃，标签二值 {0,1}。观测 x 通过节点因子进入：ψ₁(y₁)：y₁=0 时取 3、y₁=1 时取 1（来自观测 x₁ 的局部证据；其余节点因子为 1）。边因子"相同 2 / 不同 1"：ψ₁₂(a,b) 与 ψ₂₃(b,c) 均在 a=b 时取 2、a≠b 时取 1。未归一化得分与配分函数：</p>
+
+    <div class="formula">P̃(y | x) = ψ₁(y₁)·ψ₁₂(y₁,y₂)·ψ₂₃(y₂,y₃)， Z(x) = ∑<sub>y</sub> P̃(y | x)</div>
+
+    <div class="figure">
+      <div class="mermaid">
+flowchart LR
+  X1["x₁ 局部证据 ψ₁=(3,1)"] --- N1["Y₁"]
+  N1 ---|"ψ₁₂：相同 2 不同 1"| N2["Y₂"]
+  N2 ---|"ψ₂₃：相同 2 不同 1"| N3["Y₃"]
+      </div>
+      <div class="caption">3 节点链式 CRF：观测只通过 ψ₁ 进入，两条边因子鼓励相邻标签一致。</div>
+    </div>
+
+    <p><strong>前向递推 α</strong>：定义 α₁(y₁) = ψ₁(y₁)，通项为</p>
+
+    <div class="formula">α<sub>t</sub>(y<sub>t</sub>) = ∑<sub>y<sub>t−1</sub></sub> α<sub>t−1</sub>(y<sub>t−1</sub>)·ψ<sub>t−1,t</sub>(y<sub>t−1</sub>, y<sub>t</sub>)</div>
+
+    <p>逐格代入数字（每个向量按 (y=0, y=1) 两个取值列出）：</p>
+
+    <div class="formula">α₁ = ψ₁ = (3, 1)</div>
+    <div class="formula">α₂(0) = 3·2 + 1·1 = 7， α₂(1) = 3·1 + 1·2 = 5 ⟹ α₂ = (7, 5)</div>
+    <div class="formula">α₃(0) = 7·2 + 5·1 = 19， α₃(1) = 7·1 + 5·2 = 17 ⟹ α₃ = (19, 17)</div>
+    <div class="formula">Z(x) = ∑<sub>y₃</sub> α₃(y₃) = 19 + 17 = <strong>36</strong></div>
+
+    <p><strong>后向递推 β</strong>：从链尾出发，β₃ = (1, 1)，通项为</p>
+
+    <div class="formula">β<sub>t</sub>(y<sub>t</sub>) = ∑<sub>y<sub>t+1</sub></sub> ψ<sub>t,t+1</sub>(y<sub>t</sub>, y<sub>t+1</sub>)·β<sub>t+1</sub>(y<sub>t+1</sub>)</div>
+
+    <div class="formula">β₂(0) = 2·1 + 1·1 = 3， β₂(1) = 1·1 + 2·1 = 3 ⟹ β₂ = (3, 3)</div>
+    <div class="formula">β₁(0) = 2·3 + 1·3 = 9， β₁(1) = 1·3 + 2·3 = 9 ⟹ β₁ = (9, 9)</div>
+
+    <p><strong>交叉验证</strong>：在任意节点汇合都该得到同一个 Z。用链头验：Z(x) = ∑<sub>y₁</sub> α₁(y₁)·β₁(y₁) = 3·9 + 1·9 = <strong>36</strong> ✓——两个方向算的是同一个量，方向不同只是求和顺序不同。</p>
+
+    <p><strong>边际</strong>：每个位置的后验用 α·β/Z 直接读出：</p>
+
+    <div class="formula">P(Y<sub>t</sub> = y<sub>t</sub> | x) = <span class="frac"><span class="num-part">α<sub>t</sub>(y<sub>t</sub>)·β<sub>t</sub>(y<sub>t</sub>)</span><span class="den-part">Z(x)</span></span></div>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>量（按 (y=0, y=1)）</th><th>Y₁</th><th>Y₂</th><th>Y₃</th></tr>
+        <tr><td>前向 α<sub>t</sub></td><td>(3, 1)</td><td>(7, 5)</td><td>(19, 17)</td></tr>
+        <tr><td>后向 β<sub>t</sub></td><td>(9, 9)</td><td>(3, 3)</td><td>(1, 1)</td></tr>
+        <tr><td>α<sub>t</sub>·β<sub>t</sub>（未归一化）</td><td>(27, 9)</td><td>(21, 15)</td><td>(19, 17)</td></tr>
+        <tr><td>P(Y<sub>t</sub>=0 | x) = α<sub>t</sub>(0)β<sub>t</sub>(0)/Z</td><td>27/36 = <strong>3/4</strong></td><td>21/36 = <strong>7/12 ≈ 0.583</strong></td><td><strong>19/36 ≈ 0.528</strong></td></tr>
+      </table>
+    </div>
+
+    <p>读最后一行：局部证据 ψ₁ 把 Y₁ 狠狠拉向 0（3/4），这股拉力沿链逐节衰减——到 Y₂ 剩 7/12，到 Y₃ 只剩 19/36。<strong>证据的影响沿链传播、随距离衰减</strong>，在这张表里可以直接看见。</p>
+
+    <div class="box insight">
+      <span class="box-tag">✅ 这和第10章是同一件事</span>
+      <p>回头对照第10章 §10.4（消息传播与校准：两遍传遍全树）：这里的 α 递推就是在链上做变量消去——α₂ 正是消去 Y₁ 后留下的因子，α₃ 是再消去 Y₂，最后对 Y₃ 求和得 Z。前向-后向没有新数学，它只是"从两端各消一遍"（收集 + 分发）：左端到 Y<sub>t</sub> 的部分和存进 α<sub>t</sub>，右端到 Y<sub>t</sub> 的部分和存进 β<sub>t</sub>，于是<strong>每个节点的边际都能用 α·β/Z 拿到，不必为每个查询重新消元</strong>——这正是团树"一次校准、回答所有查询"在链上的样子。</p>
+    </div>
+
+    <p>最后把学习闭环接上：对数线性视角下，ln Z(x) 对特征权重的梯度仍是"数据计数 − 模型期望"（回看第17章 §17.6）——</p>
+
+    <div class="formula"><span class="frac"><span class="num-part">∂ ln Z(x)</span><span class="den-part">∂θᵢ</span></span> = E<sub>P(Y|x)</sub>[fᵢ]</div>
+
+    <p>只不过这里的期望要用上面这套前向-后向<strong>对每个样本 x 各算一遍</strong>：每轮迭代先跑一遍这张图拿到 α、β 与边际，再按"数据 vs 模型预期"的差更新 θ。<strong>学习 CRF 的每一步梯度，内循环里跑的都是这条链。</strong></p>
+
+    <!-- 回忆卡片 20.3 -->
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 20.3-1</div>
+              <div class="q-text">CRF 的 Z(X) 与生成式 MN 的 Z 有什么本质差别？带来哪两个好处？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              Z(X) 只对 Y 求和（X 给定），而生成式 Z 对 X、Y 全体求和。好处：① Z 变成每样本局部量，似然按样本分解可并行；② 链式 Y 上前向-后向线性可算。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 20.3-2</div>
+              <div class="q-text">写出 CRF 的似然梯度，并说出它和 MN 全似然梯度的结构相似点。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              ∂ℓ/∂θᵢ = Σₘ[fᵢ(y⁽ᵐ⁾,x⁽ᵐ⁾) − E_{P(Y|x⁽ᵐ⁾)}[fᵢ]]。同样是"数据特征计数 − 模型期望"，只是期望从全局模型分布换成每样本的条件分布。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 20.4 ============ -->
+    <h2><span class="sec-no">20.4</span>结构学习：评分不可分解，L1 来软删边</h2>
+
+    <p>第18章的结构学习靠"评分可分解"活着：Score = Σᵢ FamScore，局部改动局部重算。无向模型这份礼物也被 logZ 收走了：<strong>每条边的增删都改变 Z(θ)，从而改变所有参数的 MLE 和整个似然</strong>——评分不可分解，第18章的高效爬山在 MN 上失效，每次候选评估都要重训一次全模型。</p>
+
+    <p>主流出路是把"结构学习"转化为"参数学习的正则化"：<span class="term">L1 正则</span></p>
+
+    <div class="formula">max<sub>θ</sub> ℓ(θ : D) − λ ∑<sub>i</sub> |θᵢ|</div>
+
+    <p>L1 惩罚的几何性质会把不重要的 θᵢ <strong>精确压到 0</strong>——θᵢ = 0 意味着特征 i 消失、对应的边被删掉。λ 控制稀疏度：λ 大则图稀疏。于是"选结构"变成"调 λ 的连续优化"，绕开了离散图搜索。配套做法还有<strong>伪似然邻域选择</strong>：对每个变量用伪似然 + L1 学"谁是我的邻居"，拼起来即得骨架。</p>
+
+    <h3>收尾对照表：有向 vs 无向，难在哪</h3>
+    <div class="tbl-wrap">
+      <table>
+        <tr><th></th><th>贝叶斯网络（Ch17/18）</th><th>马尔可夫网络（本章）</th></tr>
+        <tr><td>参数学习 MLE</td><td>闭式：频率计数</td><td>无闭式解；梯度含模型期望，每步要推理</td></tr>
+        <tr><td>似然曲面</td><td>分解后逐族独立</td><td>凹（无局部最优）但不可分解</td></tr>
+        <tr><td>结构学习评分</td><td>可分解，爬山高效</td><td>不可分解；转 L1 正则 / 伪似然邻域选择</td></tr>
+        <tr><td>不完全数据</td><td>EM（Ch19）</td><td>更难：E 步与梯度都要推理，困难叠加</td></tr>
+        <tr><td>判别式任务</td><td>生成式，需建模 P(X)</td><td>CRF：Z 变局部，链上前向-后向可解</td></tr>
+      </table>
+    </div>
+
+    <!-- 回忆卡片 20.4 -->
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 20.4-1</div>
+              <div class="q-text">为什么 MN 的结构评分不可分解？后果是什么？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              每条边的增删改变 Z(θ)，进而改变所有参数的 MLE 与全局似然。后果：第18章的局部爬山失效，每次评估候选结构都要重训全模型。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 20.4-2</div>
+              <div class="q-text">L1 正则如何充当"软删边"？λ 起什么作用？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              max ℓ − λΣ|θᵢ|：L1 把不重要权重精确压到 0，特征/边随之消失。λ 控制稀疏度——离散结构搜索变成连续参数优化。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 概念卡 ============ -->
+    <h2><span class="sec-no">🃏</span>概念卡：本章概念的一分钟画像</h2>
+    <p>翻面前先自问：这个概念我能用一句话讲清楚吗？</p>
+    <div class="flip-grid">
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 1</div>
+            <div class="q-text">logZ(θ) 耦合（Partition-Function Coupling）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">Z(θ) = Σₓ exp(Σᵢθᵢfᵢ(x)) 依赖全部参数且需全局求和。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">它是被绕开的对象：MN 参数与结构学习困难的总根源。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">全班调分：动一个人的分，所有人排名都变。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为只是"算得慢"——它同时摧毁闭式解、分解性与结构评分。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">本章一切技术的靶子；与 Ch4 的"Z 难算"首尾呼应。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 2</div>
+            <div class="q-text">模型期望项 E_θ[fᵢ]（Moment Matching）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">梯度 = 数据特征计数 − M·E_θ[fᵢ]；不动点处模型预期 = 数据现实。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">给出无闭式解时的迭代方向；MLE 等价于矩匹配。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">教练纠正动作：看（数据）的和做（模型）的对齐为止。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为能一次算完——每步都要重新推理，参数变了期望就变。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">一切对数线性模型（最大熵、CRF、RBM）的训练核心。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 3</div>
+            <div class="q-text">伪似然（Pseudo-Likelihood）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">ℓ_PL = ΣₘΣᵢ log P(xᵢ⁽ᵐ⁾|x₋ᵢ⁽ᵐ⁾;θ)，条件概率乘积代替联合似然。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">把全局归一化拆成单变量局部归一化，绕开 Z。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">不问"整张卷子多难"，只问"给定同桌答案，我这道题多难"。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为等于真似然——条件乘积一般 ≠ 联合；不能用它比较结构。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">大图上快速估参、邻域选择学骨架。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 4</div>
+            <div class="q-text">条件随机场（CRF）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">P(Y|X) = (1/Z(X))·exp(Σᵢθᵢfᵢ(Y,X))，Z(X) 只对 Y 求和。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">判别式任务：不建模 P(X)，配分缩成每样本局部量。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">不描绘全世界，只画分界线——目标小了，账就好算了。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为 CRF 是新数学——它只是把 MN 条件化，好处全来自换问题。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">序列标注（NER/词性）、图像分割等结构化预测标配。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 5</div>
+            <div class="q-text">对比散度（Contrastive Divergence）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">Δθ ∝ f(x_data) − f(x_sampled)：用 k 步 MCMC 采样代替模型期望。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">精确推理太贵时的梯度近似，k=1 都常够用。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">不看全世界的平均，只看"从现实出发走一小步"的样子。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为是无偏梯度——有偏，但偏差在实践中可接受。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">RBM、深度玻尔兹曼机等能量模型的标准训练法。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 6</div>
+            <div class="q-text">L1 结构学习（ℓ₁-Regularized Structure Learning）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">max ℓ − λΣ|θᵢ|：连续惩罚把不重要权重压到精确的 0。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">把不可分解的离散结构搜索转化为连续凸优化。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">税收到边头上：交不起税的边自动消失。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为 λ 越大越好——过大把真边也删了，需按验证集调。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">高维 MN/高斯图模型（GLASSO）结构学习主流方案。</span></div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- ============ 分层习题 ============ -->
+    <h2><span class="sec-no">📝</span>分层习题</h2>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>判断对错：<strong>MN 的似然是凹函数，所以它的 MLE 和 BN 一样有闭式解。</strong>说明理由。</div>
+      <details>
+        <summary>提示</summary>
+        <p>凹性保证的是什么？闭式解需要的是"令导数为零可解析求解"，MN 的梯度方程满足吗？</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">错。凹性只保证"无局部最优、迭代必达全局最优"，不保证"能一步解出"。MN 的梯度方程 ∂ℓ/∂θᵢ = Σₘfᵢ − M·E_θ[fᵢ] = 0 中，E_θ[fᵢ] 是 θ 的复杂非线性函数（还要先推理才能算），方程组互相纠缠，无法解析求解——所以必须迭代优化。凹性是"不会迷路"，不是"有直达电梯"。</div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>判断对错：<strong>伪似然等于真实似然的近似，因此可以用伪似然比较两个结构的好坏。</strong>说明理由。</div>
+      <details>
+        <summary>提示</summary>
+        <p>条件概率的乘积等于联合分布吗？两个不同结构的伪似然在同一量纲上吗？</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">前半句勉强、后半句错。伪似然是代理目标：条件乘积一般不等于联合分布，不是同一量纲上的"近似似然值"。两个结构的伪似然各自在不同的条件分解下计算，数值不可比——所以伪似然适合"固定结构估参数"和"逐节点选邻居"，不适合像 BIC 那样做结构评分比较。</div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>例 1 模型：X—Y 二元，f = 1[X=Y]，θ = ln 2。手算：① Z；② E_θ[f]；③ 若 M=100 条数据中 80 条 X=Y，写出一个样本平均的梯度值并说明更新方向。</div>
+      <details>
+        <summary>提示</summary>
+        <p>枚举 4 种赋值，一致时权重 e^θ = 2，不一致时 1。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p>① Z = 2 + 1 + 1 + 2 = <strong>6</strong>。</p>
+          <p>② E_θ[f] = P(X=Y) = (2+2)/6 = <strong>2/3 ≈ 0.667</strong>。</p>
+          <p>③ 样本平均数据计数 = 80/100 = 0.8；梯度（每样本）= 0.8 − 0.667 = <strong>+0.133</strong>。梯度为正 → θ 增大 → 一致赋值的权重 e^θ 相对变大 → 模型对"一致"的预测从 0.667 向 0.8 靠拢。这就是"把模型预期拉向数据现实"的一次具体迈步。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>同例 1 模型与参数（θ = ln 2）。手算伪似然的局部条件：① P(X=1|Y=1)；② P(X=1|Y=0)；③ 说明这两个量为什么不需要全局 Z。</div>
+      <details>
+        <summary>提示</summary>
+        <p>给定 Y 时，X 只有两个取值，归一化只对 X 的两种取值求和。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p>① P(X=1|Y=1) = e^{θ·1}/(e^{θ·0}+e^{θ·1}) = 2/(1+2) = <strong>2/3</strong>。</p>
+          <p>② P(X=1|Y=0) = e^{θ·0}/(e^{θ·0}+e^{θ·1}) = 1/(1+2) = <strong>1/3</strong>。</p>
+          <p>③ 给定 Y=y 后，归一化只对 X 的两个取值求和（e^{θf(0,y)} + e^{θf(1,y)}），是一个 2 项的局部小 Z；不需要对 (X,Y) 的全部 4 种联合赋值求和。变量一多，这个差别从"4 项 vs 2 项"变成"2ⁿ 项 vs 2 项"——伪似然的全部价值就在这里。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l3">L3 建模应用</span>用 CRF 做中文 NER：输入字序列 X = x₁…x_T，输出标签序列 Y ∈ {人名, 地名, 机构, O}^T。① 画出因子图（链式）；② 设计两类特征函数；③ 写出 Z(x) 并解释为什么前向-后向能在线性时间算它；④ 若改成生成式 MN（同时建模 P(X,Y)），会多出什么困难？</div>
+      <details>
+        <summary>提示</summary>
+        <p>链式：Y_t—Y_{t+1} 转移 + Y_t—x_t 发射；Z 只对 Y 求和；生成式还要对 X 的联合分布建模。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p>① 因子图：链 Y₁—Y₂—…—Y_T，每个 Y_t 连一个发射因子 ψ(Y_t, x_t)，相邻对连转移因子 ψ(Y_t, Y_{t+1})。</p>
+          <p>② 发射特征：f = 1[Y_t = 地名 且 x_t ∈ 地名词表]、1[Y_t = 人名 且 x_t 是常见姓氏]；转移特征：g = 1[Y_t = 人名 且 Y_{t+1} = 机构]、1[Y_t = O 且 Y_{t+1} = 地名]。</p>
+          <p>③ Z(x) = Σ_{y₁…y_T} exp(Σ_t [θ·f(y_t,x_t) + θ·g(y_t,y_{t+1})])。朴素枚举是 |标签|^T 项；但链式结构下可定义前向消息 α_t(y_t) = Σ_{y_{t-1}} α_{t-1}(y_{t-1})·ψ(y_{t-1},y_t,x)，每步只对单变量求和（|标签| 项），T 步线性完成——这就是前向-后向（变量消去在链上的特例）。</p>
+          <p>④ 生成式要建模 P(X,Y)，需要额外参数化字的生成分布（特征覆盖 x 自身的依赖），配分 Z 变成对 X、Y 全体求和——x 的取值组合天文数字，Z 无法精确计算，只能伪似然/CD 近似；而且要浪费容量去建模输入分布，判别性能通常反而下降。CRF 的全部优势正是"不为 X 建模"。</p>
+        </div>
+      </details>
+    </div>
+
+    <!-- ============ 本章自测 ============ -->
+    <h2><span class="sec-no">✍️</span>本章自测</h2>
+    <p class="quiz-hint">点击选项判分，答错会给出原因。</p>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 1</div>
+      <div class="q-stem">MN 参数学习无闭式解的直接原因是：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 特征太多</li>
+        <li data-opt="b">B. logZ(θ) 依赖所有参数，使似然不可分解、梯度方程互相纠缠</li>
+        <li data-opt="c">C. 数据量不足</li>
+        <li data-opt="d">D. 似然函数非凹，存在多个局部最优</li>
+      </ul>
+      <div class="quiz-explain">选 B。logZ 把所有参数耦进全局归一化，"令导数为零"无解析解。D 恰好说反：MN 似然是凹的，无局部最优——难在每步要推理，不在会迷路。A、C 与闭式解存在性无关。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="c">
+      <div class="q-no">自测 2</div>
+      <div class="q-stem">例 1（f=1[X=Y]，θ=ln2）中 Z 与 E_θ[f] 分别是：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. Z=4，E=0.5</li>
+        <li data-opt="b">B. Z=8，E=0.5</li>
+        <li data-opt="c">C. Z=6，E=2/3</li>
+        <li data-opt="d">D. Z=6，E=1/3</li>
+      </ul>
+      <div class="quiz-explain">选 C。权重 2,1,1,2，Z=6；P(X=Y)=(2+2)/6=2/3。D 把 P(X≠Y) 当成了答案；A 误当权重全为 1；B 错把 e^{ln2} 算成 2 后又把 Z 翻倍。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="a">
+      <div class="q-no">自测 3</div>
+      <div class="q-stem">伪似然能绕开全局 Z 的原因是：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 每个局部条件只涉及单变量的马尔可夫毯，归一化只对单变量取值求和</li>
+        <li data-opt="b">B. 它假设所有变量相互独立</li>
+        <li data-opt="c">C. 它对似然取了二阶泰勒近似</li>
+        <li data-opt="d">D. 它用 MCMC 采样代替求和</li>
+      </ul>
+      <div class="quiz-explain">选 A。局部条件的归一化是小求和，全局 Z 被拆成 n 份。B 错——伪似然恰恰利用邻居信息；D 是对比散度的做法，不是伪似然；C 无此近似。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="d">
+      <div class="q-no">自测 4</div>
+      <div class="q-stem">CRF 让配分函数变得好算的根本原因是：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 它使用的特征更少</li>
+        <li data-opt="b">B. 它假设标签之间条件独立</li>
+        <li data-opt="c">C. 它用伪似然代替似然</li>
+        <li data-opt="d">D. 条件化后 X 给定，Z(X) 只对 Y 求和，是每样本局部量，链式结构上前向-后向线性可算</li>
+      </ul>
+      <div class="quiz-explain">选 D。全部优势来自"不建模 P(X)"这一个决定。B 错——CRF 恰恰建模标签间依赖（转移特征）；C 是另一种绕行方案；A 与配分函数难度无关。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 5</div>
+      <div class="q-stem">MN 结构学习比 BN 结构学习难，核心差异是：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 无向图的数量比 DAG 多</li>
+        <li data-opt="b">B. 增删边改变 Z(θ) 从而改变全局似然，评分不可分解，第18章的局部爬山失效</li>
+        <li data-opt="c">C. 无向图不能表示条件独立性</li>
+        <li data-opt="d">D. MN 不能使用 BIC 评分</li>
+      </ul>
+      <div class="quiz-explain">选 B。评分不可分解是结构层面的致命伤，逼出 L1 正则/伪似然邻域选择等替代方案。C 错——MN 用图分离表示独立性（Ch4）；D 错——BIC 可以用，只是每次评估都贵；A 不是核心困难。</div>
+    </div>
+
+    <!-- ============ 三句话复述 ============ -->
+    <div class="retell">
+      <h3>🗣️ 用自己的话，三句话讲完本章</h3>
+      <p class="retell-sub">对着空气（或室友）说出这三句。说卡壳的那句，回去重读对应小节。</p>
+      <details>
+        <summary>句1：这章解决什么问题？——</summary>
+        <div class="retell-answer">参考答案：模型是无向的（MN/CRF）时，参数和结构怎么学——第17章的计数红利在这里全部失效。</div>
+      </details>
+      <details>
+        <summary>句2：核心困难与绕行方案是什么？——</summary>
+        <div class="retell-answer">参考答案：困难是 logZ(θ) 全局耦合：梯度含模型期望、每步要推理（好在似然是凹的，不会迷路）。绕行方案三路：伪似然把全局归一化拆成局部；对比散度用短 MCMC 采样近似期望；CRF 条件化建模 P(Y|X)，让 Z 变成每样本局部量、链上前向-后向可解。结构学习评分不可分解，转用 L1 正则软删边。</div>
+      </details>
+      <details>
+        <summary>句3：它怎么给"学习"这个主题收官？——</summary>
+        <div class="retell-answer">参考答案：与第17章形成完整对照——有向靠分解计数、无向靠迭代绕 Z；至此"结构已知/未知 × 数据完全/不完全 × 有向/无向"的学习地图全部点亮，接下来进入因果推断（Ch21）与决策（Ch22–23）。</div>
+      </details>
+    </div>
+
+    <!-- ============ 复习计划 ============ -->
+    <div class="review-plan">
+      <h3>🔁 间隔复习计划</h3>
+      <p>回忆本身比重读有效 10 倍。到点只做一件事：翻卡 + 重做标记题。</p>
+      <table>
+        <tr><th>时间点</th><th>复习内容</th><th>预计用时</th></tr>
+        <tr><td>第 1 天</td><td>概念卡 1–6 全部 + 回忆卡 20.1-1、20.3-1、20.4-1</td><td>10 分钟</td></tr>
+        <tr><td>第 3 天</td><td>概念卡 1、3、4（logZ/伪似然/CRF）+ 重做自测错题 + L2 两题重算</td><td>8 分钟</td></tr>
+        <tr><td>第 7 天</td><td>三句话复述出声说一遍 + 回忆卡 20.2-1、20.4-2 + 收尾对照表默写</td><td>10 分钟</td></tr>
+        <tr><td>第 15 天</td><td>只做合上书挑战；六条全过则本章毕业，卡在哪条就重读对应小节</td><td>15 分钟</td></tr>
+      </table>
+    </div>
+
+    <!-- 合上书挑战 -->
+    <div class="final-challenge">
+      <h3>📕 合上书挑战</h3>
+      <p class="fc-sub">现在关掉这个页面（或遮住屏幕），拿一张纸，凭记忆完成以下任务。全部做完再回来核对——这是本章真正的毕业考试。</p>
+      <ol id="ch20-challenge-list">
+        <li><span class="fc-check"></span>写出 MN 对数似然与梯度公式，指出 logZ 如何耦合参数、哪一项要推理</li>
+        <li><span class="fc-check"></span>说出"好消息坏消息对"：为什么无局部最优却仍无闭式解</li>
+        <li><span class="fc-check"></span>对例 1（f=1[X=Y]，θ=ln2）重算 Z=6、E_θ[f]=2/3，并算出数据比例 0.8 时的梯度方向</li>
+        <li><span class="fc-check"></span>写出伪似然公式，解释它如何拆碎全局 Z；说出它不能干什么（比较结构）</li>
+        <li><span class="fc-check"></span>讲清 CRF 的关键一步：条件化为什么让 Z 变局部、链式上用什么算法算 Z</li>
+        <li><span class="fc-check"></span>回答本章主线问题：无向模型的 Z(θ) 把哪三件事变难了，各自怎么绕？（一句话）</li>
+      </ol>
+    </div>
+
+    <div class="complete-zone">
+      <button class="btn-complete" id="ch20-btn-complete" onclick="markDone()">✓ 我已完成本章（含合上书挑战）</button>
+    </div>
+
+    <div class="chapter-nav">
+      <a href="chapter-19.html"><span class="nav-dir">← 上一章</span>第19章 不完全数据下的学习</a>
+      <a href="chapter-21.html" class="next"><span class="nav-dir">下一章 →</span>第21章 因果推断基础</a>
+    </div>
+
+  </div>
+</div>
+
+<footer class="footer">
+  <div class="wrap">第20章 马尔可夫网络学习 · PGM 互动讲义 · 基于 Koller &amp; Friedman (2009)</div>
+</footer>
+
+<script src="assets/mermaid.min.js"></script>
+<script>
+mermaid.initialize({
+  startOnLoad: true,
+  theme: "base",
+  themeVariables: {
+    primaryColor: "#e3edf7",
+    primaryBorderColor: "#1d5f9e",
+    primaryTextColor: "#1d5f9e",
+    lineColor: "#5c554b",
+    secondaryColor: "#fbeedd",
+    tertiaryColor: "#f5f1e8",
+    fontFamily: "-apple-system, PingFang SC, sans-serif",
+    fontSize: "14px"
+  },
+  flowchart: { curve: "linear", htmlLabels: false }
+});
+</script>
+<script>
+// 自测题判分
+document.querySelectorAll(".quiz-block").forEach(block => {
+  const answer = block.dataset.answer;
+  const explain = block.querySelector(".quiz-explain");
+  block.querySelectorAll(".quiz-opts li").forEach(li => {
+    li.addEventListener("click", () => {
+      const opts = block.querySelectorAll(".quiz-opts li");
+      opts.forEach(o => o.classList.add("disabled"));
+      if (li.dataset.opt === answer) {
+        li.classList.add("correct");
+      } else {
+        li.classList.add("wrong");
+        block.querySelector(`[data-opt="${answer}"]`).classList.add("correct");
+      }
+      explain.classList.add("show");
+    });
+  });
+});
+
+// 合上书清单打勾
+document.querySelectorAll("#ch20-challenge-list li").forEach(li => {
+  li.addEventListener("click", () => li.classList.toggle("checked"));
+});
+
+// 完成标记 → localStorage（第20章）
+const KEY = "pgm_progress_v1";
+function loadProgress() {
+  try { return JSON.parse(localStorage.getItem(KEY)) || {}; } catch (e) { return {}; }
+}
+const progress = loadProgress();
+const btn = document.getElementById("ch20-btn-complete");
+if (progress[20] && progress[20].done) {
+  btn.textContent = "✓ 已完成 · 再次点击重置";
+  btn.classList.add("done");
+}
+function markDone() {
+  const p = loadProgress();
+  if (p[20] && p[20].done) {
+    delete p[20];
+    btn.textContent = "✓ 我已完成本章（含合上书挑战）";
+    btn.classList.remove("done");
+  } else {
+    p[20] = { done: true, completedAt: Date.now(), reviewsDone: 0 };
+    btn.textContent = "✓ 已完成 · 复习提醒已开启";
+    btn.classList.add("done");
+  }
+  localStorage.setItem(KEY, JSON.stringify(p));
+}
+</script>
+
+</body>
+</html>

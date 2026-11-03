@@ -1,0 +1,856 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第15章 动态网络中的推理 · PGM 互动讲义</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+<nav class="topbar">
+  <div class="topbar-inner">
+    <span class="brand"><a href="index.html" style="color:inherit">← 学习地图</a></span>
+    <span class="crumb">阶段二 · 推理 / 第15章</span>
+  </div>
+</nav>
+
+<div class="wrap">
+
+  <div class="lecture-head">
+    <span class="ch-label">CHAPTER 15 · 推理</span>
+    <h1>动态网络中的推理</h1>
+    <p class="lead">时间可以无限长，但聪明的做法是永远只维护一条马尔可夫链的"当前信念"。</p>
+  </div>
+
+  <!-- 本章定位 -->
+  <div class="position-bar">
+    <strong>本章在主线上的位置：</strong>Ch6 定义了动态贝叶斯网络（模板复制） → <u>本章利用时间马尔可夫结构做专门推理：前向-后向、Viterbi、卡尔曼与粒子滤波</u> → 推理部分到此收官，学习（Ch16–20）回答"这些模型从数据怎么来"。<br>
+    第15章回答主线上的第十五个问题：<strong>序列数据一条时间步一条时间步地长，如何避免对整条轨迹建一个无限大的网络？</strong>
+    <div class="map-inline">
+      <span class="node">Ch6 模板表示（2TBN 定义）</span><span class="arrow">→</span>
+      <span class="node here">Ch15 动态网络推理（滤波/平滑/MAP）</span><span class="arrow">→</span>
+      <span class="node">Ch13 MAP（Viterbi = 链上 max-product）</span><span class="arrow">→</span>
+      <span class="node">Ch19 EM（HMM 参数学习 Baum-Welch）</span>
+    </div>
+  </div>
+
+  <!-- 学习目标 -->
+  <div class="objectives">
+    <h4>🎯 学完本章，合上书你应该能：</h4>
+    <ol>
+      <li>画出 2TBN 与它展开后的链式结构，解释"为什么不能把整条轨迹建成一个大 BN"的两个理由</li>
+      <li>说出滤波、预测、平滑、最可能序列四个任务的定义区别</li>
+      <li>在一个两状态 HMM 上完整手算前向递推（滤波）与后向递推（平滑）</li>
+      <li>在同一个 HMM 上执行 Viterbi（max-product）递推，还原最可能状态序列</li>
+      <li>解释固定滞后平滑与 rollup 如何让推理的空间复杂度与时间步无关</li>
+    </ol>
+  </div>
+
+  <div class="lecture">
+
+    <!-- 推导主线 -->
+    <div class="figure">
+      <div class="mermaid">
+flowchart LR
+  A["时间序列无限长<br>不能直接建大网"] --> B["2TBN 加马尔可夫假设<br>未来只依赖当前"]
+  B --> C["展开成链<br>消息沿时间传递"]
+  C --> D["前向后向算法<br>alpha 乘 beta 得平滑"]
+  D --> E["求和换取最大<br>Viterbi 得最可能序列"]
+  E --> F["代价：连续或非高斯要近似<br>粒子滤波接棒"]
+  classDef hot fill:#fbeedd,stroke:#c4651f,stroke-width:2.5px,color:#c4651f;
+  classDef danger fill:#fae9e7,stroke:#b03a2e,stroke-width:2.5px,color:#b03a2e;
+  class D hot;
+  class F danger;
+      </div>
+      <div class="caption">本章推导主线：马尔可夫结构把时间维压成"接口变量"，推理退化为沿链传消息。终点（红色）是账单：非离散非高斯时精确算法失效，近似接棒。</div>
+    </div>
+
+    <!-- ============ 15.1 ============ -->
+    <h2><span class="sec-no">15.1</span>为什么不能把轨迹展开成一个大贝叶斯网络</h2>
+
+    <p>第 6 章引入了<span class="term">动态贝叶斯网络</span>（Dynamic Bayesian Network, DBN）：用两块模板描述一个时序系统——先验模板（t=0 时刻的分布）和 <span class="term">两时间片贝叶斯网络</span>（Two-slice Temporal Bayesian Network, 2TBN），它描述"从时刻 t 到时刻 t+1 的转移"。最简单的 2TBN 就是隐马尔可夫模型（HMM）：</p>
+
+    <div class="figure">
+      <div class="mermaid">
+flowchart LR
+  subgraph T0["先验模板 t0"]
+    X0["X0 隐状态"]
+  end
+  subgraph TT["2TBN 模板 从t到t+1"]
+    Xt["Xt"] --> Xt1["Xt+1"]
+    Xt --> Ot["Ot 观测"]
+    Xt1 --> Ot1["Ot+1"]
+  end
+  classDef hot fill:#fbeedd,stroke:#c4651f,stroke-width:2.5px,color:#c4651f;
+  class Xt,Xt1 hot;
+      </div>
+      <div class="caption">图 15.1 2TBN：只需描述相邻两时间片内的边（状态转移 X→X' 与发射 X→O），整段历史由模板复制生成。参数只有一份，与序列长度无关。</div>
+    </div>
+
+    <p>要推理，先把模板按时间复制展开（<span class="term">展开</span>，Unrolling）：X⁰→X¹→X²→…→Xᵀ，每个 Xᵗ 下挂观测 Oᵗ。展开后的确是一个普通贝叶斯网络，理论上第 9/10 章的算法都能跑。那为什么不行？两个硬理由：</p>
+
+    <ul>
+      <li><strong>内存爆炸</strong>：T 步展开后图有 2T 个节点。在线场景（机器人定位、行情监控）T 无限增长，内存必须跟着涨——不可接受。我们想要的算法是<strong>空间复杂度与 T 无关</strong>的。</li>
+      <li><strong>浪费结构</strong>：展开网的每一片完全相同（参数共享），但通用消去算法看不见这个对称性，会把同样的计算重复 T 遍，且消去顺序稍差就让诱导宽度随 T 增长。利用马尔可夫结构后，推理可以写成<strong>固定大小的递推</strong>：每步只做一次"预测+更新"。</li>
+    </ul>
+
+    <div class="box idea">
+      <span class="box-tag">💡 马尔可夫假设是全部魔法的来源</span>
+      <p>2TBN 的语义：给定 Xᵗ，未来（Xᵗ⁺¹ 及以后）与过去（X⁰…Xᵗ⁻¹）独立。所以任何时刻，过去对未来全部的影响都浓缩在"当前状态的后验"这一个对象里。<strong>我们只需要维护这一个信念状态</strong>，随时间滚动更新——旧时刻可以全部扔掉。这叫 <span class="term">rollup</span>（折叠）：永远只保留"接口变量"Xᵗ。</p>
+    </div>
+
+    <!-- 回忆卡片 15.1 -->
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 15.1-1</div>
+              <div class="q-text">2TBN 描述什么？它和"展开后的 DBN"是什么关系？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              2TBN 描述相邻两时间片内的转移结构（t → t+1）；展开 = 把模板沿时间复制 T 份，得到整条轨迹上的普通 BN，参数全部共享。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 15.1-2</div>
+              <div class="q-text">不能把整条轨迹建成一个大 BN 的两个硬理由？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              ①内存随 T 增长，在线场景不可接受；②通用算法看不见参数共享结构，重复计算且诱导宽度可能随 T 膨胀。马尔可夫性让推理坍缩为固定大小的递推。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 15.2 ============ -->
+    <h2><span class="sec-no">15.2</span>四个任务，一张地图：滤波、预测、平滑、最可能序列</h2>
+
+    <p>动态网络上的查询有四种标准口味，区别只在"<strong>用哪些观测，问哪个时刻</strong>"：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>任务</th><th>数学形式</th><th>直觉</th><th>典型算法</th></tr>
+        <tr><td><strong>滤波</strong>（Filtering）</td><td>P(Xᵗ | O¹…ᵗ)</td><td>边看边猜现在</td><td>前向递推 / 卡尔曼滤波</td></tr>
+        <tr><td><strong>预测</strong>（Prediction）</td><td>P(Xᵗ⁺ᵏ | O¹…ᵗ)</td><td>用现在推未来</td><td>滤波 + 转移模型前推 k 步</td></tr>
+        <tr><td><strong>平滑</strong>（Smoothing）</td><td>P(Xᵗ | O¹…ᵀ)，t &lt; T</td><td>事后回看，用全部证据修正历史</td><td>前向-后向算法</td></tr>
+        <tr><td><strong>最可能序列</strong></td><td>arg max P(X⁰…ᵀ | O¹…ᵀ)</td><td>整条轨迹的整体最优解释</td><td>Viterbi（max-product）</td></tr>
+      </table>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 平滑 ≠ 滤波的事后重放，最可能序列 ≠ 逐时刻滤波取 arg max</span>
+      <p>平滑用了未来证据，答案可以不同于滤波（下面例子里你会亲眼看到数值差异）。最可能序列是<strong>联合</strong>最优——第 13 章的教训原样适用：逐时刻取平滑边缘的 arg max，拼出来的路径可能根本不是联合最可能路径。</p>
+    </div>
+
+    <!-- 回忆卡片 15.2 -->
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 15.2-1</div>
+              <div class="q-text">滤波与平滑的数学形式区别？哪个用的证据更多？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              滤波 P(Xᵗ|O¹…ᵗ) 只用 t 之前证据；平滑 P(Xᵗ|O¹…ᵀ) 用全部证据。平滑证据更多，事后估计更准。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 15.2-2</div>
+              <div class="q-text">为什么"逐时刻取平滑的 arg max"不等于"最可能序列"？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              前者优化每个时刻的边缘（加总意义上的最优），后者优化整条轨迹的联合概率——第 13 章 MAP≠边缘 arg max 的时序版。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 15.3 ============ -->
+    <h2><span class="sec-no">15.3</span>前向递推：滤波的完整手算</h2>
+
+    <p>马尔可夫性给出的递推只有两步：<strong>预测</strong>（用转移模型把上一时刻信念前推）+<strong>更新</strong>（用新观测修正）。定义前向消息 α<sub>t</sub>(x) = P(Xᵗ=x, O¹…ᵗ)（未归一化的联合），则：</p>
+
+    <div class="formula">α<sub>t+1</sub>(x′) = P(O<sup>t+1</sup> | x′) · ∑<sub>x</sub> P(x′ | x) · α<sub>t</sub>(x)</div>
+
+    <h3>例 1：天气-心情 HMM 的两步滤波</h3>
+    <p>隐状态 X ∈ {0, 1}（0=阴郁，1=晴朗的心情），观测 O ∈ {0, 1}（看到的行为信号）。模型参数：</p>
+    <ul>
+      <li><strong>先验</strong>：P(X¹=0) = P(X¹=1) = 0.5</li>
+      <li><strong>转移</strong>：心情有惯性，P(X′=X) = 0.7，翻转 = 0.3</li>
+      <li><strong>发射</strong>：信号基本可信，P(O=X) = 0.9，错位 = 0.1</li>
+    </ul>
+    <p>观测序列：O¹=1，O²=1。</p>
+
+    <p><strong>t=1（先验 × 第一个观测）</strong>：</p>
+    <ul>
+      <li>α₁(0) = P(X¹=0)·P(O¹=1|X¹=0) = 0.5 × 0.1 = <strong>0.05</strong></li>
+      <li>α₁(1) = P(X¹=1)·P(O¹=1|X¹=1) = 0.5 × 0.9 = <strong>0.45</strong></li>
+    </ul>
+    <p>归一化得滤波结果 P(X¹=1|O¹) = 0.45/0.50 = <strong>0.9</strong>。</p>
+
+    <p><strong>t=2（预测 + 更新）</strong>：</p>
+    <ul>
+      <li>预测：∑<sub>x</sub> P(X²=0|X¹=x)·α₁(x) = 0.05×0.7 + 0.45×0.3 = 0.035 + 0.135 = 0.17</li>
+      <li>更新：α₂(0) = P(O²=1|X²=0) × 0.17 = 0.1 × 0.17 = <strong>0.017</strong></li>
+      <li>预测：∑<sub>x</sub> P(X²=1|X¹=x)·α₁(x) = 0.05×0.3 + 0.45×0.7 = 0.015 + 0.315 = 0.33</li>
+      <li>更新：α₂(1) = 0.9 × 0.33 = <strong>0.297</strong></li>
+    </ul>
+    <p>滤波结果 P(X²=1|O¹,O²) = 0.297/(0.017+0.297) = 0.297/0.314 ≈ <strong>0.946</strong>。两个一致的观测把信念从 0.9 推到 0.946。顺手记下：证据概率 P(O¹=1, O²=1) = 0.314——它是所有 α₂ 之和，算似然时白送的。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 直觉</span>
+      <p>前向递推就是"滚动的水位"：每个时刻只有 d 个数（d = 状态数），计算量 O(d²) 每步，与已经流逝的时间无关。rollup 的全部好处在这里兑现。</p>
+    </div>
+
+    <!-- 回忆卡片 15.3 -->
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 15.3-1</div>
+              <div class="q-text">写出前向递推公式，指出哪部分是预测、哪部分是更新。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              α<sub>t+1</sub>(x′) = P(O<sup>t+1</sup>|x′)·∑<sub>x</sub> P(x′|x)α<sub>t</sub>(x)。求和项是预测（转移前推），乘发射概率是更新（观测修正）。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 15.3-2</div>
+              <div class="q-text">例 1 中 α₂(0) 与 α₂(1) 各是多少？滤波结果 P(X²=1|证据) 呢？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              α₂(0)=0.017，α₂(1)=0.297；P(X²=1|O¹,O²)=0.297/0.314≈0.946。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 15.4 ============ -->
+    <h2><span class="sec-no">15.4</span>后向递推与平滑：让未来证据倒流回历史</h2>
+
+    <p>平滑要用"未来"的证据修正"过去"的估计。定义后向消息 β<sub>t</sub>(x) = P(O<sup>t+1…T</sup> | Xᵗ=x)：<strong>假设时刻 t 状态为 x，之后的观测序列有多可能</strong>。它从时间终点倒着递推：</p>
+
+    <div class="formula">β<sub>t</sub>(x) = ∑<sub>x′</sub> P(x′ | x) · P(O<sup>t+1</sup> | x′) · β<sub>t+1</sub>(x′)</div>
+
+    <p>边界：β<sub>T</sub>(x) = 1（没有未来观测，什么都可能）。前向后向相乘即得平滑：</p>
+
+    <div class="formula">P(Xᵗ=x | O¹…ᵀ) ∝ α<sub>t</sub>(x) · β<sub>t</sub>(x)</div>
+
+    <h3>例 1 续：手算 t=1 时刻的平滑</h3>
+    <p><strong>边界</strong>：β₂(0) = β₂(1) = 1。</p>
+    <p><strong>β₁</strong>（代入转移、发射 O²=1、β₂）：</p>
+    <ul>
+      <li>β₁(0) = P(0→0)·P(O²=1|0)·β₂(0) + P(0→1)·P(O²=1|1)·β₂(1) = 0.7×0.1×1 + 0.3×0.9×1 = 0.07 + 0.27 = <strong>0.34</strong></li>
+      <li>β₁(1) = P(1→0)·P(O²=1|0)·β₂(0) + P(1→1)·P(O²=1|1)·β₂(1) = 0.3×0.1×1 + 0.7×0.9×1 = 0.03 + 0.63 = <strong>0.66</strong></li>
+    </ul>
+    <p>读 β₁：若 t=1 心情晴朗（x=1），"未来观测 O²=1"出现的可能性 0.66 远高于阴郁时的 0.34——未来证据在替 t=1 的"晴朗"投票。</p>
+
+    <p><strong>合成平滑</strong>（t=1）：</p>
+    <ul>
+      <li>α₁(0)·β₁(0) = 0.05 × 0.34 = 0.017</li>
+      <li>α₁(1)·β₁(1) = 0.45 × 0.66 = 0.297</li>
+    </ul>
+    <p>归一化：P(X¹=1 | O¹, O²) = 0.297/0.314 ≈ <strong>0.946</strong>。对比滤波值 0.9：看完 O²=1 之后回看 t=1，"晴朗"的把握从 0.9 升到 0.946——<strong>未来证据确实倒流回来修正了历史</strong>。</p>
+
+    <!-- 回忆卡片 15.4 -->
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 15.4-1</div>
+              <div class="q-text">β<sub>t</sub>(x) 的定义与边界值？平滑公式怎么把 α、β 合起来？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              β<sub>t</sub>(x) = P(O<sup>t+1…T</sup>|Xᵗ=x)，β<sub>T</sub>=1。平滑：P(Xᵗ|O¹…ᵀ) ∝ α<sub>t</sub>(x)·β<sub>t</sub>(x)。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 15.4-2</div>
+              <div class="q-text">例 1 中 β₁(0)、β₁(1) 各是多少？平滑后 t=1 的信念与滤波差多少？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              β₁(0)=0.34，β₁(1)=0.66。平滑 P(X¹=1|全部)≈0.946，高于滤波的 0.9——未来观测 O²=1 为 t=1 的晴朗补了一票。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 15.5 ============ -->
+    <h2><span class="sec-no">15.5</span>最可能序列：Viterbi，链上的 Max-Product</h2>
+
+    <p>语音识别要问的不是"第 37 帧最可能是什么音素"，而是"<strong>整条音素序列</strong>哪条最可能"。把第 13 章的 Max-Product 搬到链上：定义 δ<sub>t</sub>(x) = 以 Xᵗ=x 结尾、且解释 O¹…ᵗ 的<strong>最优路径分数</strong>：</p>
+
+    <div class="formula">δ<sub>t+1</sub>(x′) = P(O<sup>t+1</sup> | x′) · max<sub>x</sub> [ P(x′ | x) · δ<sub>t</sub>(x) ]</div>
+
+    <p>与前向递推唯一的差别：<strong>∑ 换成 max</strong>，外加一根回溯指针记赢家。这就是 <span class="term">Viterbi 算法</span>。</p>
+
+    <h3>例 1 续：手算最可能序列</h3>
+    <p><strong>t=1</strong>：δ₁(0) = 0.5×0.1 = 0.05；δ₁(1) = 0.5×0.9 = 0.45。</p>
+    <p><strong>t=2</strong>：</p>
+    <ul>
+      <li>δ₂(0) = 0.1 × max(0.05×0.7, 0.45×0.3) = 0.1 × max(0.035, 0.135) = 0.1×0.135 = <strong>0.0135</strong>，指针 → X¹=1</li>
+      <li>δ₂(1) = 0.9 × max(0.05×0.3, 0.45×0.7) = 0.9 × max(0.015, 0.315) = 0.9×0.315 = <strong>0.2835</strong>，指针 → X¹=1</li>
+    </ul>
+    <p><strong>回溯</strong>：终点 arg max = X²=1（0.2835）；指针指回 X¹=1。<strong>最可能序列 = (1, 1)，分数 0.2835</strong>。</p>
+
+    <p>对照验证：枚举全部 4 条路径的联合概率，(0,0)=0.5·0.1·0.7·0.1=0.0035，(0,1)=0.5·0.1·0.3·0.9=0.0135，(1,0)=0.5·0.9·0.3·0.1=0.0135，(1,1)=0.5·0.9·0.7·0.9=<strong>0.2835</strong>。Viterbi 答案与穷举一致。</p>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 与前向递推的数字游戏</span>
+      <p>注意 δ 和 α 的前半步一样（0.05 / 0.45），差别从第二步开始：前向把两条来路<strong>加总</strong>（0.17、0.33），Viterbi 只留<strong>最强来路</strong>（0.135、0.315）。当序列变长、路径分叉变多时，两者答案可以分道扬镳——要边缘用 α，要路径用 δ，别拿错。</p>
+    </div>
+
+    <!-- 回忆卡片 15.5 -->
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 15.5-1</div>
+              <div class="q-text">Viterbi 递推与前向递推的唯一算子差别是什么？多出来的数据结构是什么？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              ∑ 换成 max；额外记录回溯指针（每个状态的赢家前驱），用于终点回溯整条最优路径。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 15.5-2</div>
+              <div class="q-text">例 1 的最可能序列与分数是多少？它与"逐时刻平滑 arg max"在这里一致吗？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              (1,1)，分数 0.2835。本例恰好与逐时刻 arg max 一致；一般情况下可以不一致（Ch13 MAP≠边缘 arg max）。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 15.6 ============ -->
+    <h2><span class="sec-no">15.6</span>超越离散 HMM：卡尔曼、固定滞后与粒子滤波</h2>
+
+    <p>离散 HMM 的四个任务都已收工。但状态常常是连续的（位置、速度）——这时α/β 递推里的求和变成积分，只有当所有分布保持高斯时才解析可算：<strong>线性高斯动态系统</strong>（X′ = AX + 噪声，O = CX + 噪声，接 Ch7）上，前向递推的每一步都保持高斯，这就是著名的<span class="term">卡尔曼滤波</span>（Kalman Filter）——预测步推均值与协方差，更新步用卡尔曼增益折中"相信模型"与"相信观测"。它的后向版叫卡尔曼平滑。</p>
+
+    <h3>例 2：一次完整的卡尔曼手算——预测变宽、更新收窄</h3>
+    <p>把上面一句话展开成完整数字：在一维线性高斯链上把"预测 → 更新"完整走一遍。设定（沿用本节记号：转移 X′ = X + 噪声、观测 O = X + 噪声）：</p>
+    <ul>
+      <li><strong>上一时刻滤波后验</strong>：X⁰ | O⁰ ~ N(μ₀, σ₀²) = N(10, 4)，即 μ₀ = 10、σ₀² = 4</li>
+      <li><strong>转移</strong>：X¹ = X⁰ + W，W ~ N(0, 1)（过程噪声方差 Q = 1）</li>
+      <li><strong>观测</strong>：O¹ = X¹ + V，V ~ N(0, 4)（观测噪声方差 R = 4），实际观测到 o¹ = 12</li>
+    </ul>
+
+    <p><strong>预测步</strong>：把上一时刻的信念沿转移模型前推。均值不变，方差叠加过程噪声：</p>
+    <div class="formula">μ₁⁻ = μ₀ = 10，&nbsp;&nbsp;σ₁⁻² = σ₀² + Q = 4 + 1 = <strong>5</strong></div>
+    <p>方差从 4 涨到 5——<strong>不看新数据，只会更不确定</strong>。这就是预测的"变宽"：过程噪声每前推一步，就往信念里掺进一份新的不确定。</p>
+
+    <p><strong>更新步</strong>：新观测 o¹ = 12 到达，先算<span class="term">卡尔曼增益</span>（Kalman Gain）——它分配"相信预测"与"相信观测"的话语权：</p>
+    <div class="formula">K = <span class="frac"><span class="num-part">σ₁⁻²</span><span class="den-part">σ₁⁻² + R</span></span> = <span class="frac"><span class="num-part">5</span><span class="den-part">5 + 4</span></span> = <span class="frac"><span class="num-part">5</span><span class="den-part">9</span></span> ≈ 0.556</div>
+    <div class="formula">μ₁ = μ₁⁻ + K · (o¹ − μ₁⁻) = 10 + <span class="frac"><span class="num-part">5</span><span class="den-part">9</span></span> × 2 = <span class="frac"><span class="num-part">100</span><span class="den-part">9</span></span> ≈ <strong>11.11</strong></div>
+    <div class="formula">σ₁² = (1 − K) · σ₁⁻² = <span class="frac"><span class="num-part">4</span><span class="den-part">9</span></span> × 5 = <span class="frac"><span class="num-part">20</span><span class="den-part">9</span></span> ≈ <strong>2.22</strong>（等价写法 <span class="frac"><span class="num-part">σ₁⁻² · R</span><span class="den-part">σ₁⁻² + R</span></span> = <span class="frac"><span class="num-part">20</span><span class="den-part">9</span></span>）</div>
+    <p>后验均值落在 10 与 12 之间，但明显偏向 12——这就是更新的"收窄"加"纠偏"。为什么偏观测一侧？看下面的秤。</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>步骤</th><th>公式</th><th>本例数字</th><th>直觉</th></tr>
+        <tr><td>预测均值</td><td>μ₁⁻ = μ₀</td><td>10</td><td>随机游走不改变中心位置</td></tr>
+        <tr><td>预测方差</td><td>σ₁⁻² = σ₀² + Q</td><td>4 + 1 = 5（变宽）</td><td>不看新数据只会更不确定</td></tr>
+        <tr><td>卡尔曼增益</td><td>K = σ₁⁻² / (σ₁⁻² + R)</td><td>5/9 ≈ 0.556</td><td>观测与预测的话语权分配</td></tr>
+        <tr><td>更新均值</td><td>μ₁ = μ₁⁻ + K·(o¹ − μ₁⁻)</td><td>10 + (5/9)×2 ≈ 11.11</td><td>按精度折中，略偏观测</td></tr>
+        <tr><td>更新方差</td><td>σ₁² = (1 − K)·σ₁⁻²</td><td>20/9 ≈ 2.22（收窄）</td><td>每条新观测都在压缩不确定性</td></tr>
+      </table>
+    </div>
+
+    <div class="box idea">
+      <span class="box-tag">💡 直觉：两台秤的读数怎么合并</span>
+      <p>同一物体用两台秤各称一次：甲秤（模型预测）报 10，乙秤（传感器）报 12。哪台秤更准就多信哪台——甲秤标准差 √5 ≈ 2.24，乙秤标准差 √4 = 2，乙更准。按<strong>精度（方差的倒数）</strong>加权：预测与观测的精度之比 (1/5):(1/4) = 4:5，于是合并读数 = (4×10 + 5×12)/9 = 100/9 ≈ 11.11，观测拿到的权重 5/9 正是卡尔曼增益 K。卡尔曼更新并不神秘，就是高斯世界里按精度加权的平均。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 后验均值 ≠ 简单平均</span>
+      <p>看到预测 10、观测 12，第一反应是取平均 (10+12)/2 = 11——错。简单平均隐含"两者同样可信"，但本例观测精度更高（R = 4 &lt; σ₁⁻² = 5），正确答案 100/9 ≈ 11.11 偏向观测一侧。只有当 σ₁⁻² = R 时，简单平均才恰好等于卡尔曼更新。</p>
+    </div>
+
+    <p>三个收尾要点：</p>
+    <ul>
+      <li><strong>每条新观测都在压缩不确定性</strong>：更新后方差 20/9 ≈ 2.22，既小于预测方差 5，也小于上一时刻的 4。预测把钟形曲线拉宽，更新把它重新捏窄——滤波就是这对动作的无限循环。</li>
+      <li><strong>增益 K = σ₁⁻²/(σ₁⁻² + R) 的直觉</strong>：观测噪声 R 越大 K 越小（少信观测，极端 R→∞ 时 K→0，观测白看）；预测越不准（σ₁⁻² 越大）K 越大（多信观测，极端 σ₁⁻²→∞ 时 K→1，后验均值直接照抄观测）。</li>
+      <li><strong>与第 9 章的呼应</strong>：预测 + 更新合起来，正是变量消去在高斯链上的解析形态——求和变积分、因子全是高斯、每步消去封闭，于是整条前向递推坍缩成对 (μ, σ²) 的两个更新式。15.3 节离散链上的 α 消息，在这里的化身就是这一对数字。</li>
+    </ul>
+
+    <p>还有两种工程上绕不开的变体：</p>
+    <ul>
+      <li><strong><span class="term">固定滞后平滑</span></strong>（Fixed-lag Smoothing）：完整平滑要存全部 α/β，在线场景太贵。折中：只回看的 L 步，估计 P(X<sup>t−L</sup> | O¹…ᵗ)——代价常数化（随 L 指数、与 t 无关），精度通常已够用。</li>
+      <li><strong>粒子滤波</strong>（接 Ch12）：非线性、非高斯（或多峰，如第 14 章的切换系统）时，用一堆带权粒子表示信念状态，传播-赋权-重采样。它是机器人定位（SLAM 前端）的事实标准。</li>
+    </ul>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>任务</th><th>离散状态</th><th>线性高斯</th><th>非线性/非高斯</th></tr>
+        <tr><td>滤波</td><td>前向递推</td><td>卡尔曼滤波</td><td>粒子滤波 / EKF / UKF</td></tr>
+        <tr><td>平滑</td><td>前向-后向</td><td>卡尔曼平滑</td><td>粒子平滑</td></tr>
+        <tr><td>预测</td><td>转移前推 k 步</td><td>均值协方差前推</td><td>粒子前推</td></tr>
+        <tr><td>最可能序列</td><td>Viterbi</td><td>模式无意义（连续），化为轨迹优化</td><td>近似优化</td></tr>
+      </table>
+    </div>
+
+    <!-- 回忆卡片 15.6 -->
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 15.6-1</div>
+              <div class="q-text">卡尔曼滤波成立的模型假设是什么？它与离散前向递推是什么关系？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              线性高斯动态系统（转移与观测都是线性+高斯噪声）。它就是前向递推在高斯闭包下的解析版：每步信念保持高斯，只需更新均值与协方差。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 15.6-2</div>
+              <div class="q-text">固定滞后平滑在精度与成本之间怎么折中？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              只用未来 L 步证据平滑 X<sup>t−L</sup>：成本随 L 指数但与总时长 t 无关，可在线运行；L 越大越接近完整平滑。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 概念卡 ============ -->
+    <h2><span class="sec-no">🃏</span>概念卡：本章概念的一分钟画像</h2>
+    <p>翻面前先自问：这个概念我能用一句话讲清楚吗？</p>
+    <div class="flip-grid">
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 1</div>
+            <div class="q-text">2TBN（Two-slice Temporal Bayesian Network）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">描述相邻两时间片内依赖关系的模板，含片内边与跨片转移边。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">让任意长序列的参数只有一份：模型大小与序列长度解耦。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">印章：一张模子沿时间轴无限盖下去。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为 2TBN 本身就是完整模型——还要配先验模板（t=0 分布）。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">一切时序建模；HMM、卡尔曼滤波器都是它的特例。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 2</div>
+            <div class="q-text">滤波与前向消息（Filtering / α）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">P(Xᵗ|O¹…ᵗ)；递推 α<sub>t+1</sub>(x′)=P(O<sup>t+1</sup>|x′)·∑<sub>x</sub>P(x′|x)α<sub>t</sub>(x)。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">在线估计当前状态：边看观测边更新，内存与时长无关。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">滚动水位：预测把水位前推并摊平，观测把水位重新捏尖。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">忘归一化时把 α 当概率——α 是未归一化的联合，和为证据似然。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">一切在线任务：定位、跟踪、监控。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 3</div>
+            <div class="q-text">平滑与前向-后向算法（Smoothing / Forward-Backward）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">P(Xᵗ|O¹…ᵀ) ∝ α<sub>t</sub>·β<sub>t</sub>；β 从终点倒推未来证据的可能性。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">事后重建历史：让未来观测倒流回去修正过去估计。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">两支队伍从两端夹攻同一时刻，会师处的乘积就是真相。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为平滑只是滤波的重放——它用了更多证据，答案可以不同。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">离线分析；Ch19 EM 学 HMM 参数时的 E 步。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 4</div>
+            <div class="q-text">Viterbi 算法</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">链上的 Max-Product：δ<sub>t+1</sub>(x′)=P(O|x′)·max<sub>x</sub>[P(x′|x)δ<sub>t</sub>(x)] + 回溯指针。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">求联合最可能的整条状态序列，而非逐时刻最可能。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">淘汰赛接力：每个状态只记住"从我这里出发的最强前半程"。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">拿逐时刻平滑 arg max 冒充最可能序列——两者一般不同。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">语音识别解码、基因序列标注、通信译码。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 5</div>
+            <div class="q-text">卡尔曼滤波（Kalman Filter）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">线性高斯动态系统上的解析前向递推：预测步前推 (μ, Σ)，更新步用卡尔曼增益融合观测。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">连续状态跟踪的闭式解：信念始终是高斯，只需维护均值与协方差。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">两票加权：模型预测一票、传感器一票，谁噪声小听谁的。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为它普适——非线性/非高斯立即失效，只能 EKF/UKF/粒子滤波近似。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">导航、航天、GPS 融合；工程界最成功的 PGM 算法。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 6</div>
+            <div class="q-text">Rollup 与固定滞后平滑（Fixed-lag Smoothing）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">Rollup：只维护接口变量 Xᵗ 的信念并滚动更新；固定滞后：用未来 L 步证据平滑 X<sup>t−L</sup>。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">让在线推理的空间/时间成本与序列总长度无关。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">只带今天的行囊上路，历史压缩进一张卡片。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为 L 越大越划算——成本随 L 指数增长，够用即可。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">实时监控、流式语音、一切"不能等整段录完再算"的场景。</span></div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- ============ 分层习题 ============ -->
+    <h2><span class="sec-no">📝</span>分层习题</h2>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>判断对错：<strong>把 DBN 沿时间展开成大 BN 后用变量消去做推理，结果与前向-后向算法一定不同，因为后者用了近似。</strong>说明理由。</div>
+      <details>
+        <summary>提示</summary>
+        <p>前向-后向是精确算法还是近似算法？两者差在结果还是效率？</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">错。前向-后向是<em>精确</em>算法，结果与展开网上的精确消去完全一致。差别在效率与内存：展开法内存随 T 增长且浪费参数共享结构；前向-后向利用马尔可夫性把计算写成固定大小的递推，每步 O(d²)，空间与 T 无关。</div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>判断对错：<strong>最可能序列一定包含每个时刻滤波分布的 arg max 状态。</strong></div>
+      <details>
+        <summary>提示</summary>
+        <p>这是第 13 章哪个事实的时序版？</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">错。最可能序列优化的是整条路径的联合概率（Viterbi/max-product）；逐时刻 arg max 优化的是每个时刻的边缘（前向/平滑）。MAP ≠ 边缘 arg max——转移约束可能迫使联合最优路径在某些时刻经过"边缘上不占优"的状态。</div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>沿用例 1 的 HMM（先验各 0.5，转移 留0.7/翻0.3，发射 对0.9/错0.1），观测改为 O¹=1，O²=0。手算：(1) α₂ 与滤波 P(X²=1|O¹,O²)；(2) Viterbi 最可能序列与分数。</div>
+      <details>
+        <summary>提示</summary>
+        <p>t=1 的 α 不变（0.05/0.45）；t=2 的发射换成 P(O=0|X)：X=0 时 0.9，X=1 时 0.1。预测部分和例 1 相同（0.17 / 0.33）。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p>α₁(0)=0.05，α₁(1)=0.45（同例 1）。预测：X²=0 得 0.17，X²=1 得 0.33。</p>
+          <p>(1) 更新：α₂(0) = 0.9×0.17 = 0.153；α₂(1) = 0.1×0.33 = 0.033。滤波 P(X²=1|O) = 0.033/0.186 ≈ <strong>0.177</strong>——矛盾观测把信念拉回阴郁。</p>
+          <p>(2) Viterbi：δ₂(0) = 0.9×max(0.05×0.7, 0.45×0.3) = 0.9×0.135 = 0.1215（指针→X¹=1）；δ₂(1) = 0.1×max(0.05×0.3, 0.45×0.7) = 0.1×0.315 = 0.0315（指针→X¹=1）。终点 arg max = X²=0，回溯得最可能序列 <strong>(1, 0)，分数 0.1215</strong>。注意：最优路径经过 X¹=1——尽管只看 t=2 时 X²=0 占优，路径整体仍认为"先是晴、后转阴"最合理。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>在例 1 原始观测（O¹=1, O²=1）下，手算 t=2 时刻的"一步预测" P(X³=1 | O¹,O²)（不看新观测，只把滤波信念前推一步）。</div>
+      <details>
+        <summary>提示</summary>
+        <p>预测 = 转移矩阵作用于滤波后验，不需要新发射概率。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p>滤波后验：P(X²=0|O)=0.017/0.314≈0.0541，P(X²=1|O)≈0.9459。</p>
+          <p>P(X³=1|O¹,O²) = 0.0541×0.3 + 0.9459×0.7 = 0.01623 + 0.66213 ≈ <strong>0.678</strong>。</p>
+          <p>没有新观测时，信念向稳态（0.5 附近）回退——转移噪声在"冲淡"旧证据。这正是预测不确定度随步数增长的机制。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l3">L3 建模应用</span>网络丢包诊断：链路真实状态 G ∈ {好, 差} 每 10ms 可能切换（惯性 0.9），监控系统收到粗粒度信号 O ∈ {正常, 告警}（好链路 5% 误报，差链路 80% 告警）。要求在线给出"当前链路为差"的概率。请：(1) 写出 2TBN 的全部参数；(2) 说明该用滤波/平滑/Viterbi 中哪个任务及理由；(3) 说明该方案的内存为何与监控时长无关。</div>
+      <details>
+        <summary>提示</summary>
+        <p>先验自定一个合理值；任务是"边看边判断现在"；回忆 rollup。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p>(1) 先验模板：P(G⁰=好)=0.95（链路多数时候正常）。2TBN：转移 P(G′=G)=0.9、切换 0.1；发射 P(告警|好)=0.05、P(告警|差)=0.8。</p>
+          <p>(2) 用<strong>滤波</strong>：任务是在线估计"当前"状态，只用历史观测，P(Gᵗ|O¹…ᵗ) 正是滤波分布。平滑需要未来证据（在线拿不到），Viterbi 回答的是整段历史路径（不是当前判断）。</p>
+          <p>(3) 前向递推每步只维护 d=2 个 α 值（滚动水位），旧时刻全部丢弃（rollup），故内存 O(d) 与监控时长 T 无关；每步计算 O(d²)=4 次乘加，10ms 预算绰绰有余。</p>
+        </div>
+      </details>
+    </div>
+
+    <!-- ============ 本章自测 ============ -->
+    <h2><span class="sec-no">✍️</span>本章自测</h2>
+    <p class="quiz-hint">点击选项判分，答错会给出原因。</p>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 1</div>
+      <div class="q-stem">不把整条轨迹展开成大 BN 做推理的根本原因是：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 展开后的网络不再是贝叶斯网络</li>
+        <li data-opt="b">B. 内存随 T 无限增长且浪费参数共享结构；马尔可夫性允许固定大小的滚动递推</li>
+        <li data-opt="c">C. 展开网络的推理结果不精确</li>
+        <li data-opt="d">D. 2TBN 无法表示转移概率</li>
+      </ul>
+      <div class="quiz-explain">选 B。展开网仍是合法 BN 且精确推理结果相同（A、C 错）；问题在成本与结构浪费。D 恰好说反——2TBN 的全部职责就是描述转移。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="c">
+      <div class="q-no">自测 2</div>
+      <div class="q-stem">平滑 P(Xᵗ|O¹…ᵀ) 与前向-后向算法的关系是：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 平滑 = α<sub>t</sub> 归一化，不需要 β</li>
+        <li data-opt="b">B. β<sub>t</sub>(x) 是"前 t 步观测的联合概率"</li>
+        <li data-opt="c">C. 平滑 ∝ α<sub>t</sub>(x)·β<sub>t</sub>(x)，其中 β 从时间终点倒推未来证据的似然</li>
+        <li data-opt="d">D. 平滑就是把滤波过程倒着跑一遍</li>
+      </ul>
+      <div class="quiz-explain">选 C。A 描述的其实是滤波；B 把 β 的定义说反了（β 是<em>未来</em>观测给定当前状态的似然）；D 错——β 不是滤波的倒放，它不含先验与历史证据。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="a">
+      <div class="q-no">自测 3</div>
+      <div class="q-stem">例 1 中（O¹=1, O²=1），Viterbi 在 t=2 对状态 1 的候选来路分数是 0.015 与 0.315。Viterbi 与前向递推在这一步的本质差别是：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. Viterbi 取 max(0.015, 0.315)=0.315 并记录来路；前向取和 0.33</li>
+        <li data-opt="b">B. Viterbi 用不同的转移矩阵</li>
+        <li data-opt="c">C. 前向递推需要回溯指针，Viterbi 不需要</li>
+        <li data-opt="d">D. 两者算的是同一个量，只是精度不同</li>
+      </ul>
+      <div class="quiz-explain">选 A。同一模型、同一观测，唯一差别是 ∑ vs max 加回溯指针。B、D 错；C 恰好颠倒——要还原路径的是 Viterbi。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="d">
+      <div class="q-no">自测 4</div>
+      <div class="q-stem">卡尔曼滤波之所以有闭式解，是因为：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 状态变量是离散的</li>
+        <li data-opt="b">B. 观测噪声为零</li>
+        <li data-opt="c">C. 它本质是 Viterbi 算法</li>
+        <li data-opt="d">D. 线性变换与高斯噪声对高斯分布封闭，每步信念保持高斯，只需递推均值与协方差</li>
+      </ul>
+      <div class="quiz-explain">选 D。这是第 7 章高斯闭包性质在时序上的兑现。A 错——卡尔曼恰恰处理连续状态；B 错——零噪声就不需要滤波了；C 错——卡尔曼是 sum 推理（滤波），Viterbi 是 max 推理。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 5</div>
+      <div class="q-stem">固定滞后平滑（滞后 L）的代价与收益是：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 成本与总时长 T 成正比，精度与完整平滑相同</li>
+        <li data-opt="b">B. 成本随 L 指数增长但与 T 无关；用"只看未来 L 步"换可在线运行的近似平滑</li>
+        <li data-opt="c">C. 它不需要存储任何历史消息</li>
+        <li data-opt="d">D. L=0 时退化为 Viterbi 算法</li>
+      </ul>
+      <div class="quiz-explain">选 B。A 错——与 T 无关正是卖点；C 错——要存最近 L 步的消息；D 错——L=0 退化为滤波，Viterbi 是 max 推理而非平滑。</div>
+    </div>
+
+    <!-- ============ 三句话复述 ============ -->
+    <div class="retell">
+      <h3>🗣️ 用自己的话，三句话讲完本章</h3>
+      <p class="retell-sub">对着空气（或室友）说出这三句。说卡壳的那句，回去重读对应小节。</p>
+      <details>
+        <summary>句1：这章解决什么问题？——</summary>
+        <div class="retell-answer">参考答案：序列无限长，不能把整条轨迹建成一个大 BN（内存爆炸、浪费模板结构）；要在时间与内存都与序列长度无关的前提下回答滤波、预测、平滑、最可能序列四类查询。</div>
+      </details>
+      <details>
+        <summary>句2：核心机制是什么？——</summary>
+        <div class="retell-answer">参考答案：马尔可夫性让"当前信念"成为过去与未来的唯一接口（rollup）；前向递推（预测+更新）做滤波，后向递推 β 把未来证据倒流回来与 α 相乘做平滑，把 ∑ 换 max 加回溯指针就是 Viterbi；连续线性高斯时全部闭式化为卡尔曼滤波。</div>
+      </details>
+      <details>
+        <summary>句3：它和前后章怎么分工？——</summary>
+        <div class="retell-answer">参考答案：Ch6 给 2TBN 表示，Ch13 给 max-product 工具（Viterbi 是其链上特例），Ch14 的混合闭包问题在这里以"切换系统需要粒子滤波"的形式回归；本章之后推理收官，Ch16 起回答模型参数与结构如何学到。</div>
+      </details>
+    </div>
+
+    <!-- ============ 复习计划 ============ -->
+    <div class="review-plan">
+      <h3>🔁 间隔复习计划</h3>
+      <p>回忆本身比重读有效 10 倍。到点只做一件事：翻卡 + 重做标记题。</p>
+      <table>
+        <tr><th>时间点</th><th>复习内容</th><th>预计用时</th></tr>
+        <tr><td>第 1 天</td><td>概念卡 1–6 全部 + 回忆卡 15.3-1、15.4-1、15.5-1</td><td>10 分钟</td></tr>
+        <tr><td>第 3 天</td><td>概念卡 2、3、4（滤波/平滑/Viterbi）+ 重做自测错题 + L2 第 1 题</td><td>8 分钟</td></tr>
+        <tr><td>第 7 天</td><td>三句话复述出声说一遍 + 回忆卡 15.1-2、15.6-1</td><td>10 分钟</td></tr>
+        <tr><td>第 15 天</td><td>只做合上书挑战；六条全过则本章毕业，卡在哪条就重读对应小节</td><td>15 分钟</td></tr>
+      </table>
+    </div>
+
+    <!-- 合上书挑战 -->
+    <div class="final-challenge">
+      <h3>📕 合上书挑战</h3>
+      <p class="fc-sub">现在关掉这个页面（或遮住屏幕），拿一张纸，凭记忆完成以下任务。全部做完再回来核对——这是本章真正的毕业考试。</p>
+      <ol id="challenge-list">
+        <li><span class="fc-check"></span>画出 2TBN 与三时间步展开图，说出不能直接展开推理的两个理由</li>
+        <li><span class="fc-check"></span>写出四类任务的数学形式（滤波/预测/平滑/最可能序列）</li>
+        <li><span class="fc-check"></span>默算例 1：α₂(0)=0.017、α₂(1)=0.297，滤波 0.946</li>
+        <li><span class="fc-check"></span>默算 β₁(0)=0.34、β₁(1)=0.66，并合成 t=1 的平滑 0.946</li>
+        <li><span class="fc-check"></span>默算 Viterbi 得序列 (1,1) 分数 0.2835，并说出它与逐时刻 arg max 何时分道扬镳</li>
+        <li><span class="fc-check"></span>回答本章的主线问题：序列无限长时，如何做到推理成本与时长无关？（一句话）</li>
+      </ol>
+    </div>
+
+    <div class="complete-zone">
+      <button class="btn-complete" id="btn-complete" onclick="markDone()">✓ 我已完成本章（含合上书挑战）</button>
+    </div>
+
+    <div class="chapter-nav">
+      <a href="chapter-14.html"><span class="nav-dir">← 上一章</span>第14章 混合网络中的推理</a>
+      <a href="chapter-16.html" class="next"><span class="nav-dir">下一章 →</span>第16章 学习模型：概述</a>
+    </div>
+
+  </div>
+</div>
+
+<footer class="footer">
+  <div class="wrap">第15章 动态网络中的推理 · PGM 互动讲义 · 基于 Koller &amp; Friedman (2009)</div>
+</footer>
+
+<script src="assets/mermaid.min.js"></script>
+<script>
+mermaid.initialize({
+  startOnLoad: true,
+  theme: "base",
+  themeVariables: {
+    primaryColor: "#e3edf7",
+    primaryBorderColor: "#1d5f9e",
+    primaryTextColor: "#1d5f9e",
+    lineColor: "#5c554b",
+    secondaryColor: "#fbeedd",
+    tertiaryColor: "#f5f1e8",
+    fontFamily: "-apple-system, PingFang SC, sans-serif",
+    fontSize: "14px"
+  },
+  flowchart: { curve: "linear", htmlLabels: false }
+});
+</script>
+<script>
+// 自测题逻辑
+document.querySelectorAll(".quiz-block").forEach(block => {
+  const answer = block.dataset.answer;
+  const explain = block.querySelector(".quiz-explain");
+  block.querySelectorAll(".quiz-opts li").forEach(li => {
+    li.addEventListener("click", () => {
+      const opts = block.querySelectorAll(".quiz-opts li");
+      opts.forEach(o => o.classList.add("disabled"));
+      if (li.dataset.opt === answer) {
+        li.classList.add("correct");
+      } else {
+        li.classList.add("wrong");
+        block.querySelector(`[data-opt="${answer}"]`).classList.add("correct");
+      }
+      explain.classList.add("show");
+    });
+  });
+});
+
+// 合上书清单打勾
+document.querySelectorAll("#challenge-list li").forEach(li => {
+  li.addEventListener("click", () => li.classList.toggle("checked"));
+});
+
+// 完成标记 → localStorage（第15章）
+const KEY = "pgm_progress_v1";
+function loadProgress() {
+  try { return JSON.parse(localStorage.getItem(KEY)) || {}; } catch (e) { return {}; }
+}
+const progress = loadProgress();
+const btn = document.getElementById("btn-complete");
+if (progress[15] && progress[15].done) {
+  btn.textContent = "✓ 已完成 · 再次点击重置";
+  btn.classList.add("done");
+}
+function markDone() {
+  const p = loadProgress();
+  if (p[15] && p[15].done) {
+    delete p[15];
+    btn.textContent = "✓ 我已完成本章（含合上书挑战）";
+    btn.classList.remove("done");
+  } else {
+    p[15] = { done: true, completedAt: Date.now(), reviewsDone: 0 };
+    btn.textContent = "✓ 已完成 · 复习提醒已开启";
+    btn.classList.add("done");
+  }
+  localStorage.setItem(KEY, JSON.stringify(p));
+}
+</script>
+
+</body>
+</html>

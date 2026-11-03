@@ -1,0 +1,968 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第9章 精确推理：变量消去 · PGM 互动讲义</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+<nav class="topbar">
+  <div class="topbar-inner">
+    <span class="brand"><a href="index.html" style="color:inherit">← 学习地图</a></span>
+    <span class="crumb">阶段二 · 推理 / 第9章</span>
+  </div>
+</nav>
+
+<div class="wrap">
+
+  <div class="lecture-head">
+    <span class="ch-label">CHAPTER 09 · 推理</span>
+    <h1>精确推理：变量消去</h1>
+    <p class="lead">推理 = 因子相乘再边缘化。所以，消元顺序决定代价。</p>
+  </div>
+
+  <!-- 本章定位 -->
+  <div class="position-bar">
+    <strong>本章在主线上的位置：</strong>前 8 章把分布写成因子乘积 → <u>本章回答"如何在因子乘积上精确算出边缘/条件概率"：变量消去，代价指数于树宽</u> → Ch10 团树缓存中间结果，一次预处理回答多个查询。<br>
+    第9章回答推理主线的第一个问题：<strong>暴力枚举不可行，精确推理的代价到底从哪来、由什么决定？</strong>
+    <div class="map-inline">
+      <span class="node">Ch8 指数族（表示的工具箱）</span><span class="arrow">→</span>
+      <span class="node here">Ch9 变量消去（精确推理的母算法）</span><span class="arrow">→</span>
+      <span class="node">Ch10 团树算法（缓存重复计算，多查询共享）</span><span class="arrow">→</span>
+      <span class="node">Ch13 MAP 推理（把 ∑ 换成 max）</span>
+    </div>
+  </div>
+
+  <!-- 学习目标 -->
+  <div class="objectives">
+    <h4>🎯 学完本章，合上书你应该能：</h4>
+    <ol>
+      <li>说出暴力枚举为什么不可行，写出边缘概率与条件概率的"求和式"</li>
+      <li>定义因子乘积与边缘化两个运算，并解释"把求和号往内推"省在哪</li>
+      <li>给定一个小网络和消元顺序，纸笔算出每一步的中间因子与最终答案</li>
+      <li>对同一个网络比较两个消元顺序，数出中间因子的最大维度与运算量差距</li>
+      <li>画出消元过程对应的诱导图，解释"复杂度指数于树宽"的完整因果链</li>
+      <li>说明证据如何先约简因子再消元，以及变量消去如何顺手算出配分函数 Z</li>
+    </ol>
+  </div>
+
+  <div class="lecture">
+
+    <!-- 推导主线 -->
+    <div class="figure">
+      <div class="mermaid">
+flowchart LR
+  A["要算边缘与条件概率<br>暴力枚举不可行"] --> B["利用因子分解<br>把求和号往内推"]
+  B --> C["变量消去<br>动态规划存中间因子"]
+  C --> D["消元顺序决定<br>中间因子的大小"]
+  D --> E["诱导图与树宽<br>复杂度指数于树宽"]
+  E --> F["代价：单查询便宜<br>多查询重复计算"]
+  classDef hot fill:#fbeedd,stroke:#c4651f,stroke-width:2.5px,color:#c4651f;
+  classDef danger fill:#fae9e7,stroke:#b03a2e,stroke-width:2.5px,color:#b03a2e;
+  class D hot;
+  class F danger;
+      </div>
+      <div class="caption">本章推导主线：从"推理要算什么"一路推到"代价由谁决定"，终点（红色）是本章买下的账单——重复计算，正是第 10 章团树算法要缓存的东西。</div>
+    </div>
+
+    <!-- ============ 9.1 ============ -->
+    <h2><span class="sec-no">9.1</span>推理任务是什么，暴力法为什么不可行</h2>
+
+    <p>前 8 章解决的是"表示"：把一个联合分布紧凑地写成一堆因子的乘积——贝叶斯网络是 P = ∏<sub>i</sub> P(X<sub>i</sub>|Pa(X<sub>i</sub>))，马尔可夫网络是 P = (1/Z)·∏<sub>C</sub> ψ<sub>C</sub>。但表示本身不是目的。模型建好之后，我们真正想做的是<strong>回答查询</strong>：这个学生拿到好推荐信的概率多大？看到 SAT 高分之后呢？这就是<span class="term">推理</span>（Inference）。</p>
+
+    <p><strong>定义</strong>：推理任务的输入是一个模型（图 + 参数）、一组<span class="term">查询变量</span>（Query Variables）Y，以及一组<span class="term">证据</span>（Evidence）E = e（观测到的变量取值）。要算的是条件概率 <strong>P(Y | E = e)</strong>；当没有证据时，就是<span class="term">边缘概率</span>（Marginal Probability）P(Y)。另一个重要查询——最可能赋值 <span class="term">MAP</span>（Maximum A Posteriori）——留到第 13 章。</p>
+
+    <p>最直接的算法是<strong>暴力枚举</strong>：把联合分布的全部行里"证据匹配"的行挑出来，按查询变量的取值分组求和：</p>
+
+    <div class="formula">P(Y | E = e) = <span class="frac"><span class="num-part">∑<sub>W</sub> P(Y, E = e, W)</span><span class="den-part">∑<sub>Y</sub> ∑<sub>W</sub> P(Y, E = e, W)</span></span></div>
+
+    <p>其中 W 是除 Y、E 之外的其余变量。问题在于：联合分布有 ∏<sub>i</sub> |Val(X<sub>i</sub>)| 行。n 个二值变量就是 2<sup>n</sup> 行——n = 30 时约 10<sup>9</sup>，n = 100 时约 10<sup>30</sup>，而一张 CT 图像动辄上千个像素。<strong>枚举全部赋值，这条路在表示省下的空间里又全部还了回去。</strong></p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>暴力法浪费了表示阶段辛苦拆出来的结构：联合分布明明是一堆小因子的乘积，枚举却先把它乘回大表再求和。<strong>更聪明的做法是永远不要造出那张完整大表</strong>——在"乘"与"加"之间精打细算。这就是变量消去。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>"图模型把联合分布分解了，所以推理就免费了"——错。因子分解省的是<strong>存储</strong>（参数量从指数降到多项式），不是计算：把边缘概率从因子乘积里算出来，仍然可能指数级贵。本章的全部内容，就是在回答"贵在哪、怎么省、省到什么程度是极限"。</p>
+    </div>
+
+    <!-- 回忆卡片 9.1 -->
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 9.1-1</div>
+              <div class="q-text">推理任务的三样输入和一样输出分别是什么？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              输入：模型（图 + 参数）、查询变量 Y、证据 E = e；输出：条件概率 P(Y | E = e)。无证据时退化为边缘概率 P(Y)。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 9.1-2</div>
+              <div class="q-text">暴力枚举算 P(Y|E=e) 的复杂度是多少？根源是什么？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              O(d<sup>n</sup>)（n 个变量、每个 d 值）。根源：先把因子乘回完整联合表（指数行），再在表上求和——等于放弃了因子分解结构。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 9.2 ============ -->
+    <h2><span class="sec-no">9.2</span>两个运算与一条代数变形：把求和号往内推</h2>
+
+    <p>上一节立下了靶子：不造大表。这一节给出武器。<span class="term">变量消去</span>（Variable Elimination, VE）只反复使用两个因子运算：</p>
+
+    <ul>
+      <li><strong><span class="term">因子乘积</span></strong>（Factor Product）：φ₁(X, Y) ⊗ φ₂(Y, Z) 得到因子 ψ(X, Y, Z)，其中 ψ(x, y, z) = φ₁(x, y)·φ₂(y, z)。变量的公共部分对齐（同取值的行才相乘），结果的变量集是两个因子作用域的<strong>并集</strong>。</li>
+      <li><strong><span class="term">边缘化</span></strong>（Marginalization，对某变量求和消去）：τ(Y) = ∑<sub>X</sub> ψ(X, Y)，把 X 的每个取值对应的行加起来，得到一个不再含 X 的新因子。</li>
+    </ul>
+
+    <p>边缘化的行数会"缩"：因子从 |Val(X)|·|Val(Y)| 行变成 |Val(Y)| 行。<strong>每消去一个变量，因子就丢掉一维。</strong></p>
+
+    <h3>核心代数变形：求和与乘积的分配</h3>
+    <p>整条链 A → B → C → D 上算 P(D)。暴力法是 ∑<sub>A,B,C</sub> P(A)·P(B|A)·P(C|B)·P(D|C)，共 2³ = 8 个乘积项相加。但注意：<strong>不是每个因子都含每个变量</strong>。利用分配律，把不含被求和变量的因子提到求和号外面：</p>
+
+    <div class="formula">P(D) = ∑<sub>A</sub> P(A) ∑<sub>B</sub> P(B|A) · <span style="color:#c4651f">∑<sub>C</sub> P(C|B) P(D|C)</span></div>
+
+    <p>最内层那个橙色求和只碰 P(C|B) 和 P(D|C) 两个因子，产出中间因子 τ₁(B, D)；然后是 τ₂(A, D) = ∑<sub>B</sub> P(B|A)·τ₁(B, D)；最后 P(D) = ∑<sub>A</sub> P(A)·τ₂(A, D)。每一步只处理一张小表，完整大表从头到尾没有出现过。</p>
+
+    <div class="box insight">
+      <span class="box-tag">✅ 求和-乘积规则（Sum-Product）</span>
+      <p>对不涉及 X 的因子，求和号可以穿过它向内推：∑<sub>X</sub>(φ₁·φ₂) = φ₁·∑<sub>X</sub>φ₂（当 X 不出现在 φ₁ 中）。VE 的全部节省都来自这一步：<strong>先消元、后相乘，乘的永远是小表。</strong></p>
+    </div>
+
+    <h3>例 1：链 A → B → C → D 全程手算</h3>
+    <p>四个二值变量，参数如下（上标 0/1 表示取值）：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>因子</th><th colspan="4">数值</th></tr>
+        <tr><td>P(A)</td><td colspan="4">P(a⁰) = 0.4，P(a¹) = 0.6</td></tr>
+        <tr><td>P(B|A)</td><td>b⁰|a⁰: 0.8</td><td>b¹|a⁰: 0.2</td><td>b⁰|a¹: 0.3</td><td>b¹|a¹: 0.7</td></tr>
+        <tr><td>P(C|B)</td><td>c⁰|b⁰: 0.9</td><td>c¹|b⁰: 0.1</td><td>c⁰|b¹: 0.4</td><td>c¹|b¹: 0.6</td></tr>
+        <tr><td>P(D|C)</td><td>d⁰|c⁰: 0.7</td><td>d¹|c⁰: 0.3</td><td>d⁰|c¹: 0.2</td><td>d¹|c¹: 0.8</td></tr>
+      </table>
+    </div>
+
+    <p><strong>第一步：消 C。</strong>τ₁(b, d) = ∑<sub>c</sub> P(c|b)·P(d|c)，四个组合逐个算：</p>
+    <ul>
+      <li>τ₁(b⁰, d⁰) = 0.9×0.7 + 0.1×0.2 = 0.63 + 0.02 = <strong>0.65</strong></li>
+      <li>τ₁(b⁰, d¹) = 0.9×0.3 + 0.1×0.8 = 0.27 + 0.08 = <strong>0.35</strong></li>
+      <li>τ₁(b¹, d⁰) = 0.4×0.7 + 0.6×0.2 = 0.28 + 0.12 = <strong>0.40</strong></li>
+      <li>τ₁(b¹, d¹) = 0.4×0.3 + 0.6×0.8 = 0.12 + 0.48 = <strong>0.60</strong></li>
+    </ul>
+
+    <p><strong>第二步：消 B。</strong>τ₂(a, d) = ∑<sub>b</sub> P(b|a)·τ₁(b, d)：</p>
+    <ul>
+      <li>τ₂(a⁰, d⁰) = 0.8×0.65 + 0.2×0.40 = 0.52 + 0.08 = <strong>0.60</strong></li>
+      <li>τ₂(a⁰, d¹) = 0.8×0.35 + 0.2×0.60 = 0.28 + 0.12 = <strong>0.40</strong></li>
+      <li>τ₂(a¹, d⁰) = 0.3×0.65 + 0.7×0.40 = 0.195 + 0.28 = <strong>0.475</strong></li>
+      <li>τ₂(a¹, d¹) = 0.3×0.35 + 0.7×0.60 = 0.105 + 0.42 = <strong>0.525</strong></li>
+    </ul>
+
+    <p><strong>第三步：消 A。</strong>P(d) = ∑<sub>a</sub> P(a)·τ₂(a, d)：</p>
+    <ul>
+      <li>P(d⁰) = 0.4×0.60 + 0.6×0.475 = 0.24 + 0.285 = <strong>0.525</strong></li>
+      <li>P(d¹) = 0.4×0.40 + 0.6×0.525 = 0.16 + 0.315 = <strong>0.475</strong></li>
+    </ul>
+
+    <p>检查：0.525 + 0.475 = 1 ✓。<strong>对照暴力法</strong>：暴力要枚举 8 个赋值、算 8 个四因子乘积再分组相加；VE 只做了 3 步，每步一张 4 行小表，中间表最大变量数 = 2。链每加长一节，暴力的代价翻倍，VE 的代价只加一张小表。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 VE 就是动态规划</span>
+      <p>τ₁、τ₂ 是被<strong>存储复用</strong>的子问题答案：τ₁(b, d) 在每个 a 的求和里被用了一次（这里是 2 次），避免了对每个 (a, d) 重算 C 的求和。存中间结果、不重复计算——动态规划的标准味道。同时注意：τ₁(b,·) 的两个值加起来是 1，它恰好是 P(d|b)——CPD 沿链消元时保持归一，这个性质 9.4 节讲证据时会再用到。</p>
+    </div>
+
+    <!-- 回忆卡片 9.2 -->
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 9.2-1</div>
+              <div class="q-text">因子乘积 φ₁(X,Y)⊗φ₂(Y,Z) 的结果定义在哪些变量上？值怎么算？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              变量集 {X, Y, Z}（两作用域的并）；ψ(x,y,z) = φ₁(x,y)·φ₂(y,z)，公共变量 Y 取值对齐才相乘。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 9.2-2</div>
+              <div class="q-text">"把求和号往内推"省计算的根本原因是什么？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              被求和变量只出现在部分因子里；先对它求和（表变小）再与其他因子相乘，避免先乘出大表。每步中间因子行数由它的变量数决定。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 9.3 ============ -->
+    <h2><span class="sec-no">9.3</span>例 2：学生网络节选，一次完整的四变量消元</h2>
+
+    <p>链式网络的消元太"顺"了，看不出顺序的影响。本章的主战场是一个带 V 结构的网络——第 3 章学生例子的节选。后面 9.4、9.5 都在同一个网络上反复用它，请把数字算到纸笔可复核。</p>
+
+    <p><strong>网络结构</strong>：D → G ← I → S → L。四个节点均为二值：</p>
+    <ul>
+      <li>D = 课程难度（d⁰ 容易 / d¹ 难），I = 学生智力（i⁰ 普通 / i¹ 聪明），先验独立；</li>
+      <li>G = 成绩（g¹ 好 / g⁰ 差），是 D、I 共同的结果——一个 V 结构 D → G ← I；</li>
+      <li>S = 实际能力（s¹ 强 / s⁰ 弱），由智力派生；L = 推荐信（l¹ 好 / l⁰ 差），只看实际能力。</li>
+    </ul>
+
+    <div class="figure">
+      <div class="mermaid">
+flowchart LR
+  D["D 课程难度"] --> G["G 成绩"]
+  I["I 智力"] --> G
+  I --> S["S 实际能力"]
+  S --> L["L 推荐信"]
+  classDef hot fill:#fbeedd,stroke:#c4651f,stroke-width:2.5px,color:#c4651f;
+  class G hot;
+      </div>
+      <div class="caption">图 9.1 本章的演练场：学生网络节选 D → G ← I → S → L。G 处是 V 结构——它是后面一切"麻烦"的来源。</div>
+    </div>
+
+    <p><strong>全部参数（因子表）</strong>：</p>
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>因子</th><th colspan="4">数值</th></tr>
+        <tr><td>P(D)</td><td colspan="2">d⁰: 0.6</td><td colspan="2">d¹: 0.4</td></tr>
+        <tr><td>P(I)</td><td colspan="2">i⁰: 0.7</td><td colspan="2">i¹: 0.3</td></tr>
+        <tr><td rowspan="2">P(G | D, I)</td><td>g¹|d⁰i⁰: 0.3</td><td>g¹|d⁰i¹: 0.9</td><td>g¹|d¹i⁰: 0.05</td><td>g¹|d¹i¹: 0.5</td></tr>
+        <tr><td>g⁰|d⁰i⁰: 0.7</td><td>g⁰|d⁰i¹: 0.1</td><td>g⁰|d¹i⁰: 0.95</td><td>g⁰|d¹i¹: 0.5</td></tr>
+        <tr><td>P(S | I)</td><td colspan="2">s¹|i⁰: 0.2（s⁰: 0.8）</td><td colspan="2">s¹|i¹: 0.8（s⁰: 0.2）</td></tr>
+        <tr><td>P(L | S)</td><td colspan="2">l¹|s⁰: 0.1（l⁰: 0.9）</td><td colspan="2">l¹|s¹: 0.9（l⁰: 0.1）</td></tr>
+      </table>
+    </div>
+
+    <p><strong>查询</strong>：P(L)。<strong>消元顺序一：L → S → I → G</strong>（先消"叶子"，最后消 G）。</p>
+
+    <p><strong>第 1 步，消 L。</strong>L 只出现在因子 P(L|S) 中。τ₁(s) = ∑<sub>l</sub> P(l|s) = 1（条件概率表每行归一）。这步之后 P(L|S) 整个消失——<strong>只挂在被消变量上的归一化因子，消掉什么都不留下</strong>。剩下 P(D)、P(I)、P(G|D,I)、P(S|I)。</p>
+
+    <p><strong>第 2 步，消 S。</strong>S 只出现在 P(S|I) 中（P(L|S) 已消失）。τ₂(i) = ∑<sub>s</sub> P(s|i) = 1，同样凭空消失。剩下 P(D)、P(I)、P(G|D,I)。</p>
+
+    <p><strong>第 3 步，消 I。</strong>I 出现在 P(I) 与 P(G|D,I) 两个因子中。先乘出 ψ(D, G, I) = P(I)·P(G|D,I)，再对 I 求和得 τ₃(d, g)。逐行手算（每行 = 0.7·P(g|d,i⁰) + 0.3·P(g|d,i¹)）：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>d</th><th>g</th><th>计算</th><th>τ₃(d, g)</th></tr>
+        <tr><td>d⁰</td><td>g¹</td><td>0.7×0.3 + 0.3×0.9 = 0.21 + 0.27</td><td><strong>0.48</strong></td></tr>
+        <tr><td>d⁰</td><td>g⁰</td><td>0.7×0.7 + 0.3×0.1 = 0.49 + 0.03</td><td><strong>0.52</strong></td></tr>
+        <tr><td>d¹</td><td>g¹</td><td>0.7×0.05 + 0.3×0.5 = 0.035 + 0.15</td><td><strong>0.185</strong></td></tr>
+        <tr><td>d¹</td><td>g⁰</td><td>0.7×0.95 + 0.3×0.5 = 0.665 + 0.15</td><td><strong>0.815</strong></td></tr>
+      </table>
+    </div>
+
+    <p><strong>第 4 步，消 G。</strong>τ₄(d) = ∑<sub>g</sub> P(d)·τ₃(d, g)。注意 τ₃ 每行（给定 d）和为 1，所以 τ₄(d) = P(d)：τ₄(d⁰) = 0.6，τ₄(d¹) = 0.4。</p>
+
+    <p><strong>第 5 步，收尾。</strong>只剩一个因子 τ₄(D)，P(L) 的"答案"是：全部因子消完后得到的常数……等等，怎么没有 L 了？</p>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ L 去哪了？</span>
+      <p>第 1 步消 L 时它带着自己的 CPD 一起归一化消失了，最后留下的是 τ₄(D) = P(D) 和一个隐藏的结果：<strong>所有因子乘积的总和 = 1</strong>。这正确地告诉我们 P(l¹) + P(l⁰) = 1，却没给出各自的值——顺序"先消查询变量"对 P(L) 这个查询来说是<strong>错误的使用方式</strong>（这个顺序对"算配分函数 Z"反而是对的，见 9.4）。要求 P(L)，应该最后消 L，或者干脆查 P(D)——本顺序算出的正是 P(D)。下面我们换一个顺序重算，真正拿到 P(L)，顺便看看代价差多少。</p>
+    </div>
+
+    <!-- 回忆卡片 9.3 -->
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 9.3-1</div>
+              <div class="q-text">消去一个变量时，为什么只挂在它身上的归一化 CPD 因子会"凭空消失"？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              CPD 对每个父节点取值行之和为 1；若该变量不出现在任何其他因子里，对它求和就是把每行加成 1，乘上常数 1 等于删掉该因子。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 9.3-2</div>
+              <div class="q-text">顺序 L→S→I→G 在例 2 里真正算出的是什么？为什么没得到 P(L)？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              算出 P(D)（以及联合总和 1）。L 第 1 步就被消去，其概率质量被归一化"吸收"，最终因子不含 L。求 P(X) 时查询变量应留到最后消。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 9.4 ============ -->
+    <h2><span class="sec-no">9.4</span>例 3：换个顺序重算，代价从哪来</h2>
+
+    <p>同一个网络、同一个查询 P(L)，换<strong>消元顺序二：G → S → I → D</strong>（先消 V 结构的"汇"G，查询变量 L 留到最后）。这个顺序看起来"差不多"，算完你会发现代价差了一个量级。</p>
+
+    <p><strong>第 1 步，消 G。</strong>G 出现在 P(G|D, I) 与 P(L|G) 中——等等，例子里 L 依赖 S 不依赖 G，P(L|S) 里没有 G。所以 G 只出现在 P(G|D,I) 中。τ₁(d, i) = ∑<sub>g</sub> P(g|d, i) = 1，又凭空消失了？</p>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 停一下——这是对的使用方式吗？</span>
+      <p>是的，而且这暴露了一个重要现象：<strong>如果查询是 P(L)，那么 G 和 D 对答案毫无影响</strong>。它们是"L 的上游之外的分支"（L ← S ← I ← G ← D 里 G、D 挂在链的侧枝上），先验下它们的信息传不到 L。任何正确实现都会把 P(G|D,I)、P(D) 归一化消掉，问题塌缩成 I → S → L 的三变量链。为了真正看到"顺序影响代价"的戏剧性场面，我们需要一个让全部变量都纠缠进来的查询——证据查询。这正是 9.5 节的内容，这里先把例 3 换成那个版本。</p>
+    </div>
+
+    <p><strong>例 3（修订）：查询 P(L | D = d¹)</strong>——已知课程难，推荐信还好拿吗？先按 9.5 节的标准手法处理证据（提前用掉）：把 D = d¹ 代入所有含 D 的因子。含 D 的只有 P(G|D,I)，代入 d¹ 后得到<strong>约简因子</strong>：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>i</th><th>g¹</th><th>g⁰</th></tr>
+        <tr><td>i⁰</td><td>0.05</td><td>0.95</td></tr>
+        <tr><td>i¹</td><td>0.5</td><td>0.5</td></tr>
+      </table>
+    </div>
+
+    <p>（这个表恰好等于 P(G|I, d¹)，因为 P(G|D,I) 本身每行归一；更一般的情形见 9.5 节例 4，那里约简因子不再是概率表。）现在因子清单：P(I)、P(G|I,d¹)、P(S|I)、P(L|S)。<strong>消元顺序：G → S → I</strong>，L 留最后。</p>
+
+    <p><strong>第 1 步，消 G。</strong>τ₁(i) = ∑<sub>g</sub> P(g|i, d¹) = 1，消失。剩 P(I)、P(S|I)、P(L|S)。</p>
+
+    <p><strong>第 2 步，消 S。</strong>S 出现在 P(S|I) 与 P(L|S)。乘出 ψ(i, s, l) = P(s|i)·P(l|s)（8 行），对 S 求和得 τ₂(i, l)。逐行（τ₂(i, l) = P(s⁰|i)·P(l|s⁰) + P(s¹|i)·P(l|s¹)）：</p>
+    <ul>
+      <li>τ₂(i⁰, l¹) = 0.8×0.1 + 0.2×0.9 = 0.08 + 0.18 = <strong>0.26</strong></li>
+      <li>τ₂(i⁰, l⁰) = 0.8×0.9 + 0.2×0.1 = 0.72 + 0.02 = <strong>0.74</strong></li>
+      <li>τ₂(i¹, l¹) = 0.2×0.1 + 0.8×0.9 = 0.02 + 0.72 = <strong>0.74</strong></li>
+      <li>τ₂(i¹, l⁰) = 0.2×0.9 + 0.8×0.1 = 0.18 + 0.08 = <strong>0.26</strong></li>
+    </ul>
+
+    <p><strong>第 3 步，消 I。</strong>τ₃(l) = ∑<sub>i</sub> P(i)·τ₂(i, l)：</p>
+    <ul>
+      <li>τ₃(l¹) = 0.7×0.26 + 0.3×0.74 = 0.182 + 0.222 = <strong>0.404</strong></li>
+      <li>τ₃(l⁰) = 0.7×0.74 + 0.3×0.26 = 0.518 + 0.078 = <strong>0.596</strong></li>
+    </ul>
+
+    <p>检查：0.404 + 0.596 = 1 ✓。这就是未归一化的 P(L, d¹)。<strong>归一化</strong>（它和 = 1，所以这里不变）：P(l¹|d¹) = <strong>0.404</strong>，P(l⁰|d¹) = 0.596。作为对照，无证据时 P(l¹) = 0.26×0.7 + ……用第 2 步的 τ₂：P(l¹) = 0.404？不对——那是同一个数。想想为什么：先验下 D 与 L 本来独立吗？D → G ← I → S → L，D 到 L 的路径 D→G←I 是 V 结构，被阻断，所以 D ⊥ L 无条件成立，P(L|d¹) = P(L)。数值自洽 ✓。若观测了 G（共同效应），D 与 L 就相关了——这是 d-分离的老知识在新算法里的回声。</p>
+
+    <h3>顺序真正的代价差异：一个会"长大"的中间因子</h3>
+    <p>上面的例子里因子都很小，戏剧冲突不足。现在看查询 <strong>P(D)</strong> 用坏顺序 <strong>L → S → I → G</strong>…… 9.3 节已经演示过它很顺（中间因子最大 3 变量、且多步凭空消失）。真正的反面教材是：<strong>先消 D、I 之外的中间节点，把 G 留到和它父母同场的时候再处理邻居</strong>。考虑顺序 <strong>S → L → I → G</strong>（查询 P(D)）：</p>
+    <ul>
+      <li>消 S：τ₁(i) = ∑<sub>s</sub> P(s|i) = 1，消失（L 的因子 P(L|S) 此时还没轮到——注意 S 出现在 P(S|I) 和 P(L|S) 两个因子里！τ₁(i, l) = ∑<sub>s</sub> P(s|i)P(l|s)，<strong>不消失</strong>，就是上面算过的 0.26/0.74/0.74/0.26 那张表）。</li>
+      <li>消 L：τ₂(i) = ∑<sub>l</sub> τ₁(i, l) = 1，消失。</li>
+      <li>消 I：I 在 P(I)、P(G|D,I) 里，τ₃(d, g) 同 9.3 节第 3 步（0.48 / 0.52 / 0.185 / 0.815）。</li>
+      <li>消 G：τ₄(d) = P(d)·∑<sub>g</sub>τ₃(d,g) = P(D)。✓</li>
+    </ul>
+
+    <p>对比两种顺序的中间因子"最大作用域"：所有正确顺序里，最大的中间因子都是消 I（或 G）时那张 <strong>{D, G, I} 三变量</strong>的表——它对应 V 结构的"父母 + 孩子"三人组，躲不掉。而如果你在 G 还没消时先消 D（顺序 <strong>D → …</strong>），D 出现在 P(D) 和 P(G|D,I)，乘出 ψ(D, G, I) 再消 D 得到 τ(G, I)——同样是三变量表。看起来差不多？差别在<strong>网络变大时</strong>：三变量表在 4 节点网络里无伤大雅，但如果 G 有 k 个父母，那张表是 2<sup>k+1</sup> 行。<strong>顺序决定的是"最大那张中间表有多大"。</strong></p>
+
+    <h3>对照手算：四元环加一条侧枝——坏顺序贵出一个数量级</h3>
+    <p>学生网络是条"链加侧枝"，因子怎么消都大不了。要看清顺序的杀伤力，得换一个<strong>带环</strong>网络：四元环 A—B—C—D—A（四条边连成圈），加一条侧枝 E—A。五个因子 φ₁(A,B)、φ₂(B,C)、φ₃(C,D)、φ₄(D,A)、φ₅(A,E)，查询 P(E)，E 留到最后。环上没有"凭空归一消失"的死角，五个变量全部纠缠在一起。代价只取决于因子作用域，与具体数值无关；设每个变量取 d 个值，最后代入 d = 10 看量级。</p>
+
+    <p><strong>顺序一（好）：C → B → D → A</strong>——先消环上离 E 最远的普通节点，枢纽 A 留到倒数第二步。</p>
+    <ul>
+      <li>消 C：φ₂·φ₃ 乘成 ψ(B,C,D)，求和得 τ₁(B,D)。最大表 3 变量。</li>
+      <li>消 B：φ₁·τ₁ 乘成 ψ(A,B,D)，求和得 τ₂(A,D)。最大表 3 变量。</li>
+      <li>消 D：φ₄·τ₂ 乘成 ψ(A,D)（2 变量），得 τ₃(A)。</li>
+      <li>消 A：φ₅·τ₃（2 变量），得 τ₄(E) = P̃(E)。</li>
+    </ul>
+    <p>最大中间因子 <strong>3 变量（d³ 行）</strong>；乘法总次数 ≈ 2d³ + 2d²（两张 d³ 乘积表 + 两张 d² 乘积表）。</p>
+
+    <p><strong>顺序二（坏）：A → C → D → B</strong>——一上来就消枢纽 A。</p>
+    <ul>
+      <li>消 A：A 连着 B、D、E 三个邻居，φ₁·φ₄·φ₅ 乘成 ψ(A,B,D,E)——<strong>4 变量大表，d⁴ 行</strong>，求和得 τ₁(B,D,E)。环被"焊"死：B、D、E 两两相连。</li>
+      <li>消 C：φ₂·φ₃ 乘成 ψ(B,C,D)（3 变量），得 τ₂(B,D)。</li>
+      <li>消 D：τ₁·τ₂ 乘成 ψ(B,D,E)（3 变量），得 τ₃(B,E)。</li>
+      <li>消 B：τ₃ 直接求和得 τ₄(E)。</li>
+    </ul>
+    <p>最大中间因子 <strong>4 变量（d⁴ 行）</strong>；乘法总次数 ≈ 2d⁴ + 2d³。</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>顺序</th><th>中间因子（逐步乘积表作用域）</th><th>最大因子维度</th><th>乘法次数（d = 10）</th></tr>
+        <tr><td>C → B → D → A（好）</td><td>{B,C,D} → {A,B,D} → {A,D} → {A,E}</td><td>3 变量 = 10³ = <strong>1,000 行</strong></td><td>≈ 2×10³ + 2×10² = <strong>2,200</strong></td></tr>
+        <tr><td>A → C → D → B（坏）</td><td>{A,B,D,E} → {B,C,D} → {B,D,E} → {B,E}</td><td>4 变量 = 10⁴ = <strong>10,000 行</strong></td><td>≈ 2×10⁴ + 2×10³ = <strong>22,000</strong></td></tr>
+      </table>
+    </div>
+
+    <p>解读：两种顺序算出的是<strong>同一个</strong> P(E)（分配律保证结果与顺序无关），但坏顺序第一步就把 A 的三个邻居焊进同一张表，最大因子多出整整一个变量——代价乘上 d。二值变量时只差 2 倍（48 vs 24，体感不强）；d = 10 时就是整整一个数量级：<strong>22,000 次 vs 2,200 次乘法</strong>。若枢纽有 k 个邻居，差距是 d<sup>k−2</sup> 倍——网络越大、枢纽越肥，坏顺序死得越快。这就是"顺序决定代价"的全部含义，也正是下一节诱导图要度量的东西：好顺序留下的最大表 3 变量，对应这个网络的树宽 w = 2。</p>
+
+    <h3>诱导图：把"顺序 → 代价"翻译成图语言</h3>
+    <p>每次消去变量 X 时，我们把所有含 X 的因子乘成一张大表——这张表的变量集是"X 及其当前邻居"。等价地图操作：<strong>在图上把 X 的所有邻居两两连边（填充边，fill edge），然后删掉 X</strong>。把整个消元过程新增的所有边叠加到原图（道德化图）上，得到的就是<span class="term">诱导图</span>（Induced Graph）。诱导图的最大团大小减 1 叫该顺序的<span class="term">诱导宽度</span>（Induced Width）w；VE 的总复杂度是 <strong>O(n · d<sup>w+1</sup>)</strong>。</p>
+
+    <div class="figure">
+      <div class="mermaid">
+flowchart LR
+  D["D"] --- G["G"]
+  I["I"] --- G
+  I --- S["S"]
+  S --- L["L"]
+  D -.- I
+  classDef hot fill:#fbeedd,stroke:#c4651f,stroke-width:2.5px,color:#c4651f;
+  classDef danger fill:#fae9e7,stroke:#b03a2e,stroke-width:2.5px,color:#b03a2e;
+  class G hot;
+  linkStyle 4 stroke:#b03a2e,stroke-width:2.5px;
+      </div>
+      <div class="caption">图 9.2 学生节选的道德化图：红色虚线 D—I 是"父母结婚"边。无论谁先谁后，只要消去与 G 相关的变量，{D, G, I} 这张三人桌就注定出现——诱导图的最大团 = 3，w = 2。</div>
+    </div>
+
+    <p>所有消元顺序中诱导宽度的最小值，是图的固有属性——<span class="term">树宽</span>（Treewidth）。它给精确推理划了一条硬边界：</p>
+
+    <div class="box insight">
+      <span class="box-tag">✅ 因果链总结（本章最重要的一张图）</span>
+      <p><strong>消元顺序 → 中间因子的最大作用域 → 诱导图的最大团 → 诱导宽度 w → 复杂度 O(n·d<sup>w+1</sup>)；所有顺序取最小，复杂度指数于树宽。</strong>树的树宽 = 1（推理线性代价！）；网格图树宽 ≈ min(m, n)（大图精确推理不可行，交给 Ch11 近似推理）。注意：找最优顺序本身是 NP-hard，实践用启发式——<span class="term">最小度</span>（Min-Degree，每次消当前度数最小的节点）与<span class="term">最小填充</span>（Min-Fill，每次消"新增填充边最少"的节点）。</p>
+    </div>
+
+    <!-- 回忆卡片 9.4 -->
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 9.4-1</div>
+              <div class="q-text">诱导图怎么构造？它和 VE 复杂度什么关系？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              消 X 时把 X 的当前邻居两两连边再删 X；全部填充边叠加原图 = 诱导图。复杂度 O(n·d<sup>w+1</sup>)，w = 诱导图最大团大小 − 1。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 9.4-2</div>
+              <div class="q-text">树宽的定义？树和网格的树宽分别是多少，后果是什么？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              树宽 = 所有消元顺序诱导宽度的最小值。树宽 1 ⇒ 线性推理；网格 ≈ min(m,n) ⇒ 指数爆炸，精确推理不可行，需近似（Ch11）。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 9.5 ============ -->
+    <h2><span class="sec-no">9.5</span>证据先约简，以及顺手算出配分函数 Z</h2>
+
+    <p>9.4 节已经提前用了证据处理手法，这一节把它正式化。观测 E = e 之后，不需要任何新运算：</p>
+
+    <div class="box insight">
+      <span class="box-tag">✅ 因子约简（Factor Reduction）</span>
+      <p>把每个含 E 的因子 φ(…, E, …) 替换为 φ(…, E = e, …)——只保留 E = e 的那些行。约简后的因子乘积 = 未归一化联合 P(·, e)。对它做 VE，消元到最后得到的常数就是 <strong>P(e)</strong>；要 P(Y|e) 就让 Y 留到最后，得到 P(Y, e) 后归一化：除以 P(e) = ∑<sub>Y</sub> P(Y, e)。</p>
+    </div>
+
+    <h3>例 4：证据约简不一定是概率表——P(G | D = d¹)</h3>
+    <p>查询 P(G|d¹)。约简因子清单：P(G|I, d¹)（9.4 节那张表）、P(I)、P(S|I)、P(L|S)。消元顺序 L → S → I：L、S 依次凭空归一消失（回忆 9.3-1），剩 P(I) 与 P(G|I,d¹)。消 I：τ(g) = ∑<sub>i</sub> P(i)·P(g|i,d¹)：</p>
+    <ul>
+      <li>τ(g¹) = 0.7×0.05 + 0.3×0.5 = 0.035 + 0.15 = <strong>0.185</strong></li>
+      <li>τ(g⁰) = 0.7×0.95 + 0.3×0.5 = 0.665 + 0.15 = <strong>0.815</strong></li>
+    </ul>
+    <p>和 = 1，归一化不变：P(g¹|d¹) = 0.185。（对照 9.3 节 τ₃： τ₃(d¹, g¹)/P(d¹) = 0.185/0.4 = 0.4625？不对——τ₃(d,·) 已经是条件分布 P(G|d)，因为 τ₃(d,g) = ∑<sub>i</sub> P(i)P(g|d,i) 里 P(i) 和为 1。所以 P(g¹|d¹) 直接就是 τ₃(d¹, g¹) = 0.185 ✓，两处自洽。）</p>
+
+    <h3>例 5：与第 4 章的桥——VE 算出配分函数 Z</h3>
+    <p>回忆第 4 章：马尔可夫网络 P = (1/Z)·∏ψ<sub>C</sub>，Z 是全局归一化常数，"本章埋下的账"。现在可以还债了：<strong>Z = ∑<sub>所有变量</sub> ∏ψ<sub>C</sub> 正是一个"没有查询变量、没有证据"的 VE</strong>——把所有变量按任意顺序消光，最后剩下的常数就是 Z。链 A—B—C（同 10 / 异 1）上验证：消 C 得 τ₁(b) = 10 + 1 = 11；消 B 得 τ₂(a) = 11×(10+1) = 121；消 A 得 Z = 121 + 121 = <strong>242</strong>，与第 4 章枚举 8 行的结果分毫不差，但一次完整大表都没造。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>证据不是推理的"附加功能"，而是让推理变便宜的机制：约简把证据变量从因子里删掉，因子更小、诱导图更稀疏。MN 里的 Z、BN 里的 P(e)，都是"全部消完剩下的常数"——<strong>归一化常数从来不是外加的，它是推理的副产品</strong>。</p>
+    </div>
+
+    <!-- 回忆卡片 9.5 -->
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 9.5-1</div>
+              <div class="q-text">给定证据 E = e，VE 的标准流程是什么？P(e) 从哪来？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              先约简：所有含 E 的因子只留 E = e 的行；再对查询外变量消元；得 P(Y, e) 后归一化。归一化常数 = P(e)，即消到最后的常数。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 9.5-2</div>
+              <div class="q-text">怎么用 VE 算马尔可夫网络的配分函数 Z？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              不约简、不留查询变量：把全部变量消光，最后剩下的常数就是 Z。例：同 10/异 1 的链得 Z = 242。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 9.6 ============ -->
+    <h2><span class="sec-no">9.6</span>本章买下的账单：多查询时的重复计算</h2>
+
+    <p>到此变量消去看起来完美：多项式次的单查询（低树宽时）。但回到真实场景——医生要分别查询"发烧的概率""肺炎的概率""某种化验结果的概率"；系统要对<strong>每一个变量</strong>都算边缘。每跑一次 VE，你都从头来一遍：同样的中间因子（比如 9.3 节的 τ₃(D,G)）在不同查询里被<strong>反复重算</strong>。</p>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 重复计算就是下一章的靶子</span>
+      <p>n 个查询 × 每个查询 O(n·d<sup>w+1</sup>) = O(n²·d<sup>w+1</sup>)。但换个角度看：不同查询的消元过程共享大量中间因子——如果有一张"工作台"能把它们缓存起来、让每个因子只算一次，多查询的总代价就能压回单查询的量级。这张工作台就是第 10 章的<span class="term">团树</span>（Clique Tree）：节点 = 诱导图的团，边上跑消息，一次预处理、所有查询各取所需。</p>
+    </div>
+
+    <p>另一个方向：树宽大的图（网格、稠密网络）连单查询都贵到不可行。那是第 11 章（近似推理：采样、变分）的领土。而本章的"求和"如果换成"取最大"，就是第 13 章的 MAP 推理——算法骨架几乎不变。<strong>VE 是推理四章的母算法：看懂它，后面三章都是它的变奏。</strong></p>
+
+    <!-- 回忆卡片 9.6 -->
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 9.6-1</div>
+              <div class="q-text">对每个变量各查一次边缘，直接重复跑 VE 的代价是多少？浪费在哪？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              O(n²·d<sup>w+1</sup>)。浪费：不同查询的消元过程算出大量相同的中间因子，却没有任何缓存与复用。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 9.6-2</div>
+              <div class="q-text">团树算法相对"重复跑 VE"省下了什么？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              把消元的中间因子组织成团树上的消息，一次双向传播后每个团的边缘（含全部单变量边缘）同时可得——共享了所有重复计算。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 概念卡 ============ -->
+    <h2><span class="sec-no">🃏</span>概念卡：本章概念的一分钟画像</h2>
+    <p>翻面前先自问：这个概念我能用一句话讲清楚吗？</p>
+    <div class="flip-grid">
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 1</div>
+            <div class="q-text">推理任务（Inference Task）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">给定模型与证据 E = e，计算查询变量的后验 P(Y | E = e)。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">模型建好后要回答查询：边缘、条件概率、MAP（Ch13）。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">问诊：已知症状（证据），算疾病（查询）的后验。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为因子分解让推理免费——它省存储，不直接省计算。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">推理四章（Ch9–13）每章都在解这个任务的不同变体。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 2</div>
+            <div class="q-text">因子乘积与边缘化（Factor Product / Marginalization）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">乘积：公共变量对齐相乘，作用域取并；边缘化：对某变量求和，把它从作用域删掉。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">VE 仅有的两个操作，一切消元都是它们的组合。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">乘积 = 两表按公共列 join；边缘化 = 分组求和后删列。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为乘积后行数不变——它膨胀为作用域并集的联合行数。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">Ch9 每步消元；Ch10 团树消息传递的底层运算。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 3</div>
+            <div class="q-text">变量消去（Variable Elimination）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">按某个顺序，对每个非查询变量：收集含它的因子→相乘→对它求和，存下中间因子。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">避免枚举完整联合表，把全局求和拆成局部求和序列。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">动态规划：子问题的答案（τ 表）存下来复用。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为结果与顺序无关所以代价也无关——结果相同，代价天差地别。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">精确推理的母算法；Ch10 团树是它的多查询缓存版。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 4</div>
+            <div class="q-text">消元顺序（Elimination Ordering）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">消去非查询变量的先后次序；查询变量留到最后。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">顺序决定中间因子的最大作用域，从而决定总代价。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">拆快递：先拆哪箱决定桌上最多同时摊多少东西。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为存在通用规则手算最优——找最优顺序是 NP-hard，实践用最小度/最小填充启发式。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">一切 VE/团树实现的预处理步骤。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 5</div>
+            <div class="q-text">诱导图（Induced Graph）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">消 X 时把 X 的当前邻居两两连边再删 X；全部填充边叠加原图所得。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">把"顺序→代价"翻译成图语言：最大中间因子 = 诱导图最大团。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">送走一个人前，让它的所有朋友互相加微信——朋友团越来越大。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为诱导图由原图唯一决定——它由顺序决定，不同顺序不同图。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">复杂度分析；Ch10 团树的节点就是诱导图的团。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 6</div>
+            <div class="q-text">树宽（Treewidth）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">所有消元顺序的诱导宽度的最小值，图的固有属性。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">划出精确推理的可行边界：复杂度 O(n·d<sup>w+1</sup>)，指数于树宽。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">图的"循环程度"：树 w=1，环越多越密 w 越大。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为树宽容易算——计算树宽本身 NP-hard。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">判断"该用精确（Ch9/10）还是近似（Ch11/12）"的分水岭。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 7</div>
+            <div class="q-text">因子约简（Factor Reduction）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">观测 E = e 后，含 E 的因子只保留 E = e 的行，E 从作用域删除。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">把"条件概率查询"变成"无证据的消元 + 最后归一化"。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">答案已知的填空题：把已知项划掉，表立刻变小。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为约简因子仍是概率表——一般是未归一化的切片（CPD 纵切是例外）。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">一切带证据查询的第一步；证据越多推理越便宜。</span></div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- ============ 分层习题 ============ -->
+    <h2><span class="sec-no">📝</span>分层习题</h2>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>判断对错：<strong>变量消去的结果取决于消元顺序，所以必须选对顺序才能得到正确答案。</strong>说明理由。</div>
+      <details>
+        <summary>提示</summary>
+        <p>求和与乘积满足交换律、结合律、分配律——最终答案是什么的求和？顺序影响的是答案还是别的东西？</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">错（前半句本身就是错的）。任何顺序算出的都是同一个边缘——分配律保证代数等价，9.3 与 9.4 两节用不同顺序算出同一个数就是证据。顺序影响的是<strong>代价</strong>：中间因子的最大维度与总运算量，可差出指数级。正确说法：结果与顺序无关，复杂度与顺序生死攸关。</div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>判断对错：<strong>VE 的复杂度指数于网络中的变量个数 n。</strong>如果不准确，给出准确的刻画。</div>
+      <details>
+        <summary>提示</summary>
+        <p>链式网络有 n 个变量，它的 VE 代价是指数于 n 吗？复杂度公式里指数位置站的是谁？</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">不准确。复杂度是 O(n·d<sup>w+1</sup>)：指数位置是<strong>诱导宽度 w</strong>（最终是树宽），不是 n。链式网络 n 再大，w = 1，代价随 n 线性增长——9.2 节的链就是例子。只有当结构迫使中间因子变大（稠密环、网格）时代价才爆炸。所以"变量多"不可怕，"缠得紧"才可怕。</div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>二值链 X → Y → Z，参数：P(x⁰) = 0.5；P(y⁰|x⁰) = 0.6，P(y⁰|x¹) = 0.2；P(z⁰|y⁰) = 0.9，P(z⁰|y¹) = 0.3。用 VE（顺序 X → Y）手算 P(Z)，列出每张中间因子的完整数值表。</div>
+      <details>
+        <summary>提示</summary>
+        <p>先消 X：τ₁(y) = ∑<sub>x</sub> P(x)P(y|x)；再消 Y：P(z) = ∑<sub>y</sub> τ₁(y)P(z|y)。最后检查两行之和。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p>第 1 步，消 X：τ₁(y⁰) = 0.5×0.6 + 0.5×0.2 = 0.3 + 0.1 = <strong>0.4</strong>；τ₁(y¹) = 0.5×0.4 + 0.5×0.8 = 0.2 + 0.4 = <strong>0.6</strong>。（和为 1 ✓，τ₁ 即 P(Y)。）</p>
+          <p>第 2 步，消 Y：P(z⁰) = 0.4×0.9 + 0.6×0.3 = 0.36 + 0.18 = <strong>0.54</strong>；P(z¹) = 0.4×0.1 + 0.6×0.7 = 0.04 + 0.42 = <strong>0.46</strong>。</p>
+          <p>检查：0.54 + 0.46 = 1 ✓。中间因子最大 1 个变量——链的树宽 1，代价线性。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>在 9.3 节学生网络（D→G←I→S→L）上，设证据 S = s¹，用 VE 手算 P(l¹ | s¹)。（顺序随意，注意先约简。）</div>
+      <details>
+        <summary>提示</summary>
+        <p>约简 S = s¹：P(S|I) 变成 φ(i)（取 s¹ 那一列：i⁰→0.2，i¹→0.8），P(L|S) 变成 φ(l)（取 s¹ 行：l¹→0.9，l⁰→0.1）。D、G 分支与 L 先验无关，会归一化消失。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p>约简后因子：φ₁(i) = P(s¹|i)（0.2 / 0.8）、φ₂(l) = P(l|s¹)（0.9 / 0.1）、P(I)、P(D)、P(G|D,I)。</p>
+          <p>消 L：L 只在 φ₂ 里，但 φ₂ 不归一（0.9 + 0.1 = 1，恰好归一——它是 CPD 的纵切）……它对 I 无影响，直接作为关于 L 的因子保留到最后。消 D、G：分别归一化消失。</p>
+          <p>消 I：τ(l) = φ₂(l)·∑<sub>i</sub> P(i)·φ₁(i)。先算括号：0.7×0.2 + 0.3×0.8 = 0.14 + 0.24 = <strong>0.38</strong>（这就是 P(s¹)）。于是未归一化：l¹: 0.9×0.38 = 0.342；l⁰: 0.1×0.38 = 0.038。</p>
+          <p>归一化（除以 P(s¹) = 0.38，即两数之和 0.38）：P(l¹|s¹) = 0.342/0.38 = <strong>0.9</strong>。合理：L 只依赖 S，给定 S = s¹ 后其他证据无关，P(l¹|s¹) 就是 CPD 表里的 0.9 本身 ✓。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l3">L3 建模应用</span>某医院用贝叶斯网络做辅助诊断：疾病 D（3 种）影响症状 S₁…S₂₀（各二值），共 21 个变量、结构是"D 为唯一父节点"的朴素贝叶斯（多树）。医生抱怨系统慢。①写出该网的树宽并说明理由；②说明为什么对任何单一症状的查询，VE 都很快；③如果医生想一次性拿到全部 20 个症状的边缘概率，指出直接重复跑 VE 的浪费，并说出第 10 章将如何解决。</div>
+      <details>
+        <summary>提示</summary>
+        <p>道德化这张图——V 结构存在吗？消 D 时中间因子多大？消症状时呢？回忆团树的"缓存"思想。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p>①树宽 = 1。每个症状只有一个父节点，无 V 结构，道德化不加边；图是星形（一种树）。先消全部症状（每个只在自己的 CPD 里，乘 D 的先验后逐个处理），最大中间因子只含 {D, Sᵢ} 两个变量。</p>
+          <p>②复杂度 O(n·d<sup>w+1</sup>) = O(21×3²) 量级——秒出。慢的原因不在结构，多半是实现问题（比如没用 VE 而在枚举）。</p>
+          <p>③20 个查询 × 每次从头消元：消 D 产生的关于各症状的中间因子被算了 20 遍。Ch10 团树把团 {D, Sᵢ} 组织成树，一次双向消息传递后所有团的边缘同时可得，重复计算被缓存消除。</p>
+        </div>
+      </details>
+    </div>
+
+    <!-- ============ 本章自测 ============ -->
+    <h2><span class="sec-no">✍️</span>本章自测</h2>
+    <p class="quiz-hint">点击选项判分，答错会给出原因。</p>
+
+    <div class="quiz-block" data-answer="c">
+      <div class="q-no">自测 1</div>
+      <div class="q-stem">n 个二值变量的贝叶斯网络，暴力枚举算一个边缘概率的复杂度量级是？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. O(n)</li>
+        <li data-opt="b">B. O(n²)</li>
+        <li data-opt="c">C. O(2ⁿ)</li>
+        <li data-opt="d">D. O(n!)</li>
+      </ul>
+      <div class="quiz-explain">选 C。要枚举全部 2ⁿ 个联合赋值求和。A/B 错在把"因子分解省存储"误当成"推理省计算"——暴力法先把因子乘回完整联合表，放弃了全部结构。D 过度估计，阶乘比指数还快，但没有任何步骤需要全排列。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 2</div>
+      <div class="q-stem">"把求和号往内推"之所以省计算，根本原因是：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 求和比乘法快，所以多做求和少做乘法</li>
+        <li data-opt="b">B. 被求和变量只出现在部分因子里，先求和让表变小再相乘</li>
+        <li data-opt="c">C. 求和号位置不影响结果，所以可以随便推</li>
+        <li data-opt="d">D. 推到最内层后可以直接查表，不用计算</li>
+      </ul>
+      <div class="quiz-explain">选 B。分配律：∑<sub>X</sub>(φ₁·φ₂) = φ₁·∑<sub>X</sub>φ₂（X 不在 φ₁ 中）——先消元后相乘，乘的永远是小表。A 本末倒置（问题不是运算种类而是表的大小）；C 只说对一半：结果确实不变，但代价剧变，"随便推"会推到天价中间因子；D 无此机制。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="d">
+      <div class="q-no">自测 3</div>
+      <div class="q-stem">消去变量 X 时，在图上的等价操作是：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 直接删掉 X 及其所有边</li>
+        <li data-opt="b">B. 把 X 的边全部反向再删除</li>
+        <li data-opt="c">C. 把 X 的邻居排成一个环再删除 X</li>
+        <li data-opt="d">D. 把 X 的所有当前邻居两两连边（填充），然后删除 X</li>
+      </ul>
+      <div class="quiz-explain">选 D。含 X 的因子相乘后，X 的邻居出现在同一张中间表里——图上就是邻居两两相连（填充边）。A 错：漏掉填充边就丢了中间因子变大的信息；B 无向图没有方向可言，且反向不是消元语义；C 排成环只连了相邻对，遗漏了其他邻居对。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="a">
+      <div class="q-no">自测 4</div>
+      <div class="q-stem">关于树宽，下列说法正确的是：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 树宽是所有消元顺序的诱导宽度的最小值，是图的固有属性</li>
+        <li data-opt="b">B. 树宽等于图中最大团的大小</li>
+        <li data-opt="c">C. 树宽大的图可以用更聪明的消元顺序把代价降到线性</li>
+        <li data-opt="d">D. 网格图的树宽是 1，因为它很规则</li>
+      </ul>
+      <div class="quiz-explain">选 A。B 错：原图最大团只是下界，填充边会让诱导图的团更大；树宽要对所有顺序取最小。C 错：树宽正是"最聪明顺序"能达到的极限，再聪明也越不过它（且找最优顺序 NP-hard）。D 错：m×n 网格树宽 ≈ min(m,n)，这正是大规模网格精确推理不可行的原因。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="c">
+      <div class="q-no">自测 5</div>
+      <div class="q-stem">观测证据 E = e 后，对含 E 的因子执行的操作是：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 把 E 的取值全部重新归一化</li>
+        <li data-opt="b">B. 删除所有含 E 的因子</li>
+        <li data-opt="c">C. 只保留 E = e 的行，把 E 从因子作用域中去掉</li>
+        <li data-opt="d">D. 把 E = e 代入后对 E 求和</li>
+      </ul>
+      <div class="quiz-explain">选 C。因子约简：切片保留匹配证据的行，E 从作用域消失，消元在更小的因子集上进行。A 错：约简因子一般不重新归一（归一化在末尾统一做，常数就是 P(e)）。B 错：删因子等于丢弃证据携带的信息。D 错：证据是"固定取值"，不是"求和消去"——求和会把它当未知变量边缘化掉。</div>
+    </div>
+
+    <!-- ============ 三句话复述 ============ -->
+    <div class="retell">
+      <h3>🗣️ 用自己的话，三句话讲完本章</h3>
+      <p class="retell-sub">对着空气（或室友）说出这三句。说卡壳的那句，回去重读对应小节。</p>
+      <details>
+        <summary>句1：这章解决什么问题？——</summary>
+        <div class="retell-answer">参考答案：模型建好后要回答查询（边缘/条件概率），暴力枚举联合分布是指数级、不可行；本章给出精确推理的基本算法，并回答"代价从哪来、由什么决定"。</div>
+      </details>
+      <details>
+        <summary>句2：核心机制是什么？——</summary>
+        <div class="retell-answer">参考答案：推理 = 因子相乘再边缘化；变量消去用分配律把求和号往内推，按消元顺序动态规划地存中间因子；顺序决定中间因子大小，诱导图与树宽把它钉死：复杂度 O(n·d<sup>w+1</sup>)，指数于树宽。证据先约简因子再消元，归一化常数（P(e) 或 Z）是消元的副产品。</div>
+      </details>
+      <details>
+        <summary>句3：它和前后章怎么分工？——</summary>
+        <div class="retell-answer">参考答案：Ch1–8 负责"表示"（把分布写成因子乘积），本章是推理起点；单查询 VE 会重复计算中间因子，Ch10 团树负责缓存共享；树宽大的图连单查询都不行，交给 Ch11/12 近似推理；把求和换成取最大就是 Ch13 的 MAP。</div>
+      </details>
+    </div>
+
+    <!-- ============ 复习计划 ============ -->
+    <div class="review-plan">
+      <h3>🔁 间隔复习计划</h3>
+      <p>回忆本身比重读有效 10 倍。到点只做一件事：翻卡 + 重做标记题。</p>
+      <table>
+        <tr><th>时间点</th><th>复习内容</th><th>预计用时</th></tr>
+        <tr><td>第 1 天</td><td>概念卡 1–7 全部 + 回忆卡 9.2-2、9.4-1、9.5-1</td><td>12 分钟</td></tr>
+        <tr><td>第 3 天</td><td>概念卡 3、4、5、6（VE/顺序/诱导图/树宽）+ 重做 L2 两题 + 自测错题</td><td>12 分钟</td></tr>
+        <tr><td>第 7 天</td><td>三句话复述出声说一遍 + 重算例 3（P(L|d¹)）+ 回忆卡 9.3-1、9.6-1</td><td>12 分钟</td></tr>
+        <tr><td>第 15 天</td><td>只做合上书挑战；七条全过则本章毕业，卡在哪条就重读对应小节</td><td>15 分钟</td></tr>
+      </table>
+    </div>
+
+    <!-- 合上书挑战 -->
+    <div class="final-challenge">
+      <h3>📕 合上书挑战</h3>
+      <p class="fc-sub">现在关掉这个页面（或遮住屏幕），拿一张纸，凭记忆完成以下任务。全部做完再回来核对——这是本章真正的毕业考试。</p>
+      <ol id="challenge-list">
+        <li><span class="fc-check"></span>写出暴力法算 P(Y|E=e) 的公式，说明它为什么是指数级</li>
+        <li><span class="fc-check"></span>定义因子乘积与边缘化，写出"求和号内推"的分配律等式</li>
+        <li><span class="fc-check"></span>在二值链 X→Y→Z 上用 VE 算出 P(Z)（自造参数，步骤写全）</li>
+        <li><span class="fc-check"></span>画出学生节选网络 D→G←I→S→L，标出它的道德化边与诱导图最大团</li>
+        <li><span class="fc-check"></span>背出复杂度公式 O(n·d<sup>w+1</sup>)，说清 w 是什么、树宽是什么、为什么最优顺序 NP-hard</li>
+        <li><span class="fc-check"></span>说明证据的处理流程（先约简后消元），以及消元如何顺手算出配分函数 Z</li>
+        <li><span class="fc-check"></span>回答本章的主线问题：精确推理的代价从哪来、由什么决定？（一句话）</li>
+      </ol>
+    </div>
+
+    <div class="complete-zone">
+      <button class="btn-complete" id="btn-complete" onclick="markDone()">✓ 我已完成本章（含合上书挑战）</button>
+    </div>
+
+    <div class="chapter-nav">
+      <a href="chapter-08.html"><span class="nav-dir">← 上一章</span>第8章 指数族</a>
+      <a href="chapter-10.html" class="next"><span class="nav-dir">下一章 →</span>第10章 精确推理：团树算法</a>
+    </div>
+
+  </div>
+</div>
+
+<footer class="footer">
+  <div class="wrap">第9章 精确推理：变量消去 · PGM 互动讲义 · 基于 Koller &amp; Friedman (2009)</div>
+</footer>
+
+<script src="assets/mermaid.min.js"></script>
+<script>
+mermaid.initialize({
+  startOnLoad: true,
+  theme: "base",
+  themeVariables: {
+    primaryColor: "#e3edf7",
+    primaryBorderColor: "#1d5f9e",
+    primaryTextColor: "#1d5f9e",
+    lineColor: "#5c554b",
+    secondaryColor: "#fbeedd",
+    tertiaryColor: "#f5f1e8",
+    fontFamily: "-apple-system, PingFang SC, sans-serif",
+    fontSize: "14px"
+  },
+  flowchart: { curve: "linear", htmlLabels: false }
+});
+</script>
+<script>
+// 自测题判分
+document.querySelectorAll(".quiz-block").forEach(block => {
+  const answer = block.dataset.answer;
+  const explain = block.querySelector(".quiz-explain");
+  block.querySelectorAll(".quiz-opts li").forEach(li => {
+    li.addEventListener("click", () => {
+      const opts = block.querySelectorAll(".quiz-opts li");
+      opts.forEach(o => o.classList.add("disabled"));
+      if (li.dataset.opt === answer) {
+        li.classList.add("correct");
+      } else {
+        li.classList.add("wrong");
+        block.querySelector(`[data-opt="${answer}"]`).classList.add("correct");
+      }
+      explain.classList.add("show");
+    });
+  });
+});
+
+// 合上书清单打勾
+document.querySelectorAll("#challenge-list li").forEach(li => {
+  li.addEventListener("click", () => li.classList.toggle("checked"));
+});
+
+// 完成标记 → localStorage（第9章）
+const KEY = "pgm_progress_v1";
+function loadProgress() {
+  try { return JSON.parse(localStorage.getItem(KEY)) || {}; } catch (e) { return {}; }
+}
+const progress = loadProgress();
+const btn = document.getElementById("btn-complete");
+if (progress[9] && progress[9].done) {
+  btn.textContent = "✓ 已完成 · 再次点击重置";
+  btn.classList.add("done");
+}
+function markDone() {
+  const p = loadProgress();
+  if (p[9] && p[9].done) {
+    delete p[9];
+    btn.textContent = "✓ 我已完成本章（含合上书挑战）";
+    btn.classList.remove("done");
+  } else {
+    p[9] = { done: true, completedAt: Date.now(), reviewsDone: 0 };
+    btn.textContent = "✓ 已完成 · 复习提醒已开启";
+    btn.classList.add("done");
+  }
+  localStorage.setItem(KEY, JSON.stringify(p));
+}
+</script>
+
+</body>
+</html>

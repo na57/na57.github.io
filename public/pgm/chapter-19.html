@@ -1,0 +1,759 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第19章 不完全数据下的学习 · PGM 互动讲义</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+<nav class="topbar">
+  <div class="topbar-inner">
+    <span class="brand"><a href="index.html" style="color:inherit">← 学习地图</a></span>
+    <span class="crumb">阶段三 · 学习 / 第19章</span>
+  </div>
+</nav>
+
+<div class="wrap">
+
+  <div class="lecture-head">
+    <span class="ch-label">CHAPTER 19 · 学习</span>
+    <h1>不完全数据下的学习</h1>
+    <p class="lead">有缺失，就不是计数——而是一个对隐变量的积分。log 里套求和，只能迭代逼近。</p>
+  </div>
+
+  <!-- 本章定位 -->
+  <div class="position-bar">
+    <strong>本章在主线上的位置：</strong>第17章假设"数据完全"，第18章假设"数据完全"地学结构 → <u>本章撤掉"数据完全"：有缺失值和隐变量时，参数怎么估计</u> → 第20章再换到无向模型，两个困难会叠加。<br>
+    第19章回答主线问题：<strong>当有些变量从未被观测（隐变量）或记录有缺失时，第17章"数一数"的办法为什么失效，EM 算法又如何把它救回来？</strong>
+    <div class="map-inline">
+      <span class="node">Ch17 完全数据（计数 + 平滑）</span><span class="arrow">→</span>
+      <span class="node">Ch18 结构学习（评分 + 搜索）</span><span class="arrow">→</span>
+      <span class="node here">Ch19 不完全数据（EM 迭代）</span><span class="arrow">→</span>
+      <span class="node">Ch20 马尔可夫网络学习</span><span class="arrow">→</span>
+      <span class="node">Ch21 因果推断</span>
+    </div>
+  </div>
+
+  <!-- 学习目标 -->
+  <div class="objectives">
+    <h4>🎯 学完本章，合上书你应该能：</h4>
+    <ol>
+      <li>写出不完全数据的对数似然公式，指出 log 里套求和如何破坏第17章的分解</li>
+      <li>区分 MCAR / MAR / MNAR 三种缺失机制，并给出一个现实例子</li>
+      <li>写出 EM 的 E 步与 M 步各做什么，说明"期望充分统计量"是什么</li>
+      <li>对一个小型混合模型手算一整轮 EM（E 步后验 + M 步重估）</li>
+      <li>用 ELBO 下界一句话解释为什么 EM 每轮必提升似然，并说出局部最优的局限</li>
+      <li>说出梯度上升作为对照方案与 EM 的异同</li>
+    </ol>
+  </div>
+
+  <div class="lecture">
+
+    <!-- 推导主线 -->
+    <div class="figure">
+      <div class="mermaid">
+flowchart LR
+  A["数据有缺失 /<br>存在隐变量"] --> B["似然 = log Σ_h<br>log 里套求和"]
+  B --> C["无法按节点分解<br>计数失效"]
+  C --> D["EM：E 步填期望<br>假装数据完整"]
+  D --> E["M 步：当完整数据<br>回到第17章的计数"]
+  E --> F["每轮必提升似然<br>ELBO 下界单调"]
+  F --> G["代价：只到局部最优<br>初值敏感，需多重启"]
+  classDef hot fill:#fbeedd,stroke:#c4651f,stroke-width:2.5px,color:#c4651f;
+  classDef danger fill:#fae9e7,stroke:#b03a2e,stroke-width:2.5px,color:#b03a2e;
+  class D hot;
+  class G danger;
+      </div>
+      <div class="caption">本章推导主线：缺失把"计数"变成"积分"，EM（橙色）用"填期望—再计数"的循环把第17章的方法救回来；终点（红色）是它天生的代价——只保证局部最优。</div>
+    </div>
+
+    <!-- ============ 19.1 ============ -->
+    <h2><span class="sec-no">19.1</span>什么变了：缺失让计数失效</h2>
+
+    <p>第17章的全部轻松来自一个前提：<strong>每条样本的每个变量都被观测</strong>。现实从不这么客气。数据不完全有两种形态：</p>
+
+    <ul>
+      <li><strong>缺失值</strong>：有些样本的某些字段没填。按缺失机制分三类：</li>
+    </ul>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>机制</th><th>全称</th><th>含义</th><th>例子</th></tr>
+        <tr><td><strong>MCAR</strong></td><td>完全随机缺失</td><td>缺不缺与任何变量无关</td><td>传感器随机故障</td></tr>
+        <tr><td><strong>MAR</strong></td><td>随机缺失</td><td>缺不缺依赖<strong>已观测</strong>变量</td><td>男性更不愿意报告收入</td></tr>
+        <tr><td><strong>MNAR</strong></td><td>非随机缺失</td><td>缺不缺依赖<strong>缺失值本身</strong></td><td>高收入者更不愿意报告收入</td></tr>
+      </table>
+    </div>
+
+    <ul>
+      <li><strong>隐变量</strong>（Latent Variable）：有些变量<strong>从未</strong>被观测——聚类标签、疾病亚型、用户真实意图。它们不是"丢了"，是原则上观测不到。</li>
+    </ul>
+
+    <p>现在看学习问题变成了什么。设样本 m 观测到 o⁽ᵐ⁾、未观测部分为 h。对数似然：</p>
+
+    <div class="formula">ℓ(θ : D) = ∑<sub>m</sub> log <strong>∑<sub>h</sub></strong> P(o⁽ᵐ⁾, h | θ)</div>
+
+    <p>和第17章对比：那里 log 后面是<strong>乘积</strong>（log 拆开乘积变求和，逐项独立）；这里 log 里套着<strong>求和</strong>——对隐变量所有取值积分。<strong>log of sum 拆不开</strong>：对数无法穿透求和号，参数在求和内部互相纠缠，第17章"每个 CPD 独立计数"的分解瞬间失效，MLE 不再有闭式解。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>困难全部浓缩在一个数学事实里：<strong>log Σ ≠ Σ log</strong>。第17章能计数，是因为 log 把连乘拆成连加；隐变量引入的边缘化把求和塞进了 log 内部。本章全部技术（EM、梯度法）都是在回答：怎么绕开或驯服这个 log of sum。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>"把缺失行删掉不就行了"——三个问题：① 隐变量场景下每行都有缺失，全删就没了；② MCAR 之外，删行引入系统偏差（MAR：删掉的都是男性低收入者，剩下样本不再代表总体）；③ 浪费已观测字段的信息。正确处理是把缺失边缘化掉——这正是上面那个求和。</p>
+    </div>
+
+    <!-- 回忆卡片 19.1 -->
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 19.1-1</div>
+              <div class="q-text">写出不完全数据的对数似然，并指出它与第17章的结构性差别。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              ℓ = Σₘ log Σ_h P(o⁽ᵐ⁾,h|θ)。差别：log 里套求和（对隐变量边缘化），log of sum 无法拆解，似然不能按 CPD 分解，计数失效。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 19.1-2</div>
+              <div class="q-text">"高收入者更不愿报告收入"属于哪种缺失机制？为什么它最危险？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              MNAR——缺失与否依赖缺失值本身。危险：缺失机制与目标变量耦合，删行/忽略会系统性低估高收入比例，且无法仅从已观测数据校正。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 19.2 ============ -->
+    <h2><span class="sec-no">19.2</span>EM 算法：填期望，再计数</h2>
+
+    <p><span class="term">EM 算法</span>（Expectation-Maximization）的核心想法朴素得可爱：<strong>缺失之所以麻烦，是因为我们不知道它是什么——那就用当前模型"猜"一个分布填进去，然后当数据完整来数；数完模型变好了，再重新猜。</strong>两步循环：</p>
+
+    <ul>
+      <li><strong>E 步（Expectation）</strong>：固定当前参数 θᵗ，对每条样本做<strong>推理</strong>，算出缺失变量的后验 Q(h) = P(h | o⁽ᵐ⁾, θᵗ)，进而算出<span class="term">期望充分统计量</span> M̄[x, u] = Σₘ P(x, u | o⁽ᵐ⁾, θᵗ)——"格子 (x,u) 平均被占了多少次"。</li>
+      <li><strong>M 步（Maximization）</strong>：把这些期望计数当作真实计数，执行第17章的完整数据 MLE：θᵗ⁺¹ = M̄ 归一化。</li>
+    </ul>
+
+    <p>注意 M 步做了什么：<strong>它把第19章的问题变回了第17章的问题</strong>。EM 不是新估计器，是一个"把不完全数据迭代转化为完全数据"的循环框架。</p>
+
+    <h3>例 1：混合伯努利——完整手算两轮</h3>
+    <p>最小但完整的例子。一枚硬币来自两台机器之一：隐变量 H ∈ {1, 0} 标记机器，P(H=1) = θ（要学的就是它）。机器 1 出正面概率 0.75，机器 0 出正面概率 0.25（均已知）。观测 M = 10 次抛掷：<strong>6 正 4 反</strong>，但不知道每次是哪台机器。</p>
+
+    <p><strong>初始化 θ⁽⁰⁾ = 0.5</strong>（两台机器等可能）。</p>
+
+    <p><strong>第 1 轮 E 步</strong>：对每个"正面"样本，后验：</p>
+    <div class="formula">r(1) = P(H=1 | X=1) = <span class="frac"><span class="num-part">0.75 × 0.5</span><span class="den-part">0.75×0.5 + 0.25×0.5</span></span> = <span class="frac"><span class="num-part">0.375</span><span class="den-part">0.5</span></span> = <strong>0.75</strong></div>
+    <p>对每个"反面"样本：</p>
+    <div class="formula">r(0) = P(H=1 | X=0) = <span class="frac"><span class="num-part">0.25 × 0.5</span><span class="den-part">0.25×0.5 + 0.75×0.5</span></span> = <strong>0.25</strong></div>
+    <p>期望计数：#(H=1) = 6×0.75 + 4×0.25 = 4.5 + 1.0 = <strong>5.5</strong>。</p>
+
+    <p><strong>第 1 轮 M 步</strong>：θ⁽¹⁾ = 5.5 / 10 = <strong>0.55</strong>。</p>
+
+    <p><strong>第 2 轮</strong>：r(1) = 0.75×0.55 / (0.75×0.55 + 0.25×0.45) ≈ 0.4125/0.525 ≈ <strong>0.7857</strong>；r(0) = 0.25×0.55 / (0.25×0.55 + 0.75×0.45) ≈ 0.1375/0.475 ≈ <strong>0.2895</strong>。期望计数 = 6×0.7857 + 4×0.2895 ≈ 4.714 + 1.158 ≈ 5.87，θ⁽²⁾ ≈ <strong>0.587</strong>。继续迭代，收敛到 <strong>θ* = 0.7</strong>。</p>
+
+    <p><strong>验证似然确实在升</strong>：ℓ(θ) = 6 log(0.25 + 0.5θ) + 4 log(0.75 − 0.5θ)。ℓ(0.5) = 6 log 0.5 + 4 log 0.5 ≈ <strong>−6.93</strong>；ℓ(0.55) ≈ 6 log 0.525 + 4 log 0.475 ≈ <strong>−6.84</strong>。一轮提升 0.09——单调上升，19.3 节解释这为什么必然。</p>
+
+    <div class="box insight">
+      <span class="box-tag">✅ 一般 BN 中的 EM</span>
+      <p>把上例的"后验"换成一般推理就得到 BN 版 EM：E 步对每条样本在 BN 中做推理（Ch9–11 的算法在此服役），算每个 CPD 格子的期望计数；M 步把期望计数当真实计数做频率估计。结构未知时还有 <strong>结构 EM</strong>：外层循环学结构（Ch18 的评分搜索），内层用 EM 补缺失数据给候选结构评分。</p>
+    </div>
+
+    <!-- 回忆卡片 19.2 -->
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 19.2-1</div>
+              <div class="q-text">EM 的 E 步和 M 步各做什么？期望充分统计量是什么？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              E 步：固定 θᵗ 做推理，算缺失变量后验与期望计数 M̄[x,u]=ΣₘP(x,u|o⁽ᵐ⁾,θᵗ)；M 步：把期望计数当真实计数做第17章的 MLE 得 θᵗ⁺¹。期望充分统计量 = 用软后验加权得到的"分数计数"。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 19.2-2</div>
+              <div class="q-text">例 1 中 θ⁽⁰⁾=0.5 时，正面样本的 H=1 后验与 θ⁽¹⁾ 各是多少？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              r(1) = 0.375/0.5 = 0.75；期望计数 = 6×0.75+4×0.25 = 5.5；θ⁽¹⁾ = 0.55。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 19.3 ============ -->
+    <h2><span class="sec-no">19.3</span>为什么 EM 每轮必提升似然：ELBO 视角</h2>
+
+    <p>EM 最迷人的性质是<strong>单调性</strong>：每一轮迭代似然不下降，ℓ(θᵗ⁺¹) ≥ ℓ(θᵗ)。这不是经验观察，是有保证的。关键工具：对任意分布 Q(h)，</p>
+
+    <div class="formula">log P(o | θ) ≥ E<sub>Q</sub>[ log P(o, H | θ) ] + H(Q) ≡ ELBO(Q, θ)</div>
+
+    <p>这个下界叫 <span class="term">ELBO</span>（Evidence Lower Bound，证据下界）。一句话直觉（<span class="term">Jensen 不等式</span>）：log 是凹函数，"期望的 log" 永远压不过 "log 的期望"——而 log P(o|θ) = log Σₕ P(o,h|θ) 正是 log 的期望那一边。</p>
+
+    <p>现在看 EM 两步在下界上各干了什么：</p>
+    <ul>
+      <li><strong>E 步 = 令 Q = P(H | o, θᵗ)</strong>。可以验证此时不等式取<strong>等号</strong>（KL(Q ‖ P(H|o,θᵗ)) = 0），下界在 θᵗ 处<strong>贴紧</strong>真实似然。</li>
+      <li><strong>M 步 = 最大化 ELBO 的第一项</strong>（H(Q) 与 θ 无关）——下界被推高，而真实似然 ≥ 下界，于是真实似然也被迫升高。</li>
+    </ul>
+
+    <div class="box idea">
+      <span class="box-tag">💡 一张嘴就讲清的图景</span>
+      <p>真实似然是一座看不见的山。EM 每轮先造一个"在当前位置与山相切的弹簧床"（E 步贴紧下界），再把弹簧床的最高点作为下一站（M 步抬升下界）。床永远在山下方，床的顶点升高 → 山的高度至少那么高。<strong>单调提升是结构保证的，不靠运气。</strong></p>
+    </div>
+
+    <h3>ELBO 为什么单调：一个可以亲手验证的分解</h3>
+
+    <p>上面"弹簧床"的图景还可以更硬核：不用 Jensen 不等式、不用画图，一条<strong>恒等式</strong>就把单调性的来源全部暴露出来。下面分两步：（a）写出分解恒等式；（b）用一个两状态小例子亲手验证它。</p>
+
+    <p><strong>（a）分解推导。</strong>取单个观测样本 x、隐变量 Z，Q(Z) 是<strong>任意</strong>一个隐变量分布（换用单样本记号：观测 x 即上文的 o、隐变量 Z 即上文的 H；ln 与上文的 log 同为自然对数）。五步走完：</p>
+
+    <p><strong>第一步</strong>：把 ℓ 写成对 Q 的期望——∑<sub>z</sub> Q(z) = 1，白乘一层不亏：</p>
+    <div class="formula">ℓ(θ) = ln P(x;θ) = ∑<sub>z</sub> Q(z) ln P(x;θ)</div>
+
+    <p><strong>第二步</strong>：把 z 请进对数——由条件概率定义，P(x;θ) = P(x, z;θ) / P(z | x;θ)：</p>
+    <div class="formula">ℓ(θ) = ∑<sub>z</sub> Q(z) ln <span class="frac"><span class="num-part">P(x, z;θ)</span><span class="den-part">P(z | x;θ)</span></span></div>
+
+    <p><strong>第三步</strong>：乘一个 Q(z) / Q(z) = 1，把对数拆成两项：</p>
+    <div class="formula">ℓ(θ) = ∑<sub>z</sub> Q(z) ln <span class="frac"><span class="num-part">P(x, z;θ)</span><span class="den-part">Q(z)</span></span> + ∑<sub>z</sub> Q(z) ln <span class="frac"><span class="num-part">Q(z)</span><span class="den-part">P(z | x;θ)</span></span></div>
+
+    <p><strong>第四步</strong>：认人——第一项正是 ELBO，第二项正是 Q 与真实后验之间的 KL 散度：</p>
+    <div class="formula">ℓ(θ) = ELBO(Q, θ) + KL( Q(Z) ‖ P(Z | x;θ) )</div>
+
+    <p><strong>第五步</strong>：KL 散度非负，且仅当两分布完全相同（Q 恰好是真实后验）时取 0——下界与缝隙同时现身：</p>
+    <div class="formula">KL ≥ 0 ⟹ ELBO(Q, θ) ≤ ℓ(θ)，等号当且仅当 Q(Z) = P(Z | x;θ)</div>
+
+    <p>单调性至此全部现身：<strong>E 步</strong>把 Q 设为当前后验 P(Z | x;θᵗ)，KL 归零，ELBO 在 θᵗ 处贴到 ℓ；<strong>M 步</strong>固定 Q、换 θ 抬升 ELBO，而 ℓ = ELBO + KL ≥ 抬高后的 ELBO——ℓ 只升不降。这就是单调性的全部来源。</p>
+
+    <p><strong>（b）两状态小数值验证。</strong>单个样本 x，隐变量 Z ∈ {0, 1}。模型：P(Z=0) = P(Z=1) = 0.5，P(x | Z=0) = 0.8，P(x | Z=1) = 0.2（Z=0 下 x 常见，Z=1 下罕见）。</p>
+
+    <p>联合：P(x, Z=0) = 0.5 × 0.8 = 0.4，P(x, Z=1) = 0.5 × 0.2 = 0.1；边际 P(x) = 0.4 + 0.1 = 0.5，故</p>
+    <div class="formula">ℓ = ln 0.5 ≈ <strong>−0.6931</strong></div>
+    <p>真实后验：P(Z=0 | x) = 0.4 / 0.5 = 0.8，P(Z=1 | x) = 0.1 / 0.5 = 0.2。</p>
+
+    <p><strong>取 Q = 真实后验</strong>：</p>
+    <div class="formula">ELBO = 0.8 ln <span class="frac"><span class="num-part">0.4</span><span class="den-part">0.8</span></span> + 0.2 ln <span class="frac"><span class="num-part">0.1</span><span class="den-part">0.2</span></span> = 0.8 ln 0.5 + 0.2 ln 0.5 = ln 0.5 ≈ <strong>−0.6931</strong> = ℓ</div>
+    <p><strong>分毫不差</strong>——此时 KL = 0，下界贴到似然上。</p>
+
+    <p><strong>取 Q = 均匀分布 (0.5, 0.5)</strong>（故意偏离后验）：</p>
+    <div class="formula">ELBO = 0.5 ln <span class="frac"><span class="num-part">0.4</span><span class="den-part">0.5</span></span> + 0.5 ln <span class="frac"><span class="num-part">0.1</span><span class="den-part">0.5</span></span> = 0.5 ln 0.8 + 0.5 ln 0.2 ≈ −0.1116 − 0.8047 ≈ <strong>−0.9163</strong></div>
+    <div class="formula">KL(Q ‖ 后验) = 0.5 ln <span class="frac"><span class="num-part">0.5</span><span class="den-part">0.8</span></span> + 0.5 ln <span class="frac"><span class="num-part">0.5</span><span class="den-part">0.2</span></span> ≈ −0.2350 + 0.4581 ≈ <strong>0.2231</strong></div>
+    <p>验证恒等式：ℓ − KL ≈ −0.6931 − 0.2231 = −0.9163 = ELBO ✓——缝隙一分不差地被 KL 补上。</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>Q 的取法</th><th>ELBO</th><th>KL(Q ‖ 后验)</th><th>ELBO + KL</th><th>是否等于 ℓ ≈ −0.6931</th></tr>
+        <tr><td>真实后验 (0.8, 0.2)</td><td>−0.6931</td><td>0</td><td>−0.6931</td><td>✓ 贴紧</td></tr>
+        <tr><td>均匀分布 (0.5, 0.5)</td><td>−0.9163</td><td>0.2231</td><td>−0.6931</td><td>✓ 缝隙 = 0.2231</td></tr>
+      </table>
+    </div>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>E 步不是"猜"隐变量，而是把 Q <strong>顶到天花板</strong>：在当前 θ 下取 Q 为真实后验，缝隙 KL 归零，ELBO 与 ℓ 相切；M 步换 θ，相当于把天花板本身又抬高一截。贴紧、抬高、再贴紧——两步交替，ℓ 单调爬升。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>"ELBO 是似然的近似值"——错把下界当近似。ELBO 是 ℓ 的<strong>下界</strong>，不是近似值本身：只有 Q 恰好等于真实后验时二者才相等；Q 越偏离后验，缝隙 KL 越大，下界越松。上表那 0.2231 的缺口，就是"均匀分布猜得不对"的代价。</p>
+    </div>
+
+    <!-- 回忆卡片 19.3 -->
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 19.3-1</div>
+              <div class="q-text">写出 ELBO 不等式，并说明 E 步为什么让下界贴紧。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              log P(o|θ) ≥ E_Q[log P(o,H|θ)] + H(Q)。E 步取 Q = P(H|o,θᵗ)，此时 KL 散度为 0，不等式取等号，下界在 θᵗ 处贴紧真实似然。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 19.3-2</div>
+              <div class="q-text">用一句话解释 EM 为什么单调提升似然。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              E 步让下界在当前点贴紧真实似然，M 步抬高这条下界，而真实似然永远 ≥ 下界——所以每轮真实似然不下降。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 19.4 ============ -->
+    <h2><span class="sec-no">19.4</span>局部最优的代价，与梯度法对照</h2>
+
+    <p>单调提升 ≠ 找到全局最优。log of sum 使似然<strong>不再是凹的</strong>（这是与完全数据 logistic CPD 的本质区别），地形上有多个山峰。EM 只能保证爬上<strong>从出发点能看到的那座</strong>。例 1 里若初始化 θ⁽⁰⁾ = 0.9，会收敛到不同的局部解。标准对策：<strong>多次随机重启</strong>，保留似然最高的结果。</p>
+
+    <h3>对照方案：梯度上升</h3>
+    <p>也可以不绕弯，直接对 ℓ 求梯度做上升：</p>
+
+    <div class="formula">∇ℓ = ∑<sub>m</sub> E<sub>P(h | o⁽ᵐ⁾, θ)</sub> [ ∇<sub>θ</sub> log P(o⁽ᵐ⁾, h | θ) ]</div>
+
+    <p>注意一个深刻的事实：<strong>这个梯度里同样藏着后验期望</strong>——直接梯度法也逃不掉对每条样本做推理。所以 EM 与梯度法的真实对照是：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th></th><th>EM</th><th>梯度上升</th></tr>
+        <tr><td>每步推理</td><td>需要（E 步）</td><td>同样需要（梯度含后验期望）</td></tr>
+        <tr><td>参数更新</td><td>闭式（期望计数归一化）</td><td>迭代步进，需调学习率</td></tr>
+        <tr><td>单调性</td><td>保证 ℓ 不下降</td><td>学习率过大可能震荡</td></tr>
+        <tr><td>局部最优</td><td>会陷入</td><td>同样会陷入</td></tr>
+        <tr><td>适用</td><td>表 CPD、有期望充分统计量的模型</td><td>无闭式 M 步的广义 CPD</td></tr>
+      </table>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>"EM 收敛了就是学好了"——收敛只说明到达局部最优。隐变量问题里局部最优可能差得离谱（比如混合模型里两个簇被整体对调、或一个簇吞掉所有样本）。看最终似然、做多重启、用领域知识 sanity check，一个都不能少。</p>
+    </div>
+
+    <!-- 回忆卡片 19.4 -->
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 19.4-1</div>
+              <div class="q-text">EM 单调提升似然，为什么仍可能学出差模型？对策是什么？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              log of sum 使似然非凹、多峰；EM 只收敛到初值附近的局部最优。对策：多次随机重启取似然最高者，并用领域知识校验。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 19.4-2</div>
+              <div class="q-text">直接梯度上升的公式里也藏着什么？它与 EM 的真正差别在哪？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              藏着后验期望 E_{P(h|o,θ)}[∇log P]——同样要做推理。真正差别在更新方式：EM 的 M 步闭式（期望计数），梯度法需步进调学习率，且不保证单调。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 概念卡 ============ -->
+    <h2><span class="sec-no">🃏</span>概念卡：本章概念的一分钟画像</h2>
+    <p>翻面前先自问：这个概念我能用一句话讲清楚吗？</p>
+    <div class="flip-grid">
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 1</div>
+            <div class="q-text">缺失机制 MCAR / MAR / MNAR</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">按缺失概率依赖什么分类：无依赖 / 依赖已观测 / 依赖缺失值本身。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">决定"能否安全地忽略缺失、直接边缘化"的资格。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">问卷漏填：手滑（MCAR）/ 男人不答（MAR）/ 答了丢脸（MNAR）。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为三种都能同样处理——MNAR 与目标耦合，需显式建模缺失机制。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">任何真实数据集清洗前的第一道诊断。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 2</div>
+            <div class="q-text">log of sum 难题（Marginalization Barrier）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">ℓ = Σₘ log Σ_h P(o⁽ᵐ⁾,h|θ)：隐变量边缘化把求和塞进 log 内部。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">它是被绕开的对象：让第17章的闭式计数失效的总根源。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">log Σ ≠ Σ log——对数拆不开求和，参数纠缠成一团。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为删缺失行能绕开——引入偏差且丢掉已观测信息。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">理解 EM、变分推断、采样法为何存在的共同出发点。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 3</div>
+            <div class="q-text">EM 算法（Expectation-Maximization）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">E 步算缺失变量后验与期望计数，M 步当完整数据做 MLE，交替至收敛。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">把 log of sum 的硬问题转化为"填期望 + 第17章计数"的循环。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">不知道答案就先按当前理解猜，按猜的学，学完再重新猜。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为收敛=学好——只保证局部最优，初值敏感。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">GMM、HMM、带隐变量/缺失值的 BN 参数学习标配。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 4</div>
+            <div class="q-text">期望充分统计量（Expected Sufficient Statistics）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">M̄[x,u] = Σₘ P(x,u|o⁽ᵐ⁾,θᵗ)：用软后验加权的"分数计数"。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">让 M 步可以假装数据完整，直接复用完全数据 MLE。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">一条样本不属于某个格子，而是按概率"分摊"到各格子。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为可以硬填单一最可能值——硬填丢掉不确定性，是有偏的。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">E 步的产出物、M 步的输入物，EM 的传动轴。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 5</div>
+            <div class="q-text">ELBO 与单调性（Evidence Lower Bound）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">log P(o|θ) ≥ E_Q[log P(o,H|θ)] + H(Q)，Jensen 不等式的产物。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">解释 EM 为何每轮必提升似然：E 步贴紧、M 步抬高。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">在山下铺一张相切的弹簧床，床顶升高山必更高。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为单调 = 到全局最优——只保证到局部山峰。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">变分推断的同一个下界；理解一切 EM 变体的钥匙。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 6</div>
+            <div class="q-text">局部最优与多重启（Local Optima / Restarts）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">log of sum 使似然非凹多峰，EM 只收敛到初值附近的峰。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">它是被缓解的对象：EM 固有的认识论局限。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">蒙眼爬山：站哪座山脚，就只能上哪座山。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为换梯度法能逃脱——梯度法同样陷入局部最优。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">跑 EM 的标准流程：多重启 + 比较最终似然 + 领域校验。</span></div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- ============ 分层习题 ============ -->
+    <h2><span class="sec-no">📝</span>分层习题</h2>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>判断对错：<strong>数据不完全时，BN 似然仍能按节点分解，只是计数要换成期望计数。</strong>说明理由。</div>
+      <details>
+        <summary>提示</summary>
+        <p>log of sum 里的参数纠缠发生在哪个层面？期望计数是哪一步的产物？</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">错。不完全数据的 ℓ = Σₘ log Σ_h P(o,h|θ)，log 内嵌求和，似然本身<strong>不可分解</strong>——这正是困难所在。期望计数是 EM 的 E 步人为构造的产物：只有在固定 θᵗ、用后验填平缺失之后，M 步面对的"伪完整数据"才恢复分解。分解是每轮 EM 内部借来的，不是不完全数据似然本身的性质。</div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>判断对错：<strong>EM 算法保证收敛到全局最优。</strong>说明理由。</div>
+      <details>
+        <summary>提示</summary>
+        <p>ELBO 论证保证的是什么？似然曲面是凹的吗？</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">错。ELBO 论证只保证<strong>单调不下降</strong>——每轮似然不降，必收敛；但 log of sum 使似然非凹、存在多个局部最优，EM 收敛到哪个峰取决于初值。保证"收敛"与保证"到全局最优"是两回事，工程上靠多次随机重启缓解。</div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>沿用例 1：P(X=1|H=1)=0.75，P(X=1|H=0)=0.25，10 个样本 6 正 4 反，θ⁽⁰⁾ = 0.5。手算一整轮 EM 得 θ⁽¹⁾。</div>
+      <details>
+        <summary>提示</summary>
+        <p>分别算正、反样本的后验 r(1)、r(0)，再加权求期望计数。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p>E 步：r(1) = (0.75×0.5)/(0.75×0.5+0.25×0.5) = 0.375/0.5 = <strong>0.75</strong>；r(0) = (0.25×0.5)/(0.25×0.5+0.75×0.5) = <strong>0.25</strong>。</p>
+          <p>期望计数 #(H=1) = 6×0.75 + 4×0.25 = <strong>5.5</strong>。</p>
+          <p>M 步：θ⁽¹⁾ = 5.5/10 = <strong>0.55</strong>。直觉：正面多（6:4），而后验说正面更可能来自机器 1，所以 θ 被推高。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>验证例 1 的单调性：计算 ℓ(0.5) 与 ℓ(0.55)（提示：P(X=1|θ) = 0.25+0.5θ，P(X=0|θ) = 0.75−0.5θ）。</div>
+      <details>
+        <summary>提示</summary>
+        <p>ℓ(θ) = 6·log P(X=1|θ) + 4·log P(X=0|θ)，代入两个 θ 值。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p>ℓ(0.5) = 6 log 0.5 + 4 log 0.5 = 10 × (−0.693) ≈ <strong>−6.93</strong>。</p>
+          <p>ℓ(0.55) = 6 log 0.525 + 4 log 0.475 ≈ 6×(−0.644) + 4×(−0.744) ≈ −3.87 − 2.98 ≈ <strong>−6.84</strong>。</p>
+          <p>−6.84 &gt; −6.93，一轮 EM 提升似然约 0.09——ELBO 单调性在具体数字上兑现。（继续迭代收敛到 θ*=0.7，此时 P(X=1)=0.6，恰与观测频率 6/10 吻合。）</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l3">L3 建模应用</span>某医院 BN：Disease → Cough，Disease → Fever，结构已知。202 条病历中，30 条缺 Fever 记录（化验未做，可视为 MAR）。① 指出哪个变量是"隐"的、E 步要对什么做推理；② 写出 M 步如何更新 P(Fever|Disease)；③ 说明为什么不能直接删掉这 30 条。</div>
+      <details>
+        <summary>提示</summary>
+        <p>缺失的是 Fever 而非 Disease；E 步需要给定已观测变量推断 Fever 的后验；想想这 30 条的 Disease 与 Cough 值是否仍含信息。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p>① 对这 30 条，Fever 是缺失变量。E 步：对每条缺失样本，用当前参数做推理算 P(Fever | Disease, Cough, θᵗ)（Disease、Cough 已观测，作为证据）；再汇总出 Fever 各 CPD 格子的期望计数。</p>
+          <p>② M 步：P(Fever=f | Disease=d) = [172 条完整样本中 (d,f) 的真实计数 + 30 条缺失样本贡献的期望计数] / [Disease=d 的总（真实+期望）计数]——第17章的频率公式，计数换期望计数。</p>
+          <p>③ 不能删：这 30 条的 Disease 和 Cough 是完整观测的，删掉会丢失 P(Disease) 与 P(Cough|Disease) 的信息量；且若缺失是 MAR（比如重症者更常化验），删行使 Fever 分布产生系统偏差。EM 的边缘化处理既用上了已观测字段，又不引入删行偏差。</p>
+        </div>
+      </details>
+    </div>
+
+    <!-- ============ 本章自测 ============ -->
+    <h2><span class="sec-no">✍️</span>本章自测</h2>
+    <p class="quiz-hint">点击选项判分，答错会给出原因。</p>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 1</div>
+      <div class="q-stem">不完全数据下 MLE 失去闭式解的根本原因是：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 样本量变少了</li>
+        <li data-opt="b">B. 对隐变量边缘化产生 log of sum，对数拆不开求和，似然不可分解</li>
+        <li data-opt="c">C. CPD 表格变大了</li>
+        <li data-opt="d">D. 缺失值导致计数表有空白格</li>
+      </ul>
+      <div class="quiz-explain">选 B。困难是数学结构性的：log Σ_h P(o,h|θ) 中参数在求和内部纠缠，无法按 CPD 拆成独立子问题。A、C、D 都是表象；即便样本量巨大、表格很小，只要 log 里套着求和，闭式解就不存在。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="c">
+      <div class="q-no">自测 2</div>
+      <div class="q-stem">例 1 中 θ⁽⁰⁾=0.5 时，一个"反面"样本来自机器 1 的后验 r(0) 是：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 0.75</li>
+        <li data-opt="b">B. 0.5</li>
+        <li data-opt="c">C. 0.25</li>
+        <li data-opt="d">D. 0.125</li>
+      </ul>
+      <div class="quiz-explain">选 C。r(0) = 0.25×0.5/(0.25×0.5+0.75×0.5) = 0.25。机器 1 出反面概率只有 0.25，所以看到反面，它来自机器 1 的后验被拉低。A 是正面样本的后验 r(1)，注意区分。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="a">
+      <div class="q-no">自测 3</div>
+      <div class="q-stem">EM 每轮必提升似然的机制是：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. E 步令 Q 为后验使 ELBO 在当前点贴紧，M 步抬高下界，真实似然 ≥ 下界故被迫升高</li>
+        <li data-opt="b">B. 每轮都重新随机初始化参数</li>
+        <li data-opt="c">C. M 步对真实似然直接求最大值</li>
+        <li data-opt="d">D. E 步删除了不确定性最大的样本</li>
+      </ul>
+      <div class="quiz-explain">选 A。这是 ELBO 论证的两步：贴紧（E）+ 抬高（M）。C 错——M 步最大化的是期望完全数据对数似然（下界的一部分），不是真实似然本身；B、D 与算法无关。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="d">
+      <div class="q-no">自测 4</div>
+      <div class="q-stem">关于 EM 与梯度上升的对照，正确的是：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 梯度上升不需要对隐变量做推理</li>
+        <li data-opt="b">B. EM 保证收敛到全局最优，梯度法不保证</li>
+        <li data-opt="c">C. 梯度上升保证似然单调不下降，EM 不保证</li>
+        <li data-opt="d">D. 两者都需要每步推理，也都可能陷入局部最优；EM 的 M 步闭式、梯度法需调学习率</li>
+      </ul>
+      <div class="quiz-explain">选 D。梯度公式 ∇ℓ = Σₘ E_{P(h|o,θ)}[∇log P] 同样含后验期望（A 错）；单调性是 EM 的保证而非梯度法（C 错）；两者都只到局部最优（B 错）。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 5</div>
+      <div class="q-stem">"高收入者更不愿意报告收入"属于哪种缺失机制，为何最危险？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. MAR；因为依赖性别</li>
+        <li data-opt="b">B. MNAR；缺失与否依赖缺失值本身，删行造成无法从观测数据校正的系统性偏差</li>
+        <li data-opt="c">C. MCAR；因为完全随机</li>
+        <li data-opt="d">D. MAR；因为依赖收入这个变量</li>
+      </ul>
+      <div class="quiz-explain">选 B。缺失概率依赖收入本身（缺失的值），是 MNAR 的教科书例子。危险在于：缺失机制与目标变量耦合，任何只看已观测数据的校正都会系统性低估高收入。D 有迷惑性——"依赖收入"中收入正是缺失变量本身，不是已观测变量，所以不是 MAR。</div>
+    </div>
+
+    <!-- ============ 三句话复述 ============ -->
+    <div class="retell">
+      <h3>🗣️ 用自己的话，三句话讲完本章</h3>
+      <p class="retell-sub">对着空气（或室友）说出这三句。说卡壳的那句，回去重读对应小节。</p>
+      <details>
+        <summary>句1：这章解决什么问题？——</summary>
+        <div class="retell-answer">参考答案：数据有缺失或存在从未观测的隐变量时怎么学参数——现实数据的常态，第17章的计数法在这里失效。</div>
+      </details>
+      <details>
+        <summary>句2：核心机制是什么？——</summary>
+        <div class="retell-answer">参考答案：失效根源是 log of sum——隐变量边缘化把求和塞进 log 内部，似然不可分解。EM 用循环破解：E 步用当前参数推理出缺失变量的后验、算期望计数，M 步把期望计数当真实计数做第17章的 MLE；由 ELBO 下界保证每轮似然必升。</div>
+      </details>
+      <details>
+        <summary>句3：它的代价和前后章关系？——</summary>
+        <div class="retell-answer">参考答案：代价是只到局部最优、初值敏感，要靠多重启。本章把 Ch17 的计数变成 M 步内核、把 Ch9–11 的推理变成 E 步引擎；下一章换无向模型，logZ 耦合与缺失数据两个困难将叠加出现。</div>
+      </details>
+    </div>
+
+    <!-- ============ 复习计划 ============ -->
+    <div class="review-plan">
+      <h3>🔁 间隔复习计划</h3>
+      <p>回忆本身比重读有效 10 倍。到点只做一件事：翻卡 + 重做标记题。</p>
+      <table>
+        <tr><th>时间点</th><th>复习内容</th><th>预计用时</th></tr>
+        <tr><td>第 1 天</td><td>概念卡 1–6 全部 + 回忆卡 19.1-1、19.2-2、19.3-1</td><td>10 分钟</td></tr>
+        <tr><td>第 3 天</td><td>概念卡 2、3、5（log of sum/EM/ELBO）+ 重做自测错题 + L2 两题重算</td><td>8 分钟</td></tr>
+        <tr><td>第 7 天</td><td>三句话复述出声说一遍 + 回忆卡 19.2-1、19.4-2 + L3 题重做</td><td>10 分钟</td></tr>
+        <tr><td>第 15 天</td><td>只做合上书挑战；六条全过则本章毕业，卡在哪条就重读对应小节</td><td>15 分钟</td></tr>
+      </table>
+    </div>
+
+    <!-- 合上书挑战 -->
+    <div class="final-challenge">
+      <h3>📕 合上书挑战</h3>
+      <p class="fc-sub">现在关掉这个页面（或遮住屏幕），拿一张纸，凭记忆完成以下任务。全部做完再回来核对——这是本章真正的毕业考试。</p>
+      <ol id="ch19-challenge-list">
+        <li><span class="fc-check"></span>写出不完全数据的对数似然公式，并解释 log of sum 为什么让第17章的计数失效</li>
+        <li><span class="fc-check"></span>说出 MCAR / MAR / MNAR 的区别，各给一个例子，指出哪种最危险</li>
+        <li><span class="fc-check"></span>写出 EM 两步的内容与期望充分统计量的定义</li>
+        <li><span class="fc-check"></span>对例 1（6 正 4 反，θ⁽⁰⁾=0.5）重算一整轮 EM 得 θ⁽¹⁾=0.55，并验证 ℓ(0.5) &lt; ℓ(0.55)</li>
+        <li><span class="fc-check"></span>用 ELBO 一句话解释单调性，并说出局部最优的局限与对策</li>
+        <li><span class="fc-check"></span>回答本章主线问题：有缺失为什么就不是计数，EM 如何把计数救回来？（一句话）</li>
+      </ol>
+    </div>
+
+    <div class="complete-zone">
+      <button class="btn-complete" id="ch19-btn-complete" onclick="markDone()">✓ 我已完成本章（含合上书挑战）</button>
+    </div>
+
+    <div class="chapter-nav">
+      <a href="chapter-18.html"><span class="nav-dir">← 上一章</span>第18章 结构学习</a>
+      <a href="chapter-20.html" class="next"><span class="nav-dir">下一章 →</span>第20章 马尔可夫网络学习</a>
+    </div>
+
+  </div>
+</div>
+
+<footer class="footer">
+  <div class="wrap">第19章 不完全数据下的学习 · PGM 互动讲义 · 基于 Koller &amp; Friedman (2009)</div>
+</footer>
+
+<script src="assets/mermaid.min.js"></script>
+<script>
+mermaid.initialize({
+  startOnLoad: true,
+  theme: "base",
+  themeVariables: {
+    primaryColor: "#e3edf7",
+    primaryBorderColor: "#1d5f9e",
+    primaryTextColor: "#1d5f9e",
+    lineColor: "#5c554b",
+    secondaryColor: "#fbeedd",
+    tertiaryColor: "#f5f1e8",
+    fontFamily: "-apple-system, PingFang SC, sans-serif",
+    fontSize: "14px"
+  },
+  flowchart: { curve: "linear", htmlLabels: false }
+});
+</script>
+<script>
+// 自测题判分
+document.querySelectorAll(".quiz-block").forEach(block => {
+  const answer = block.dataset.answer;
+  const explain = block.querySelector(".quiz-explain");
+  block.querySelectorAll(".quiz-opts li").forEach(li => {
+    li.addEventListener("click", () => {
+      const opts = block.querySelectorAll(".quiz-opts li");
+      opts.forEach(o => o.classList.add("disabled"));
+      if (li.dataset.opt === answer) {
+        li.classList.add("correct");
+      } else {
+        li.classList.add("wrong");
+        block.querySelector(`[data-opt="${answer}"]`).classList.add("correct");
+      }
+      explain.classList.add("show");
+    });
+  });
+});
+
+// 合上书清单打勾
+document.querySelectorAll("#ch19-challenge-list li").forEach(li => {
+  li.addEventListener("click", () => li.classList.toggle("checked"));
+});
+
+// 完成标记 → localStorage（第19章）
+const KEY = "pgm_progress_v1";
+function loadProgress() {
+  try { return JSON.parse(localStorage.getItem(KEY)) || {}; } catch (e) { return {}; }
+}
+const progress = loadProgress();
+const btn = document.getElementById("ch19-btn-complete");
+if (progress[19] && progress[19].done) {
+  btn.textContent = "✓ 已完成 · 再次点击重置";
+  btn.classList.add("done");
+}
+function markDone() {
+  const p = loadProgress();
+  if (p[19] && p[19].done) {
+    delete p[19];
+    btn.textContent = "✓ 我已完成本章（含合上书挑战）";
+    btn.classList.remove("done");
+  } else {
+    p[19] = { done: true, completedAt: Date.now(), reviewsDone: 0 };
+    btn.textContent = "✓ 已完成 · 复习提醒已开启";
+    btn.classList.add("done");
+  }
+  localStorage.setItem(KEY, JSON.stringify(p));
+}
+</script>
+
+</body>
+</html>

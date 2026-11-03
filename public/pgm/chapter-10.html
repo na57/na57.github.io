@@ -1,0 +1,949 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第10章 精确推理：团树算法 · PGM 互动讲义</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+<nav class="topbar">
+  <div class="topbar-inner">
+    <span class="brand"><a href="index.html" style="color:inherit">← 学习地图</a></span>
+    <span class="crumb">阶段二 · 推理 / 第10章</span>
+  </div>
+</nav>
+
+<div class="wrap">
+
+  <div class="lecture-head">
+    <span class="ch-label">CHAPTER 10 · 推理</span>
+    <h1>精确推理：团树算法</h1>
+    <p class="lead">给变量消去加一个"缓存"：把重复的中间运算存进一棵团树，一次校准，回答所有查询。</p>
+  </div>
+
+  <!-- 本章定位 -->
+  <div class="position-bar">
+    <strong>本章在主线上的位置：</strong>Ch9 用消元顺序回答"一次查询怎么算" → <u>Ch10 把消元过程本身组织成一棵可复用的缓存树，一次校准后回答所有查询</u> → Ch11 回答"图带环、树宽太大时怎么办"（近似推理）。<br>
+    第10章回答主线上的这个问题：<strong>多个查询下，如何避免变量消去对同一批中间因子的重复计算？</strong>
+    <div class="map-inline">
+      <span class="node">Ch9 变量消去（单次查询的因子运算）</span><span class="arrow">→</span>
+      <span class="node here">Ch10 团树算法</span><span class="arrow">→</span>
+      <span class="node">Ch11 置信传播（消息传到带环图）</span><span class="arrow">→</span>
+      <span class="node">Ch14 混合网络推理（连续变量上的推广）</span>
+    </div>
+  </div>
+
+  <!-- 学习目标 -->
+  <div class="objectives">
+    <h4>🎯 学完本章，合上书你应该能：</h4>
+    <ol>
+      <li>用同一网络两次查询的例子，指出变量消去哪一步在重复劳动</li>
+      <li>解释为什么消元前必须弦化，并对一个四元环手算加边（triangulation）过程</li>
+      <li>从一张弦图出发构造团树：找最大团、按分隔集连边、验证运行交性质</li>
+      <li>写出消息公式与团信念公式，并对一条三团链手算收集 + 分发两遍消息</li>
+      <li>逐条数出"消元两次查询 vs 团树校准"的因子运算清单，说出省在哪里</li>
+      <li>说明校准后如何读取任意单变量边缘，以及证据如何进入团树</li>
+    </ol>
+  </div>
+
+  <div class="lecture">
+
+    <!-- 推导主线 -->
+    <div class="figure">
+      <div class="mermaid">
+flowchart LR
+  A["Ch9 变量消去<br>多查询时重复算<br>同一批中间因子"] --> B["想缓存复用<br>先把图变成弦图<br>否则消元必加填充边"]
+  B --> C["最大团连成树<br>分隔集当接口<br>运行交性质保证变量不丢"]
+  C --> D["两遍消息传播<br>收集加分发<br>一次校准回答所有查询"]
+  D --> E["代价：树宽封顶<br>且算法离不开树<br>带环图怎么办"]
+  classDef hot fill:#fbeedd,stroke:#c4651f,stroke-width:2.5px,color:#c4651f;
+  classDef danger fill:#fae9e7,stroke:#b03a2e,stroke-width:2.5px,color:#b03a2e;
+  class C hot;
+  class E danger;
+      </div>
+      <div class="caption">本章推导主线：从"重复计算"这个痛点出发，经弦化、建树、校准三步到"一次校准回答所有查询"；终点（红色）是留给第 11 章的两笔账——树宽限制与带环图。</div>
+    </div>
+
+    <!-- ============ 10.1 ============ -->
+    <h2><span class="sec-no">10.1</span>为什么需要团树：变量消去在重复劳动</h2>
+
+    <p>上一章的变量消去（Variable Elimination）回答的是"一次查询怎么算"。但真实系统里，查询从来不是一次性的：诊断系统要轮番报告每个变量的后验，传感器网络要持续回答"现在每个节点处于什么状态"。<strong>对同一个网络问第二次、第三次时，变量消去会从头再来——而它并不知道，自己刚刚算过几乎一样的东西。</strong></p>
+
+    <h3>例 1：同一个网络，跑两次查询</h3>
+    <p>本章全程使用同一个例子：四个二值变量 A、B、C、D 组成一个<strong>四元环</strong>，边为 A—B、B—C、C—D、D—A（这正是第 4 章"误解例子"里贝叶斯网络表达不了的那张图，现在我们直接以马尔可夫网络起步）。四个势函数形状相同：<strong>两端取值一致得 5，不一致得 1</strong>（邻居倾向一致）。</p>
+
+    <div class="figure">
+      <div class="mermaid">
+flowchart LR
+  A["A"] --- B["B"]
+  B --- C["C"]
+  C --- D["D"]
+  D --- A
+  classDef hot fill:#fbeedd,stroke:#c4651f,stroke-width:2.5px,color:#c4651f;
+  class A,C hot;
+      </div>
+      <div class="caption">图 10.1 本章的常驻例子：四元环 A—B—C—D—A，无向、无弦。四个势函数均为 φ(x,y)：一致 5 / 不一致 1。</div>
+    </div>
+
+    <p><strong>第一次查询 P(A)</strong>，选消元顺序 D, C, B（始终先消叶度最小的节点）。初始因子：φ₁(A,B)、φ₂(B,C)、φ₃(C,D)、φ₄(D,A)。</p>
+    <ul>
+      <li><strong>消 D</strong>：含 D 的因子是 φ₃、φ₄，乘起来得中间因子 ψ(C,D,A)，再对 D 求和得 τ₁(C,A)。</li>
+      <li><strong>消 C</strong>：含 C 的因子是 φ₂、τ₁，乘得中间因子，对 C 求和得 τ₂(A,B)。</li>
+      <li><strong>消 B</strong>：φ₁ × τ₂ 对 B 求和，得 τ₃(A)。归一化即 P(A)。</li>
+    </ul>
+    <p><strong>第二次查询 P(C)</strong>，选顺序 D, A, B。消 D 时含 D 的因子还是 φ₃、φ₄——<strong>ψ = φ₃ × φ₄ 这张 8 行的表，我们几分钟前刚算过一遍，现在原样重算</strong>。消 A、消 B 同理，大半个流程是第一次查询的回放。</p>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 重复的不是巧合，是结构性浪费</span>
+      <p>两次查询的消元过程里，<strong>凡是"不经过查询变量"方向上的求和，两次是完全相同的</strong>。n 个变量、n 次单变量查询，变量消去就把网络从头扫 n 遍；而真正"不同"的只是最后一步留在哪个变量上。查询越多，浪费越大——这不是实现不够好，是算法本身没有记忆。</p>
+    </div>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>变量消去的每一步"乘起来再求和"，产出的中间因子只依赖于网络的某个局部，<strong>与"这次想问谁"无关</strong>。那么：把这些中间因子存下来、组织好、标明谁依赖谁——之后任何查询直接取缓存即可。这棵"缓存的组织结构"，就是本章的主角<span class="term">团树</span>（Clique Tree）。</p>
+    </div>
+
+    <!-- 回忆卡片 10.1 -->
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 10.1-1</div>
+              <div class="q-text">同一个网络上做第二次查询时，变量消去哪一部分在重复计算？为什么？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              所有不经过新查询变量的中间因子（如例 1 中的 φ₃×φ₄ 对 D 求和）。因为它们只由网络局部结构决定，与查询目标无关，而变量消去没有机制记住它们。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 10.1-2</div>
+              <div class="q-text">用一句话说出团树相对变量消去的核心改进。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              把消元产生的中间因子缓存到一棵树的边上（作为消息），一次校准后所有单变量/团查询直接从缓存读取，不再重复计算。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 10.2 ============ -->
+    <h2><span class="sec-no">10.2</span>先把图变成弦图：为什么非弦不可</h2>
+
+    <p>上一节说"缓存消元的中间因子"。但缓存要有货架：中间因子定义在哪些变量组上，得事先定下来。消元时"消去变量 X，把含 X 的因子乘起来"——这个乘积的作用范围是 X 的全部邻居；要让它成为一个合法的"团"，<strong>这些邻居必须两两相连</strong>。在原图上这并不成立，于是消元会悄悄往图里加边。</p>
+
+    <h3>例 2：在四元环上手算一次弦化</h3>
+    <p>回到图 10.1 的四元环。它是<span class="term">非弦图</span>：环 A—B—C—D—A 长度 4，却没有任何"弦"（连接环上不相邻节点的边，如 A—C 或 B—D）。试着按顺序 D, C, B, A 消元，并<strong>盯住图的变化</strong>：</p>
+    <ol>
+      <li><strong>消 D</strong>：D 的邻居是 C 和 A。含 D 的因子 φ₃(C,D)、φ₄(D,A) 相乘后作用域是 {C,D,A}——这要求 C 与 A 之间有一条边。原图没有，<strong>被迫加入填充边 A—C</strong>。</li>
+      <li><strong>消 C</strong>：此时 C 的邻居是 B 和 A（A—C 已是边）。φ₂(B,C) × τ₁(C,A) 作用域 {A,B,C}——恰好 A—B、B—C、A—C 三边俱全，{A,B,C} 已是团，不再需要新边。</li>
+      <li><strong>消 B、A</strong>：作用域 {A,B}、{A}，均为已有团。</li>
+    </ol>
+
+    <div class="figure">
+      <div class="mermaid">
+flowchart LR
+  subgraph G1["原图：四元环（非弦）"]
+    A1["A"] --- B1["B"]
+    B1 --- C1["C"]
+    C1 --- D1["D"]
+    D1 --- A1
+  end
+  subgraph G2["弦化后：加入填充边 A-C"]
+    A2["A"] --- B2["B"]
+    B2 --- C2["C"]
+    C2 --- D2["D"]
+    D2 --- A2
+    A2 -.- C2
+  end
+  classDef danger fill:#fae9e7,stroke:#b03a2e,stroke-width:2.5px,color:#b03a2e;
+  class G1 danger;
+  linkStyle 8 stroke:#b03a2e,stroke-width:2.5px;
+      </div>
+      <div class="caption">图 10.2 左：四元环含长度 4 的无弦环。右：消 D 时其邻居 A、C 必须相连，红色虚线 A—C 是填充边（fill-in edge）。加边后图中不再有无弦环。</div>
+    </div>
+
+    <p>这个"先加边、再消元"的预处理叫<span class="term">弦化</span>（Triangulation，又称三角化）：不断给无弦环加弦，直到图中<strong>所有长度 ≥ 4 的环都有弦</strong>。这样的图叫<span class="term">弦图</span>（Chordal Graph）。</p>
+
+    <div class="box insight">
+      <span class="box-tag">✅ 为什么团树依赖弦性</span>
+      <p>弦图有一个决定性好性质：<strong>存在一种消元顺序（完美消元序），使消去每个节点时其邻居两两相连</strong>，每一步产生的中间因子恰好落在一个已有的团上，一条填充边都不用再加。这意味着：消元产生的全部中间因子的作用域，可以<strong>事先</strong>从弦图的最大团里读出来——货架尺寸在建树前就定死了。非弦图上做不到这一点：中间因子的形状要跑到半路才知道，缓存无从规划。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>"弦化只是画图好看"——错。加哪条弦由消元顺序决定，而不同的弦化结果会造出<strong>不同大小的最大团</strong>。四元环加 A—C，最大团是三元组；若原图是更大的网格，糟糕的顺序可能加出一个巨型团。团的大小直接决定推理成本（见 10.6 节树宽），所以"选消元顺序"就是"选弦化"，是精确推理里真正的优化战场。</p>
+    </div>
+
+    <!-- 回忆卡片 10.2 -->
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 10.2-1</div>
+              <div class="q-text">什么是弦图？四元环为什么不是弦图？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              所有长度 ≥ 4 的环都至少有一条弦（连接环上不相邻节点的边）的图。四元环 A—B—C—D—A 长度 4 且无 A—C、B—D 这样的弦，所以非弦。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 10.2-2</div>
+              <div class="q-text">消去变量 D 时为什么会引入填充边？这条边的两端是谁？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              含 D 的因子相乘后作用域含 D 的全部邻居 {C, A}，消元要求该作用域是团，故 C 与 A 必须相连——填充边 A—C。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 10.3 ============ -->
+    <h2><span class="sec-no">10.3</span>团树的构造：同一棵缓存树</h2>
+
+    <p>弦图有了，现在把"缓存"正式组织起来。直觉很简单：消元的每个中间因子住在某个团上，那么<strong>让团当节点，让"谁把中间因子交给谁"当边</strong>——得到的就是<span class="term">团树</span>（Clique Tree），也叫<span class="term">联结树</span>（Junction Tree）。它不是一张新图，而是<strong>同一套消元计算被重新排成了一棵树</strong>。</p>
+
+    <h3>三个构造动作，一棵树</h3>
+    <p><strong>① 找最大团</strong>：弦化后的图 10.2（右）里，两两全连且不能再扩大的节点组只有两个：<strong>C₁={A,B,C}</strong>（A—B、B—C 与填充边 A—C 两两全连）和 <strong>C₂={A,C,D}</strong>（C—D、D—A 与填充边 A—C 两两全连）。其余边如 {A,D}、{B,C} 都被这两个三元团包含，不构成新的最大团。</p>
+
+    <p><strong>② 按分隔集连边</strong>：两个团共享的变量集合叫<span class="term">分隔集</span>（Sepset）S<sub>ij</sub> = C<sub>i</sub> ∩ C<sub>j</sub>。C₁ 与 C₂ 共享 {A,C}，用一条标着 {A,C} 的边把它们连起来。一般地，在所有候选边里选一棵"分隔集总权重最大"的生成树（最大生成树），保证信息走最宽的路。</p>
+
+    <div class="figure">
+      <div class="mermaid">
+flowchart LR
+  C1["团 C1：{A,B,C}<br>初始势能 ψ1 = φ(A,B) × φ(B,C)"] -- "分隔集 {A,C}" --- C2["团 C2：{A,C,D}<br>初始势能 ψ2 = φ(C,D) × φ(D,A)"]
+  classDef hot fill:#fbeedd,stroke:#c4651f,stroke-width:2.5px,color:#c4651f;
+  class C1,C2 hot;
+      </div>
+      <div class="caption">图 10.3 本章例子的团树：两个团、一条边、分隔集 {A,C}。每个团的初始势能 = 分配到该团的原始因子之积（每个因子至少分配给一个包含它的团）。</div>
+    </div>
+
+    <p><strong>③ 验证运行交性质</strong>：<span class="term">运行交性质</span>（Running Intersection Property）要求：若变量 X 出现在两个团里，则 X 必须出现在连接它们的<strong>唯一路径上的每一个团</strong>里。本例中 A 与 C 都同时出现在 C₁、C₂ 中，而路径就是那条边本身——满足。这条性质的语义是：<strong>每个变量在团树上占据一片连通区域</strong>，信息沿树传递时不会"绕过"某个持有该变量的团，求和时也就不会把同一变量错误地消两次或漏消。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 这棵树是什么</span>
+      <p>把 10.1 节的消元过程 D, C, B 倒过来看：消 D 产生 τ₁(C,A) 交给含 {A,C} 的下一步；消 C 产生 τ₂(A,B)……团树只是把这条"因子交接链"摆成了图：团是工作站，分隔集是传送带，消息就是消元里的中间因子 τ。<strong>团树 = 变量消去的可复用存档格式。</strong></p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>"团树是随便一棵连接团的树"——错。少了运行交性质，同一个变量可能出现在树的两处而不连通，消息传递时信息会断裂，校准等式不再成立。运行交性质是团树合法性的全部核心；最大生成树只是满足它的一种顺手构造法。</p>
+    </div>
+
+    <!-- 回忆卡片 10.3 -->
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 10.3-1</div>
+              <div class="q-text">团树的节点和边分别是什么？分隔集是什么？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              节点 = 弦图的最大团（各持一个初始势能，为分配到的原始因子之积）；边连接共享变量的团，边上标注分隔集 S<sub>ij</sub> = C<sub>i</sub> ∩ C<sub>j</sub>。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 10.3-2</div>
+              <div class="q-text">用自己的话陈述运行交性质，并说明它保证了什么。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              同一变量出现的所有团在树中连成一片（路径上每个团都含它）。保证消息沿树传递时该变量的信息连续不断，消元既不重复也不遗漏。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 10.4 ============ -->
+    <h2><span class="sec-no">10.4</span>消息传播与校准：两遍传遍全树</h2>
+
+    <p>树建好了，缓存还是空的。填缓存的机制叫<span class="term">消息传播</span>（Message Passing）：相邻团之间互相发送"我这边的信息汇总"，每条边两个方向各发一次，整棵树就同步了。</p>
+
+    <p><strong>消息公式</strong>：团 C<sub>i</sub> 发给邻居 C<sub>j</sub> 的消息，是定义在分隔集 S<sub>ij</sub> 上的因子：</p>
+
+    <div class="formula">δ<sub>i→j</sub>(S<sub>ij</sub>) = ∑<sub>C<sub>i</sub> ∖ S<sub>ij</sub></sub> ψ<sub>i</sub>(C<sub>i</sub>) · ∏<sub>k ∈ N(i) ∖ j</sub> δ<sub>k→i</sub>(S<sub>ki</sub>)</div>
+
+    <p>读法：把自己的初始势能，乘上<strong>除 j 以外所有邻居发来的消息</strong>，再把"只属于自己、不属于分隔集"的变量求和消掉——剩下的就是"i 这一侧对分隔集的全部意见"。这正是变量消去里"乘起来、求和消去"那一步，只不过结果被<strong>记在边上</strong>，谁都能来取。</p>
+
+    <p><strong>两遍就够</strong>：任选一个团当根，先<span class="term">收集</span>（Collect，叶子→根：每个团等齐上游消息后向上发），再<span class="term">分发</span>（Distribute，根→叶子：反向发回）。每条边两个方向各一条消息后，树达到<span class="term">校准</span>（Calibration）：对每条边，两侧团在分隔集上的边缘完全一致。</p>
+
+    <p><strong>校准后读答案</strong>：每个团的<span class="term">信念</span>（Belief）</p>
+
+    <div class="formula">β<sub>i</sub>(C<sub>i</sub>) = ψ<sub>i</sub>(C<sub>i</sub>) · ∏<sub>k ∈ N(i)</sub> δ<sub>k→i</sub>(S<sub>ki</sub>)</div>
+
+    <p>就是该团变量的<strong>未归一化联合边缘</strong> P̃(C<sub>i</sub>)——任取一个含目标变量 X 的团，把 β 对团内其余变量求和再归一化，即得 P(X)。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 直觉</span>
+      <p>收集阶段像"逐级汇报"：每个分支把自己的信息压缩成分隔集上的一条简报交给上级；分发阶段像"逐级传达"：全局信息再沿树回流。两遍之后，每个团都坐拥全局——却只在局部做了乘法与求和。</p>
+    </div>
+
+    <!-- 回忆卡片 10.4 -->
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 10.4-1</div>
+              <div class="q-text">写出消息公式 δ<sub>i→j</sub>，并说出它与变量消去哪一步对应。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              δ<sub>i→j</sub>(S<sub>ij</sub>) = Σ<sub>C<sub>i</sub>∖S<sub>ij</sub></sub> ψ<sub>i</sub> · ∏<sub>k≠j</sub> δ<sub>k→i</sub>。对应消元中"乘起所有相关因子、消去非分隔集变量"那一步——只是结果被缓存在边上。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 10.4-2</div>
+              <div class="q-text">什么是校准？校准后团信念 β<sub>i</sub> 等于什么？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              校准 = 每条边两侧团在分隔集上的边缘一致（收集+分发两遍后达到）。β<sub>i</sub>(C<sub>i</sub>) = ψ<sub>i</sub> · ∏<sub>k</sub> δ<sub>k→i</sub>，等于该团变量的未归一化边缘 P̃(C<sub>i</sub>)。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 10.5 ============ -->
+    <h2><span class="sec-no">10.5</span>完整手算：在例 1 的团树上做两遍消息传播</h2>
+
+    <p>上一节给了公式，这一节把数字全部算出来。回到图 10.3 的两团树：ψ₁(A,B,C) = φ(A,B)·φ(B,C)，ψ₂(A,C,D) = φ(C,D)·φ(D,A)，分隔集 {A,C}。先算初始势能（一致 5 / 不一致 1）：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>A</th><th>B</th><th>C</th><th>φ(A,B)</th><th>φ(B,C)</th><th>ψ₁</th><th></th><th>A</th><th>C</th><th>D</th><th>φ(C,D)</th><th>φ(D,A)</th><th>ψ₂</th></tr>
+        <tr><td>0</td><td>0</td><td>0</td><td>5</td><td>5</td><td><strong>25</strong></td><td></td><td>0</td><td>0</td><td>0</td><td>5</td><td>5</td><td><strong>25</strong></td></tr>
+        <tr><td>0</td><td>0</td><td>1</td><td>5</td><td>1</td><td>5</td><td></td><td>0</td><td>0</td><td>1</td><td>1</td><td>1</td><td>1</td></tr>
+        <tr><td>0</td><td>1</td><td>0</td><td>1</td><td>1</td><td>1</td><td></td><td>0</td><td>1</td><td>0</td><td>1</td><td>5</td><td>5</td></tr>
+        <tr><td>0</td><td>1</td><td>1</td><td>1</td><td>5</td><td>5</td><td></td><td>0</td><td>1</td><td>1</td><td>5</td><td>1</td><td>5</td></tr>
+        <tr><td>1</td><td>0</td><td>0</td><td>1</td><td>5</td><td>5</td><td></td><td>1</td><td>0</td><td>0</td><td>5</td><td>1</td><td>5</td></tr>
+        <tr><td>1</td><td>0</td><td>1</td><td>1</td><td>1</td><td>1</td><td></td><td>1</td><td>0</td><td>1</td><td>1</td><td>5</td><td>5</td></tr>
+        <tr><td>1</td><td>1</td><td>0</td><td>5</td><td>1</td><td>5</td><td></td><td>1</td><td>1</td><td>0</td><td>1</td><td>1</td><td>1</td></tr>
+        <tr><td>1</td><td>1</td><td>1</td><td>5</td><td>5</td><td><strong>25</strong></td><td></td><td>1</td><td>1</td><td>1</td><td>5</td><td>5</td><td><strong>25</strong></td></tr>
+      </table>
+    </div>
+
+    <h3>收集阶段：C₂ → C₁</h3>
+    <p>δ<sub>2→1</sub>(A,C) = Σ<sub>D</sub> ψ₂(A,C,D)。逐格求和：</p>
+    <ul>
+      <li>δ(0,0) = ψ₂(0,0,0)+ψ₂(0,0,1) = 25+1 = <strong>26</strong></li>
+      <li>δ(0,1) = ψ₂(0,1,0)+ψ₂(0,1,1) = 5+5 = <strong>10</strong></li>
+      <li>δ(1,0) = ψ₂(1,0,0)+ψ₂(1,0,1) = 5+5 = <strong>10</strong></li>
+      <li>δ(1,1) = ψ₂(1,1,0)+ψ₂(1,1,1) = 1+25 = <strong>26</strong></li>
+    </ul>
+
+    <h3>分发阶段：C₁ → C₂</h3>
+    <p>δ<sub>1→2</sub>(A,C) = Σ<sub>B</sub> ψ₁(A,B,C)。同样的形状：δ(0,0)=25+1=26，δ(0,1)=5+1=6？慢着——逐格：ψ₁(0,0,1)=5、ψ₁(0,1,1)=5，所以 δ(0,1) = 5+5 = <strong>10</strong>；δ(1,0) = ψ₁(1,0,0)+ψ₁(1,1,0) = 5+5 = <strong>10</strong>；δ(1,1) = ψ₁(1,0,1)+ψ₁(1,1,1) = 1+25 = <strong>26</strong>。两条消息恰好相同（网络对称之故）：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>(A, C)</th><th>δ<sub>2→1</sub></th><th>δ<sub>1→2</sub></th></tr>
+        <tr><td>(0, 0)</td><td>26</td><td>26</td></tr>
+        <tr><td>(0, 1)</td><td>10</td><td>10</td></tr>
+        <tr><td>(1, 0)</td><td>10</td><td>10</td></tr>
+        <tr><td>(1, 1)</td><td>26</td><td>26</td></tr>
+      </table>
+    </div>
+
+    <style>
+      .c10-wrong { color: #b03a2e; font-weight: 700; text-decoration: line-through; }
+      .c10-right { color: #1e8449; font-weight: 700; }
+    </style>
+
+    <h3>校准验证与团信念</h3>
+    <p>β₁(A,B,C) = ψ₁·δ<sub>2→1</sub>，β₂(A,C,D) = ψ₂·δ<sub>1→2</sub>。验证校准等式：两侧在分隔集 {A,C} 上的边缘必须一致。先把<strong>正确</strong>的两侧算出来——注意查消息表时下标是分隔集 (A,C)，与 B、D 无关：</p>
+    <ul>
+      <li>Σ<sub>B</sub> β₁(0,B,0) = β₁(0,0,0)+β₁(0,1,0) = 25×26 + 1×26 = 650+26 = <span class="c10-right">676</span> ✓</li>
+      <li>Σ<sub>D</sub> β₂(0,0,D) = β₂(0,0,0)+β₂(0,0,1) = 25×26 + 1×26 = 650+26 = <span class="c10-right">676</span> ✓</li>
+    </ul>
+    <p>两侧同为 676，校准通过。这正是校准等式的用法：<strong>分隔集边缘必须相等，不等就是算错了</strong>。</p>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 错误示范：660 是怎么来的（别学这个数）</span>
+      <p>假如算第一侧时把 β₁(0,1,0) 的消息格子查错——<strong>按 (A,B)=(0,1) 而不是按分隔集 (A,C)=(0,0) 去查 δ<sub>2→1</sub></strong>——就会写成：</p>
+      <p>Σ<sub>B</sub> β₁(0,B,0) = 25×26 + <span class="c10-wrong">1×10</span> = 650 + <span class="c10-wrong">10</span> = <span class="c10-wrong">660</span> ≠ 676</p>
+      <p><strong>660 不是"另一个合法的中间值"，它就是错的</strong>：红色那项把 δ<sub>2→1</sub>(0,0) = 26 误取成了 δ<sub>2→1</sub>(0,1) = 10，正确值 676 直接覆盖它，没有任何商量余地。</p>
+      <p><strong>自查口诀：如果你在第一侧算出 660，说明你读团 C₁ = {A,B,C} 的 B=1 那一行时查错了消息格</strong>——回到 C₁，确认那一行乘的是分隔集 (A,C)=(0,0) 对应的 δ<sub>2→1</sub>(0,0) = 26，而不是 (0,1) 格的 10。校准等式的全部价值就在这一刻：两边对不上时，它替你把错误定位到具体哪个团、哪一格。</p>
+    </div>
+
+    <h3>读答案：P(A) 与 P(C) 都来自同一次校准</h3>
+    <ul>
+      <li>P̃(a⁰) = Σ<sub>B,C</sub> β₁(0,B,C) = 650+50+26+50 = <strong>776</strong>（四项分别对应 (B,C)=(0,0),(0,1),(1,0),(1,1)：25×26、5×10、1×26、5×10）；由对称性 P̃(a¹) = 776，故 P(a⁰) = 776/1552 = <strong>0.5</strong>。</li>
+      <li>P̃(c⁰) = Σ<sub>A,B</sub> β₁(A,B,0) = 650+26+50+50 = <strong>776</strong>，同样得 P(c⁰) = <strong>0.5</strong>。</li>
+      <li>顺便，配分函数 Z = 1552 也从团信念里免费得到（Σ β₁ = Σ β₂ = 1552）。</li>
+    </ul>
+    <p>注意第二行<strong>没有发动任何新的传播</strong>——校准过的树回答 P(C) 只是"在 β₁ 上换个方向求和"。</p>
+
+    <!-- 回忆卡片 10.5 -->
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 10.5-1</div>
+              <div class="q-text">本例中 δ<sub>2→1</sub>(0,0) = 26 是怎么算出来的？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              δ<sub>2→1</sub>(0,0) = Σ<sub>D</sub> ψ₂(0,0,D) = ψ₂(0,0,0)+ψ₂(0,0,1) = 25+1 = 26（25 来自 D 与 A、C 全一致）。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 10.5-2</div>
+              <div class="q-text">校准等式是什么？手算时它有什么用？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              每条边两侧团在分隔集上的边缘相等：Σ<sub>C<sub>i</sub>∖S</sub> β<sub>i</sub> = Σ<sub>C<sub>j</sub>∖S</sub> β<sub>j</sub>。手算时是最快的查错器——不等必有计算错误。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 10.6 ============ -->
+    <h2><span class="sec-no">10.6</span>消元 vs 团树：同一网络，逐条数运算</h2>
+
+    <p>现在兑现 10.1 节的承诺：把"变量消去跑两次查询"和"团树校准一次"的因子运算逐条列出来对比。计数以一次"因子相乘"或一次"对变量求和"为一个因子运算。</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>步骤</th><th>VE 查询 P(A)（顺序 D,C,B）</th><th>VE 查询 P(C)（顺序 D,A,B）</th><th>团树校准（一次）</th></tr>
+        <tr><td>1</td><td>φ₃ × φ₄ → ψ(C,D,A)</td><td>φ₃ × φ₄ → ψ(C,D,A)　<strong>← 重复</strong></td><td>建势能：ψ₁ = φ₁×φ₂，ψ₂ = φ₃×φ₄</td></tr>
+        <tr><td>2</td><td>Σ<sub>D</sub> ψ → τ₁(C,A)</td><td>Σ<sub>D</sub> ψ → τ₁(C,A)　<strong>← 重复</strong></td><td>收集：δ<sub>2→1</sub> = Σ<sub>D</sub> ψ₂</td></tr>
+        <tr><td>3</td><td>φ₂ × τ₁ → ψ(A,B,C)</td><td>φ₁ × τ₁ → ψ(A,B,C)</td><td>分发：δ<sub>1→2</sub> = Σ<sub>B</sub> ψ₁</td></tr>
+        <tr><td>4</td><td>Σ<sub>C</sub> → τ₂(A,B)</td><td>Σ<sub>A</sub> → τ₂(B,C)</td><td>团信念：β₁ = ψ₁·δ<sub>2→1</sub>，β₂ = ψ₂·δ<sub>1→2</sub></td></tr>
+        <tr><td>5</td><td>φ₁ × τ₂，Σ<sub>B</sub> → τ₃(A)，归一化</td><td>φ₂ × τ₂，Σ<sub>B</sub> → τ₃(C)，归一化</td><td>读 P(A)：Σ<sub>B,C</sub> β₁；读 P(C)：Σ<sub>A,B</sub> β₁——局部求和，无新传播</td></tr>
+        <tr><td><strong>合计</strong></td><td>6 次因子运算</td><td>6 次，其中 2 次与左列完全重复</td><td>约 6 次建势能/消息/信念运算，之后<strong>每个新查询 0 次传播</strong></td></tr>
+      </table>
+    </div>
+
+    <p>规律：两次查询，VE 共 12 次运算、团树约 6 次加 2 次局部求和；查询数变成 k 时，VE 是 6k，团树仍然是"一次校准 + k 次局部求和"。<strong>查询越多，团树省得越多</strong>——这就是"给消元加缓存"的全部含义。</p>
+
+    <div class="box insight">
+      <span class="box-tag">✅ 判定规则：什么时候用团树</span>
+      <p>单次查询、且图稀疏 → 变量消去更省（无建树开销）；需要反复查询、在线更新、或想要所有变量的边缘 → 团树。现实中"诊断系统持续回答每个变量的后验"几乎都是后者。</p>
+    </div>
+
+    <h3>证据怎么进入团树</h3>
+    <p>观测到证据 X = x 时：任取一个<strong>含 X 的团</strong>，把指示因子 1[X = x] 乘进它的势能（相当于把势能里 X ≠ x 的行清零），然后只需从该团出发重新传播——树结构、其他团的初始势能都不变。这叫增量更新：证据是局部事件，不需要推倒重来。</p>
+
+    <!-- 回忆卡片 10.6 -->
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 10.6-1</div>
+              <div class="q-text">校准后再来一个新查询，需要做几次消息传播？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              0 次。任取一个含目标变量的团，对其信念 β 做局部边缘化并归一化即可——所有全局信息已在两遍校准中流遍全树。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 10.6-2</div>
+              <div class="q-text">新证据 X=x 到来时，团树如何处理？需要重建树吗？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              找一个含 X 的团，把指示因子乘进其势能，再从该团重新传播消息。树结构不变，无需重建——这是团树适合在线推理的原因。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 10.7 ============ -->
+    <h2><span class="sec-no">10.7</span>代价与出路：树宽封顶，以及带环图的诱惑</h2>
+
+    <p>团树并非免费午餐。它的成本由<strong>最大团的大小</strong>决定：团内势能表有 d<sup>|C|</sup> 项（d 为变量取值数），而最大团多大由弦化加了多少边决定。图的<span class="term">树宽</span>（Treewidth）=（最优弦化下最大团大小 − 1），精确推理复杂度 O(d<sup>w+1</sup>)——<strong>树宽是精确推理的天花板</strong>。稠密网络（如大网格）树宽随规模线性增长，团再大也算不动。</p>
+
+    <p>另一个更微妙的问题藏在 10.4 节：消息传播的正确性证明依赖"树"——每条边切断后两侧变量的信息只沿这条边流动，所以每条消息只算一次、不循环。<strong>如果图本身带环、我们又懒得弦化（因为弦化会造出巨型团），直接把消息公式搬到带环图上迭代会怎样？</strong>直觉上消息会绕圈回流、自我加强；但实践中这种"违规操作"常常意外地好用。这就是第 11 章<span class="term">环上置信传播</span>（Loopy Belief Propagation）的起点——用近似换可行。</p>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>"团树是万能升级版，建了就比消元强"——错。单次查询时建树 + 两遍传播比一次消元更贵；树宽大的网络里团表本身就存不下。团树的价值场景是"多查询 / 在线证据 / 要全部边缘"，不是"任何推理"。</p>
+    </div>
+
+    <!-- 回忆卡片 10.7 -->
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 10.7-1</div>
+              <div class="q-text">团树推理的成本由什么决定？树宽的定义是什么？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              由最大团大小决定：势能表 d<sup>|C|</sup> 项。树宽 w = 最优弦化下最大团大小 − 1，复杂度 O(d<sup>w+1</sup>)。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 10.7-2</div>
+              <div class="q-text">消息传播为什么要求团树是"树"？把公式直接搬到带环图上引出哪一章？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              树上每条边是两侧信息的唯一通道，每条消息恰好算一次，不循环。搬到带环图就是 Loopy BP——第 11 章近似推理的起点。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 概念卡 ============ -->
+    <h2><span class="sec-no">🃏</span>概念卡：本章概念的一分钟画像</h2>
+    <p>翻面前先自问：这个概念我能用一句话讲清楚吗？</p>
+    <div class="flip-grid">
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 1</div>
+            <div class="q-text">弦化（Triangulation）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">给无向图加填充边，直到所有长度 ≥ 4 的环都有弦，得到弦图。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">非弦图上消元会在半路引入新边，中间因子的形状无法事先规划，缓存无从建。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">先把仓库的货架尺寸定死，货物（中间因子）才好入库。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为加边随意——弦化方式决定最大团大小，即决定推理成本。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">一切团树/联结树推理的预处理；树宽也由它定义（Ch10–11）。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 2</div>
+            <div class="q-text">团树 / 联结树（Clique Tree / Junction Tree）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">以弦图最大团为节点、按分隔集连边且满足运行交性质的树，各团持初始势能。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">变量消去多查询时重复计算同一批中间因子。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">消元的存档格式：中间结果存进树里，查询随取随用。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为团树是新模型——它是同一套消元计算的重组，不改分布。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">多查询、在线证据更新、需要全部边缘的精确推理（Ch10）；Ch11 的对照组。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 3</div>
+            <div class="q-text">分隔集（Sepset）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">相邻两团的变量交集 S<sub>ij</sub> = C<sub>i</sub> ∩ C<sub>j</sub>，消息就定义在它上面。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">划定两团之间信息交换的"接口宽度"：消息只谈共享变量。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">两部门之间的联络员——只传递双方都管的事。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为消息定义在整个团上——消息的作用域只有分隔集，其余变量已被消掉。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">消息公式与校准等式的主角；Ch11 BP 消息的同型物。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 4</div>
+            <div class="q-text">运行交性质（Running Intersection Property）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">若变量 X 同时出现在两团中，则它出现在连接两团路径上的每个团里。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">保证同一变量的信息在树中连续，消息传递不重不漏，校准等式成立。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">每个变量在树上占据一片连通辖区，不能"飞地"。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为任意连接团的树都行——缺了它，校准等式直接失效。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">构造与验证团树的合法性标准（最大生成树是满足它的构造法）。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 5</div>
+            <div class="q-text">消息传播（Message Passing / Sum-Product）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">δ<sub>i→j</sub>(S<sub>ij</sub>) = Σ<sub>C<sub>i</sub>∖S<sub>ij</sub></sub> ψ<sub>i</sub>·∏<sub>k≠j</sub> δ<sub>k→i</sub>，沿边两个方向各传一次。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">把"消元的中间因子"变成可缓存、可复用的边上对象。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">逐级汇报再逐级传达：收集（叶→根）+ 分发（根→叶）两遍传遍。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为要传很多轮——树上恰两遍即收敛；多轮迭代是带环图（Ch11）的事。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">本章校准机制；Ch11 把它搬到带环图即 Loopy BP。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 6</div>
+            <div class="q-text">校准与团信念（Calibration / Belief）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">校准：每边两侧团在分隔集上边缘一致；β<sub>i</sub> = ψ<sub>i</sub>·∏<sub>k</sub> δ<sub>k→i</sub> = P̃(C<sub>i</sub>)。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">校准后任意查询只需局部边缘化，无需新传播。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">全树信息同步完成：每个团都坐拥全局。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为 β 是归一化概率——它是未归一化边缘，读答案时还要归一化。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">读 P(X)、算 Z、手算查错（分隔集边缘必须相等）。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 7</div>
+            <div class="q-text">树宽（Treewidth）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">w = 最优弦化下最大团大小 − 1；精确推理复杂度 O(d<sup>w+1</sup>)。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">给出精确推理是否可行的判据：w 大则精确推理指数爆炸。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">图"离一棵树有多远"的度量——树 w=1，环 w=2，网格 w 随边长涨。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为树宽是图的固有数字——它由最优消元顺序定义，顺序差则表观树宽虚高。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">决定选精确（Ch9/10）还是近似（Ch11–13）推理的分水岭。</span></div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- ============ 分层习题 ============ -->
+    <h2><span class="sec-no">📝</span>分层习题</h2>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>判断对错：<strong>团树上每个团的信念 β<sub>i</sub> 就是该团变量的归一化联合概率分布。</strong>说明理由。</div>
+      <details>
+        <summary>提示</summary>
+        <p>回顾 β<sub>i</sub> 的构成：初始势能与消息的乘积。消息和势能归一化过吗？</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">错。β<sub>i</sub> = ψ<sub>i</sub>·∏ δ<sub>k→i</sub> 是该团变量的<strong>未归一化</strong>边缘 P̃(C<sub>i</sub>)：各行之和等于配分函数 Z（本章例中 Σβ₁ = 1552），不是 1。读答案时必须再做一次归一化。校准保证的是"分隔集边缘一致"，不保证"和为 1"。</div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>判断对错：<strong>只要把所有最大团任意连成一棵树，消息传播两遍后就能得到正确边缘。</strong>说明理由。</div>
+      <details>
+        <summary>提示</summary>
+        <p>想想运行交性质：如果变量 X 出现在树的两处但路径上有个团不含 X，会发生什么？</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">错。必须满足运行交性质。反例：三团 C₁={A,B}、C₂={C,D}、C₃={A,D} 连成 C₁—C₂—C₃，A 出现在 C₁、C₃ 但中间 C₂ 不含 A。消息 δ<sub>1→2</sub> 在 {B} 或空集上传递，A 的信息在 C₂ 处断裂，C₃ 拿到的"全局"信息漏掉了 C₁ 关于 A 的部分，校准等式失效。运行交性质不是装饰，是正确性的全部来源。</div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>五元环 A—B—C—D—E—A。按消元顺序 C, D 开始消元，写出前两步各引入了哪条填充边（若有），并给出弦化后含 {A,B} 的最大团。</div>
+      <details>
+        <summary>提示</summary>
+        <p>消去一个节点时，它的所有当前邻居两两之间必须有边；缺哪条就补哪条。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p>消 C：C 的邻居为 B、D，二者原不相连 → 加填充边 <strong>B—D</strong>。此时含 C 的因子合并为作用域 {B,C,D} 的中间因子。</p>
+          <p>消 D：D 的当前邻居为 C（待消路径上）、B、E——C 已消后 D 的邻居为 B、E，且 B—D 边存在使作用域涉及 {B,D,E}，B 与 E 原不相连 → 加填充边 <strong>B—E</strong>。</p>
+          <p>两条填充边 B—D、B—E 加入后，环上不再有无弦四环/五环。含 {A,B} 的最大团为 <strong>{A,B,E}</strong>（A—B、B—E、E—A 两两全连）。另两个最大团：{B,C,D}、{B,D,E}。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>用本章例子的校准结果，计算 P(b⁰|c⁰)。要求写出用了哪个团、哪条消息，以及归一化常数。</div>
+      <details>
+        <summary>提示</summary>
+        <p>B 和 C 同在团 C₁ 中：先取 β₁ 的边缘 P̃(B,C)，再按条件概率定义相除。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p>P̃(B,C) = Σ<sub>A</sub> β₁(A,B,C) = Σ<sub>A</sub> ψ₁(A,B,C)·δ<sub>2→1</sub>(A,C)。</p>
+          <p>P̃(b⁰,c⁰) = β₁(0,0,0)+β₁(1,0,0) = 25×26 + 5×10 = 650+50 = <strong>700</strong>。</p>
+          <p>P̃(c⁰) = 776（10.5 节已算，即归一化所用的未归一化边缘）。</p>
+          <p>P(b⁰|c⁰) = 700/776 ≈ <strong>0.902</strong>。看到邻居 C=0，B=0 的概率从 0.5 升到约 0.90——依赖穿过分隔集传了过来。全程只用团 C₁ 的信念与消息 δ<sub>2→1</sub>，无新传播。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l3">L3 建模应用</span>某电网监控系统有 12 个节点排成 3×4 网格，每小时要报告<strong>每个节点</strong>的故障后验，且新的传感器读数每分钟到达。在"变量消去"与"团树"之间做架构选择，说明理由；并指出该网格的树宽量级对选择的约束。</div>
+      <details>
+        <summary>提示</summary>
+        <p>两个维度：查询频率（12 个/小时）与证据更新频率（每分钟）；3×n 网格的树宽约为 3。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p>选团树。理由一：12 个节点轮番查询，VE 每次全网重扫，团树一次校准后每个查询只做局部边缘化。理由二：证据每分钟到达——团树把指示因子乘进含证据变量的团、局部重新传播即可，VE 则每次从零开始。</p>
+          <p>树宽约束：3×4 网格最优弦化后最大团约 4 个变量，树宽 w ≈ 3，二值变量下团表 2⁴ = 16 项，精确推理完全可行。若换成 30×40 大网格，w ≈ 30，团表 2³¹ 项存不下——此时无论 VE 还是团树都不可行，只能转向第 11 章的近似推理。网格宽度就是这条架构选择的分界线。</p>
+        </div>
+      </details>
+    </div>
+
+    <!-- ============ 本章自测 ============ -->
+    <h2><span class="sec-no">✍️</span>本章自测</h2>
+    <p class="quiz-hint">点击选项判分，答错会给出原因。</p>
+
+    <div class="quiz-block" data-answer="c">
+      <div class="q-no">自测 1</div>
+      <div class="q-stem">团树相对变量消去的根本改进是：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 用了更高效的求和算法，降低单步复杂度</li>
+        <li data-opt="b">B. 把有向图转成无向图，扩大可处理的模型范围</li>
+        <li data-opt="c">C. 把消元的中间因子缓存在树的边上，一次校准后任意查询不再重复传播</li>
+        <li data-opt="d">D. 用近似消息代替精确消元，牺牲精度换速度</li>
+      </ul>
+      <div class="quiz-explain">选 C。团树的每一步运算与消元完全相同，差别只在"结果存下来、按树组织、可复用"。A 错：单步运算一模一样。B 错：无向化（道德化）两者都需要，不是团树的改进。D 错：团树是精确推理，毫无近似——近似是第 11 章的事。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 2</div>
+      <div class="q-stem">为什么团树构造前必须先把图弦化？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 弦图上消息传播收敛更快</li>
+        <li data-opt="b">B. 非弦图上消元会引入填充边，中间因子的作用域无法事先确定，缓存（团）无从规划</li>
+        <li data-opt="c">C. 只有弦图才有最大团</li>
+        <li data-opt="d">D. 弦化可以降低配分函数的值</li>
+      </ul>
+      <div class="quiz-explain">选 B。弦图存在完美消元序：消每个节点时邻居已是团，中间因子恰好落在事先读出的最大团上。A 错：收敛速度（两遍）与弦性无关。C 错：任何图都有最大团，问题是它们装不下消元半路造出的因子。D 错：Z 是分布的性质，加边不改分布，也不会改 Z 的"值域"。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="a">
+      <div class="q-no">自测 3</div>
+      <div class="q-stem">团 C₁={A,B,C} 与 C₂={A,C,D} 相连。下列说法正确的是：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 分隔集是 {A,C}，消息 δ<sub>1→2</sub> 只定义在 A、C 上</li>
+        <li data-opt="b">B. 分隔集是 {A,B,C,D}，消息覆盖两团全部变量</li>
+        <li data-opt="c">C. 分隔集是 {B,D}，因为它们是两团各自的"私有变量"</li>
+        <li data-opt="d">D. 消息 δ<sub>1→2</sub> 定义在 {A,B,C} 上</li>
+      </ul>
+      <div class="quiz-explain">选 A。分隔集 = 交集 {A,C}，消息公式消去 C₁∖S = {B} 后只余 A、C。B 错：并集不是分隔集。C 恰好说反：私有变量恰恰是被消去的部分。D 错：消息作用域不含 B——B 在发送前已被求和消掉。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="d">
+      <div class="q-no">自测 4</div>
+      <div class="q-stem">本章例子校准后，要回答新查询 P(D)，最少需要做的是：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 从 C₁ 重新发起一遍收集+分发</li>
+        <li data-opt="b">B. 对 β₁ 求和消去 B、C</li>
+        <li data-opt="c">C. 对 β₂ 求和消去 A、C，再归一化</li>
+        <li data-opt="d">D. B 和 C 等价：取含 D 的团 C₂ 的信念做局部边缘化即可，无需新传播</li>
+      </ul>
+      <div class="quiz-explain">选 D。D 只出现在 C₂，校准后 β₂ = P̃(A,C,D)，对 A、C 求和再除以 Z 即得 P(D)。A 错：重新传播只在证据更新时需要。B 错：β₁ 不含 D，怎么消也得不到 P(D)。C 的操作本身对，但它就是 D 说的"局部边缘化"，D 说出了"为什么可以这么做"。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 5</div>
+      <div class="q-stem">关于树宽与第 11 章的衔接，下列说法正确的是：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 团树算法对任意网络都可行，只是慢一点</li>
+        <li data-opt="b">B. 树宽 w 决定成本 O(d<sup>w+1</sup>)；w 太大时精确推理不可行，只能转向近似推理（如 Loopy BP）</li>
+        <li data-opt="c">C. 带环图上直接跑消息传播一定发散，所以第 11 章没有意义</li>
+        <li data-opt="d">D. 树宽大的图可以通过更多轮消息传播克服</li>
+      </ul>
+      <div class="quiz-explain">选 B。团表 d<sup>|C|</sup> 项是硬约束，w 大则连存储都不可行，A 错。C 错：Loopy BP 不保证收敛、结果是近似的，但实践中常常好用，这正是它值得学的原因。D 错：消息轮数改不了团表大小，瓶颈在空间不在迭代。</div>
+    </div>
+
+    <!-- ============ 三句话复述 ============ -->
+    <div class="retell">
+      <h3>🗣️ 用自己的话，三句话讲完本章</h3>
+      <p class="retell-sub">对着空气（或室友）说出这三句。说卡壳的那句，回去重读对应小节。</p>
+      <details>
+        <summary>句1：这章解决什么问题？——</summary>
+        <div class="retell-answer">参考答案：变量消去每来一次查询就从头算一遍，同一批中间因子被反复重算；本章要给消元加一个可复用的缓存结构，一次计算回答所有查询。</div>
+      </details>
+      <details>
+        <summary>句2：核心机制是什么？——</summary>
+        <div class="retell-answer">参考答案：先把图弦化（消元的中间因子形状才能事先确定为最大团），把最大团按分隔集连成满足运行交性质的树；每个团持初始势能，收集+分发两遍消息传播后全树校准，团信念 = 未归一化边缘，任意查询只做局部边缘化。</div>
+      </details>
+      <details>
+        <summary>句3：它和前后章怎么分工？——</summary>
+        <div class="retell-answer">参考答案：Ch9 管"一次查询怎么消元"，本章把消元存档成树管"多次查询怎么复用"；但树宽封顶 + 算法离不开树结构，带环图上的消息传播（Loopy BP）和各类近似推理交给 Ch11 及以后。</div>
+      </details>
+    </div>
+
+    <!-- ============ 复习计划 ============ -->
+    <div class="review-plan">
+      <h3>🔁 间隔复习计划</h3>
+      <p>回忆本身比重读有效 10 倍。到点只做一件事：翻卡 + 重做标记题。</p>
+      <table>
+        <tr><th>时间点</th><th>复习内容</th><th>预计用时</th></tr>
+        <tr><td>第 1 天</td><td>概念卡 1–7 全部 + 回忆卡 10.2-1、10.4-1、10.5-1</td><td>10 分钟</td></tr>
+        <tr><td>第 3 天</td><td>概念卡 2、4、6（团树/运行交/校准）+ 重做 L2 第 2 题 + 自测错题</td><td>10 分钟</td></tr>
+        <tr><td>第 7 天</td><td>三句话复述出声说一遍 + 回忆卡 10.1-1、10.6-1、10.7-2</td><td>10 分钟</td></tr>
+        <tr><td>第 15 天</td><td>只做合上书挑战；七条全过则本章毕业，卡在哪条就重读对应小节</td><td>15 分钟</td></tr>
+      </table>
+    </div>
+
+    <!-- 合上书挑战 -->
+    <div class="final-challenge">
+      <h3>📕 合上书挑战</h3>
+      <p class="fc-sub">现在关掉这个页面（或遮住屏幕），拿一张纸，凭记忆完成以下任务。全部做完再回来核对——这是本章真正的毕业考试。</p>
+      <ol id="challenge-list">
+        <li><span class="fc-check"></span>用"同一网络查 P(A) 再查 P(C)"的例子，指出变量消去哪两步在重复计算</li>
+        <li><span class="fc-check"></span>画出四元环，按顺序 D, C, B 消元，写出引入的填充边并解释为什么非弦不可</li>
+        <li><span class="fc-check"></span>写出消息公式 δ<sub>i→j</sub> 与团信念公式 β<sub>i</sub>，标出分隔集的位置</li>
+        <li><span class="fc-check"></span>对两团树（一致 5 / 不一致 1）手算两条消息（26/10/10/26），并用校准等式查错</li>
+        <li><span class="fc-check"></span>说明证据 X=x 如何进入团树，以及为什么不需要重建树</li>
+        <li><span class="fc-check"></span>说出树宽的定义，并解释它如何决定"精确推理还行不行"</li>
+        <li><span class="fc-check"></span>回答本章的主线问题：团树凭什么一次校准就能回答所有查询？（一句话）</li>
+      </ol>
+    </div>
+
+    <div class="complete-zone">
+      <button class="btn-complete" id="btn-complete" onclick="markDone()">✓ 我已完成本章（含合上书挑战）</button>
+    </div>
+
+    <div class="chapter-nav">
+      <a href="chapter-09.html"><span class="nav-dir">← 上一章</span>第9章 精确推理：变量消去</a>
+      <a href="chapter-11.html" class="next"><span class="nav-dir">下一章 →</span>第11章 近似推理：置信传播</a>
+    </div>
+
+  </div>
+</div>
+
+<footer class="footer">
+  <div class="wrap">第10章 精确推理：团树算法 · PGM 互动讲义 · 基于 Koller &amp; Friedman (2009)</div>
+</footer>
+
+<script src="assets/mermaid.min.js"></script>
+<script>
+mermaid.initialize({
+  startOnLoad: true,
+  theme: "base",
+  themeVariables: {
+    primaryColor: "#e3edf7",
+    primaryBorderColor: "#1d5f9e",
+    primaryTextColor: "#1d5f9e",
+    lineColor: "#5c554b",
+    secondaryColor: "#fbeedd",
+    tertiaryColor: "#f5f1e8",
+    fontFamily: "-apple-system, PingFang SC, sans-serif",
+    fontSize: "14px"
+  },
+  flowchart: { curve: "linear", htmlLabels: false }
+});
+</script>
+<script>
+// 自测题逻辑
+document.querySelectorAll(".quiz-block").forEach(block => {
+  const answer = block.dataset.answer;
+  const explain = block.querySelector(".quiz-explain");
+  block.querySelectorAll(".quiz-opts li").forEach(li => {
+    li.addEventListener("click", () => {
+      const opts = block.querySelectorAll(".quiz-opts li");
+      opts.forEach(o => o.classList.add("disabled"));
+      if (li.dataset.opt === answer) {
+        li.classList.add("correct");
+      } else {
+        li.classList.add("wrong");
+        block.querySelector(`[data-opt="${answer}"]`).classList.add("correct");
+      }
+      explain.classList.add("show");
+    });
+  });
+});
+
+// 合上书清单打勾
+document.querySelectorAll("#challenge-list li").forEach(li => {
+  li.addEventListener("click", () => li.classList.toggle("checked"));
+});
+
+// 完成标记 → localStorage（第10章）
+const KEY = "pgm_progress_v1";
+function loadProgress() {
+  try { return JSON.parse(localStorage.getItem(KEY)) || {}; } catch (e) { return {}; }
+}
+const progress = loadProgress();
+const btn = document.getElementById("btn-complete");
+if (progress[10] && progress[10].done) {
+  btn.textContent = "✓ 已完成 · 再次点击重置";
+  btn.classList.add("done");
+}
+function markDone() {
+  const p = loadProgress();
+  if (p[10] && p[10].done) {
+    delete p[10];
+    btn.textContent = "✓ 我已完成本章（含合上书挑战）";
+    btn.classList.remove("done");
+  } else {
+    p[10] = { done: true, completedAt: Date.now(), reviewsDone: 0 };
+    btn.textContent = "✓ 已完成 · 复习提醒已开启";
+    btn.classList.add("done");
+  }
+  localStorage.setItem(KEY, JSON.stringify(p));
+}
+</script>
+
+</body>
+</html>

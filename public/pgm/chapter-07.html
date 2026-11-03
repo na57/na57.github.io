@@ -1,0 +1,878 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第7章 高斯网络 · PGM 互动讲义</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+<nav class="topbar">
+  <div class="topbar-inner">
+    <span class="brand"><a href="index.html" style="color:inherit">← 学习地图</a></span>
+    <span class="crumb">阶段一 · 表示 / 第7章</span>
+  </div>
+</nav>
+
+<div class="wrap">
+
+  <div class="lecture-head">
+    <span class="ch-label">CHAPTER 07 · 表示</span>
+    <h1>高斯网络</h1>
+    <p class="lead">当变量连续、表格列不出来时，图模型换一种语言说话——而且恰好是唯一一种让推理保持解析可算的语言。</p>
+  </div>
+
+  <!-- 本章定位 -->
+  <div class="position-bar">
+    <strong>本章在主线上的位置：</strong>第 3–6 章默认变量离散、CPD 用表格 → <u>连续变量改用高斯分布：联合分布由均值向量 μ 与协方差矩阵 Σ（或其逆 J）完全决定，边缘化与条件化都有闭式解</u> → 第 8 章指数族把高斯与离散分布统一进同一框架。<br>
+    第7章回答主线上的第三个问题：<strong>当变量取值连续（温度、位置、股价）时，如何紧凑表示联合分布，并让推理保持解析可算？</strong>
+    <div class="map-inline">
+      <span class="node">Ch3–6 离散变量（CPD = 表格）</span><span class="arrow">→</span>
+      <span class="node here">Ch7 高斯网络（连续，μ/Σ 与 J）</span><span class="arrow">→</span>
+      <span class="node">Ch8 指数族（高斯是其中一员，统一视角）</span><span class="arrow">→</span>
+      <span class="node">Ch14 混合网络推理（离散×连续混合，本章埋的账）</span>
+    </div>
+  </div>
+
+  <!-- 学习目标 -->
+  <div class="objectives">
+    <h4>🎯 学完本章，合上书你应该能：</h4>
+    <ol>
+      <li>说出为什么表格 CPD 在连续变量上失效，以及高斯分布凭什么成为连续图模型的默认语言（三条封闭性）</li>
+      <li>写出多元高斯的协方差形式与信息形式，并在两者之间换算（J = Σ⁻¹，h = Jμ）</li>
+      <li>给定一个二维高斯的 μ 与 Σ，手算观测一个变量后的条件均值与条件方差</li>
+      <li>手算一个小协方差矩阵的逆，用 J 的零模式读出高斯 MRF 的图结构（Jᵢⱼ = 0 ⟺ 给定其余变量条件独立）</li>
+      <li>从线性高斯 CPD 出发按拓扑序递归手算联合协方差矩阵，并解释高斯 BN 的图独立性为何"可靠但不完备"</li>
+      <li>解释条件线性高斯网络边缘化离散父节点后为何变成高斯混合，以及这为什么是第 14 章的伏笔</li>
+    </ol>
+  </div>
+
+  <div class="lecture">
+
+    <!-- 推导主线 -->
+    <div class="figure">
+      <div class="mermaid">
+flowchart LR
+  A["连续变量<br>表格 CPD 列不出表"] --> B["多元高斯<br>μ 与 Σ 两个参数定全局"]
+  B --> C["信息形式 J=Σ⁻¹<br>图结构 = J 的零模式"]
+  C --> D["高斯 BN 与 MRF<br>边缘化条件化闭式可解"]
+  D --> E["代价：高斯假设强<br>混入离散变量后不再是高斯（第14章的账）"]
+  classDef hot fill:#fbeedd,stroke:#c4651f,stroke-width:2.5px,color:#c4651f;
+  classDef danger fill:#fae9e7,stroke:#b03a2e,stroke-width:2.5px,color:#b03a2e;
+  class C hot;
+  class E danger;
+      </div>
+      <div class="caption">图 7.1 本章推导主线：连续变量的表示困难逼出高斯分布；高斯的两种参数化里，信息形式把图结构编码成矩阵的零模式；闭式推理是红利，红色节点是红利背后的账单。</div>
+    </div>
+
+    <!-- ============ 7.1 ============ -->
+    <h2><span class="sec-no">7.1</span>连续变量逼我们换语言：从列不出的表到多元高斯</h2>
+
+    <p>第 3 到 6 章有一个安静的默认假设：每个变量取<strong>有限个离散值</strong>，CPD 就是一张表——父节点每种组合一行，行内是和为 1 的概率。但很多真实变量是连续的：温度、位置、浓度、股价。给"明天气温"列条件概率表？温度有无穷多个取值，<strong>表有无穷多行</strong>；更糟的是，连续变量取到任何单点的概率都是 0，"P(温度 = 23.5℃)" 这个写法本身就塌了。</p>
+
+    <p>补救办法是换一个数学对象：用<span class="term">概率密度函数</span>（Probability Density Function, PDF）p(x) 代替概率。密度本身不是概率，<strong>概率是密度曲线下某段区间的面积</strong>：P(a ≤ X ≤ b) = ∫<sub>a</sub><sup>b</sup> p(x)dx。单点区间面积为零，这正好解释了"单点概率恒为 0"。</p>
+
+    <p>密度函数的形状有无穷多种候选：均匀、指数、拉普拉斯、t 分布……为什么整章只押注<span class="term">高斯分布</span>（Gaussian Distribution，即正态分布）？三个理由，一个比一个硬：</p>
+
+    <ul>
+      <li><strong>它天然常见</strong>：<span class="term">中心极限定理</span>（Central Limit Theorem）说，大量独立小随机因素之和趋向高斯。测量误差、身高、热噪声——自然界处处是高斯。</li>
+      <li><strong>它参数极少</strong>：n 元<span class="term">多元高斯分布</span>（Multivariate Gaussian Distribution）完全被两样东西决定——均值向量 μ（n 个数）与<span class="term">协方差矩阵</span>（Covariance Matrix）Σ（对称正定，n(n+1)/2 个数）。不需要表，不需要形状参数。</li>
+      <li><strong>它在运算下封闭</strong>：这是决定性的一条。高斯经过<strong>线性变换</strong>仍是高斯；对联合高斯做<strong>边缘化</strong>仍是高斯；做<strong>条件化</strong>（观测一部分变量）仍是高斯。推理的每一步都不离开高斯家族，每步都有闭式公式。</li>
+    </ul>
+
+    <p>多元高斯的协方差形式定义：</p>
+
+    <div class="formula">p(x) = (2π)<sup>−n/2</sup> |Σ|<sup>−1/2</sup> · exp( −½ (x − μ)ᵀ Σ⁻¹ (x − μ) )</div>
+
+    <p>其中 |Σ| 是 Σ 的行列式。看形状：指数部分是一个<strong>二次型</strong>，等高线（密度相等的点）是椭圆；μ 决定椭圆中心，Σ 决定椭圆的轴向与胖瘦。一维时退化成熟悉的钟形曲线 N(μ, σ²)。</p>
+
+    <h3>封闭性不是口号：条件化的闭式公式与一次完整手算</h3>
+
+    <p>把变量分成两组：要查询的 X<sub>A</sub> 与观测到的 X<sub>B</sub>。联合高斯的条件化定理说，观测 X<sub>B</sub> = x<sub>B</sub> 之后，X<sub>A</sub> 仍是高斯，且：</p>
+
+    <div class="formula">μ<sub>A|B</sub> = μ<sub>A</sub> + Σ<sub>AB</sub> Σ<sub>BB</sub>⁻¹ (x<sub>B</sub> − μ<sub>B</sub>)<br>
+    Σ<sub>A|B</sub> = Σ<sub>AA</sub> − Σ<sub>AB</sub> Σ<sub>BB</sub>⁻¹ Σ<sub>BA</sub></div>
+
+    <p>其中 Σ<sub>AB</sub> 是 Σ 中"A 行、B 列"的子块。这就是高斯网络推理的全部秘密：<strong>不用枚举、不用数值积分，套公式代入数字即可</strong>。下面完整算一遍。</p>
+
+    <h3>例 1：二维高斯的条件化手算</h3>
+    <p>设两个连续变量（比如某房间的真实温度 X₁ 与传感器读数 X₂）服从联合高斯：</p>
+
+    <div class="formula">μ = ( 1 , 0 )，&nbsp;&nbsp; Σ = <span class="var">[</span> 2 &nbsp; 1 ; &nbsp; 1 &nbsp; 2 <span class="var">]</span></div>
+
+    <p>即 Var(X₁) = 2，Var(X₂) = 2，Cov(X₁,X₂) = 1（相关系数 ρ = 1/√(2·2) = 0.5）。现在观测到传感器读数 <strong>X₂ = 3</strong>，问真实温度的后验分布。</p>
+
+    <p><strong>第一步：认出各子块</strong>。A = {1}，B = {2}。μ<sub>A</sub> = 1，μ<sub>B</sub> = 0；Σ<sub>AA</sub> = 2，Σ<sub>AB</sub> = 1，Σ<sub>BB</sub> = 2。</p>
+
+    <p><strong>第二步：算条件均值</strong>。Σ<sub>BB</sub>⁻¹ = 1/2（标量求逆就是取倒数）：</p>
+
+    <div class="formula">μ<sub>1|2</sub> = 1 + 1 · <span class="frac"><span class="num-part">1</span><span class="den-part">2</span></span> · (3 − 0) = 1 + 1.5 = <strong>2.5</strong></div>
+
+    <p><strong>第三步：算条件方差</strong>：</p>
+
+    <div class="formula">Σ<sub>1|2</sub> = 2 − 1 · <span class="frac"><span class="num-part">1</span><span class="den-part">2</span></span> · 1 = 2 − 0.5 = <strong>1.5</strong></div>
+
+    <p>结论：观测 X₂ = 3 后，X₁ ~ N(2.5, 1.5)。读数高于预期（3 比均值 0 高），把温度的估计从 1 拉高到 2.5——拉高幅度由协方差之比 Σ₁₂/Σ₂₂ = 0.5 控制，这个比值正是"用 X₂ 线性预测 X₁"的回归系数。不确定性从 2 收缩到 1.5：<strong>观测永远削减（或保持）方差</strong>，且条件方差与观测值无关，只取决于 Σ——这是高斯特有的性质。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 直觉</span>
+      <p>联合高斯的等高线是椭圆。观测 X₂ = 3 就是拿一条竖直线去切这个椭圆——切出来的截面仍是一条（一维）钟形曲线，只是中心偏移、宽度变窄。条件化 = 切椭圆，这就是全部几何内容。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>"连续而已，把区间切成小格子离散化不就行了？"——精度每提高 10 倍，每个变量的格子数乘 10，n 个变量就是 10ⁿ 倍的表，第 9 章会精确看到这张表如何吃掉所有计算。高斯闭式解的意义正是<strong>绕开离散化</strong>。反过来也要记住：高斯单峰、对称、轻尾，多峰或重尾的真实数据它表示不了——这个局限会在 7.4 节以另一种方式回来找我们。</p>
+    </div>
+
+    <!-- 回忆卡片 7.1 -->
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 7.1-1</div>
+              <div class="q-text">为什么表格 CPD 无法用于连续变量？概率密度和概率是什么关系？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              连续取值无穷多，表需要无穷多行，且单点概率恒为 0。密度 p(x) 不是概率；概率是密度曲线下区间的面积 P(a≤X≤b) = ∫p(x)dx。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 7.1-2</div>
+              <div class="q-text">高斯分布的哪三条封闭性让推理保持解析可算？分布由哪两个参数完全决定？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              线性变换封闭、边缘化封闭、条件化封闭——三种运算的结果仍是高斯。整个分布由均值向量 μ 与协方差矩阵 Σ 完全决定。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 7.2 ============ -->
+    <h2><span class="sec-no">7.2</span>信息形式：图的结构藏在哪个矩阵里</h2>
+
+    <p>7.1 节用 (μ, Σ) 表示高斯，很直观。但如果给你一张稀疏的图——比如链 X—Y—Z——再问"Σ 的哪个元素反映这条链的结构"，答案会让人失望：<strong>Σ 通常是稠密的</strong>。X 与 Z 之间明明没有边，Cov(X,Z) 却不是 0，因为相关性会沿路径 X—Y—Z 传过去。想在矩阵里"看见"图，得换一个参数化。</p>
+
+    <p>把密度公式里的二次型展开：−½(x−μ)ᵀΣ⁻¹(x−μ) = −½xᵀΣ⁻¹x + (Σ⁻¹μ)ᵀx − ½μᵀΣ⁻¹μ。最后一项是常数，吸进归一化系数；前两项给出<span class="term">信息形式</span>（Information Form）：</p>
+
+    <div class="formula">p(x) ∝ exp( −½ xᵀ J x + hᵀ x )</div>
+
+    <p>其中 <span class="term">精度矩阵</span>（Precision Matrix）<strong>J = Σ⁻¹</strong>——也叫<span class="term">信息矩阵</span>（Information Matrix）；<span class="term">信息向量</span>（Information Vector）<strong>h = Jμ</strong>。两个参数化等价：(μ, Σ) ⟺ (h, J)，换算只需一次矩阵求逆。</p>
+
+    <div class="box insight">
+      <span class="box-tag">✅ 高斯马尔可夫随机场的核心定理</span>
+      <p>对联合高斯分布：<strong>Jᵢⱼ = 0 ⟺ Xᵢ ⊥ Xⱼ | 其余所有变量</strong>。也就是说，J 的零元素精确对应<span class="term">高斯马尔可夫随机场</span>（Gaussian Markov Random Field, Gaussian MRF）中<strong>不存在的边</strong>：J 的零模式就是图的结构。严格地说，−Jᵢⱼ/Jᵢᵢ 是"用其余所有变量线性回归 Xᵢ 时 Xⱼ 的系数"——它为 0，说明给定其余变量后 Xⱼ 对 Xᵢ 毫无额外信息。</p>
+    </div>
+
+    <p>对比鲜明：<strong>Σ 是稠密的，J 是稀疏的</strong>。相关性能沿图传播，所以协方差处处非零；条件独立却会在精度矩阵上留下精确的零。想看图，别看 Σ，看 J。</p>
+
+    <h3>例 2：三变量链——手算 Σ 的逆，亲眼看到零出现在哪</h3>
+
+    <p>考虑一条三变量高斯链 X—Y—Z（7.3 节会讲它的协方差矩阵怎么从 CPD 算出来，现在先把结果当给定）：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>Σ</th><th>X</th><th>Y</th><th>Z</th></tr>
+        <tr><th>X</th><td>1</td><td>1</td><td>1</td></tr>
+        <tr><th>Y</th><td>1</td><td>2</td><td>2</td></tr>
+        <tr><th>Z</th><td>1</td><td>2</td><td>3</td></tr>
+      </table>
+    </div>
+
+    <p>注意 Σ 是<strong>满</strong>的：Σ₁₃ = 1 ≠ 0，尽管 X 与 Z 之间没有边。现在按伴随矩阵法求逆 J = Σ⁻¹，全程不跳步。</p>
+
+    <p><strong>第一步：算行列式</strong>，按第一行展开：</p>
+
+    <div class="formula">det(Σ) = 1·(2·3 − 2·2) − 1·(1·3 − 2·1) + 1·(1·2 − 2·1) = 2 − 1 + 0 = <strong>1</strong></div>
+
+    <p><strong>第二步：算全部 9 个代数余子式</strong> Cᵢⱼ = (−1)ⁱ⁺ʲ·Mᵢⱼ（Mᵢⱼ 是删去第 i 行第 j 列后的 2×2 行列式）：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>Cᵢⱼ</th><th>计算</th><th>值</th></tr>
+        <tr><td>C₁₁</td><td>+(2·3 − 2·2)</td><td>2</td></tr>
+        <tr><td>C₁₂</td><td>−(1·3 − 2·1)</td><td>−1</td></tr>
+        <tr><td>C₁₃</td><td>+(1·2 − 2·1)</td><td><strong>0</strong></td></tr>
+        <tr><td>C₂₁</td><td>−(1·3 − 1·2)</td><td>−1</td></tr>
+        <tr><td>C₂₂</td><td>+(1·3 − 1·1)</td><td>2</td></tr>
+        <tr><td>C₂₃</td><td>−(1·2 − 1·1)</td><td>−1</td></tr>
+        <tr><td>C₃₁</td><td>+(1·2 − 1·2)</td><td><strong>0</strong></td></tr>
+        <tr><td>C₃₂</td><td>−(1·2 − 1·1)</td><td>−1</td></tr>
+        <tr><td>C₃₃</td><td>+(1·2 − 1·1)</td><td>1</td></tr>
+      </table>
+    </div>
+
+    <p><strong>第三步：J = 伴随矩阵 / 行列式</strong>。伴随矩阵是余子式矩阵的转置（这里碰巧对称，转置不变），除以 det = 1：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>J = Σ⁻¹</th><th>X</th><th>Y</th><th>Z</th></tr>
+        <tr><th>X</th><td>2</td><td>−1</td><td><strong>0</strong></td></tr>
+        <tr><th>Y</th><td>−1</td><td>2</td><td>−1</td></tr>
+        <tr><th>Z</th><td><strong>0</strong></td><td>−1</td><td>1</td></tr>
+      </table>
+    </div>
+
+    <p><strong>第四步：验证与读图</strong>。抽查 JΣ 应得单位矩阵：J 第一行 × Σ 第一列 = 2·1 + (−1)·1 + 0·1 = 1 ✓；J 第一行 × Σ 第三列 = 2·1 + (−1)·2 + 0·3 = 0 ✓。再看 J 的零模式：<strong>J₁₃ = J₃₁ = 0，恰好落在 X—Z 这对不相邻的节点上</strong>。对照定理：X ⊥ Z | Y——这正是链 X—Y—Z 唯一的条件独立性。图的结构，一分不差地刻在 J 的零里。</p>
+
+    <div class="figure">
+      <div class="mermaid">
+flowchart LR
+  X["X"] --- Y["Y"] --- Z["Z"]
+  classDef hot fill:#fbeedd,stroke:#c4651f,stroke-width:2.5px,color:#c4651f;
+  class X,Z hot;
+      </div>
+      <div class="caption">图 7.2 三变量链：Σ 稠密（Σ₁₃ = 1），J 三对角（J₁₃ = 0）。橙色的 X 与 Z 之间没有边——这个"没有"只在 J 里看得见。非零的 Jᵢⱼ 恰好标出图中的每条边。</div>
+    </div>
+
+    <div class="box idea">
+      <span class="box-tag">💡 为什么这件事值得激动</span>
+      <p>第 4 章里，无向图的结构要靠图分离去读；在高斯世界，图结构直接等于一个矩阵的稀疏模式。这带来两个工程红利：<strong>存储</strong>——稀疏图只存 J 的非零元；<strong>计算</strong>——高斯推理本质是解线性方程组 J·(解) = h，稀疏矩阵有专门的快速算法。顺便，信息形式下做条件化也更省：观测 X<sub>B</sub> = x<sub>B</sub> 后，X<sub>A</sub> 的信息矩阵就是 J<sub>AA</sub>（直接取子块），信息向量变为 h<sub>A</sub> − J<sub>AB</sub>x<sub>B</sub>，连逆都不用求——与协方差形式里的 Σ<sub>BB</sub>⁻¹ 对照，各有千秋。</p>
+    </div>
+
+    <h3>例 2′：对照手算——同一个观测，Σ 形式与信息形式各算一遍</h3>
+
+    <p>上面那句"信息形式下条件化就是取子块"，字面好懂、机制却容易含糊：为什么不用求逆？算出来的数和 7.1 节真的一样吗？用<strong>例 1 的同一个分布、同一个观测</strong>两条路径各走一遍，数字对上了才算懂。</p>
+
+    <p><strong>设定（同例 1）</strong>：μ = (1, 0)，Σ = [ 2 1 ; 1 2 ]，观测 X₂ = 3，求 X₁ 的条件分布。</p>
+
+    <p><strong>路径一（协方差形式，例 1 已算）</strong>：需要求 Σ<sub>BB</sub>⁻¹ = 1/2，得 μ₁|₂ = 1 + 1·(1/2)·3 = <strong>2.5</strong>，Σ₁|₂ = 2 − 1·(1/2)·1 = <strong>1.5</strong>。求逆发生在"观测变量"那一侧。</p>
+
+    <p><strong>路径二（信息形式）</strong>，分三步：</p>
+    <p><strong>第一步：换成 (J, h)</strong>。det(Σ) = 2·2 − 1·1 = 3，故 J = Σ⁻¹ = (1/3)·[ 2 −1 ; −1 2 ]；h = Jμ = (1/3)·(2·1 + (−1)·0, −1·1 + 2·0) = (2/3, −1/3)。</p>
+    <p><strong>第二步：条件化 = 取子块 + 修正 h</strong>。规则：观测 X<sub>B</sub> = x<sub>B</sub> 后，X<sub>A</sub> 的条件精度 <strong>J<sub>A|B</sub> = J<sub>AA</sub></strong>（直接取子块，不求逆），条件信息向量 <strong>h<sub>A|B</sub> = h<sub>A</sub> − J<sub>AB</sub>x<sub>B</sub></strong>。代入 A = {1}、B = {2}：</p>
+
+    <div class="formula">J<sub>1|2</sub> = J₁₁ = <span class="frac"><span class="num-part">2</span><span class="den-part">3</span></span>，&nbsp;&nbsp; h<sub>1|2</sub> = h₁ − J₁₂·x₂ = <span class="frac"><span class="num-part">2</span><span class="den-part">3</span></span> − (−<span class="frac"><span class="num-part">1</span><span class="den-part">3</span></span>)·3 = <span class="frac"><span class="num-part">2</span><span class="den-part">3</span></span> + 1 = <span class="frac"><span class="num-part">5</span><span class="den-part">3</span></span></div>
+
+    <p><strong>第三步：换回 (μ, Σ) 读数</strong>。方差 = 精度的倒数：Σ₁|₂ = 1/(2/3) = <strong>1.5</strong> ✓；均值 = J<sub>1|2</sub>⁻¹·h<sub>1|2</sub> = (3/2)·(5/3) = <strong>2.5</strong> ✓。与路径一分毫不差。</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th></th><th>路径一：Σ 形式</th><th>路径二：信息形式</th></tr>
+        <tr><td>条件化的动作</td><td>对观测侧子块<strong>求逆</strong> Σ<sub>BB</sub>⁻¹</td><td>对查询侧子块<strong>直接取</strong> J<sub>AA</sub>，h 减去 J<sub>AB</sub>x<sub>B</sub></td></tr>
+        <tr><td>条件方差</td><td>2 − 0.5 = <strong>1.5</strong></td><td>1/(2/3) = <strong>1.5</strong></td></tr>
+        <tr><td>条件均值</td><td>1 + 1.5 = <strong>2.5</strong></td><td>(3/2)·(5/3) = <strong>2.5</strong></td></tr>
+      </table>
+    </div>
+
+    <div class="box idea">
+      <span class="box-tag">💡 机制一句话</span>
+      <p>信息形式下 p(x) ∝ exp(−½xᵀJx + hᵀx)。"观测 X₂ = 3"就是把这个变量<strong>钉成常数</strong>：二次型 −½xᵀJx 展开后，只含 x₂ 的项整个变成常数（吸进归一化系数），含 x₁x₂ 的交叉项 −J₁₂x₂·x₁ 则并入 x₁ 的线性项——所以 J<sub>AA</sub> 原样保留，h<sub>A</sub> 只修正一个 J<sub>AB</sub>x<sub>B</sub>。<strong>观测 = 代入一个数，不是求一个逆</strong>。观测越多（B 越大），Σ 形式的逆越贵，信息形式的优势越实在。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 本章最容易记反的一件事</span>
+      <p>"矩阵的零元素 ⟺ 图中无边"说的是 <strong>J = Σ⁻¹</strong>，不是 Σ！Σ₁₃ ≠ 0 恰恰因为相关性会传播。口诀：<strong>协方差看（无条件）相关，精度看（条件）独立</strong>。考试和论文里记反这两个矩阵，是本章出错率最高的地方。</p>
+    </div>
+
+    <!-- 回忆卡片 7.2 -->
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 7.2-1</div>
+              <div class="q-text">信息形式的两个参数 J 和 h 分别等于什么？Jᵢⱼ = 0 在图上意味着什么？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              J = Σ⁻¹（精度/信息矩阵），h = Jμ。Jᵢⱼ = 0 ⟺ Xᵢ ⊥ Xⱼ | 其余所有变量 ⟺ 图中 i、j 之间没有边。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 7.2-2</div>
+              <div class="q-text">链 X—Y—Z 的 Σ₁₃ = 1 但 J₁₃ = 0，这两个事实矛盾吗？各自说明什么？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              不矛盾。Σ₁₃ ≠ 0 说 X 与 Z （无条件）相关——相关性沿路径传播；J₁₃ = 0 说给定 Y 之后二者条件独立。协方差看相关，精度看条件独立。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 7.3 ============ -->
+    <h2><span class="sec-no">7.3</span>高斯贝叶斯网络：线性高斯 CPD，与一张读不全的图</h2>
+
+    <p>7.2 节是无向视角。有向世界（第 3 章的因果方向）怎么处理连续变量？答案是<span class="term">高斯贝叶斯网络</span>（Gaussian Bayesian Network）：每个节点的 CPD 是父节点的线性函数加一个独立高斯噪声——<span class="term">线性高斯模型</span>（Linear Gaussian Model）：</p>
+
+    <div class="formula">Xᵢ = β₀ + ∑<sub>j ∈ Pa(i)</sub> βⱼ Xⱼ + εᵢ，&nbsp;&nbsp; εᵢ ~ N(0, σᵢ²)</div>
+
+    <p>注意 CPD 的形式：Xᵢ 给定父节点后是均值为 β₀ + Σβⱼxⱼ、方差为 σᵢ² 的高斯。由于高斯的<strong>线性组合</strong>加上独立高斯噪声仍是高斯，按拓扑序逐节点代入可得一个优美结论：</p>
+
+    <div class="box insight">
+      <span class="box-tag">✅ 定理</span>
+      <p>若每个节点的 CPD 都是线性高斯，则全体变量的<strong>联合分布必为多元高斯</strong>。于是 7.1、7.2 节的一切（条件化闭式解、J 的稀疏性）全部免费继承。</p>
+    </div>
+
+    <p>联合高斯的 μ 和 Σ 不必积分，可以按<strong>拓扑序递归</strong>算出来（父节点永远先于子节点被处理）：</p>
+
+    <div class="formula">E[Xᵢ] = β₀ + ∑<sub>j</sub> βⱼ E[Xⱼ]<br>
+    Cov(Xᵢ, Xₖ) = ∑<sub>j</sub> βⱼ Cov(Xⱼ, Xₖ) &nbsp;（k 排在 i 之前）<br>
+    Var(Xᵢ) = ∑<sub>j</sub> ∑<sub>l</sub> βⱼ β<sub>l</sub> Cov(Xⱼ, X<sub>l</sub>) + σᵢ²</div>
+
+    <h3>例 3：两节点高斯 BN——递归手算 Σ 的全部四个元素</h3>
+
+    <div class="figure">
+      <div class="mermaid">
+flowchart LR
+  X["X = ε₁，ε₁~N(0，1)"] --> Y["Y = 2X + 3 + ε₂，ε₂~N(0，1)"]
+      </div>
+      <div class="caption">图 7.3 两节点线性高斯 BN：X 是外生噪声，Y 是 X 的线性函数加独立噪声。</div>
+    </div>
+
+    <p><strong>第一步：均值</strong>（拓扑序 X 先于 Y）。E[X] = E[ε₁] = <strong>0</strong>。E[Y] = 2·E[X] + 3 + E[ε₂] = 0 + 3 + 0 = <strong>3</strong>。</p>
+
+    <p><strong>第二步：Var(X)</strong>。X = ε₁，所以 Var(X) = <strong>1</strong>。</p>
+
+    <p><strong>第三步：Cov(X, Y)</strong>。把 Y 的定义代入，用协方差的双线性性质，常数 3 与独立的 ε₂ 都不贡献：</p>
+
+    <div class="formula">Cov(X, Y) = Cov(X, 2X + 3 + ε₂) = 2·Cov(X, X) = 2·1 = <strong>2</strong></div>
+
+    <p><strong>第四步：Var(Y)</strong>。独立和的方差 = 方差之和（系数要平方）：</p>
+
+    <div class="formula">Var(Y) = 2²·Var(X) + Var(ε₂) = 4·1 + 1 = <strong>5</strong></div>
+
+    <p>汇总：μ = (0, 3)，Σ 的四个元素为 Σ₁₁ = 1、Σ₁₂ = Σ₂₁ = 2、Σ₂₂ = 5，行列式 = 1·5 − 2·2 = 1 &gt; 0，确实是合法协方差矩阵。X 与 Y 的相关系数 ρ = 2/√5 ≈ 0.89——强相关，来自系数 2 与较小的噪声。</p>
+
+    <h3>反直觉点：这张图的独立性"可靠但不完备"</h3>
+
+    <p>第 3 章我们习惯了"d-分离读出独立性"。在高斯 BN 上，这件事必须说得更精确：</p>
+
+    <ul>
+      <li><strong>可靠</strong>（sound）：d-分离判出的独立性，在分布里一定成立。图说独立，必真独立。</li>
+      <li><strong>不完备</strong>（incomplete）：分布里可能藏着图<strong>读不出</strong>的独立性。图说相关，实际可能独立。</li>
+    </ul>
+
+    <p>看一个精确的反例。菱形结构：X 经两条路径影响 W——X→Y→W 与 X→Z→W。</p>
+
+    <div class="figure">
+      <div class="mermaid">
+flowchart TB
+  X["X ~ N(0，1)"] -->|"系数 1"| Y["Y = X + εy"]
+  X -->|"系数 1"| Z["Z = X + εz"]
+  Y -->|"系数 1"| W["W = Y − Z + εw"]
+  Z -->|"系数 −1"| W
+  classDef danger fill:#fae9e7,stroke:#b03a2e,stroke-width:2.5px,color:#b03a2e;
+  class W danger;
+      </div>
+      <div class="caption">图 7.4 忠实性失效：图上 X 经两条有向路径连通 W（d-分离判相关），但两条路径的系数恰好一正一负，效应在 W 处精确抵消——分布里 X 与 W 实际独立。</div>
+    </div>
+
+    <p>手算协方差验证（εy、εz、εw 都是独立 N(0,1)）：Cov(X, Y) = Var(X) = 1，Cov(X, Z) = Var(X) = 1，于是</p>
+
+    <div class="formula">Cov(X, W) = Cov(X, Y − Z + εw) = Cov(X,Y) − Cov(X,Z) + 0 = 1 − 1 = <strong>0</strong></div>
+
+    <p>而高斯分布有个离散分布没有的好性质：<strong>不相关 ⟺ 独立</strong>（一般分布只有"独立 ⇒ 不相关"）。Cov(X, W) = 0 直接给出 X ⊥ W。但看图：X→Y→W 与 X→Z→W 都是活路径，d-分离判它们相关。<strong>图漏报了一条真实存在的独立性。</strong></p>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 忠实性失效：高斯网络与离散 BN 的重要差别</span>
+      <p>理论上离散 BN 也可能因参数巧合漏报独立性，但高斯情形格外突出：这里的"相关"完全由协方差一个数决定，两条路径的效应在协方差上<strong>精确相加</strong>，一正一负就归零——控制系统里的对消、两条等幅反相的物理路径，都是工程上真实会撞见的情形，不是测度零的怪胎。结论：在高斯 BN 上读图，只能把 d-分离读出的独立性当作分布独立性的<strong>子集</strong>；要相信"相关"，必须回到参数本身。这个性质叫<span class="term">忠实性</span>（Faithfulness）失效——图不再忠实地反映分布的全部独立性。</p>
+    </div>
+
+    <p>最后一句带过的远景：把线性高斯链沿时间展开（X<sub>t+1</sub> = AX<sub>t</sub> + 噪声，观测 O<sub>t</sub> = CX<sub>t</sub> + 噪声），就是<span class="term">线性动态系统</span>（Linear Dynamical System, LDS）；在它上面做高斯推理——预测步推进 (μ, Σ)、更新步做条件化——就是著名的<span class="term">卡尔曼滤波</span>（Kalman Filter）。细节留给第 15 章（动态网络中的推理）。</p>
+
+    <!-- 回忆卡片 7.3 -->
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 7.3-1</div>
+              <div class="q-text">线性高斯 CPD 长什么样？为什么它组装出的联合分布必为高斯？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              Xᵢ = β₀ + ΣβⱼXⱼ + εᵢ，εᵢ 独立 N(0, σᵢ²)。高斯的线性组合加独立高斯噪声仍是高斯；按拓扑序逐节点代入，联合分布必为多元高斯。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 7.3-2</div>
+              <div class="q-text">"高斯 BN 的图独立性可靠但不完备"是什么意思？给一个失效场景。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              d-分离读出的独立性必为真（可靠），但分布可能多出图读不出的独立性（不完备）。例：X 经系数 +1 与 −1 两条路径到 W，Cov(X,W) = 1−1 = 0，高斯里即 X ⊥ W，但图上两条路径都活着。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 7.4 ============ -->
+    <h2><span class="sec-no">7.4</span>条件线性高斯：通往混合网络的门（与一笔留给第 14 章的账）</h2>
+
+    <p>前三节的世界很干净：全员连续、全员高斯。现实往往混杂：连续变量的行为<strong>被一个离散开关决定</strong>——传感器正常时读数紧贴真值，故障时漂移；经济平稳期股价小幅波动，危机期剧烈震荡。让离散变量只做连续变量的<strong>父节点</strong>（不反向），且每个离散取值决定一套线性高斯参数，这就是<span class="term">条件线性高斯</span>（Conditional Linear Gaussian, CLG）：</p>
+
+    <div class="formula">p(Xᵢ | Pa<sub>d</sub> = d, Pa<sub>c</sub> = x) = N( β₀(d) + ∑<sub>j</sub> βⱼ(d) xⱼ ; σᵢ²(d) )</div>
+
+    <p>即：离散父节点选定"工况"（regime），同一工况下，连续父节点以线性方式进入。例如传感器：D = 正常时 Y = X + ε（σ = 0.1）；D = 故障时 Y = 0.5X + 10 + ε′（σ = 2）。</p>
+
+    <div class="figure">
+      <div class="mermaid">
+flowchart LR
+  D["D 离散：传感器工况"] --> Y["Y 连续：读数"]
+  X["X 连续：真实温度"] --> Y
+  classDef hot fill:#fbeedd,stroke:#c4651f,stroke-width:2.5px,color:#c4651f;
+  class D hot;
+      </div>
+      <div class="caption">图 7.5 CLG 的骨架：离散父 D 选择哪套线性高斯参数生效，连续父 X 线性进入 Y。离散节点只允许做父节点——这是 CLG 能维持可分析性的底线。</div>
+    </div>
+
+    <p>表示很优雅，推理却撞上一堵墙。问"Y 的边际分布是什么"，就得把离散父 D 边缘化掉：</p>
+
+    <div class="formula">p(Y) = ∑<sub>d</sub> P(d) · N( μ(d), σ²(d) )</div>
+
+    <p>这是若干座钟形曲线的加权叠加——<span class="term">高斯混合</span>（Mixture of Gaussians）。<strong>它不再是高斯</strong>：可能多峰、可能偏斜。7.1 节赖以生存的三条封闭性里，"边缘化封闭"在 CLG 中失效了。更糟的是爆炸速度：每多一个二值离散变量，混合分量数翻倍；n 个二值离散变量就是 2ⁿ 个分量。10 个就是 1024 项，每项还要带着自己的 μ 和 Σ 参与后续推理。</p>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 本章买下的账单</span>
+      <p>纯高斯网络推理是闭式代数；一旦混入离散父节点，精确推理要追踪随离散变量数<strong>指数增长</strong>的高斯分量，很快不可行。这笔账本章不还——它正是<strong>第 14 章"混合网络中的推理"</strong>要对付的核心难题（近似、剪枝、消息近似都是为此而生）。记住这条线索：CLG 表示容易、推理难，难在边缘化离散变量后高斯性丢失。</p>
+    </div>
+
+    <div class="box idea">
+      <span class="box-tag">💡 回头看整章</span>
+      <p>高斯假设强，却换来了全书唯一一处"推理是纯线性代数"的天堂；一旦离散变量掺进来，天堂关门，混合爆炸。第 8 章会告诉你高斯其实是指数族的一员（与离散分布同一框架），第 14 章则负责收拾混合网络的残局。</p>
+    </div>
+
+    <!-- 回忆卡片 7.4 -->
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 7.4-1</div>
+              <div class="q-text">CLG 中离散变量与连续变量的角色分工是什么？为什么不许连续变量做离散变量的父节点？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              离散父节点选工况，连续父节点线性进入；每个离散取值决定一套线性高斯参数。若允许连续父→离散子，离散变量的条件分布无法用表格/高斯干净表达，模型立即失去可分析性。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 7.4-2</div>
+              <div class="q-text">为什么混合网络推理难？混合分量数随什么以什么速度增长？这指向哪一章？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              边缘化离散父后，连续变量变成高斯混合，不再是高斯，闭式推理失效；分量数随离散变量数指数增长（n 个二值离散变量 → 2ⁿ 个分量）。这是第 14 章的核心问题。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 概念卡 ============ -->
+    <h2><span class="sec-no">🃏</span>概念卡：本章概念的一分钟画像</h2>
+    <p>翻面前先自问：这个概念我能用一句话讲清楚吗？</p>
+    <div class="flip-grid">
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 1</div>
+            <div class="q-text">多元高斯分布（Multivariate Gaussian）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">密度 p(x) ∝ exp(−½(x−μ)ᵀΣ⁻¹(x−μ))，由均值向量 μ 与对称正定协方差矩阵 Σ 完全决定的连续分布。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">表格 CPD 无法表示连续变量；高斯用 O(n²) 个参数装下整个 n 维联合分布。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">一个 n 维椭圆云：μ 是中心，Σ 决定各方向的胖瘦与倾斜。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为它万能——单峰、对称、轻尾，多峰或重尾数据它表示不了。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">一切连续变量 PGM 的默认件；Ch8 证明它是指数族一员，Ch14/15 都建立在它上面。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 2</div>
+            <div class="q-text">精度矩阵 / 信息矩阵（Precision / Information Matrix）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">J = Σ⁻¹，信息形式 p(x) ∝ exp(−½xᵀJx + hᵀx) 中的矩阵参数，h = Jμ。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">Σ 稠密看不出图结构；J 的零模式精确等于高斯 MRF 的图。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">Jᵢⱼ 是"给定其余变量后 i 与 j 还剩多少直接联系"的计量器，零就是没边。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">拿 Σ 的零元素去读图——Σᵢⱼ=0 只说明无条件不相关，不说明条件独立。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">稀疏存储与稀疏线性代数推理；Ch14 信息滤波、SLAM 与 Ch20 高斯图模型学习。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 3</div>
+            <div class="q-text">高斯马尔可夫随机场（Gaussian MRF）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">联合高斯 + 无向图：Jᵢⱼ = 0 ⟺ Xᵢ ⊥ Xⱼ | 其余变量 ⟺ 图中无边。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">把第 4 章的马尔可夫网络搬到连续域，图结构变成矩阵稀疏性。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">图的每条边对应 J 的一个非零元；图越稀疏，J 越稀疏。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为配分函数难算——高斯的归一化常数有闭式（含 |J|），不像离散 MRF 要指数求和。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">空间统计、图像、高斯过程回归；Ch20 学习稀疏 J（图lasso 的思想源头）。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 4</div>
+            <div class="q-text">线性高斯 CPD（Linear Gaussian CPD）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">Xᵢ = β₀ + ΣⱼβⱼXⱼ + εᵢ，εᵢ ~ N(0, σᵢ²)：父节点线性组合 + 独立高斯噪声。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">给有向图上的连续变量一个局部参数化，且保证联合分布仍是高斯。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">子节点 = 父节点的加权和 + 一阵噪声风；风彼此独立。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为 σᵢ² 依赖父节点取值——线性高斯里方差是常数（同方差），依赖方差就超出了这个模型类。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">传感器模型、计量经济联立方程；Ch15 的 LDS/卡尔曼滤波就是它的时序版。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 5</div>
+            <div class="q-text">忠实性失效（Faithfulness Violation）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">分布中存在图结构读不出的独立性；高斯 BN 的 d-分离因此可靠但不完备。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">不是工具，是警告：提醒你"图上连通 ≠ 分布相关"，别把图读过头。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">两条路径一正一负精确抵消，像两根等幅反相的绳子同时拉，节点纹丝不动。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为 d-分离判出的"相关"一定相关——那只对"几乎所有参数"成立，特殊参数（对消）会失效。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">结构学习（Ch18）的理论前提分析；解读因果推断（Ch21）中"有边无效应"的怪象。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 6</div>
+            <div class="q-text">条件线性高斯（Conditional Linear Gaussian, CLG）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">混合网络：离散父节点选 regime，同一 regime 下连续变量按线性高斯 CPD 生成。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">让"工况/状态"这类离散开关与连续测量共存于一个模型。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">一台多档位机器：档位（离散）决定当前用哪套线性高斯说明书。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为推理同样闭式——边缘化离散父后得到高斯混合，分量随离散变量数指数爆炸。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">故障诊断、regime-switching 金融模型；其推理难题正是 Ch14 的主角。</span></div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- ============ 分层习题 ============ -->
+    <h2><span class="sec-no">📝</span>分层习题</h2>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>判断对错：<strong>在高斯马尔可夫随机场中，Σᵢⱼ = 0 当且仅当变量 i 与 j 之间没有边。</strong>说明理由。</div>
+      <details>
+        <summary>提示</summary>
+        <p>回忆例 2：链 X—Y—Z 里 X 和 Z 没有边，Σ₁₃ 等于多少？哪个矩阵的零元素才对应无边？</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">错。对应"无边"的是精度矩阵 J = Σ⁻¹ 的零元素：Jᵢⱼ = 0 ⟺ Xᵢ ⊥ Xⱼ | 其余变量 ⟺ 无边。Σ 一般是稠密的，因为相关性沿路径传播——例 2 中 X、Z 无边但 Σ₁₃ = 1。口诀：协方差看相关，精度看条件独立。把两个矩阵的角色记反，是本章最高频的错误。</div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>判断对错：<strong>"两个变量协方差为 0 却不能判独立"——这句话对高斯分布成立。</strong>说明理由。</div>
+      <details>
+        <summary>提示</summary>
+        <p>想想 7.3 节我们凭什么从 Cov(X, W) = 0 直接断言 X ⊥ W？这个推理对一般分布成立吗？</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">错。对<strong>联合高斯</strong>分布，不相关 ⟺ 独立：协方差为 0 时密度可分解为两个独立高斯的乘积。这是一般分布没有的特权——一般分布只有"独立 ⇒ 不相关"，反向不成立（如 Y = X²，X 对称分布时 Cov(X,Y)=0 但显然不独立）。所以这句话恰好说反了：高斯里协方差为 0 <strong>就能</strong>判独立。</div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>设 (X₁, X₂) 服从联合高斯，μ = (0, 0)，Σ 的元素为 Σ₁₁ = 9、Σ₁₂ = 3、Σ₂₂ = 4。观测到 X₂ = 8，手算 X₁ 的条件均值与条件方差。</div>
+      <details>
+        <summary>提示</summary>
+        <p>套条件化公式：μ₁|₂ = μ₁ + Σ₁₂·Σ₂₂⁻¹·(x₂ − μ₂)；Σ₁|₂ = Σ₁₁ − Σ₁₂²/Σ₂₂。注意 Σ₂₂ 是标量，求逆即取倒数。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p><strong>第一步</strong>：子块——μ_A = 0，μ_B = 0，Σ_AB = 3，Σ_BB = 4，Σ_AA = 9；Σ_BB⁻¹ = 1/4。</p>
+          <p><strong>第二步</strong>：条件均值 μ₁|₂ = 0 + 3·(1/4)·(8 − 0) = 3·2 = <strong>6</strong>。回归系数 Σ₁₂/Σ₂₂ = 3/4，观测高出均值 8 个单位，估计上调 (3/4)×8 = 6。</p>
+          <p><strong>第三步</strong>：条件方差 Σ₁|₂ = 9 − 3·(1/4)·3 = 9 − 9/4 = 27/4 = <strong>6.75</strong>。</p>
+          <p>验证合理性：6.75 &lt; 9，观测使不确定性下降 ✓；且条件方差与观测值 8 无关（公式里只有 Σ），符合高斯特性。结论：X₁ | X₂=8 ~ N(6, 6.75)。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>高斯贝叶斯网络：X = ε₁，Var(ε₁) = 2；Y = −3X + 1 + ε₂，Var(ε₂) = 4，两个噪声独立、均值都是 0。按拓扑序递归手算联合分布的均值向量与协方差矩阵的全部元素。</div>
+      <details>
+        <summary>提示</summary>
+        <p>先算 E[X]、Var(X)，再用双线性算 Cov(X,Y)（常数与独立噪声不贡献），最后用"独立和的方差可加（系数平方）"算 Var(Y)。别忘了验证行列式为正。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p><strong>均值</strong>：E[X] = 0；E[Y] = −3·E[X] + 1 + 0 = <strong>1</strong>。</p>
+          <p><strong>Var(X)</strong> = Var(ε₁) = <strong>2</strong>。</p>
+          <p><strong>Cov(X,Y)</strong> = Cov(X, −3X + 1 + ε₂) = −3·Cov(X,X) + 0 + 0 = −3·2 = <strong>−6</strong>（负号来自系数 −3：X 越大 Y 越小）。</p>
+          <p><strong>Var(Y)</strong> = (−3)²·Var(X) + Var(ε₂) = 9·2 + 4 = <strong>22</strong>。</p>
+          <p>汇总：μ = (0, 1)，Σ = [[2, −6], [−6, 22]]。正定性检查：det = 2·22 − (−6)² = 44 − 36 = 8 &gt; 0 ✓，且 Σ₁₁ = 2 &gt; 0 ✓。相关系数 ρ = −6/√(2·22) ≈ −0.905，强负相关，与系数 −3 的语义一致。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l3">L3 建模应用</span>某化工厂反应釜：真实温度 T（连续）先验 N(180, 25)；一个离散工况开关 D ∈ {正常, 清洗}，P(正常) = 0.9；温度传感器 S 在正常档紧贴真值（S = T + ε₁，σ₁ = 0.5），清洗档因蒸汽干扰读数漂移（S = 0.8T + 20 + ε₂，σ₂ = 5）。用 CLG 建模：画出图、写出每个 CPD；说明边缘化 D 后 S 的分布形态；若工厂有 5 个独立二值工况开关共同影响 S，S 的边际分布至多有多少个高斯分量？</div>
+      <details>
+        <summary>提示</summary>
+        <p>变量三个：D（离散）、T（连续）、S（连续）。D 和 T 谁是 S 的父节点？边缘化 D 就是按 P(d) 加权叠加两个工况下的高斯。分量数 = 离散变量联合状态数。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p><strong>图</strong>：D → S ← T（D 离散做父，T 连续做父，S 连续做子；T 无父，用先验）。</p>
+          <p><strong>CPD</strong>：T ~ N(180, 25)；P(D=正常) = 0.9，P(D=清洗) = 0.1；</p>
+          <p>S | (D=正常, T=t) ~ N(t, 0.25)；S | (D=清洗, T=t) ~ N(0.8t + 20, 25)。</p>
+          <p><strong>S 的边际</strong>：p(S) = 0.9·N(180, 25.25) + 0.1·N(164, 41)——两个高斯的加权和（清洗档均值 0.8×180+20 = 164，方差 0.64×25+25 = 41）。这是<strong>高斯混合</strong>：双峰、非高斯。注意边缘化后 S 失去了"单高斯"身份，这正是 CLG 推理变难的根源。</p>
+          <p><strong>5 个二值开关</strong>：联合状态 2⁵ = 32 种，至多 <strong>32 个高斯分量</strong>。指数爆炸的直觉到此坐实。</p>
+        </div>
+      </details>
+    </div>
+
+    <!-- ============ 本章自测 ============ -->
+    <h2><span class="sec-no">✍️</span>本章自测</h2>
+    <p class="quiz-hint">点击选项判分，答错会给出原因。</p>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 1</div>
+      <div class="q-stem">一个 n 维多元高斯分布由什么完全决定？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 均值向量 μ、协方差矩阵 Σ 和三阶矩张量</li>
+        <li data-opt="b">B. 均值向量 μ 与协方差矩阵 Σ</li>
+        <li data-opt="c">C. 每个维度上的一张离散化的概率表</li>
+        <li data-opt="d">D. 精度矩阵 J、信息向量 h 和偏度参数</li>
+      </ul>
+      <div class="quiz-explain">选 B。高斯分布只有前两阶矩，μ 与 Σ（或等价的 h 与 J）就是全部参数。A 错：高斯的三阶及以上矩完全由前两阶决定，不需要额外指定；C 错：连续变量不列表，离散化只是近似手段；D 错：J 与 h 确实等价参数化了高斯，但"偏度参数"不存在——高斯恒为对称（偏度为 0）。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="c">
+      <div class="q-no">自测 2</div>
+      <div class="q-stem">高斯 MRF 中 J₁₂ = 0 的精确含义是：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. X₁ 与 X₂ 无条件独立</li>
+        <li data-opt="b">B. X₁ 与 X₂ 的协方差为 0</li>
+        <li data-opt="c">C. 给定其余所有变量后，X₁ 与 X₂ 条件独立；图上二者之间没有边</li>
+        <li data-opt="d">D. X₁ 与 X₂ 之间有边，但边权为 0</li>
+      </ul>
+      <div class="quiz-explain">选 C。定理：Jᵢⱼ = 0 ⟺ Xᵢ ⊥ Xⱼ | 其余变量 ⟺ 无边。A 错：条件独立不蕴含无条件独立（链上 X、Z 就无条件相关）；B 错：J 的零不对应 Σ 的零，例 2 里 J₁₃ = 0 而 Σ₁₃ = 1；D 错：Jᵢⱼ = 0 恰恰表示没有边，而不是"有边但权重为零"。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="a">
+      <div class="q-no">自测 3</div>
+      <div class="q-stem">三变量高斯链 X—Y—Z。关于它的 Σ 与 J，下列说法正确的是：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. Σ 一般满（Σ₁₃ ≠ 0），J 是三对角的（J₁₃ = 0）</li>
+        <li data-opt="b">B. Σ 是三对角的，J 是满的</li>
+        <li data-opt="c">C. Σ 和 J 都是三对角的</li>
+        <li data-opt="d">D. Σ 和 J 都是满的</li>
+      </ul>
+      <div class="quiz-explain">选 A。相关性沿链传播，X 与 Z 无条件相关，故 Σ₁₃ ≠ 0，Σ 稠密；给定 Y 后 X ⊥ Z，故 J₁₃ = 0，J 只在对角与相邻位置非零（三对角）。B 把两个矩阵说反了；C、D 都误判了其中至少一个的稀疏性——例 2 的手算就是反例。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="d">
+      <div class="q-no">自测 4</div>
+      <div class="q-stem">高斯 BN 中，X 经 X→Y→W 与 X→Z→W 两条路径连通 W，但参数使两路效应恰好抵消（Cov(X,W)=0）。这说明：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. d-分离规则在高斯 BN 上不再可靠，图说独立也可能不独立</li>
+        <li data-opt="b">B. 这张图不是合法的高斯 BN，必须删去一条路径</li>
+        <li data-opt="c">C. Cov(X,W)=0 不能推出独立，所以 X 与 W 仍相关</li>
+        <li data-opt="d">D. 图独立性可靠但不完备：图说相关，分布里却可能因参数抵消而独立</li>
+      </ul>
+      <div class="quiz-explain">选 D。图读出的独立性 ⊆ 分布真实独立性，这个例子漏报的是 X ⊥ W。A 错：方向恰好相反，d-分离判"独立"永远可信，失效的是"相关"这一侧；B 错：图与参数都合法，问题在图的可读性而非合法性；C 错：联合高斯下不相关 ⟺ 独立，Cov=0 就是独立。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 5</div>
+      <div class="q-stem">一个 CLG 网络含 3 个二值离散变量（都做连续变量的父节点）。把离散变量全部边缘化后，某连续变量的边际分布是：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 仍然是单个高斯，因为边缘化保持高斯性</li>
+        <li data-opt="b">B. 至多 8 个分量的高斯混合，不再是高斯</li>
+        <li data-opt="c">C. 至多 6 个分量的高斯混合（3 个变量各贡献 2）</li>
+        <li data-opt="d">D. 均匀分布，因为离散化抹平了峰值</li>
+      </ul>
+      <div class="quiz-explain">选 B。3 个二值离散变量有 2³ = 8 种联合状态，每种状态给出一套高斯参数，边缘化后至多是 8 分量高斯混合；混合一般多峰，不再是高斯。A 错：边缘化封闭性只对纯高斯网络成立，对 CLG 失效——这正是本章埋给第 14 章的难题；C 错：分量数是联合状态数（乘积 8），不是求和 6；D 错：与均匀分布毫无关系。</div>
+    </div>
+
+    <!-- ============ 三句话复述 ============ -->
+    <div class="retell">
+      <h3>🗣️ 用自己的话，三句话讲完本章</h3>
+      <p class="retell-sub">对着空气（或室友）说出这三句。说卡壳的那句，回去重读对应小节。</p>
+      <details>
+        <summary>句1：这章解决什么问题？——</summary>
+        <div class="retell-answer">参考答案：前几章的表格 CPD 只适用于离散变量，连续变量（温度、位置、股价）连表都列不出来；本章引入高斯分布作为连续变量的表示语言，让图模型在连续域依然紧凑、推理依然解析可算。</div>
+      </details>
+      <details>
+        <summary>句2：核心机制是什么？——</summary>
+        <div class="retell-answer">参考答案：联合分布由 μ 与 Σ 完全决定，边缘化/条件化/线性变换都封闭（条件化有闭式公式）；等价的精度矩阵 J = Σ⁻¹ 把图结构编码为零模式（Jᵢⱼ=0 ⟺ 给定其余条件独立 ⟺ 无边）；有向版用线性高斯 CPD，联合必为高斯，但图独立性可靠而不完备。</div>
+      </details>
+      <details>
+        <summary>句3：它和前后章怎么分工？——</summary>
+        <div class="retell-answer">参考答案：第 3–6 章管离散表示，本章管连续表示，"表示"阶段到此补齐；第 8 章用指数族把离散与高斯统一；高斯假设的代价——混入离散变量后边缘化产生高斯混合、推理指数爆炸——留给第 14 章；时序展开（LDS/卡尔曼滤波）留给第 15 章。</div>
+      </details>
+    </div>
+
+    <!-- ============ 复习计划 ============ -->
+    <div class="review-plan">
+      <h3>🔁 间隔复习计划</h3>
+      <p>回忆本身比重读有效 10 倍。到点只做一件事：翻卡 + 重做标记题。</p>
+      <table>
+        <tr><th>时间点</th><th>复习内容</th><th>预计用时</th></tr>
+        <tr><td>第 1 天</td><td>概念卡 1–6 全部 + 回忆卡 7.1-2、7.2-1、7.3-2</td><td>10 分钟</td></tr>
+        <tr><td>第 3 天</td><td>概念卡 2、5、6（精度矩阵/忠实性失效/CLG）+ 重做自测错题 + L2 两题</td><td>10 分钟</td></tr>
+        <tr><td>第 7 天</td><td>三句话复述出声说一遍 + 回忆卡 7.2-2、7.4-2 + 重算例 2 的矩阵求逆</td><td>12 分钟</td></tr>
+        <tr><td>第 15 天</td><td>只做合上书挑战；六条全过则本章毕业，卡在哪条就重读对应小节</td><td>15 分钟</td></tr>
+      </table>
+    </div>
+
+    <!-- 合上书挑战 -->
+    <div class="final-challenge">
+      <h3>📕 合上书挑战</h3>
+      <p class="fc-sub">现在关掉这个页面（或遮住屏幕），拿一张纸，凭记忆完成以下任务。全部做完再回来核对——这是本章真正的毕业考试。</p>
+      <ol id="ch07-challenge-list">
+        <li><span class="fc-check"></span>写出多元高斯的协方差形式与信息形式，说出 J、h 与 Σ、μ 的换算关系</li>
+        <li><span class="fc-check"></span>说出高斯分布让推理解析可算的三条封闭性，并各给一句"为什么重要"</li>
+        <li><span class="fc-check"></span>手算：μ = (1, 0)、Σ = [[2,1],[1,2]]，观测 X₂ = 3，求条件均值（2.5）与条件方差（1.5）</li>
+        <li><span class="fc-check"></span>手算：对链 X—Y—Z 的 Σ = [[1,1,1],[1,2,2],[1,2,3]] 求逆，指出 J 的哪个零元素对应哪条条件独立</li>
+        <li><span class="fc-check"></span>解释"高斯 BN 的图独立性可靠但不完备"，并举两条路径系数抵消导致 Cov = 0 的例子</li>
+        <li><span class="fc-check"></span>回答本章的主线问题：连续变量上如何紧凑表示联合分布并让推理保持解析可算？（一句话）</li>
+      </ol>
+    </div>
+
+    <div class="complete-zone">
+      <button class="btn-complete" id="ch07-btn-complete" onclick="markDone()">✓ 我已完成本章（含合上书挑战）</button>
+    </div>
+
+    <div class="chapter-nav">
+      <a href="chapter-06.html"><span class="nav-dir">← 上一章</span>第6章 基于模板的表示</a>
+      <a href="chapter-08.html" class="next"><span class="nav-dir">下一章 →</span>第8章 指数族</a>
+    </div>
+
+  </div>
+</div>
+
+<footer class="footer">
+  <div class="wrap">第7章 高斯网络 · PGM 互动讲义 · 基于 Koller &amp; Friedman (2009)</div>
+</footer>
+
+<script src="assets/mermaid.min.js"></script>
+<script>
+mermaid.initialize({
+  startOnLoad: true,
+  theme: "base",
+  themeVariables: {
+    primaryColor: "#e3edf7",
+    primaryBorderColor: "#1d5f9e",
+    primaryTextColor: "#1d5f9e",
+    lineColor: "#5c554b",
+    secondaryColor: "#fbeedd",
+    tertiaryColor: "#f5f1e8",
+    fontFamily: "-apple-system, PingFang SC, sans-serif",
+    fontSize: "14px"
+  },
+  flowchart: { curve: "linear", htmlLabels: false }
+});
+</script>
+<script>
+// 自测题判分
+document.querySelectorAll(".quiz-block").forEach(block => {
+  const answer = block.dataset.answer;
+  const explain = block.querySelector(".quiz-explain");
+  block.querySelectorAll(".quiz-opts li").forEach(li => {
+    li.addEventListener("click", () => {
+      const opts = block.querySelectorAll(".quiz-opts li");
+      opts.forEach(o => o.classList.add("disabled"));
+      if (li.dataset.opt === answer) {
+        li.classList.add("correct");
+      } else {
+        li.classList.add("wrong");
+        block.querySelector(`[data-opt="${answer}"]`).classList.add("correct");
+      }
+      explain.classList.add("show");
+    });
+  });
+});
+
+// 合上书清单打勾
+document.querySelectorAll("#ch07-challenge-list li").forEach(li => {
+  li.addEventListener("click", () => li.classList.toggle("checked"));
+});
+
+// 完成标记 → localStorage（第7章）
+const KEY = "pgm_progress_v1";
+function loadProgress() {
+  try { return JSON.parse(localStorage.getItem(KEY)) || {}; } catch (e) { return {}; }
+}
+const progress = loadProgress();
+const btn = document.getElementById("ch07-btn-complete");
+if (progress[7] && progress[7].done) {
+  btn.textContent = "✓ 已完成 · 再次点击重置";
+  btn.classList.add("done");
+}
+function markDone() {
+  const p = loadProgress();
+  if (p[7] && p[7].done) {
+    delete p[7];
+    btn.textContent = "✓ 我已完成本章（含合上书挑战）";
+    btn.classList.remove("done");
+  } else {
+    p[7] = { done: true, completedAt: Date.now(), reviewsDone: 0 };
+    btn.textContent = "✓ 已完成 · 复习提醒已开启";
+    btn.classList.add("done");
+  }
+  localStorage.setItem(KEY, JSON.stringify(p));
+}
+</script>
+
+</body>
+</html>

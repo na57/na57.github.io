@@ -1,0 +1,885 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第13章 MAP推理 · PGM 互动讲义</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+<nav class="topbar">
+  <div class="topbar-inner">
+    <span class="brand"><a href="index.html" style="color:inherit">← 学习地图</a></span>
+    <span class="crumb">阶段二 · 推理 / 第13章</span>
+  </div>
+</nav>
+
+<div class="wrap">
+
+  <div class="lecture-head">
+    <span class="ch-label">CHAPTER 13 · 推理</span>
+    <h1>MAP 推理</h1>
+    <p class="lead">不要整个后验分布，只要"最可能的那一组赋值"——但这件事比你想的更难。</p>
+  </div>
+
+  <!-- 本章定位 -->
+  <div class="position-bar">
+    <strong>本章在主线上的位置：</strong>求和推理（Ch9–12）回答"每个变量的边缘分布是什么" → <u>MAP 推理回答"联合最可能的赋值是哪一组"，把 ∑ 换成 max</u> → 混合与动态网络（Ch14–15）沿用同样的消息骨架，决策（Ch23）最终消费的就是 MAP 解。<br>
+    第13章回答主线上的第十三个问题：<strong>当任务只要"最可能的解释"而不要完整后验时，推理算法要怎么改？为什么换一个问题反而更难？</strong>
+    <div class="map-inline">
+      <span class="node">Ch9-12 求和推理（边缘概率）</span><span class="arrow">→</span>
+      <span class="node here">Ch13 MAP 推理（最大赋值）</span><span class="arrow">→</span>
+      <span class="node">Ch14-15 混合/动态网络（同一骨架的专用版）</span><span class="arrow">→</span>
+      <span class="node">Ch23 影响图（决策 = 效用下的 MAP）</span>
+    </div>
+  </div>
+
+  <!-- 学习目标 -->
+  <div class="objectives">
+    <h4>🎯 学完本章，合上书你应该能：</h4>
+    <ol>
+      <li>写出 MAP 与边缘 MAP（Marginal MAP）的定义，并用一个具体分布说明两者答案可以不同</li>
+      <li>在一条三节点链上手工执行 Max-Product 变量消去，含回溯指针，还原出 MAP 赋值</li>
+      <li>解释 Max-Product 与 Max-Sum 为什么等价，以及取对数后 MAP 为什么变成能量最小化</li>
+      <li>不用定理名词，用一句大白话解释为什么 MAP 是 NP-hard、而边缘推断的难处在别处</li>
+      <li>说出整数规划/LP 松弛、图割（Graph Cuts）各自能解决哪类 MAP，以及各自的适用边界</li>
+    </ol>
+  </div>
+
+  <div class="lecture">
+
+    <!-- 推导主线 -->
+    <div class="figure">
+      <div class="mermaid">
+flowchart LR
+  A["边缘概率够用吗<br>决策只要一个答案"] --> B["换任务<br>求和换成取最大"]
+  B --> C["Max-Product 消去<br>还要记回溯指针"]
+  C --> D["取对数变 Max-Sum<br>MAP = 能量最小化"]
+  D --> E["组合优化武器登场<br>LP 松弛与图割"]
+  E --> F["代价：MAP 是 NP-hard<br>只有特例能精确求解"]
+  classDef hot fill:#fbeedd,stroke:#c4651f,stroke-width:2.5px,color:#c4651f;
+  classDef danger fill:#fae9e7,stroke:#b03a2e,stroke-width:2.5px,color:#b03a2e;
+  class C hot;
+  class F danger;
+      </div>
+      <div class="caption">本章推导主线：任务一换，算法骨架不变，但难度性质彻底改变。终点（红色）是本章的账单：MAP 一般不可精确解，只能靠特例与近似。</div>
+    </div>
+
+    <!-- ============ 13.1 ============ -->
+    <h2><span class="sec-no">13.1</span>MAP 到底是什么：它和"每个变量各自最可能"不是一回事</h2>
+
+    <p>第 9–12 章的推理任务都是<span class="term">求和推理</span>（Sum Inference）：给定证据，算出某个（或每个）查询变量的边缘分布 P(Xᵢ | E)。但很多实际任务不需要分布，只需要<strong>一个答案</strong>：医学诊断要的是"最可能的疾病组合"，图像分割要的是"最可能的一组像素标签"。这就是 <span class="term">最大后验</span>（Maximum A Posteriori, MAP）任务：</p>
+
+    <div class="formula">MAP(Y | E = e) = arg max<sub>y</sub> P(Y = y | E = e) = arg max<sub>y</sub> P(Y = y, E = e)</div>
+
+    <p>等号成立是因为 P(E=e) 与 y 无关，归一化常数不影响 arg max。当查询集 Y 是<strong>全部</strong>非证据变量时，这个任务也叫<span class="term">最可能解释</span>（Most Probable Explanation, MPE）。</p>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 本章最重要的反直觉事实</span>
+      <p>MAP 答案 ≠ 每个变量各自取边缘最可能值。先算每个变量的边缘分布、再逐变量取 arg max，得到的<strong>一般不是</strong>联合最可能赋值。下面用一个 2×2 的分布亲手验证。</p>
+    </div>
+
+    <h3>例 1：联合最可能 ≠ 逐变量最可能（完整手算）</h3>
+    <p>两个二元变量 X、Y 的联合分布：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th></th><th>y⁰</th><th>y¹</th><th>行和（X 的边缘）</th></tr>
+        <tr><td>x⁰</td><td>0.04</td><td>0.30</td><td>0.34</td></tr>
+        <tr><td>x¹</td><td><strong>0.36</strong></td><td>0.30</td><td>0.66</td></tr>
+        <tr><td>列和（Y 的边缘）</td><td>0.40</td><td>0.60</td><td>1.00</td></tr>
+      </table>
+    </div>
+
+    <p><strong>第一步：逐变量取边缘最可能</strong>。P(x¹) = 0.66 &gt; 0.34，所以 X 取 x¹；P(y¹) = 0.60 &gt; 0.40，所以 Y 取 y¹。拼起来得到 <strong>(x¹, y¹)</strong>，其联合概率是 <strong>0.30</strong>。</p>
+    <p><strong>第二步：直接找联合最可能</strong>。四格里最大的是 (x¹, y⁰) = <strong>0.36</strong>。</p>
+    <p><strong>结论</strong>：边缘拼出的答案 (0.30) 比真正的 MAP (0.36) 少了 20% 的概率质量。原因不难理解：取边缘时，x¹ 的胜利靠的是 (x¹,y⁰) 和 (x¹,y¹) 两格<strong>加总</strong>的优势；一旦要求两个变量"同时落在一格里"，加总优势用不上了。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>边缘推断回答的是"平均而言每个变量倾向什么"；MAP 回答的是"哪一幅完整画面最可信"。画面内部的相容性（各变量取值是否配套）只有联合视角才能看见。所以 MAP 不能被分解成逐变量问题——必须整体优化。</p>
+    </div>
+
+    <!-- 回忆卡片 13.1 -->
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 13.1-1</div>
+              <div class="q-text">写出 MAP 任务的定义，并说明为什么可以把条件概率换成联合概率。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              MAP(Y|E=e) = arg max<sub>y</sub> P(y, e)。因为 P(y|e) = P(y,e)/P(e)，分母 P(e) 不随 y 变化，不影响 arg max。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 13.1-2</div>
+              <div class="q-text">例 1 中，逐变量取边缘最可能得到的答案是什么？真正的 MAP 是什么？差在哪？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              逐变量得 (x¹,y¹)=0.30；真正 MAP 是 (x¹,y⁰)=0.36。差在边缘胜利靠两格加总，联合最可能只看单格。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 13.2 ============ -->
+    <h2><span class="sec-no">13.2</span>Max-Product 变量消去：把第 9 章的 ∑ 换成 max</h2>
+
+    <p>上一节明确了任务：对联合打分取最大。好消息是，<strong>max 对乘法同样满足分配律</strong>：</p>
+
+    <div class="formula">max<sub>x</sub> [ f(x) · g ] = g · max<sub>x</sub> f(x)  （g 不含 x 时）</div>
+
+    <p>这正是第 9 章变量消去依赖的分配律的 max 版。于是整个消去流程原封不动搬过来：每个因子照乘，消去变量时把"对取值求和"换成"对取值取最大"。这就是 <span class="term">Max-Product 变量消去</span>（Max-Product Variable Elimination）。</p>
+
+    <p>但有一个新需求：sum-product 只产出数字（边缘概率），MAP 还要产出<strong>那组赋值</strong>。所以每次取最大时，必须同时记下"是哪个取值赢了"——一根<span class="term">回溯指针</span>（Traceback Pointer）：</p>
+
+    <div class="formula">τ(Y) = max<sub>X</sub> φ(X, Y) ，  δ(Y) = arg max<sub>X</sub> φ(X, Y)</div>
+
+    <p>τ 存赢家的分数，δ 存赢家的取值；消完所有变量后，从最后的 arg max 出发沿 δ 倒着走，就还原出完整的 MAP 赋值。</p>
+
+    <h3>例 2：链上 Max-Product 消去的完整手算</h3>
+    <p>二元变量链 A—B—C，两个因子（未归一化的打分即可，MAP 不需要 Z）：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>a</th><th>b</th><th>φ₁(a,b)</th><th></th><th>b</th><th>c</th><th>φ₂(b,c)</th></tr>
+        <tr><td>0</td><td>0</td><td>2</td><td></td><td>0</td><td>0</td><td>1</td></tr>
+        <tr><td>0</td><td>1</td><td>1</td><td></td><td>0</td><td>1</td><td>3</td></tr>
+        <tr><td>1</td><td>0</td><td>1</td><td></td><td>1</td><td>0</td><td>2</td></tr>
+        <tr><td>1</td><td>1</td><td>4</td><td></td><td>1</td><td>1</td><td>1</td></tr>
+      </table>
+    </div>
+
+    <p><strong>第一步：消去 A</strong>。对 b 的每个取值，在 a 上取最大：</p>
+    <ul>
+      <li>τ₁(b⁰) = max(φ₁(0,0), φ₁(1,0)) = max(2, 1) = <strong>2</strong>，δ₁(b⁰) = a⁰</li>
+      <li>τ₁(b¹) = max(φ₁(0,1), φ₁(1,1)) = max(1, 4) = <strong>4</strong>，δ₁(b¹) = a¹</li>
+    </ul>
+
+    <p><strong>第二步：消去 B</strong>。新因子 τ₁(b)·φ₂(b,c)，对 b 取最大：</p>
+    <ul>
+      <li>c = 0：b⁰ 给 2·1 = 2，b¹ 给 4·2 = 8 → τ₂(c⁰) = <strong>8</strong>，δ₂(c⁰) = b¹</li>
+      <li>c = 1：b⁰ 给 2·3 = 6，b¹ 给 4·1 = 4 → τ₂(c¹) = <strong>6</strong>，δ₂(c¹) = b⁰</li>
+    </ul>
+
+    <p><strong>第三步：取全局最大并回溯</strong>。max(8, 6) = 8，赢家 c = c⁰。回溯：δ₂(c⁰) = b¹ → b = b¹；δ₁(b¹) = a¹ → a = a¹。</p>
+    <p><strong>MAP 赋值：(a¹, b¹, c⁰)，分数 = φ₁(1,1)·φ₂(1,0) = 4·2 = 8</strong>。不信可以枚举全部 8 种赋值核对——最大的确实是 8。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 直觉</span>
+      <p>Max-Product 就是动态规划：消去变量时只把"局部冠军"往后传，冠军是谁用指针记着。复杂度和 Sum-Product VE <strong>完全一样</strong>：O(n · d<sup>w+1</sup>)，w 为诱导宽度——同一棵团树上，两遍 Max-Product 消息传递也能给出精确 MAP（Ch10 的骨架直接复用）。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>"既然复杂度一样，MAP 和边缘推断一样难"——错。同样的 <em>精确</em>算法复杂度一样，但两者的<em>可近似性</em>天差地别：边缘概率可以用采样近似（Ch12），MAP 却连"近似得好不好"都难以验证。这个差距就是 13.4 节的 NP-hard。</p>
+    </div>
+
+    <h3>边缘 MAP：先求和再取最大，max 与 ∑ 不可交换（完整手算）</h3>
+
+    <p>13.1 节的 MAP 任务里，查询集可以是全部非证据变量（MPE），也可以只是<strong>其中一部分</strong> Y，其余变量 W 只是陪衬（nuisance）。后一种任务叫<span class="term">边缘 MAP</span>（Marginal MAP）：先把 W <strong>求和边缘化</strong>，再对 Y 取 arg max：</p>
+
+    <div class="formula">arg max<sub>y</sub> P(y | e) = arg max<sub>y</sub> ∑<sub>w</sub> P(y, w, e)</div>
+
+    <p>它和联合 MAP 的分工：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th></th><th>联合 MAP（MPE）</th><th>边缘 MAP</th></tr>
+        <tr><td>查询对象</td><td>全部非证据变量</td><td>部分变量 Y，其余 W 是陪衬</td></tr>
+        <tr><td>目标</td><td>arg max<sub>y,w</sub> P(y, w, e)</td><td>arg max<sub>y</sub> ∑<sub>w</sub> P(y, w, e)</td></tr>
+        <tr><td>需要的算子</td><td>只有 max（Max-Product 直接给出）</td><td>∑ 与 max 都要</td></tr>
+        <tr><td>消去顺序</td><td>任意顺序均可</td><td>求和变量必须先于取最大变量被消去</td></tr>
+      </table>
+    </div>
+
+    <p>为什么不能把 Max-Product 直接拿来用？因为 <strong>max 与 ∑ 不可交换</strong>：</p>
+
+    <div class="formula">max<sub>x</sub> ∑<sub>y</sub> f(x, y) ≤ ∑<sub>y</sub> max<sub>x</sub> f(x, y)　（max of sums ≤ sum of maxes）</div>
+
+    <p>左边先加总再取最大，是边缘 MAP 要的顺序；右边先对每个 y 取最大再加总——每个 y 可以让<strong>不同的 x</strong> 当冠军，把所有局部冠军都收进来，结果必然虚增（等号只在"所有 y 的冠军是同一个 x"时成立）。所以消去顺序受到硬约束：<strong>求和变量 W 必须先于取最大变量 Y 被消去</strong>，Max-Product 那种"随便挑顺序消"的自由没了。下面用一条三变量链把这件事算透。</p>
+
+    <p><strong>例：链 X—Y—Z 上两种答案的分歧</strong>。全部二值，因子 φ₁(X,Y) 与 φ₂(Y,Z)（φ₂ 的规则是"相同得 2、不同得 1"）：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>x</th><th>y</th><th>φ₁(x,y)</th><th></th><th>y</th><th>z</th><th>φ₂(y,z)</th></tr>
+        <tr><td>0</td><td>0</td><td>26</td><td></td><td>0</td><td>0</td><td>2</td></tr>
+        <tr><td>0</td><td>1</td><td>28</td><td></td><td>0</td><td>1</td><td>1</td></tr>
+        <tr><td>1</td><td>0</td><td>16</td><td></td><td>1</td><td>0</td><td>1</td></tr>
+        <tr><td>1</td><td>1</td><td>30</td><td></td><td>1</td><td>1</td><td>2</td></tr>
+      </table>
+    </div>
+
+    <p>未归一化权重 w(x,y,z) = φ₁(x,y)·φ₂(y,z)。查询变量只有 X，Y、Z 是陪衬变量。</p>
+
+    <p><strong>第一步：枚举全部 8 个权重</strong>（顺便得到总质量 Z = 300）：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>(x, y, z)</th><th>φ₁(x,y) · φ₂(y,z)</th><th>w</th></tr>
+        <tr><td>(0,0,0)</td><td>26 · 2</td><td>52</td></tr>
+        <tr><td>(0,0,1)</td><td>26 · 1</td><td>26</td></tr>
+        <tr><td>(0,1,0)</td><td>28 · 1</td><td>28</td></tr>
+        <tr><td>(0,1,1)</td><td>28 · 2</td><td>56</td></tr>
+        <tr><td>(1,0,0)</td><td>16 · 2</td><td>32</td></tr>
+        <tr><td>(1,0,1)</td><td>16 · 1</td><td>16</td></tr>
+        <tr><td>(1,1,0)</td><td>30 · 1</td><td>30</td></tr>
+        <tr><td>(1,1,1)</td><td>30 · 2</td><td><strong>60</strong></td></tr>
+      </table>
+    </div>
+
+    <p><strong>第二步：联合 MAP</strong>。单格最大是 w(1,1,1) = 60（次大的两格是 w(0,1,1) = 56 与 w(0,0,0) = 52）。联合 MAP 赋值 = (x,y,z) = (1,1,1)，其 <strong>x 分量 = 1</strong>。</p>
+
+    <p><strong>第三步：边缘 MAP（先求和，再取最大）</strong>。注意对每个 y 都有 ∑<sub>z</sub> φ₂(y,z) = 2 + 1 = 3，因此：</p>
+
+    <div class="formula">P(x) ∝ ∑<sub>y,z</sub> w(x,y,z) = 3 · ∑<sub>y</sub> φ₁(x,y)</div>
+
+    <ul>
+      <li>x = 0：3 × (26 + 28) = 3 × 54 = <strong>162</strong></li>
+      <li>x = 1：3 × (16 + 30) = 3 × 46 = <strong>138</strong></li>
+    </ul>
+
+    <p>归一化（除以 Z = 300）：P(x=0) = <span class="frac"><span class="num-part">162</span><span class="den-part">300</span></span> = 0.54，P(x=1) = <span class="frac"><span class="num-part">138</span><span class="den-part">300</span></span> = 0.46。边缘 MAP 答案 <strong>x = 0</strong>——与联合 MAP 的 x 分量 1 <strong>不一致</strong>。</p>
+
+    <p><strong>第四步：顺序不可交换的数值证据</strong>。同一个网络上把两种顺序各算一遍：</p>
+    <ul>
+      <li>正确顺序（先 ∑ 后 max）：max<sub>x</sub> ∑<sub>y,z</sub> w = max(162, 138) = <strong>162</strong> ✓</li>
+      <li>错误顺序（先 max 后 ∑）：∑<sub>y,z</sub> max<sub>x</sub> w = 52 + 26 + 30 + 60 = <strong>168 ≠ 162</strong> ✗</li>
+    </ul>
+    <p>168 的虚增从哪来？逐格看冠军：(y,z)=(0,0) 时 x=0 赢（52）、(0,1) 时 x=0 赢（26）、(1,0) 时 x=1 赢（30）、(1,1) 时 x=1 赢（60）——四个格子的冠军不是同一个 x，先取 max 把它们的分数全部收进总分；而正确顺序只允许一个 x 带走它自己那一列的全部加总。这正是"max of sums ≤ sum of maxes"的现场版。</p>
+
+    <p><strong>第五步：消去顺序的结论</strong>。边缘 MAP 必须先用 ∑ 消去全部非查询变量（本例先消 Z 再消 Y，或先 Y 再 Z 皆可），<strong>最后</strong>才对 X 取 max。这个硬约束缩小了消去顺序的选择空间，可能被迫采用诱导宽度更大的顺序——所以边缘 MAP 一般比联合 MAP <strong>更难</strong>（概念卡 6 说"两种最难的操作叠在一起"，根源就在这里）。</p>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>"对联合 MAP 的赋值取 x 分量，就是 x 的边缘 MAP"——错，本例当场翻车：联合 MAP (1,1,1) 的 x 分量是 1，边缘 MAP 答案却是 0。联合 MAP 要的是"整幅画面同时最吻合"；边缘 MAP 允许 x 靠<strong>多幅画面的加总优势</strong>获胜（x=0 的团体分 162 &gt; x=1 的 138）。任务是哪个就解哪个，两者不能互相代替。</p>
+    </div>
+
+    <div class="box idea">
+      <span class="box-tag">💡 直觉：各有各的消去时刻表</span>
+      <p>把变量消去想成两条流水线：陪衬变量走"∑ 口"，查询变量走"max 口"，且 ∑ 口必须全部排在 max 口之前。联合 MAP 里所有变量同走一条 max 流水线，顺序随便排；边缘 MAP 里两条流水线有先后，调度被卡死——顺序选择变少、诱导宽度可能变大，这就是它更难的结构性原因。</p>
+    </div>
+
+    <!-- 回忆卡片 13.2 -->
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 13.2-1</div>
+              <div class="q-text">Max-Product VE 相比 Sum-Product VE 改了哪两处？复杂度变了吗？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              ①消去时 ∑ 换 max；②额外记录回溯指针 δ（arg max 的取值）。复杂度不变：O(n·d<sup>w+1</sup>)。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 13.2-2</div>
+              <div class="q-text">例 2 中消去 B 时，c⁰ 对应的两个候选分数是多少？最终 MAP 赋值是什么？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              c⁰：b⁰ 给 2，b¹ 给 8，max=8。回溯得 (a¹, b¹, c⁰)，分数 8。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 13.3 ============ -->
+    <h2><span class="sec-no">13.3</span>Max-Sum 与能量视角：乘积变加法，MAP 变最小化</h2>
+
+    <p>连乘一大堆小数值，数值上容易下溢；取对数，乘法变加法——这就是 <span class="term">Max-Sum</span> 形式。对马尔可夫网络 P(X) = (1/Z)∏<sub>C</sub> ψ<sub>C</sub>(X<sub>C</sub>)：</p>
+
+    <div class="formula">arg max<sub>X</sub> P(X) = arg max<sub>X</sub> ∑<sub>C</sub> log ψ<sub>C</sub>(X<sub>C</sub>) = arg min<sub>X</sub> ∑<sub>C</sub> E<sub>C</sub>(X<sub>C</sub>)</div>
+
+    <p>最后一步令 E<sub>C</sub> = −log ψ<sub>C</sub>，就是第 4 章见过的<span class="term">能量函数</span>（Energy Function）。于是：</p>
+
+    <div class="box insight">
+      <span class="box-tag">✅ 判定规则</span>
+      <p><strong>MAP = 能量最小化</strong>。Max-Product（乘积上取最大）、Max-Sum（对数上取最大）、能量最小化（能量上取最小）是同一个问题的三张面孔。选哪张脸取决于工具：消息传递用前两张，组合优化用第三张。</p>
+    </div>
+
+    <p>这张"能量"的脸价值巨大：它把 PGM 接进了组合优化几十年的工具箱。计算机视觉里图像去噪、立体匹配、分割的标准做法，就是把任务写成能量最小化——每个像素一个标签变量，相邻像素标签不一致要付能量代价。这正是 13.5 节图割的舞台。</p>
+
+    <!-- 回忆卡片 13.3 -->
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 13.3-1</div>
+              <div class="q-text">Max-Product 和 Max-Sum 为什么等价？实际计算中为什么偏好后者？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              log 是单调增函数，不改变 arg max 的位置；对数把连乘变连加，避免数值下溢，也让分数更直观。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 13.3-2</div>
+              <div class="q-text">能量函数和势函数是什么关系？MAP 在能量语言里是什么？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              E<sub>C</sub> = −log ψ<sub>C</sub>（能量越低越可能）。MAP = 使总能量 ∑<sub>C</sub> E<sub>C</sub> 最小的赋值。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 13.4 ============ -->
+    <h2><span class="sec-no">13.4</span>为什么 MAP 是 NP-hard：不用定理名，用直觉</h2>
+
+    <p>13.2 节说精确 Max-Product 和精确 Sum-Product 复杂度相同，怎么这里又说 MAP 更难？关键在于：<strong>那个"相同"是树上的相同；离开树之后，两者的命运分岔了</strong>。</p>
+
+    <p>先看一个最直接的难度证据——<strong>从 3-SAT 到 MAP 的归约</strong>。任给一个 3-SAT 公式（若干个子句的合取，如 (x₁ ∨ ¬x₂ ∨ x₃) ∧ …），为每个子句建一个因子：子句被满足得 1 分，不满足得 0 分。那么：</p>
+
+    <div class="box insight">
+      <span class="box-tag">✅ 归约一眼看穿</span>
+      <p>这个网络的 MAP 分数 &gt; 0 ⟺ 存在满足所有子句的赋值 ⟺ 原 3-SAT 公式可满足。也就是说，<strong>任何一个能高效解 MAP 的算法，都能顺手高效解 3-SAT</strong>。而 3-SAT 是 NP-complete 的招牌问题——所以 MAP 不可能有多项式通用算法，除非 P = NP。这就是"MAP 是 NP-hard"的全部直觉：它至少和布尔可满足性一样难。</p>
+    </div>
+
+    <p>再和边缘推断对比。边缘推断（算 P(Xᵢ|E)）的难属于 <strong>#P</strong> 类——要对指数多个赋值<strong>全部加总</strong>，连"验证一个答案"都贵。但它的好消息是：采样可以给出越来越准的近似（Ch12），误差随样本数平滑下降。MAP 不同：</p>
+
+    <ul>
+      <li><strong>没有"部分正确"</strong>：赋值差一位，分数可能从最高掉到零（想想 3-SAT 里一个子句被违反）。近似算法难以给出"离最优还有多远"的保证。</li>
+      <li><strong>验证不了</strong>：有人递给你一组赋值说"这是 MAP"，你只能验证它分数高，无法验证"没有更高的"——那要扫完整个指数空间。</li>
+      <li><strong>对环极度敏感</strong>：树上精确 MAP 很便宜（和 sum-product 同价），一旦图有环，消息传递不再收敛到正确答案，组合优化的全部难度瞬间回来。</li>
+    </ul>
+
+    <div class="box idea">
+      <span class="box-tag">💡 一句话总结两难</span>
+      <p>求和的难是"量大"——每项都贡献一点，采样可以摊薄；取最大的难是"藏针"——最优解只有一根针，插在指数大的草垛里，而且不承认"差不多找到"。</p>
+    </div>
+
+    <!-- 回忆卡片 13.4 -->
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 13.4-1</div>
+              <div class="q-text">用 3-SAT 归约，一句话说清 MAP 为什么是 NP-hard。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              每个子句建成一个"满足得 1、违反得 0"的因子；MAP 分数为正 ⟺ 公式可满足。解 MAP 的通用算法能解 3-SAT，故 MAP 至少 NP-hard。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 13.4-2</div>
+              <div class="q-text">边缘推断和 MAP 在"可近似性"上的核心差别是什么？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              边缘是大量项加总，采样近似误差平滑下降；MAP 是找唯一最大值，差一位可能全错，且无法验证所给答案离最优多远。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 13.5 ============ -->
+    <h2><span class="sec-no">13.5</span>求解思路地图：整数规划、LP 松弛，以及图割这块"特例绿洲"</h2>
+
+    <p>既然通用精确解无望，工程上的策略是：<strong>把 MAP 翻译成组合优化的标准语言，然后看自己的问题落在哪个可解特例里</strong>。</p>
+
+    <h3>翻译一：整数线性规划（ILP）</h3>
+    <p>引入 0/1 指示变量 μ<sub>i</sub>(x<sub>i</sub>)（"节点 i 是否取值 x<sub>i</sub>"）和 μ<sub>ij</sub>(x<sub>i</sub>,x<sub>j</sub>)（"边两端是否同时取这对值"），MAP 变成：</p>
+
+    <div class="formula">max ∑<sub>i</sub> ∑<sub>x<sub>i</sub></sub> θ<sub>i</sub>(x<sub>i</sub>)·μ<sub>i</sub>(x<sub>i</sub>) + ∑<sub>ij</sub> ∑<sub>x<sub>i</sub>,x<sub>j</sub></sub> θ<sub>ij</sub>(x<sub>i</sub>,x<sub>j</sub>)·μ<sub>ij</sub>(x<sub>i</sub>,x<sub>j</sub>)</div>
+
+    <p>其中 θ = log ψ。约束：μ 取 0/1，且边上的联合指示必须与两端节点指示一致。<strong>整数约束是全部难度所在</strong>。把 0/1 放松成 [0,1] 区间，就得到 <span class="term">LP 松弛</span>（LP Relaxation）：多项式可解，给出 MAP 的<strong>上界</strong>；若松弛解恰好是整数，则中奖——它就是精确 MAP（树上永远如此，这叫松弛是"紧"的）。<span class="term">切割平面</span>（Cutting Plane）法不断加入新约束把分数解"切掉"，逐步收紧松弛，是一般含环图的主力精确武器之一。</p>
+
+    <h3>翻译二：图割（Graph Cuts）——特例绿洲</h3>
+    <p>有一类能量函数可以<strong>精确地、多项式时间地</strong>最小化：<strong>二元变量</strong>的成对 MRF，且每条边的能量满足<span class="term">子模性</span>（Submodularity）：</p>
+
+    <div class="formula">E<sub>ij</sub>(0,0) + E<sub>ij</sub>(1,1) ≤ E<sub>ij</sub>(0,1) + E<sub>ij</sub>(1,0)</div>
+
+    <p>读法：<strong>"两端一致"的总代价不超过"两端不一致"的总代价</strong>——邻居倾向取相同标签，这正是图像分割的物理直觉。此时 MAP 可以精确转化为网络流上的最小割问题，用最大流算法秒解。</p>
+
+    <h3>例 3：验证子模性并手算一个 2 像素分割</h3>
+    <p>两个相邻像素 X₁、X₂，各自倾向"前景"（1）：一元能量 E₁(0)=2, E₁(1)=0；E₂(0)=3, E₂(1)=0。相邻一致性边能量：E₁₂(0,0)=0，E₁₂(1,1)=0，E₁₂(0,1)=E₁₂(1,0)=2。</p>
+    <p><strong>第一步：验证子模</strong>。E₁₂(0,0)+E₁₂(1,1) = 0 ≤ E₁₂(0,1)+E₁₂(1,0) = 4。✓ 可以用图割精确求解。</p>
+    <p><strong>第二步：枚举四种赋值的总能量</strong>：</p>
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>(x₁, x₂)</th><th>E₁</th><th>E₂</th><th>E₁₂</th><th>总能量</th></tr>
+        <tr><td>(0,0)</td><td>2</td><td>3</td><td>0</td><td>5</td></tr>
+        <tr><td>(0,1)</td><td>2</td><td>0</td><td>2</td><td>4</td></tr>
+        <tr><td>(1,0)</td><td>0</td><td>3</td><td>2</td><td>5</td></tr>
+        <tr><td>(1,1)</td><td>0</td><td>0</td><td>0</td><td><strong>0</strong></td></tr>
+      </table>
+    </div>
+    <p>MAP = (1,1)：两个像素都是前景，总能量 0。注意"保持一致"帮 (1,1) 省掉了 2 点不一致代价——子模条件保证的正是这种"一致偏好"能被图割利用。</p>
+
+    <p><strong>多标签怎么办？</strong> 图割只管二元。多标签时用 <span class="term">α-Expansion</span>：每轮选一个标签 α，把"保持原标签 vs 换成 α"编成二元子问题用图割解，迭代改进；<span class="term">αβ-Swap</span> 类似，在两个标签间做交换。它们是近似算法，但在视觉任务上效果极好，是事实标准。</p>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>"图割能解 MAP"——只在<strong>二元 + 成对 + 子模</strong>三个条件同时成立时精确。三元以上、高阶项、非子模能量，图割全部失效，只能回到 LP 松弛/α-Expansion 这类近似或松弛路线。</p>
+    </div>
+
+    <!-- 回忆卡片 13.5 -->
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 13.5-1</div>
+              <div class="q-text">LP 松弛放松了什么？它给出上界还是下界？什么时候它给出精确解？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              放松 0/1 整数约束为 [0,1] 连续区间。给出上界；当松弛解恰为整数时（树上必如此），即精确 MAP。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 13.5-2</div>
+              <div class="q-text">写出子模条件，并用一句话说出它的物理含义与适用场景。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              E(0,0)+E(1,1) ≤ E(0,1)+E(1,0)：相邻取同标签的总代价不超过取异标签。适用：二元成对 MRF，如图像分割。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 概念卡 ============ -->
+    <h2><span class="sec-no">🃏</span>概念卡：本章概念的一分钟画像</h2>
+    <p>翻面前先自问：这个概念我能用一句话讲清楚吗？</p>
+    <div class="flip-grid">
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 1</div>
+            <div class="q-text">MAP / MPE（Maximum A Posteriori / Most Probable Explanation）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">arg max<sub>y</sub> P(Y=y | E=e)：给定证据下联合最可能的赋值；查全体非证据变量时叫 MPE。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">决策只要一个答案，不需要完整后验分布。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">不问"每门课平均考多少"，问"哪份全科成绩单最可能"。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为逐变量取边缘 arg max 再拼起来就是 MAP——例 1 证明它可以错。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">诊断、分割、解码（Ch15 Viterbi）、影响图决策（Ch23）。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 2</div>
+            <div class="q-text">Max-Product 变量消去（Max-Product VE）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">Sum-Product VE 把消去算子从 ∑ 换成 max，并记录回溯指针 δ。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">在因子结构上高效找全局最大赋值，不用枚举全部赋值。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">淘汰赛：每轮只把局部冠军往后传，冠军名单用指针记着。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">只记最大值不记指针——能拿到分数却还原不出赋值。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">树上/低树宽图精确 MAP；Ch15 Viterbi 是它的链上特例。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 3</div>
+            <div class="q-text">Max-Sum / 能量最小化（Energy Minimization）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">取对数后 MAP = max ∑ log ψ = min ∑ E，E = −log ψ 为能量。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">乘法变加法（数值稳定），并接通组合优化工具箱。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">同一座山的两张地图：找最高峰 = 找最低谷（海拔取负）。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为换了形式换了问题——三者数学上严格等价。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">计算机视觉能量模型；LP 松弛与图割都以能量形式陈述。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 4</div>
+            <div class="q-text">LP 松弛与切割平面（LP Relaxation / Cutting Plane）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">把 MAP 写成整数线性规划后放松整数约束为连续区间，得多项式可解的 LP；切割平面逐步加约束收紧。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">一般含环图上 NP-hard 的 MAP，需要一个可计算的界与收紧机制。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">先允许"半个标签"的作弊解，再一刀刀把作弊空间削掉。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为松弛解能直接用——分数解不是合法赋值，只有取整（且取整解=松弛解）时才中奖。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">含环图的精确/认证近似 MAP；树上松弛必紧。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 5</div>
+            <div class="q-text">图割与子模性（Graph Cuts / Submodularity）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">二元成对 MRF 且边能量满足 E(0,0)+E(1,1) ≤ E(0,1)+E(1,0) 时，MAP 精确等价于网络最小割。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">NP-hard 大海中的一块多项式绿洲：一大类视觉能量可精确最小化。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">"一致比分歧便宜"的能量，可以画成水管网络，最小割一刀切出最优标签。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为图割是通用 MAP 算法——三元以上、非子模、高阶项全部失效。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">图像分割、立体匹配；多标签靠 α-Expansion 迭代调用它。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 6</div>
+            <div class="q-text">边缘 MAP（Marginal MAP）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">arg max<sub>y</sub> P(Y=y|E) 但 Y 只是部分变量：要先对其余变量<strong>求和</strong>再取最大。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">只关心一部分变量的最可能取值时（其余变量是 nuisance）。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">既要加总（边缘化 nuisance）又要取最大（选 Y）——两种最难的操作叠在一起。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为它比 MPE 简单——max 与 ∑ 不可交换，消去顺序受限，复杂度反而更高。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">诊断只查病因子集；理论上本章最难的推广。</span></div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- ============ 分层习题 ============ -->
+    <h2><span class="sec-no">📝</span>分层习题</h2>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>判断对错：<strong>只要用 Max-Product 变量消去，MAP 推理就和边缘推理一样便宜，所以 MAP 不是 NP-hard 的说法是误传。</strong>说明理由。</div>
+      <details>
+        <summary>提示</summary>
+        <p>回忆"相同复杂度"成立的条件是什么图结构；NP-hard 谈的是哪一类图。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">错。Max-Product VE 与 Sum-Product VE 复杂度相同（O(n·d<sup>w+1</sup>)），但这个"相同"对两者都随诱导宽度 w 指数爆炸。NP-hard 指的是：不存在对<em>所有图</em>都多项式的 MAP 算法（3-SAT 归约）。树上的便宜是特例，不推翻一般情形的难度结论。</div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>判断对错：<strong>对任意分布，MAP 赋值中每个变量的取值一定等于该变量边缘分布的 arg max。</strong></div>
+      <details>
+        <summary>提示</summary>
+        <p>回到 13.1 节的 2×2 反例表，逐格核对。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">错。13.1 例 1 中 MAP = (x¹, y⁰)，但 Y 的边缘 arg max 是 y¹（0.60 &gt; 0.40）。MAP 的 y 分量 y⁰ 不是 Y 的边缘最可能值。原因：MAP 优化的是单格联合概率，边缘 arg max 优化的是整行/整列的加总，两者的目标函数不同。</div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>二元链 X—Y，因子 φ(x,y)：φ(0,0)=3，φ(0,1)=2，φ(1,0)=1，φ(1,1)=5。用 Max-Product 消去（消 X）求 MAP 赋值与分数，写出回溯指针。</div>
+      <details>
+        <summary>提示</summary>
+        <p>先对每个 y 在 x 上取 max（记指针），再对 y 取 max，最后回溯。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p>消去 X：τ(y⁰) = max(3, 1) = <strong>3</strong>，δ(y⁰) = x⁰；τ(y¹) = max(2, 5) = <strong>5</strong>，δ(y¹) = x¹。</p>
+          <p>全局最大：max(3, 5) = 5，y = y¹。</p>
+          <p>回溯：δ(y¹) = x¹。</p>
+          <p><strong>MAP = (x¹, y¹)，分数 = 5</strong>。枚举核对：3、2、1、5 中最大确为 5。✓</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>某二元成对能量边：E(0,0)=1，E(1,1)=0，E(0,1)=3，E(1,0)=1。问：(1) 它满足子模性吗？(2) 若把 E(0,0) 从 1 改成 4，结论怎么变，意味着什么？</div>
+      <details>
+        <summary>提示</summary>
+        <p>比较"同标签和"与"异标签和"。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p>(1) E(0,0)+E(1,1) = 1+0 = 1 ≤ E(0,1)+E(1,0) = 3+1 = 4。✓ 满足子模性，可用图割精确求解。</p>
+          <p>(2) 改后：4+0 = 4 ≤ 3+1 = 4，仍满足（等号是允许的）。若改成 4.1，则 4.1 &gt; 4，子模被破坏——这条边实际上"偏好不一致"（x=0 和两端相异都便宜），图割不再适用，只能退回 LP 松弛等通用方法。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l3">L3 建模应用</span>医学诊断：两种疾病 D₁、D₂（各取 有/无），症状 S 受两者影响。临床要"最可能的疾病组合"而不是每种病各自的概率。请：(1) 说明该用 MAP 还是逐变量边缘 arg max，为什么；(2) 若还要求同时给出 S 的最可能值，任务变成什么；(3) 说出一个让图割能用上的建模限制。</div>
+      <details>
+        <summary>提示</summary>
+        <p>回忆例 1 的教训；"所有非证据变量一起查"是哪种任务；图割的三个前提。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p>(1) 用 MAP（对 {D₁,D₂} 联合取 arg max）。两病可能有交互（共生或互斥），逐变量边缘 arg max 可能拼出一组联合概率并非最高的组合——例 1 的反例结构在医学里真实存在。</p>
+          <p>(2) 查询集扩大为全部非证据变量 {D₁,D₂,S}，任务变成 MPE（最可能解释）。</p>
+          <p>(3) 限制模型为：二元变量（有/无）+ 只含成对交互 + 所有边能量子模（如"两病共生"与"症状吻合"的边都是同标签便宜）。此时可用图割精确求得最优诊断组合；一旦加入"三病联合效应"这类高阶项或"互斥"型（非子模）边，就要改用 LP 松弛。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l3">L3 建模应用</span>临床决策：病情 X∈{轻，重}（编码 0/1），两项检查 Y、Z 与病情成链 X—Y—Z（Y、Z 均为二值结果）。因子沿用正文手算例：φ₁(X,Y)：φ₁(0,0)=26，φ₁(0,1)=28，φ₁(1,0)=16，φ₁(1,1)=30；φ₂(Y,Z)：相同得 2、不同得 1。医生只关心<strong>最可能的病情 X</strong>，不关心检查结果的具体取值。问：(1) 该用联合 MAP 还是边缘 MAP？(2) 分别算出两种答案；(3) 解释两者为什么不同。</div>
+      <details>
+        <summary>提示</summary>
+        <p>"只关心 X"意味着 Y、Z 是陪衬变量——该对它们做什么操作？回忆正文手算中 60 与 162 各代表什么。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p>(1) 用<strong>边缘 MAP</strong>：arg max<sub>x</sub> ∑<sub>y,z</sub> w(x,y,z)。医生的决策变量只有 X，检查结果 Y、Z 不被询问，应当对它们求和边缘化，而不是连同它们一起取最大。</p>
+          <p>(2) 联合 MAP：w(1,1,1) = 30·2 = 60 为全局最大（次大 56、52），赋值 = （重， 阳性， 阳性），x 分量 = <strong>重</strong>。边缘 MAP：对每个 y 有 ∑<sub>z</sub> φ₂ = 3，故 P(x) ∝ 3·∑<sub>y</sub> φ₁(x,y)——x=轻得 3×(26+28) = 162（即 162/300 = 0.54），x=重得 3×(16+30) = 138（0.46），答案 = <strong>轻</strong>。两种算法给出相反结论。</p>
+          <p>(3) 差异根源：联合 MAP 找的是"病情与两项检查同时最吻合"的单幅画面，"重"只赢在 w（重，阳，阳）=60 这一个格子；边缘 MAP 把每个病情下所有检查组合的概率质量<strong>加总</strong>，"轻"靠 52+26+28+56 = 162 的团体分获胜。由于 max 与 ∑ 不可交换（先 max 后 ∑ 会虚增成 168 ≠ 162），"先取联合 MAP 再读 x 分量"是错误流程。结论：决策对象是谁，就把谁留到最后取 max，其余变量先求和——本例医生应报告<strong>轻</strong>。</p>
+        </div>
+      </details>
+    </div>
+
+    <!-- ============ 本章自测 ============ -->
+    <h2><span class="sec-no">✍️</span>本章自测</h2>
+    <p class="quiz-hint">点击选项判分，答错会给出原因。</p>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 1</div>
+      <div class="q-stem">关于 MAP 与逐变量边缘 arg max，正确的是：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 两者永远一致，因为 arg max 可以逐坐标取</li>
+        <li data-opt="b">B. 两者可能不同，因为边缘是行/列加总后的最可能，MAP 是单格联合最可能</li>
+        <li data-opt="c">C. 两者可能不同，但只有变量数 ≥ 3 时才发生</li>
+        <li data-opt="d">D. MAP 一定等于边缘 arg max 中概率最高的那个分量对应的赋值</li>
+      </ul>
+      <div class="quiz-explain">选 B。13.1 的 2×2 例子（两个变量）已经构成反例，C 错；arg max 对加总不可逐坐标分配，A 错；D 编造的规则在例 1 中就失败——边缘 arg max 拼出的 (x¹,y¹) 根本不是 MAP。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="c">
+      <div class="q-no">自测 2</div>
+      <div class="q-stem">Max-Product 变量消去相对 Sum-Product 变量消去的改动是：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 只把 ∑ 换成 max，其他完全不变</li>
+        <li data-opt="b">B. 换成 max 且复杂度从指数降到多项式</li>
+        <li data-opt="c">C. 换成 max，并额外记录 arg max 的回溯指针；复杂度不变</li>
+        <li data-opt="d">D. 换成 max，且必须先对势函数归一化</li>
+      </ul>
+      <div class="quiz-explain">选 C。A 漏了回溯指针——没有它还原不出赋值。B 错：复杂度同为 O(n·d<sup>w+1</sup>)。D 错：arg max 与归一化常数无关，MAP 不需要 Z，这正是它比边缘推断省掉的一个麻烦。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="a">
+      <div class="q-no">自测 3</div>
+      <div class="q-stem">"MAP 是 NP-hard"最直接的证据是：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 任何 3-SAT 公式都能编码成一个因子网络，使其 MAP 分数为正当且仅当公式可满足</li>
+        <li data-opt="b">B. MAP 需要对指数多个赋值求和</li>
+        <li data-opt="c">C. Max-Product VE 在含环图上不终止</li>
+        <li data-opt="d">D. 配分函数 Z 算不出来</li>
+      </ul>
+      <div class="quiz-explain">选 A。这是从 NP-complete 问题到 MAP 的归约：解 MAP 的通用算法必然能解 3-SAT。B 描述的是求和推理（#P 类难度），且 MAP 恰恰不需要求和；C 与 D 都不是 NP-hard 的原因（MAP 甚至不需要 Z）。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="d">
+      <div class="q-no">自测 4</div>
+      <div class="q-stem">下列哪种情形的 MAP 可以用图割<em>精确</em>求解？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 三元变量的成对 MRF，能量子模</li>
+        <li data-opt="b">B. 二元变量 MRF，含三元团上的高阶项</li>
+        <li data-opt="c">C. 二元变量的成对 MRF，边能量任意</li>
+        <li data-opt="d">D. 二元变量的成对 MRF，所有边能量满足子模条件</li>
+      </ul>
+      <div class="quiz-explain">选 D。图割的三根支柱：二元、成对、子模，缺一不可。A 标签数超了（多标签只能用 α-Expansion 近似）；B 有高阶项；C 缺子模条件。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 5</div>
+      <div class="q-stem">关于 LP 松弛，下列说法正确的是：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 它放松的是图的连通性约束</li>
+        <li data-opt="b">B. 它把 0/1 指示变量放松为 [0,1] 连续值；若解恰为整数则得到精确 MAP</li>
+        <li data-opt="c">C. 它的解一定不是整数，所以永远只是近似</li>
+        <li data-opt="d">D. 它给出 MAP 分数的下界</li>
+      </ul>
+      <div class="quiz-explain">选 B。放松整数约束后可行域变大，最大化问题的最优值只会升高——所以是<em>上界</em>（D 错）。树上松弛恒紧、必出整数解（C 错）。A 张冠李戴：放松的是变量的整数性，不是图结构。</div>
+    </div>
+
+    <!-- ============ 三句话复述 ============ -->
+    <div class="retell">
+      <h3>🗣️ 用自己的话，三句话讲完本章</h3>
+      <p class="retell-sub">对着空气（或室友）说出这三句。说卡壳的那句，回去重读对应小节。</p>
+      <details>
+        <summary>句1：这章解决什么问题？——</summary>
+        <div class="retell-answer">参考答案：很多任务不需要完整后验分布，只要"联合最可能的那一组赋值"（MAP/MPE）；而且它不能被分解成逐变量取边缘最可能——必须整体优化。</div>
+      </details>
+      <details>
+        <summary>句2：核心机制是什么？——</summary>
+        <div class="retell-answer">参考答案：把求和推理的 ∑ 换成 max（max 对乘法同样有分配律），得 Max-Product 消去 + 回溯指针；取对数后 MAP 等价于能量最小化，从而接通整数规划/LP 松弛与图割等组合优化工具。</div>
+      </details>
+      <details>
+        <summary>句3：它和前后章怎么分工？——</summary>
+        <div class="retell-answer">参考答案：Ch9–12 管"边缘概率"（求和），本章管"最可能赋值"（取最大），算法骨架共享但难度性质不同（NP-hard）；Ch15 的 Viterbi 是它在链上的特例，Ch23 的决策是它的直接下游。</div>
+      </details>
+    </div>
+
+    <!-- ============ 复习计划 ============ -->
+    <div class="review-plan">
+      <h3>🔁 间隔复习计划</h3>
+      <p>回忆本身比重读有效 10 倍。到点只做一件事：翻卡 + 重做标记题。</p>
+      <table>
+        <tr><th>时间点</th><th>复习内容</th><th>预计用时</th></tr>
+        <tr><td>第 1 天</td><td>概念卡 1–6 全部 + 回忆卡 13.1-2、13.2-1、13.4-1</td><td>10 分钟</td></tr>
+        <tr><td>第 3 天</td><td>概念卡 1、4、5（MAP/LP 松弛/图割）+ 重做自测错题 + L2 第 1 题</td><td>8 分钟</td></tr>
+        <tr><td>第 7 天</td><td>三句话复述出声说一遍 + 回忆卡 13.3-2、13.5-2</td><td>10 分钟</td></tr>
+        <tr><td>第 15 天</td><td>只做合上书挑战；六条全过则本章毕业，卡在哪条就重读对应小节</td><td>15 分钟</td></tr>
+      </table>
+    </div>
+
+    <!-- 合上书挑战 -->
+    <div class="final-challenge">
+      <h3>📕 合上书挑战</h3>
+      <p class="fc-sub">现在关掉这个页面（或遮住屏幕），拿一张纸，凭记忆完成以下任务。全部做完再回来核对——这是本章真正的毕业考试。</p>
+      <ol id="challenge-list">
+        <li><span class="fc-check"></span>写出 MAP 与 MPE 的定义，并默写 13.1 的 2×2 反例表，指出两个答案各是什么</li>
+        <li><span class="fc-check"></span>在链 A—B—C（例 2 的因子表）上完整执行 Max-Product 消去，含回溯指针，得到 (a¹,b¹,c⁰)=8</li>
+        <li><span class="fc-check"></span>写出"MAP = 能量最小化"的推导：从 P ∝ ∏ψ 到 min ∑E，说清 E 与 ψ 的关系</li>
+        <li><span class="fc-check"></span>用 3-SAT 归约向朋友解释 MAP 为什么 NP-hard（不超过三句话）</li>
+        <li><span class="fc-check"></span>写出子模条件，默算例 3 的四种赋值能量，并说明多标签时用哪两种迭代方法</li>
+        <li><span class="fc-check"></span>回答本章的主线问题：换"最可能赋值"这个任务后，算法怎么改、为什么反而更难？（一句话）</li>
+      </ol>
+    </div>
+
+    <div class="complete-zone">
+      <button class="btn-complete" id="btn-complete" onclick="markDone()">✓ 我已完成本章（含合上书挑战）</button>
+    </div>
+
+    <div class="chapter-nav">
+      <a href="chapter-12.html"><span class="nav-dir">← 上一章</span>第12章 近似推理：粒子方法</a>
+      <a href="chapter-14.html" class="next"><span class="nav-dir">下一章 →</span>第14章 混合网络中的推理</a>
+    </div>
+
+  </div>
+</div>
+
+<footer class="footer">
+  <div class="wrap">第13章 MAP 推理 · PGM 互动讲义 · 基于 Koller &amp; Friedman (2009)</div>
+</footer>
+
+<script src="assets/mermaid.min.js"></script>
+<script>
+mermaid.initialize({
+  startOnLoad: true,
+  theme: "base",
+  themeVariables: {
+    primaryColor: "#e3edf7",
+    primaryBorderColor: "#1d5f9e",
+    primaryTextColor: "#1d5f9e",
+    lineColor: "#5c554b",
+    secondaryColor: "#fbeedd",
+    tertiaryColor: "#f5f1e8",
+    fontFamily: "-apple-system, PingFang SC, sans-serif",
+    fontSize: "14px"
+  },
+  flowchart: { curve: "linear", htmlLabels: false }
+});
+</script>
+<script>
+// 自测题逻辑
+document.querySelectorAll(".quiz-block").forEach(block => {
+  const answer = block.dataset.answer;
+  const explain = block.querySelector(".quiz-explain");
+  block.querySelectorAll(".quiz-opts li").forEach(li => {
+    li.addEventListener("click", () => {
+      const opts = block.querySelectorAll(".quiz-opts li");
+      opts.forEach(o => o.classList.add("disabled"));
+      if (li.dataset.opt === answer) {
+        li.classList.add("correct");
+      } else {
+        li.classList.add("wrong");
+        block.querySelector(`[data-opt="${answer}"]`).classList.add("correct");
+      }
+      explain.classList.add("show");
+    });
+  });
+});
+
+// 合上书清单打勾
+document.querySelectorAll("#challenge-list li").forEach(li => {
+  li.addEventListener("click", () => li.classList.toggle("checked"));
+});
+
+// 完成标记 → localStorage（第13章）
+const KEY = "pgm_progress_v1";
+function loadProgress() {
+  try { return JSON.parse(localStorage.getItem(KEY)) || {}; } catch (e) { return {}; }
+}
+const progress = loadProgress();
+const btn = document.getElementById("btn-complete");
+if (progress[13] && progress[13].done) {
+  btn.textContent = "✓ 已完成 · 再次点击重置";
+  btn.classList.add("done");
+}
+function markDone() {
+  const p = loadProgress();
+  if (p[13] && p[13].done) {
+    delete p[13];
+    btn.textContent = "✓ 我已完成本章（含合上书挑战）";
+    btn.classList.remove("done");
+  } else {
+    p[13] = { done: true, completedAt: Date.now(), reviewsDone: 0 };
+    btn.textContent = "✓ 已完成 · 复习提醒已开启";
+    btn.classList.add("done");
+  }
+  localStorage.setItem(KEY, JSON.stringify(p));
+}
+</script>
+
+</body>
+</html>

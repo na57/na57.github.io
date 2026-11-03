@@ -1,0 +1,837 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第23章 影响图 · PGM 互动讲义</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+<nav class="topbar">
+  <div class="topbar-inner">
+    <span class="brand"><a href="index.html" style="color:inherit">← 学习地图</a></span>
+    <span class="crumb">阶段四 · 因果与决策 / 第23章（全书终章）</span>
+  </div>
+</nav>
+
+<div class="wrap">
+
+  <div class="lecture-head">
+    <span class="ch-label">CHAPTER 23 · 因果与决策</span>
+    <h1>影响图</h1>
+    <p class="lead">把决策变量画进图里，让"做决定"也能像推断一样算——全书在此收口。</p>
+  </div>
+
+  <!-- 本章定位 -->
+  <div class="position-bar">
+    <strong>本章在主线上的位置：</strong>第 1–21 章给出概率（含干预语义），第 22 章给出效用 → <u>本章把机会、决策、效用画进同一张图，用推理算法直接算出最优策略</u> → 全书"表示 → 推理 → 学习 → 因果 → 决策"的主线在此闭环。<br>
+    第23章回答主线上的最后一个问题：<strong>如何把"做决定"本身变成图模型上的一个计算问题？</strong>
+    <div class="map-inline">
+      <span class="node">Ch1–8 表示（把分布画成图）</span><span class="arrow">→</span>
+      <span class="node">Ch9–15 推理（在图上算查询）</span><span class="arrow">→</span>
+      <span class="node">Ch16–20 学习（从数据估参数与结构）</span><span class="arrow">→</span>
+      <span class="node">Ch21 因果推断（干预会怎样）</span><span class="arrow">→</span>
+      <span class="node">Ch22 效用与决策（结果值多少）</span><span class="arrow">→</span>
+      <span class="node here">Ch23 影响图（三者合龙）</span>
+    </div>
+  </div>
+
+  <!-- 学习目标 -->
+  <div class="objectives">
+    <h4>🎯 学完本章，合上书你应该能：</h4>
+    <ol>
+      <li>说出影响图三类节点（机会/决策/价值）的形状、含义与参数形式</li>
+      <li>区分信息弧与影响弧，并解释"决策节点的父节点必须在它之前确定"的原因</li>
+      <li>对单决策影响图手算最优行动（MEU），并算出新增一条信息弧带来的价值</li>
+      <li>对两阶段决策问题用逆向归纳手算最优策略的完整决策规则</li>
+      <li>说明 sum-max 变量消去如何复用第 9–10 章的推理算法求最优策略</li>
+      <li>画出全书"表示→推理→学习→因果→决策"的地图，并用三句话讲清每个阶段回答什么</li>
+    </ol>
+  </div>
+
+  <div class="lecture">
+
+    <!-- 推导主线 -->
+    <div class="figure">
+      <div class="mermaid">
+flowchart LR
+  A["概率（Ch1-21）回答<br>世界会怎样"] --> B["效用（Ch22）回答<br>我想要什么"]
+  B --> C["但两者还在两个世界<br>决策靠手工相乘"]
+  C --> D["把决策与效用画进图<br>机会 决策 价值节点"]
+  D --> E["信息弧标明<br>决策时已知道什么"]
+  E --> F["策略 = 每个决策节点<br>一张规则表"]
+  F --> G["求最优：从后往前<br>机会求和 决策取 max"]
+  G --> H["收口：表示 推理 学习<br>因果 决策 全线闭环"]
+  classDef hot fill:#fbeedd,stroke:#c4651f,stroke-width:2.5px,color:#c4651f;
+  classDef danger fill:#fae9e7,stroke:#b03a2e,stroke-width:2.5px,color:#b03a2e;
+  class D hot;
+  class H danger;
+      </div>
+      <div class="caption">本章推导主线：第 22 章留下"两个世界"的接口，本章把它们合并成一张图。终点是全书的闭环——你能用一套语言走完"建模→推断→决策"全程。</div>
+    </div>
+
+    <!-- ============ 23.1 ============ -->
+    <h2><span class="sec-no">23.1</span>三类节点与两种弧：把决策画进图</h2>
+
+    <p>第 22 章的决策计算（例 1 的治疗方案、例 4 的检查）都是手工完成的：列概率、乘效用、取最大。问题复杂一点——多个决策、中间有观测、效用依赖多个变量——手工列表就失控了。就像第 3 章用图模型驯服了联合分布，<span class="term">影响图</span>（Influence Diagram）用图驯服决策问题。它在贝叶斯网络上增加两种新节点，共三类：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>节点类型</th><th>图形</th><th>含义</th><th>携带的参数</th></tr>
+        <tr><td><strong>机会节点</strong>（Chance Node）</td><td>圆形/椭圆</td><td>随机变量，世界替它"掷骰子"</td><td>CPD：P(X | Pa(X))</td></tr>
+        <tr><td><strong>决策节点</strong>（Decision Node）</td><td>矩形</td><td>行动变量，<strong>你</strong>替它选值</td><td>无 CPD；取值由策略决定</td></tr>
+        <tr><td><strong>价值节点</strong>（Value/Utility Node）</td><td>菱形</td><td>效用的计分项，无子节点</td><td>效用函数 U(Pa(V))，确定性</td></tr>
+      </table>
+    </div>
+
+    <p>边也分成两种语义，必须分清：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>弧的类型</th><th>指向</th><th>含义</th><th>类比</th></tr>
+        <tr><td><strong>影响弧</strong>（Relevance Arc）</td><td>机会/决策 → 机会节点<br>机会/决策 → 价值节点</td><td>概率依赖或效用依赖：它<strong>改变</strong>下游的分布或得分</td><td>BN 里的普通有向边（含 Ch21 干预语义）</td></tr>
+        <tr><td><strong>信息弧</strong>（Information Arc）</td><td>机会/决策 → <strong>决策节点</strong></td><td>做该决策时，父节点的取值<strong>已经被你观测到</strong></td><td>"决策时摆在桌面上的情报"</td></tr>
+      </table>
+    </div>
+
+    <div class="figure">
+      <div class="mermaid">
+flowchart LR
+  W(("W 天气")) -.->|"信息弧"| D["D 带伞否"]
+  D -->|"影响弧"| V{"V 效用"}
+  W -->|"影响弧"| V
+  classDef hot fill:#fbeedd,stroke:#c4651f,stroke-width:2.5px,color:#c4651f;
+  class D hot;
+      </div>
+      <div class="caption">图 23.1 带伞决策的影响图（含信息弧版本）。圆 = 机会节点，矩形 = 决策节点（橙色），菱形 = 价值节点。虚线是信息弧：决策时已知天气；两条实线是影响弧：天气与决策共同决定效用。</div>
+    </div>
+
+    <div class="box insight">
+      <span class="box-tag">✅ 一条硬性时序规则</span>
+      <p>决策节点的父节点，必须是在该决策<strong>之前</strong>就能确定的量——否则"策略 = 给定父节点取值选行动"这张规则表里会出现"决策时还不知道答案"的格子，整个决策规则无从执行。多个决策节点时，影响图还要求存在一个全序：D₁ 的信息弧来自 D₁ 之前观测到的变量与之前的决策（人不会忘记自己做过什么）。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 信息弧不是因果弧</span>
+      <p>图 23.1 里 W → D 的虚线<strong>不表示</strong>"天气导致带伞"，它只表示"带伞前看了天气"。反过来，决策 D → V 的实线才是因果：带不带伞改变你的处境。判断一条边是哪种，看箭头落点：落在决策节点上是信息弧，落在机会/价值节点上是影响弧。</p>
+    </div>
+
+    <!-- 回忆卡片 23.1 -->
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 23.1-1</div>
+              <div class="q-text">影响图三类节点各是什么形状、携带什么参数？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              机会节点（圆）：随机变量，带 CPD；决策节点（矩形）：行动变量，无 CPD，由策略赋值；价值节点（菱形）：确定性的效用函数 U(Pa(V))，无子节点。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 23.1-2</div>
+              <div class="q-text">信息弧与影响弧的区别？为什么决策节点的父节点必须先于它确定？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              信息弧（→决策节点）只声明"决策时已知"，无因果义；影响弧（→机会/价值节点）是概率或效用依赖，有因果义。父节点若不先确定，策略表就有填不了的格子，决策无法执行。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 23.2 ============ -->
+    <h2><span class="sec-no">23.2</span>单决策完整手算：带伞问题与信息弧的价格</h2>
+
+    <p>把第 22 章的手工计算搬进图里，看影响图如何"算"决策。带伞问题：决策 D（带/不带），天气 W（雨 0.3 / 晴 0.7），效用表：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>U(D, W)</th><th>W = 雨（0.3）</th><th>W = 晴（0.7）</th></tr>
+        <tr><td>D = 带</td><td>70（干爽但累赘）</td><td>60（白拿一天）</td></tr>
+        <tr><td>D = 不带</td><td>0（落汤鸡）</td><td>100（一身轻）</td></tr>
+      </table>
+    </div>
+
+    <h3>情形一：无信息弧（出门前看不到天气）</h3>
+    <p>没有 W ⇢ D，决策时 W 未知，最优行动是全局比较期望效用：</p>
+    <ul>
+      <li>EU(带) = 0.3×70 + 0.7×60 = 21 + 42 = <strong>63</strong></li>
+      <li>EU(不带) = 0.3×0 + 0.7×100 = 0 + 70 = <strong>70</strong></li>
+    </ul>
+    <p>最优策略：δ*(D) = 不带，EU = <strong>70</strong>。</p>
+
+    <h3>情形二：有信息弧（出门前看了完美预报）</h3>
+    <p>现在决策规则是 W 的函数：对每种天气分别取最优——</p>
+    <ul>
+      <li>W = 雨：带（70）&gt; 不带（0）→ δ*(雨) = 带</li>
+      <li>W = 晴：不带（100）&gt; 带（60）→ δ*(晴) = 不带</li>
+    </ul>
+    <p>期望效用 = 0.3×70 + 0.7×100 = 21 + 70 = <strong>91</strong>。</p>
+
+    <p><strong>对比：信息弧的价值 = 91 − 70 = 21</strong>，正是第 22 章 VPI 的图上版本。注意它全部来自"晴天才改主意"：无信息时被迫选"不带"，在雨天赔掉 70（0.3×70 = 21）。信息弧只可能让期望效用变高或不变——多一张可用的情报不会变差，这就是"信息弧单调性"（VPI ≥ 0 的图读法）。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 图在替你记账</span>
+      <p>情形一与情形二的唯一差别是图上一条虚线。影响图把"你知道什么"也变成图结构：加信息弧 = 策略表里多一个条件列。第 22 章手工算的 VPI，在这里变成"比较两张图的期望效用"——图本身就是决策分析的账本。</p>
+    </div>
+
+    <!-- 回忆卡片 23.2 -->
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 23.2-1</div>
+              <div class="q-text">带伞问题（无信息弧）的最优行动与期望效用是多少？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              EU(带) = 0.3×70 + 0.7×60 = 63；EU(不带) = 0.3×0 + 0.7×100 = 70。选"不带"，EU = 70。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 23.2-2</div>
+              <div class="q-text">加上信息弧 W⇢D 后最优策略和期望效用变成什么？信息的价值是多少、来自哪里？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              δ*(雨)=带、δ*(晴)=不带，EU = 91。信息价值 = 91−70 = 21，全部来自雨天分支从"不带（0）"改为"带（70）"：0.3×70 = 21。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 23.3 ============ -->
+    <h2><span class="sec-no">23.3</span>多阶段决策：从后往前算的逆向归纳</h2>
+
+    <p>真实决策是序列：先做 D₁，观测一些结果，再做 D₂。信息弧编码这个顺序（D₂ 的父节点 = 做 D₂ 时已知的量）。最优策略怎么求？答案是<span class="term">逆向归纳</span>（Backward Induction）：<strong>最后一个决策先定</strong>——它的信息最全；定好之后把它"固化"成一个普通机会节点，再倒推前一个。</p>
+
+    <h3>例 2：检查—治疗，完整手算</h3>
+    <p>病情 D（病/健康，各 0.5）。可选做一次检查（成本 5 效用单位），结果 R 与病情相关：P(+|病) = 0.8，P(+|健康) = 0.2。随后决定治疗/不治。效用（不含检查成本）：治+病 = 90，治+健康 = 40（白挨副作用），不治+病 = 0，不治+健康 = 100。</p>
+
+    <div class="figure">
+      <div class="mermaid">
+flowchart LR
+  D(("D 病情")) --> R(("R 检查结果"))
+  D1["D1 做检查否"] --> R
+  R -.->|"信息弧"| D2["D2 治疗否"]
+  D --> V{"V 效用"}
+  D2 --> V
+  D1 -->|"检查成本"| V
+  classDef hot fill:#fbeedd,stroke:#c4651f,stroke-width:2.5px,color:#c4651f;
+  class D1,D2 hot;
+      </div>
+      <div class="caption">图 23.2 两阶段决策。D₁ 决定是否获取信息，R 经信息弧进入 D₂，D₂ 与病情共同决定效用，D₁ 还直接向效用收"成本"。逆向归纳先定 D₂ 的规则，再回头定 D₁。</div>
+    </div>
+
+    <p><strong>第 0 步：准备工作（贝叶斯）。</strong>P(+) = 0.5×0.8 + 0.5×0.2 = 0.5。检查后验：</p>
+    <ul>
+      <li>P(病|+) = 0.8×0.5 / 0.5 = <strong>0.8</strong>；P(病|−) = 0.2×0.5 / 0.5 = <strong>0.2</strong></li>
+    </ul>
+
+    <p><strong>第 1 步：先定最后的决策 D₂（对 R 的每个取值各选最优）。</strong></p>
+    <ul>
+      <li>R = +：EU(治|+) = 0.8×90 + 0.2×40 = 72 + 8 = <strong>80</strong>；EU(不治|+) = 0.8×0 + 0.2×100 = 20。→ δ*(+) = <strong>治</strong>（80）</li>
+      <li>R = −：EU(治|−) = 0.2×90 + 0.8×40 = 18 + 32 = 50；EU(不治|−) = 0.2×0 + 0.8×100 = <strong>80</strong>。→ δ*(−) = <strong>不治</strong>（80）</li>
+    </ul>
+    <p>此时把 D₂"固化"：它不再自由，而是一个按 δ* 执行的规则——图上的一个普通机会节点。</p>
+
+    <p><strong>第 2 步：倒推 D₁。</strong>若做检查：按 δ* 执行后的期望效用（扣除成本 5）= P(+)×80 + P(−)×80 − 5 = 0.5×80 + 0.5×80 − 5 = 80 − 5 = <strong>75</strong>。若不做检查：D₂ 无信息可用，全局比较 EU(治) = 0.5×90 + 0.5×40 = 45 + 20 = <strong>65</strong>，EU(不治) = 50——选治，得 65。</p>
+
+    <p><strong>第 3 步：D₁ 取最优。</strong>75 &gt; 65 → <strong>δ*(D₁) = 做检查</strong>。完整最优策略：做检查；阳性则治，阴性则不治。期望效用 75，比"不做检查直接治"（65）多 10——检查的信息价值（80−65=15）盖过了成本 5。</p>
+
+    <div class="box insight">
+      <span class="box-tag">✅ 逆向归纳的一般形式</span>
+      <p>按决策时序的逆序处理每个决策节点 D：对它父节点的每种赋值，选 max 行动（这就是 δ* 的一行）；然后把 D 替换为执行 δ* 的机会节点，继续向前。每个决策只被优化一次，且每次优化时它需要的全部信息都已就绪——这正是"父节点必须先确定"规则在算法层的回声。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 顺序不能反</span>
+      <p>若先定 D₁ 再定 D₂，D₂ 的规则表还没填，D₁ 的两个分支就没有可比较的期望效用。"从后往前"不是技巧，是时序约束的必然结果。这也解释了为什么 23.1 节要求影响图存在决策全序。</p>
+    </div>
+
+    <!-- 回忆卡片 23.3 -->
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 23.3-1</div>
+              <div class="q-text">例 2 中 D₂ 的最优规则是什么？两个分支的期望效用各是多少？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              δ*(+) = 治（EU 80 vs 20）；δ*(−) = 不治（EU 80 vs 50）。后验由贝叶斯给出：P(病|+) = 0.8，P(病|−) = 0.2。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 23.3-2</div>
+              <div class="q-text">逆向归纳为什么必须从最后一个决策开始？固化一个决策节点是什么意思？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              后决策的信息最全，且只有定好它，前决策的分支才有可比较的期望效用。固化 = 决策节点按 δ* 机械执行，退化为普通机会节点，供上一层继续倒推。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 23.4 ============ -->
+    <h2><span class="sec-no">23.4</span>影响图上的推理：sum-max 变量消去</h2>
+
+    <p>例 2 是手工倒推的，但它暗示了一个通用算法。第 9 章变量消去对联合分布做"乘因子、按序求和"；影响图的期望效用计算只需改一个符号：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>节点类型</th><th>消去时做什么</th><th>对应第 22 章</th></tr>
+        <tr><td>机会节点</td><td><strong>求和</strong>（对不确定取期望）</td><td>概率项 Σ P(·)</td></tr>
+        <tr><td>决策节点</td><td><strong>取最大</strong>（并记下 argmax 作为策略）</td><td>MEU 的 max</td></tr>
+        <tr><td>价值节点</td><td><strong>累加</strong>（多个价值节点求和为一个总效用因子）</td><td>加性分解</td></tr>
+      </table>
+    </div>
+
+    <p>消去顺序服从时序约束：机会变量按任意合法顺序求和，决策节点必须<strong>逆时序</strong>取 max（先消最后的决策）——这正是逆向归纳。同样，第 10 章的团树也可以改造：团需包含影响同一决策的全部变量，消息传递中遇到决策节点做 max 而非 sum。<strong>表示、推理两阶段投资的所有算法，在决策问题上原样复用</strong>——这就是把决策画进图的红利。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 望向更远处</span>
+      <p>把时间维度铺开，影响图的序列版本就是<span class="term">马尔可夫决策过程</span>（MDP，状态→行动→状态→行动……），求解它用动态规划；状态看不全时就是 POMDP——第 15 章动态贝叶斯网络的过滤/平滑与本章决策的合流。强化学习里的"值函数"正是逆向归纳中"固化后的期望效用"的递归写法。</p>
+    </div>
+
+    <!-- 回忆卡片 23.4 -->
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 23.4-1</div>
+              <div class="q-text">sum-max 变量消去中，机会/决策/价值三类节点分别做什么运算？消去顺序有什么约束？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              机会求和、决策取 max（记下 argmax）、价值累加。决策节点必须逆时序消去（最后的决策最先 max），即逆向归纳。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 23.4-2</div>
+              <div class="q-text">影响图与 MDP/POMDP 是什么关系？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              MDP 是影响图在时间维上的展开（状态-行动交替序列），用动态规划求解；POMDP 是状态不完全可观测的 MDP，对应动态贝叶斯网络（Ch15）+ 本章决策的合流。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 23.5 ============ -->
+    <h2><span class="sec-no">23.5</span>全书收口：一张地图与三个问题</h2>
+
+    <p>到这里，23 章全部到位。回头看，整本书其实只讲了一条线：<strong>如何用图驯服高维不确定性，并在这套语言里完成从"看世界"到"做决策"的全部计算。</strong></p>
+
+    <div class="figure">
+      <div class="mermaid">
+flowchart LR
+  subgraph S1["表示 Ch1-8"]
+    direction TB
+    A1["Ch1-2 引言与背景"] --> A2["Ch3-4 BN 与 MN<br>两种图语言"]
+    A2 --> A3["Ch5-8 局部模型 模板<br>高斯 指数族"]
+  end
+  subgraph S2["推理 Ch9-15"]
+    direction TB
+    B1["Ch9-10 精确推理<br>变量消去 团树"] --> B2["Ch11-12 近似推理<br>置信传播 采样"]
+    B2 --> B3["Ch13-15 MAP<br>混合 动态网络"]
+  end
+  subgraph S3["学习 Ch16-20"]
+    direction TB
+    C1["Ch16-17 参数学习"] --> C2["Ch18 结构学习"]
+    C2 --> C3["Ch19-20 不完全数据<br>与 MN 学习"]
+  end
+  subgraph S4["因果与决策 Ch21-23"]
+    direction TB
+    D1["Ch21 因果推断<br>do 与可识别"] --> D2["Ch22 效用<br>MEU"]
+    D2 --> D3["Ch23 影响图<br>最优策略"]
+  end
+  S1 --> S2 --> S3 --> S4
+  S1 -.->|"图语言全程复用"| S4
+  classDef hot fill:#fbeedd,stroke:#c4651f,stroke-width:2.5px,color:#c4651f;
+  class D3 hot;
+      </div>
+      <div class="caption">图 23.3 全书地图完成版。四个阶段不是四本书，是一条链：表示给分布一个可计算的形态；推理在这形态上回答查询；学习解决形态从哪来；因果与决策把它接到行动上。每个阶段都在复用前面阶段的成果——包括本章复用第 9–10 章的消去算法。</div>
+    </div>
+
+    <h3>读完全书，你应该能用自己的话回答这三个问题</h3>
+    <ol>
+      <li><strong>（表示）</strong>给我一个领域和其中的变量，我能否画出一张图、写出因子分解，并说清每条边、每个因子在说什么？——Ch3–8 的全部内容浓缩于此。</li>
+      <li><strong>（推理与学习）</strong>给我图、参数和证据，我能否算出任意查询？算不动时，我是否知道选哪种近似、付出什么代价？图和参数从数据中来时，我能否估出来？——Ch9–15 与 Ch16–20 的合奏。</li>
+      <li><strong>（因果与决策）</strong>我能否区分"看到的"与"做出来的"（P(Y|X) 与 P(Y|do(X))），并在给定偏好后把概率与效用合成一个可辩护的行动乃至策略？——Ch21–23 的落点，也是全书的目的。</li>
+    </ol>
+
+    <div class="box idea">
+      <span class="box-tag">💡 毕业赠言</span>
+      <p>图模型的力量不在于某一条公式，而在于它强迫你把隐含的假设<strong>画出来</strong>：变量是谁、依赖是谁、你知道什么、你能改变什么、你想要什么。图画对了，剩下的都是计算——而计算，这本书已经交给了你。</p>
+    </div>
+
+    <!-- 回忆卡片 23.5 -->
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 23.5-1</div>
+              <div class="q-text">全书四个阶段（表示/推理/学习/因果与决策）各回答什么问题？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              表示：如何紧凑编码联合分布（Ch1–8）；推理：如何高效回答查询（Ch9–15）；学习：结构与参数从数据哪来（Ch16–20）；因果与决策：干预会怎样、该选哪个行动（Ch21–23）。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 23.5-2</div>
+              <div class="q-text">用自己的话说出"毕业三问"的第三问（因果与决策）。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              我能否区分 P(Y|X) 与 P(Y|do(X))、判断因果效应可否从观测数据识别，并把推断出的分布与效用函数合成一个 MEU 意义下可辩护的行动或策略。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 概念卡 ============ -->
+    <h2><span class="sec-no">🃏</span>概念卡：本章概念的一分钟画像</h2>
+    <p>翻面前先自问：这个概念我能用一句话讲清楚吗？</p>
+    <div class="flip-grid">
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 1</div>
+            <div class="q-text">影响图（Influence Diagram）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">贝叶斯网络 + 决策节点（矩形）+ 价值节点（菱形）构成的决策模型。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">把概率、决策、效用统一到一张图上，使"求最优决策"成为图上的计算。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">决策的作战地图：情报（信息弧）、行动（矩形）、战果（菱形）。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为只是 BN 的图示变体——多出的两类节点改变了语义与算法（max 登场）。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">医疗决策、诊断测试选择、任何结构化单/多阶段决策分析。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 2</div>
+            <div class="q-text">决策节点（Decision Node）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">矩形节点：行动变量，取值由策略（而非 CPD）决定。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">把"我们能做什么"显式放进模型——世界不替它掷骰子。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">棋盘上轮到你走的格子。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">给它配 CPD——决策节点没有概率，只有规则；其"分布"由策略诱导。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">一切可选行动的建模点；Ch21 do 算子的图形化身。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 3</div>
+            <div class="q-text">信息弧（Information Arc）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">指向决策节点的弧：声明做该决策时父节点取值已被观测。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">显式编码"决策时知道什么"，决定策略表的形状。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">开考前允许带进考场的纸条——有它，策略才能按它分栏。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">当成因果弧——它只传递"可知性"，不代表影响。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">多阶段决策建模；增删一条信息弧的期望效用差 = VPI（Ch22）。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 4</div>
+            <div class="q-text">策略 / 决策规则（Policy / Decision Rule）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">δ<sub>D</sub>：Pa(D) → Val(D)，给定决策时的全部已知信息，选定行动。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">把"随机应变"形式化：不是选一个行动，而是选一张行动表。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">棋谱：每种局面（父节点赋值）对应一步棋。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为策略是固定行动——有信息弧时策略必须是信息的函数。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">一切多阶段决策；MDP/RL 中的 policy 即此物。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 5</div>
+            <div class="q-text">最优策略与 MEU（Optimal Policy）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">δ* = argmax<sub>δ</sub> E<sub>P<sub>δ</sub></sub>[U]：使策略诱导分布下期望效用最大的策略。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">定义影响图的"解"：不是概率查询，而是一张最优行动表。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">全书公式的终点站：概率（Ch1-21）× 效用（Ch22）取最大。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">逐行动独立贪心——决策间有信息传递时须全局（逆向）优化。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">本章所有例题的目标量；由逆向归纳/sum-max VE 计算。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 6</div>
+            <div class="q-text">逆向归纳（Backward Induction）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">从最后一个决策开始：对其父节点每种赋值取 max 记下规则，固化为机会节点，再倒推前一个。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">多阶段最优策略的可行求法，尊重"信息按序到达"的时序约束。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">下棋先算残局：终局最优确定后，倒数第二步才有意义。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">顺序搞反——前决策的期望效用依赖后决策的规则，无法先算。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">影响图求解、博弈论、动态规划（值函数是其递归形式）。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 7</div>
+            <div class="q-text">sum-max 变量消去</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">变量消去的决策版：机会节点求和、决策节点逆序取 max、价值节点累加。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">让第 9–10 章的推理机器直接输出最优策略。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">同一台发动机（因子运算），换挡位：Σ 换 max。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">随意排消去顺序——决策节点必须逆时序，否则算的不是最优策略。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">影响图的通用求解；团树同样可改造（决策团内做 max）。</span></div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- ============ 分层习题 ============ -->
+    <h2><span class="sec-no">📝</span>分层习题</h2>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>判断对错：<strong>信息弧 W → D（W 为机会节点、D 为决策节点）表示"W 是 D 的原因"。</strong>说明理由。</div>
+      <details>
+        <summary>提示</summary>
+        <p>回到信息弧的定义：它声明的是什么？有因果含义吗？决策的值由谁决定？</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">错。信息弧只声明"做决策 D 时已观测到 W"，是<strong>可知性</strong>关系而非因果关系；D 的取值由策略决定，不由 W 概率性地"导致"（策略可以是 δ(W) 的任意函数，包括完全无视 W）。混淆两者会错误地用 CPD 给 D 参数化，或把"加信息弧提高期望效用"误读为"W 对 D 有因果作用"——它提高的是<em>信息条件下的决策质量</em>。</div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>判断对错：<strong>在影响图中，决策节点 D 的父节点可以包含一个决策时尚未确定取值的变量。</strong></div>
+      <details>
+        <summary>提示</summary>
+        <p>策略 δ<sub>D</sub>：Pa(D) → Val(D) 是一张什么表？如果某列的"条件"在填表时还不存在会怎样？</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">错。策略是以父节点赋值为条件的行动规则表；若某父变量在决策时未定，该规则表出现"无法查"的格子，策略无法执行，逆向归纳也随之失效（max 对未知的条件无法取）。因此影响图要求时序约束：决策节点的父节点必须先于它可确定，多决策时存在信息全序。</div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>带伞问题改参数：P(雨) = 0.4，效用表不变（带：雨 70 / 晴 60；不带：雨 0 / 晴 100）。分别计算无信息弧与有完美预报信息弧时的最优策略与期望效用，并求信息价值。</div>
+      <details>
+        <summary>提示</summary>
+        <p>无信息：全局比较 EU(带) 与 EU(不带)；有信息：对每种天气分别取 max，再按天气分布加权。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p>无信息：EU(带) = 0.4×70 + 0.6×60 = 28 + 36 = 64；EU(不带) = 0.4×0 + 0.6×100 = 60。→ 选<strong>带</strong>，EU = 64（注意与 23.2 节结论相反：雨概率升高后带伞转正）。</p>
+          <p>有信息：δ*(雨) = 带（70），δ*(晴) = 不带（100）。EU = 0.4×70 + 0.6×100 = 28 + 60 = <strong>88</strong>。</p>
+          <p>信息价值 = 88 − 64 = <strong>24</strong>，来自晴天才改主意的分支：0.6×(100−60) = 24。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>例 2 中把检查成本从 5 改为 20，其余不变。重做逆向归纳，给出完整最优策略，并回答"检查还值不值"。</div>
+      <details>
+        <summary>提示</summary>
+        <p>D₂ 的规则与检查成本无关（成本挂在 D₁ 上）；只有第 2、3 步的数字会变。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p>第 1 步不变：δ*(+) = 治（80），δ*(−) = 不治（80）。</p>
+          <p>第 2 步：做检查的期望效用 = 0.5×80 + 0.5×80 − 20 = 60；不做检查的最优 = 治（65）。</p>
+          <p>第 3 步：60 &lt; 65 → δ*(D₁) = <strong>不做检查</strong>，直接治疗。完整策略：不检查、治疗，EU = 65。</p>
+          <p>解读：检查的信息价值仍是 80 − 65 = 15，但成本 20 超过了它——信息再好，贵过它能带来的改变就不买。VPI 给出了"最多愿付多少"的精确上界。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l3">L3 建模应用</span>石油钻探：是否钻一口井（决策 D₂），事前可做地震勘探（决策 D₁，有成本），勘探结果 S（好/差信号）与地下含油 O 相关，钻探收益取决于 O 与 D₂。①画出影响图（标三类节点、信息弧、影响弧）；②说明为什么 S → D₂ 是信息弧而 D₂ → V 是影响弧；③描述求最优策略的算法步骤（不必算数）。</div>
+      <details>
+        <summary>提示</summary>
+        <p>时序：先决定勘不勘（D₁），看到信号 S，再决定钻不钻（D₂）。O 是世界的状态，谁依赖它？</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p>① 机会节点：O（含油，带先验）、S（信号，P(S|O,D₁)）；决策节点：D₁（矩形）、D₂（矩形）；价值节点：V（菱形）。边：O→S、D₁→S（影响弧）；S⇢D₂、D₁⇢D₂（信息弧，D₂ 时已知是否勘探及信号）；O→V、D₂→V（影响弧，收益函数）；D₁→V（勘探成本）。</p>
+          <p>② S⇢D₂ 只声明"钻井决策前看到了信号"，不表示信号导致决策——决策由策略选定；D₂→V 表示钻不钻（与 O 一起）因果地改变收益。箭头落点定语义：落在决策节点上是信息弧，落在价值节点上是影响弧。</p>
+          <p>③ 算法（逆向归纳 / sum-max VE）：㈠ 对每个 S 取值计算 P(O|S)（贝叶斯）；㈡ 对 D₂ 的每种信息赋值（含"未勘探"分支）取 max，得规则 δ*(D₂)；㈢ 将 D₂ 固化为机会节点，对 S 与 O 求和，比较"勘探−成本"与"不勘探"两个分支的期望效用；㈣ 取 max 得 δ*(D₁)，输出完整策略。</p>
+        </div>
+      </details>
+    </div>
+
+    <!-- ============ 本章自测 ============ -->
+    <h2><span class="sec-no">✍️</span>本章自测</h2>
+    <p class="quiz-hint">点击选项判分，答错会给出原因。</p>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 1</div>
+      <div class="q-stem">影响图的决策节点与普通机会节点的关键区别是：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 决策节点没有父节点</li>
+        <li data-opt="b">B. 决策节点没有 CPD，取值由策略（决策规则）确定</li>
+        <li data-opt="c">C. 决策节点不能有子节点</li>
+        <li data-opt="d">D. 决策节点只能取两个值</li>
+      </ul>
+      <div class="quiz-explain">选 B。决策节点的"分布"不是概率而是策略：δ：Pa(D)→Val(D)。A 错：决策节点恰恰靠信息弧拥有父节点；C 错：决策可以影响机会节点与价值节点；D 无任何依据。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="c">
+      <div class="q-no">自测 2</div>
+      <div class="q-stem">关于信息弧，正确的是：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 信息弧表示父节点对决策有因果影响</li>
+        <li data-opt="b">B. 信息弧越多越好，因为它让图更连通</li>
+        <li data-opt="c">C. 信息弧声明决策时已观测父节点；增删信息弧的期望效用之差就是该信息的价值</li>
+        <li data-opt="d">D. 信息弧可以指向价值节点</li>
+      </ul>
+      <div class="quiz-explain">选 C。A 错：信息弧是可知性而非因果；B 错：信息弧的价值取决于能否改变行动（VPI 可为 0），且它假设了信息免费可得——有成本时要比较（例 2 成本 20 的变体）；D 错：指向价值节点的是影响弧（效用依赖）。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="a">
+      <div class="q-no">自测 3</div>
+      <div class="q-stem">例 2（检查成本 5）的最优完整策略是：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 做检查；阳性治疗，阴性不治疗（EU = 75）</li>
+        <li data-opt="b">B. 不做检查，直接治疗（EU = 65）</li>
+        <li data-opt="c">C. 不做检查，不治疗（EU = 50）</li>
+        <li data-opt="d">D. 做检查；无论结果都治疗</li>
+      </ul>
+      <div class="quiz-explain">选 A。逆向归纳：δ*(+)=治（80）、δ*(−)=不治（80），检查分支 EU = 80−5 = 75 &gt; 不检查直接治的 65。B 是次优（忽略信息价值 15 &gt; 成本 5）；C 连先验下的 MEU 都不是；D 浪费了信息，EU = 65−5 = 60。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="d">
+      <div class="q-no">自测 4</div>
+      <div class="q-stem">sum-max 变量消去求最优策略时，正确的做法是：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 所有节点都求和</li>
+        <li data-opt="b">B. 所有节点都取最大</li>
+        <li data-opt="c">C. 决策节点按时间正序取 max</li>
+        <li data-opt="d">D. 机会节点求和、决策节点逆时序取 max、价值节点累加</li>
+      </ul>
+      <div class="quiz-explain">选 D。求和对应"对世界的不确定性取期望"，max 对应"选择最优行动"，累加对应"效用分项加总"；决策节点必须逆时序（逆向归纳），否则前序决策的分支没有可比较的期望效用。A 把决策也平均了；B 把不确定性也"取最好"，是乐观幻觉；C 顺序反了。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 5</div>
+      <div class="q-stem">"读完全书三问"中，第二问（推理与学习）问的是：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 能否把领域画成图并写出因子分解</li>
+        <li data-opt="b">B. 给定图、参数与证据能否算出查询，算不动时能否选对近似，以及能否从数据估出图与参数</li>
+        <li data-opt="c">C. 能否区分观测与干预</li>
+        <li data-opt="d">D. 能否写出效用函数</li>
+      </ul>
+      <div class="quiz-explain">选 B。A 是第一问（表示，Ch1–8）；C 是第三问的前半（因果，Ch21）；D 是第三问的后半（决策，Ch22–23）。B 完整覆盖推理（精确/近似及其代价，Ch9–15）与学习（参数与结构从数据来，Ch16–20）。</div>
+    </div>
+
+    <!-- ============ 三句话复述 ============ -->
+    <div class="retell">
+      <h3>🗣️ 用自己的话，三句话讲完本章</h3>
+      <p class="retell-sub">对着空气（或室友）说出这三句。说卡壳的那句，回去重读对应小节。</p>
+      <details>
+        <summary>句1：这章解决什么问题？——</summary>
+        <div class="retell-answer">参考答案：前 22 章分别给了我们概率（含干预语义）和效用，但做决策时两者还靠手工相乘；本章把决策与效用直接画进图模型，让"求最优行动/策略"成为图上可以机械执行的计算。</div>
+      </details>
+      <details>
+        <summary>句2：核心机制是什么？——</summary>
+        <div class="retell-answer">参考答案：影响图 = BN + 决策节点（矩形，由策略赋值）+ 价值节点（菱形，效用函数）；信息弧声明"决策时已知什么"，策略是"给定信息选行动"的规则表；最优策略用逆向归纳求（最后的决策先 max、固化、再倒推），一般化为 sum-max 变量消去，复用第 9–10 章的推理机器。</div>
+      </details>
+      <details>
+        <summary>句3：它和前后章怎么分工？——</summary>
+        <div class="retell-answer">参考答案：本章是全书终点：表示（Ch1–8）给语言，推理（Ch9–15）给算法，学习（Ch16–20）给参数与结构的来源，因果（Ch21）给"行动改变世界"的语义，效用（Ch22）给价值度量——本章把它们合成一张图、一个算法、一张最优行动表，主线"表示→推理→学习→因果→决策"就此闭环。</div>
+      </details>
+    </div>
+
+    <!-- ============ 复习计划 ============ -->
+    <div class="review-plan">
+      <h3>🔁 间隔复习计划</h3>
+      <p>回忆本身比重读有效 10 倍。到点只做一件事：翻卡 + 重做标记题。</p>
+      <table>
+        <tr><th>时间点</th><th>复习内容</th><th>预计用时</th></tr>
+        <tr><td>第 1 天</td><td>概念卡 1–7 全部 + 回忆卡 23.1-2、23.2-2、23.3-1</td><td>10 分钟</td></tr>
+        <tr><td>第 3 天</td><td>概念卡 3、4、6（信息弧/策略/逆向归纳）+ 重做 L2 两题 + 自测错题</td><td>10 分钟</td></tr>
+        <tr><td>第 7 天</td><td>三句话复述出声说一遍 + 例 2 逆向归纳全程重推 + 回忆卡 23.5-1</td><td>15 分钟</td></tr>
+        <tr><td>第 15 天</td><td>只做合上书挑战；七条全过则本章毕业、全书毕业，卡在哪条就重读对应小节</td><td>20 分钟</td></tr>
+      </table>
+    </div>
+
+    <!-- 合上书挑战 -->
+    <div class="final-challenge">
+      <h3>📕 合上书挑战</h3>
+      <p class="fc-sub">现在关掉这个页面（或遮住屏幕），拿一张纸，凭记忆完成以下任务。全部做完再回来核对——这是本章、也是全书的毕业考试。</p>
+      <ol id="ch23-challenge-list">
+        <li><span class="fc-check"></span>画出影响图的三类节点（形状+参数），并标出信息弧与影响弧的差别</li>
+        <li><span class="fc-check"></span>解释"决策节点的父节点必须先于它确定"，并说明违反时策略表会出什么问题</li>
+        <li><span class="fc-check"></span>手算带伞问题（P(雨)=0.3）：无信息 EU=70 选不带；有信息 EU=91；信息价值 21</li>
+        <li><span class="fc-check"></span>完整重推例 2 逆向归纳：δ*(+)=治、δ*(−)=不治、δ*(D₁)=做检查（EU=75）</li>
+        <li><span class="fc-check"></span>写出 sum-max 变量消去中三类节点的运算与消去顺序约束</li>
+        <li><span class="fc-check"></span>默画全书地图：表示→推理→学习→因果与决策，标出每个阶段的章号与一句话功能</li>
+        <li><span class="fc-check"></span>回答全书的主线问题：概率图模型如何把"建模→推断→决策"统一成一套语言？（一句话）</li>
+      </ol>
+    </div>
+
+    <div class="complete-zone">
+      <button class="btn-complete" id="ch23-btn-complete" onclick="markDone()">✓ 我已完成本章（含合上书挑战）</button>
+    </div>
+
+    <div class="chapter-nav">
+      <a href="chapter-22.html"><span class="nav-dir">← 上一章</span>第22章 效用与决策</a>
+      <a href="index.html" class="next"><span class="nav-dir">下一章 →</span>回到学习地图（全书完）</a>
+    </div>
+
+  </div>
+</div>
+
+<footer class="footer">
+  <div class="wrap">第23章 影响图 · PGM 互动讲义 · 基于 Koller &amp; Friedman (2009)</div>
+</footer>
+
+<script src="assets/mermaid.min.js"></script>
+<script>
+mermaid.initialize({
+  startOnLoad: true,
+  theme: "base",
+  themeVariables: {
+    primaryColor: "#e3edf7",
+    primaryBorderColor: "#1d5f9e",
+    primaryTextColor: "#1d5f9e",
+    lineColor: "#5c554b",
+    secondaryColor: "#fbeedd",
+    tertiaryColor: "#f5f1e8",
+    fontFamily: "-apple-system, PingFang SC, sans-serif",
+    fontSize: "14px"
+  },
+  flowchart: { curve: "linear", htmlLabels: false }
+});
+</script>
+<script>
+// 自测题逻辑
+document.querySelectorAll(".quiz-block").forEach(block => {
+  const answer = block.dataset.answer;
+  const explain = block.querySelector(".quiz-explain");
+  block.querySelectorAll(".quiz-opts li").forEach(li => {
+    li.addEventListener("click", () => {
+      const opts = block.querySelectorAll(".quiz-opts li");
+      opts.forEach(o => o.classList.add("disabled"));
+      if (li.dataset.opt === answer) {
+        li.classList.add("correct");
+      } else {
+        li.classList.add("wrong");
+        block.querySelector(`[data-opt="${answer}"]`).classList.add("correct");
+      }
+      explain.classList.add("show");
+    });
+  });
+});
+
+// 合上书清单打勾
+document.querySelectorAll("#ch23-challenge-list li").forEach(li => {
+  li.addEventListener("click", () => li.classList.toggle("checked"));
+});
+
+// 完成标记 → localStorage（第23章）
+const KEY = "pgm_progress_v1";
+function loadProgress() {
+  try { return JSON.parse(localStorage.getItem(KEY)) || {}; } catch (e) { return {}; }
+}
+const progress = loadProgress();
+const btn = document.getElementById("ch23-btn-complete");
+if (progress[23] && progress[23].done) {
+  btn.textContent = "✓ 已完成 · 再次点击重置";
+  btn.classList.add("done");
+}
+function markDone() {
+  const p = loadProgress();
+  if (p[23] && p[23].done) {
+    delete p[23];
+    btn.textContent = "✓ 我已完成本章（含合上书挑战）";
+    btn.classList.remove("done");
+  } else {
+    p[23] = { done: true, completedAt: Date.now(), reviewsDone: 0 };
+    btn.textContent = "✓ 已完成 · 复习提醒已开启";
+    btn.classList.add("done");
+  }
+  localStorage.setItem(KEY, JSON.stringify(p));
+}
+</script>
+
+</body>
+</html>

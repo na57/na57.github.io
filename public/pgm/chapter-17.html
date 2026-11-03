@@ -1,0 +1,917 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第17章 完全数据参数学习 · PGM 互动讲义</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+<nav class="topbar">
+  <div class="topbar-inner">
+    <span class="brand"><a href="index.html" style="color:inherit">← 学习地图</a></span>
+    <span class="crumb">阶段三 · 学习 / 第17章</span>
+  </div>
+</nav>
+
+<div class="wrap">
+
+  <div class="lecture-head">
+    <span class="ch-label">CHAPTER 17 · 学习</span>
+    <h1>完全数据参数学习</h1>
+    <p class="lead">结构已知、数据齐全时，参数估计退化成一件事：计数，再加一点平滑。</p>
+  </div>
+
+  <!-- 本章定位 -->
+  <div class="position-bar">
+    <strong>本章在主线上的位置：</strong>第16章把学习问题按"结构是否已知 × 数据是否完全"分成四格 → <u>本章解决最简单的一格：结构已知 + 数据完全，参数估计 = 计数加平滑</u> → 第18章撤掉"结构已知"，第19章撤掉"数据完全"，第20章换到无向模型。<br>
+    第17章回答主线上的第一个学习问题：<strong>当图结构和完整数据都摆在面前时，CPD 里的数字从哪来？</strong>
+    <div class="map-inline">
+      <span class="node">Ch16 学习概述（四种学习场景）</span><span class="arrow">→</span>
+      <span class="node here">Ch17 完全数据参数学习（计数 + 平滑）</span><span class="arrow">→</span>
+      <span class="node">Ch18 结构学习（结构也要学）</span><span class="arrow">→</span>
+      <span class="node">Ch19 不完全数据（EM 迭代）</span><span class="arrow">→</span>
+      <span class="node">Ch20 马尔可夫网络学习（logZ 把一切变难）</span>
+    </div>
+  </div>
+
+  <!-- 学习目标 -->
+  <div class="objectives">
+    <h4>🎯 学完本章，合上书你应该能：</h4>
+    <ol>
+      <li>写出 BN 完全数据似然按节点分解的公式，并解释为什么每个 CPD 可以独立优化</li>
+      <li>对给定的计数表，手算出表 CPD 的全部最大似然条目</li>
+      <li>用一个具体数值例子说明零概率灾难如何把整体似然清零，并用拉普拉斯平滑修复它</li>
+      <li>写出 Dirichlet 先验下的后验更新与后验预测公式，解释等价样本量的含义</li>
+      <li>说出线性高斯 CPD 与 logistic CPD 的 MLE 各自对应什么经典算法、谁有闭式解</li>
+      <li>解释为什么无向模型的 MLE 没有闭式解（logZ(θ) 耦合），并说出它难在哪一步</li>
+    </ol>
+  </div>
+
+  <div class="lecture">
+
+    <!-- 推导主线 -->
+    <div class="figure">
+      <div class="mermaid">
+flowchart LR
+  A["结构已知<br>数据齐全"] --> B["似然按节点分解<br>每个 CPD 独立优化"]
+  B --> C["表 CPD 的 MLE<br>= 频率计数"]
+  C --> D["零计数 = 概率 0<br>似然整体崩溃"]
+  D --> E["拉普拉斯平滑 /<br>Dirichlet 贝叶斯估计"]
+  E --> F["广义 CPD 无闭式解<br>改用梯度上升"]
+  F --> G["代价：无向模型 logZ 耦合<br>MLE 无闭式解（→Ch20）"]
+  classDef hot fill:#fbeedd,stroke:#c4651f,stroke-width:2.5px,color:#c4651f;
+  classDef danger fill:#fae9e7,stroke:#b03a2e,stroke-width:2.5px,color:#b03a2e;
+  class C hot;
+  class G danger;
+      </div>
+      <div class="caption">本章推导主线：分解让计数成为答案，零计数逼出平滑，平滑的最自然形式是贝叶斯；终点（红色）是本章埋给第20章的对照——换一个模型类别，一切简单都消失。</div>
+    </div>
+
+    <!-- ============ 17.1 ============ -->
+    <h2><span class="sec-no">17.1</span>问题设置：为什么这是最简单的学习问题</h2>
+
+    <p>第16章说过，学习问题的难度取决于两个维度：<strong>结构是否已知</strong>、<strong>数据是否完全</strong>。本章站在最友好的那个角落：</p>
+    <ul>
+      <li><strong>结构已知</strong>：图 𝒢 给定（来自专家知识，或第18章学出来的结果）；</li>
+      <li><strong>数据完全</strong>：数据集 D = {x⁽¹⁾, …, x⁽ᴹ⁾} 中每条样本的<strong>每个变量都被观测</strong>，没有缺失值，没有隐变量；</li>
+      <li><strong>任务</strong>：估计每个 CPD P(Xᵢ | Pa(Xᵢ)) 里的参数 θᵢ。</li>
+    </ul>
+
+    <p>为什么简单？因为贝叶斯网络的因子分解会把学习问题"拆开"。写出整个数据集的<span class="term">似然</span>（Likelihood）：</p>
+
+    <div class="formula">P(D | θ) = ∏<sub>m=1</sub><sup>M</sup> ∏<sub>i=1</sub><sup>n</sup> P(xᵢ⁽ᵐ⁾ | paᵢ⁽ᵐ⁾ ; θᵢ) = ∏<sub>i=1</sub><sup>n</sup> [ ∏<sub>m=1</sub><sup>M</sup> P(xᵢ⁽ᵐ⁾ | paᵢ⁽ᵐ⁾ ; θᵢ) ]</div>
+
+    <p>第一步是每个样本用链式法则分解；第二步只是<strong>交换连乘顺序</strong>——但效果惊人：参数 θᵢ（第 i 个 CPD 的参数）只出现在第 i 个方括号里。要最大化总似然，只需<strong>分别</strong>最大化每个方括号。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>BN 的因子分解是学习问题的"解耦器"：一个全局优化问题自动拆成 n 个互不干扰的局部问题。估计"成绩"的 CPD 时，完全不用管"智力"的 CPD 长什么样。<strong>这是 BN 比马尔可夫网络容易学的根本原因</strong>——17.6 节会看到无向模型没有这份礼物。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>"分解是近似"——错。交换连乘顺序是恒等变形，一步近似都没有。分解之所以成立，恰恰是因为 BN 的联合分布本来就按结构因子化：结构已知，分解白送。</p>
+    </div>
+
+    <!-- 回忆卡片 17.1 -->
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 17.1-1</div>
+              <div class="q-text">"完全数据 + 已知结构"这两条假设各自是什么意思？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              结构已知：图 𝒢 给定，只需估计 CPD 参数；数据完全：每条样本的所有变量都被观测，无缺失、无隐变量。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 17.1-2</div>
+              <div class="q-text">写出似然分解公式，并说明它带来的计算后果。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              P(D|θ) = ∏ᵢ [∏ₘ P(xᵢ⁽ᵐ⁾|paᵢ⁽ᵐ⁾;θᵢ)]。后果：每个 θᵢ 只出现在自己的方括号里，可以独立优化——全局问题拆成 n 个局部问题。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 17.2 ============ -->
+    <h2><span class="sec-no">17.2</span>表 CPD 的 MLE：就是频率计数</h2>
+
+    <p>对离散变量的表格 CPD，逐个方括号求最大值，解是闭式的，而且朴素得不像话——<span class="term">最大似然估计</span>（Maximum Likelihood Estimation, MLE）等于<strong>频率计数</strong>：</p>
+
+    <div class="formula">θ̂<sub>x|u</sub> = <span class="frac"><span class="num-part">#{X = x, Pa = u}</span><span class="den-part">#{Pa = u}</span></span></div>
+
+    <p>读法：在所有"父节点配置 = u"的样本里，数一下 X = x 占了多大比例。这个比例就是 MLE。</p>
+
+    <h3>例 1：学生网络 G 的 CPD，完整手算</h3>
+    <p>回到学生网络：成绩 G 依赖难度 D（Easy/Hard）与智力 I（High/Low）。收集了 130 名学生的完整记录，按父节点配置分组计数：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>D</th><th>I</th><th>G = A</th><th>G = B</th><th>G = C</th><th>行合计</th></tr>
+        <tr><td>Easy</td><td>High</td><td>30</td><td>5</td><td>0</td><td>35</td></tr>
+        <tr><td>Easy</td><td>Low</td><td>15</td><td>10</td><td>5</td><td>30</td></tr>
+        <tr><td>Hard</td><td>High</td><td>5</td><td>20</td><td>10</td><td>35</td></tr>
+        <tr><td>Hard</td><td>Low</td><td>0</td><td>5</td><td>25</td><td>30</td></tr>
+      </table>
+    </div>
+
+    <p>逐行除以行合计，整张 CPD 一次算完：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>P(G | D, I)</th><th>A</th><th>B</th><th>C</th></tr>
+        <tr><td>Easy, High</td><td>30/35 ≈ <strong>0.857</strong></td><td>5/35 ≈ 0.143</td><td>0/35 = 0</td></tr>
+        <tr><td>Easy, Low</td><td>15/30 = 0.500</td><td>10/30 ≈ 0.333</td><td>5/30 ≈ 0.167</td></tr>
+        <tr><td>Hard, High</td><td>5/35 ≈ 0.143</td><td>20/35 ≈ 0.571</td><td>10/35 ≈ 0.286</td></tr>
+        <tr><td>Hard, Low</td><td><strong>0</strong></td><td>5/30 ≈ 0.167</td><td>25/30 ≈ 0.833</td></tr>
+      </table>
+    </div>
+
+    <p>比如 P(G=A | Easy, High) = 30/35 ≈ 0.857——简单课 + 高智力，85.7% 拿 A。这就是参数学习的全部：<strong>数清楚，除一下</strong>。</p>
+
+    <div class="box insight">
+      <span class="box-tag">✅ 为什么计数就是 MLE（一句话推导）</span>
+      <p>对某一行配置 u，似然中涉及它的部分是 ∏<sub>x</sub> θ<sub>x|u</sub><sup>#(x,u)</sup>，约束 Σ<sub>x</sub> θ<sub>x|u</sub> = 1。这是加权几何平均最大化，用拉格朗日乘子法（或对数似然求导）一步解出 θ̂<sub>x|u</sub> ∝ #(x,u)。计数不是近似，是精确最优解。</p>
+    </div>
+
+    <h3>其他 CPD 的 MLE 是什么</h3>
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>CPD 类型</th><th>MLE 对应</th><th>闭式解？</th></tr>
+        <tr><td>表格 CPD（离散）</td><td>频率计数</td><td>✅ 有</td></tr>
+        <tr><td>线性高斯 X = β₀ + ΣβⱼXⱼ + ε</td><td><strong>最小二乘回归</strong>估 β，残差方差估 σ²</td><td>✅ 有</td></tr>
+        <tr><td>Logistic P(1|u) = σ(βᵀu)</td><td><strong>逻辑回归</strong></td><td>❌ 无 → 梯度上升（17.5）</td></tr>
+      </table>
+    </div>
+
+    <div class="box idea">
+      <span class="box-tag">💡 直觉</span>
+      <p>MLE 的世界观是"看到什么就信什么"：数据频率是多少，概率就填多少。这在数据充足时近乎完美；但下一节会看到，它对"没见过的"过于自信——直接判死刑。</p>
+    </div>
+
+    <!-- 回忆卡片 17.2 -->
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 17.2-1</div>
+              <div class="q-text">写出表 CPD 的 MLE 公式，并算出 P(G=A | Easy, High)。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              θ̂<sub>x|u</sub> = #(x,u) / #(u)。P(G=A|Easy,High) = 30/(30+5+0) = 30/35 ≈ 0.857。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 17.2-2</div>
+              <div class="q-text">线性高斯 CPD 和 logistic CPD 的 MLE 分别是什么算法？谁没有闭式解？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              线性高斯 → 最小二乘回归（闭式解）；logistic → 逻辑回归（无闭式解，需梯度上升迭代）。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 17.3 ============ -->
+    <h2><span class="sec-no">17.3</span>零概率灾难：为什么必须平滑</h2>
+
+    <p>回看上一节算出的 CPD，有一个刺眼的格子：</p>
+
+    <div class="formula">P̂(G = A | Hard, Low) = <span class="frac"><span class="num-part">0</span><span class="den-part">30</span></span> = 0</div>
+
+    <p>"难题 + 低智力"的 30 个学生里没人拿 A，于是 MLE 宣布：<strong>这件事的概率是 0——绝对不可能</strong>。</p>
+
+    <h3>一个 0 如何毁掉整个数据集</h3>
+    <p>现在来了一名新学生：课难、智力平平，却拿了 A。问模型"这条记录的概率是多少"：</p>
+
+    <div class="formula">P(Hard, Low, A, …) = P(D)·P(I)·<strong>P(A | Hard, Low)</strong>·… = P(D)·P(I)·<strong>0</strong>·… = 0</div>
+
+    <p>一条 CPD 条目是 0，整条样本的联合概率就是 0。更狠的是：如果测试集里有这么一名学生，<strong>整个测试集的似然变成 0</strong>（对数似然 −∞）——其余 129 条样本提供的全部证据瞬间作废。这就是<span class="term">零概率灾难</span>（Zero-Frequency Problem）：模型把"没见过"当成"不可能"，而真实世界总会送来没见过的事。</p>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 这是 MLE 的结构性缺陷，不是数据问题</span>
+      <p>30 个样本不足以排除一个真实概率 1% 的事件（30 次都不中的概率仍有 0.99³⁰ ≈ 74%）。样本量永远有限，未观测 ≠ 不可能。任何要用似然做评估、做推理的系统，都必须消灭参数里的 0。</p>
+    </div>
+
+    <h3>拉普拉斯平滑：给每个格子发"保底票"</h3>
+    <p><span class="term">拉普拉斯平滑</span>（Laplace Smoothing）的做法：给每个计数先加上一个伪计数 α，再照常相除：</p>
+
+    <div class="formula">θ̂<sub>x|u</sub> = <span class="frac"><span class="num-part">#{x, u} + α</span><span class="den-part">#{u} + α · |Val(X)|</span></span></div>
+
+    <p>α = 1 时叫<strong>加一平滑</strong>。用它重算两个关键格子（|Val(G)| = 3）：</p>
+    <ul>
+      <li>P̂(G=A | Easy, High) = (30+1)/(35+3) = 31/38 ≈ <strong>0.816</strong>（比 0.857 略低，向均匀方向收缩）；</li>
+      <li>P̂(G=A | Hard, Low) = (0+1)/(30+3) = 1/33 ≈ <strong>0.030</strong>（不再是 0，新学生的似然得救了）。</li>
+    </ul>
+
+    <div class="box idea">
+      <span class="box-tag">💡 直觉</span>
+      <p>平滑 = 假装每个格子里预先躺了 α 个"保底样本"。数据多（35 个）时它们几乎没影响（0.857→0.816）；数据少或为零时，它们撑起一个不为零的地板。α 控制的是"先验均匀信念"与"数据证据"的配比——下一节会看到，这正是 Dirichlet 先验的贝叶斯解读。</p>
+    </div>
+
+    <!-- 回忆卡片 17.3 -->
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 17.3-1</div>
+              <div class="q-text">什么是零概率灾难？它为什么会污染整个数据集？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              某配置从未出现 → MLE 给 0 概率 → 任何含该配置的样本联合概率为 0 → 整条测试集似然清零（log 似然 −∞），其他样本的证据全被作废。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 17.3-2</div>
+              <div class="q-text">写出拉普拉斯平滑公式，并重算 P̂(G=A | Hard, Low)（α=1）。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              θ̂ = (#(x,u)+α) / (#(u)+α·|Val(X)|)。P̂ = (0+1)/(30+1×3) = 1/33 ≈ 0.030。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 17.4 ============ -->
+    <h2><span class="sec-no">17.4</span>贝叶斯估计：把平滑变成原则，而非补丁</h2>
+
+    <p>拉普拉斯平滑像事后打的补丁。<span class="term">贝叶斯参数估计</span>（Bayesian Parameter Estimation）给出它的原则性来源：<strong>把 θ 本身当作随机变量</strong>，用数据更新对它的信念。</p>
+
+    <h3>Dirichlet 先验与后验更新</h3>
+    <p>对一个 K 值的 CPD 行 θ = (θ₁,…,θ<sub>K</sub>)，配<span class="term">Dirichlet 先验</span>（Dirichlet Prior）Dir(α₁,…,α<sub>K</sub>)——它是多项分布的<span class="term">共轭先验</span>（Conjugate Prior），意思是：看到计数数据后，后验<strong>仍是 Dirichlet</strong>，参数简单相加：</p>
+
+    <div class="formula">P(θ | D) = Dir(α₁ + #(x¹,u),  α₂ + #(x²,u),  …,  α<sub>K</sub> + #(x<sup>K</sup>,u))</div>
+
+    <p>预测下一条样本时，用后验期望，得到<span class="term">后验预测</span>（Posterior Predictive）：</p>
+
+    <div class="formula">P(X = x | u, D) = <span class="frac"><span class="num-part">α<sub>x</sub> + #(x, u)</span><span class="den-part">Σ<sub>x′</sub> α<sub>x′</sub> + #(u)</span></span></div>
+
+    <p>注意它和拉普拉斯平滑<strong>长得一模一样</strong>：α 就是伪计数。拉普拉斯平滑 = 带 Dirichlet 先验的贝叶斯估计。</p>
+
+    <h3>例 2：抛硬币，完整手算</h3>
+    <p>一枚可疑硬币，先验 Dir(2, 2)（相当于预先见过 2 正 2 反）。抛 4 次，结果 <strong>3 正 1 反</strong>：</p>
+    <ul>
+      <li><strong>后验</strong>：Dir(2+3, 2+1) = Dir(5, 3)；</li>
+      <li><strong>贝叶斯预测</strong>下一次为正：5/(5+3) = 5/8 = <strong>0.625</strong>；</li>
+      <li><strong>对照 MLE</strong>：3/4 = 0.75。</li>
+    </ul>
+    <p>贝叶斯把 0.75 往均匀方向拉回 0.625——4 次抛掷不足以推翻"硬币大概率接近公平"的先验。若抛 400 次仍是 3:1，后验 Dir(302,102)，预测 302/404 ≈ 0.748，几乎等于 MLE：<strong>数据多了，先验自然退场</strong>。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 等价样本量</span>
+      <p>定义<span class="term">等价样本量</span>（Equivalent Sample Size）N′ = Σ<sub>x</sub> α<sub>x</sub>：先验相当于在数据之外预先看过的样本数。Dir(2,2) 的 N′=4，所以 4 个真样本只能把信念"扳动一半"；400 个样本则完全压过它。选先验的本质 = 决定用多少个"虚拟样本"表达你的先见。</p>
+    </div>
+
+    <h3>回到学生例子</h3>
+    <p>给 Easy,High 行配先验 Dir(2,2,2)，后验 = Dir(32,7,2)，预测 P(G=A|Easy,High,D) = 32/41 ≈ 0.780（对比 MLE 0.857、加一平滑 0.816）。三种方法给出三个数，数据越多，三个数越接近。</p>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>"贝叶斯估计比 MLE 准"——不一定。先验是把双刃剑：数据少时它是护栏，先验错了它就是偏见。只能说贝叶斯估计给出了<strong>诚实的答案</strong>：一个包含不确定性的后验，而不是一个假装确定的小数。</p>
+    </div>
+
+    <!-- 回忆卡片 17.4 -->
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 17.4-1</div>
+              <div class="q-text">Dirichlet 是多项分布的共轭先验——"共轭"指什么？后验怎么更新？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              共轭 = 后验与先验同族。更新 = 参数直接加计数：Dir(α) + 数据 #(x,u) → Dir(α+#)。闭式，无需优化。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 17.4-2</div>
+              <div class="q-text">什么是等价样本量？Dir(2,2) 先验下抛 4 次得 3 正 1 反，预测下一次为正是多少？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              等价样本量 N′=Σα，先验相当于预先看过的样本数。后验 Dir(5,3)，预测 = 5/8 = 0.625（对比 MLE 0.75）。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 17.5 ============ -->
+    <h2><span class="sec-no">17.5</span>广义 CPD：当计数不够用时，梯度上升登场</h2>
+
+    <p>表格 CPD 的参数量随父节点数爆炸（k 个二元父节点就有 2<sup>k</sup> 行），所以第5章引入了紧凑的广义 CPD。它们的 MLE 不再只是数数：</p>
+
+    <ul>
+      <li><strong>线性高斯</strong> X = β₀ + Σ<sub>j</sub> βⱼXⱼ + ε：最大化似然 ⟺ 最小化平方误差，β 的最小二乘解有闭式公式，σ² 用残差方差估计。回归就是 MLE。</li>
+      <li><strong>Logistic CPD</strong> P(X=1|u) = σ(βᵀu)：似然是凹函数（无局部最优），但没有闭式解——σ 的非线性让"令导数为 0"得不到解析式。用<span class="term">梯度上升</span>（Gradient Ascent）迭代：</li>
+    </ul>
+
+    <div class="formula">∂ℓ/∂βⱼ = ∑<sub>m</sub> [ x⁽ᵐ⁾ − σ(βᵀu⁽ᵐ⁾) ] · uⱼ⁽ᵐ⁾</div>
+
+    <p>读法：<strong>（真实标签 − 预测概率）× 特征值</strong>，在全数据集上求和。预测偏高的样本把 β 往回拉，偏低的往上推，直到平衡。这正是逻辑回归的训练式——在 PGM 视角下，它就是 logistic CPD 的 MLE。</p>
+
+    <div class="box insight">
+      <span class="box-tag">✅ 一个统一的图景</span>
+      <p>完全数据 + 有向结构下，每个 CPD 的学习都是一个独立的小问题：表 CPD → 计数；线性高斯 → 最小二乘；logistic → 逻辑回归。你在机器学习课学过的"单点估计器"，在这里全部各就各位——PGM 只是把它们挂到图结构上。</p>
+    </div>
+
+    <!-- 回忆卡片 17.5 -->
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 17.5-1</div>
+              <div class="q-text">为什么 logistic CPD 的 MLE 没有闭式解，而线性高斯有？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              线性高斯的对数似然是 β 的二次函数，令导数为零是线性方程组；logistic 的 σ(·) 非线性使导数方程无解析解，只能迭代（好在似然是凹的，迭代必达全局最优）。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 17.5-2</div>
+              <div class="q-text">写出 logistic CPD 对数似然对 βⱼ 的梯度，并用一句话解释每一项。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              ∂ℓ/∂βⱼ = Σₘ (x⁽ᵐ⁾ − σ(βᵀu⁽ᵐ⁾))·uⱼ⁽ᵐ⁾。即（真值 − 预测）× 特征，误差驱动修正。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 17.6 ============ -->
+    <h2><span class="sec-no">17.6</span>关键反直觉点：无向模型的 MLE 没有闭式解</h2>
+
+    <p>本章的一切轻松——分解、计数、闭式更新——都是<strong>有向 + 归一化局部</strong>带来的。换到马尔可夫网络，试试同样的 MLE。对数线性 MN 的对数似然：</p>
+
+    <div class="formula">ℓ(θ) = ∑<sub>m</sub> ∑<sub>i</sub> θᵢ fᵢ(x⁽ᵐ⁾) − M · log Z(θ)</div>
+
+    <p>前一项是按样本、按特征分解的，很好算。麻烦全在第二项：<span class="term">配分函数</span> Z(θ) = Σ<sub>x</sub> exp(Σᵢ θᵢfᵢ(x)) <strong>依赖所有参数</strong>，而且要对全体赋值求和。它把每个 θᵢ 都拽进同一个全局归一化里——似然<strong>无法分解</strong>成独立的局部问题，"分别令导数为零"得到的方程组互相纠缠，没有闭式解。</p>
+
+    <p>连梯度都带着推理的负担：</p>
+
+    <div class="formula">∂ℓ/∂θᵢ = ∑<sub>m</sub> fᵢ(x⁽ᵐ⁾) − M · E<sub>θ</sub>[fᵢ(X)]</div>
+
+    <p>第二项是<strong>模型分布下的特征期望</strong>——算它就等于做一次推理（第9–11章的事）。也就是说：MN 每走一步梯度，都要先解一个推理问题。</p>
+
+    <h3>完整推导：logZ 是怎样把一切耦在一起的</h3>
+
+    <p>上面两条结论——似然里的 −M·log Z(θ)、梯度里的 E<sub>θ</sub>[fᵢ]——不是断言。这里一步不跳地推一遍，顺便把"耦合"摸到手里。</p>
+
+    <p><strong>第一步：写对数似然，盯住第二项。</strong>对数线性模型下，单条样本的对数概率是：</p>
+
+    <div class="formula">log P(x; θ) = ∑<sub>i</sub> θᵢ fᵢ(x) − log Z(θ)</div>
+
+    <p>M 条独立样本的似然相乘，取对数后变成连加：</p>
+
+    <div class="formula">ℓ(θ) = ∑<sub>m=1</sub><sup>M</sup> ∑<sub>i</sub> θᵢ fᵢ(x⁽ᵐ⁾) − M · log Z(θ)</div>
+
+    <p>麻烦全在第二项：log Z(θ) 是对<strong>全体赋值</strong>求和，而 exp 里躺着每一个参数——<strong>所有 θ 被耦进同一个数</strong>。对比 17.1：BN 的归一化在每个 CPD 内部就地完成，参数互不相欠；MN 把归一化拖到了全局，耦合由此而来。</p>
+
+    <p><strong>第二步：对 θᵢ 求导，梯度露出真身。</strong>第一项的导数白送（就是数据计数）；关键是把 log Z 的导数算到底——链式法则、代入 Z 的定义、最后认出期望：</p>
+
+    <div class="formula"><span class="frac"><span class="num-part">∂ log Z</span><span class="den-part">∂θᵢ</span></span> = <span class="frac"><span class="num-part">1</span><span class="den-part">Z</span></span> · <span class="frac"><span class="num-part">∂Z</span><span class="den-part">∂θᵢ</span></span> = <span class="frac"><span class="num-part">1</span><span class="den-part">Z</span></span> ∑<sub>x</sub> fᵢ(x) · exp( ∑<sub>j</sub> θⱼ fⱼ(x) ) = ∑<sub>x</sub> fᵢ(x) · P(x; θ) = E<sub>θ</sub>[fᵢ]</div>
+
+    <p>代回 ∂ℓ/∂θᵢ = ∑<sub>m</sub> fᵢ(x⁽ᵐ⁾) − M·(∂logZ/∂θᵢ)，梯度 = <strong>数据计数 − 模型期望</strong>：</p>
+
+    <div class="formula">∂ℓ/∂θᵢ = ∑<sub>m</sub> fᵢ(x⁽ᵐ⁾) − M · E<sub>θ</sub>[fᵢ] = M · ( E<sub>D</sub>[fᵢ] − E<sub>θ</sub>[fᵢ] )</div>
+
+    <p>其中 E<sub>D</sub>[fᵢ] = (1/M)·∑<sub>m</sub> fᵢ(x⁽ᵐ⁾) 是特征在数据里的平均——它就是"数数"，闭式可得；难的是第二项，它要在当前模型下做推理。</p>
+
+    <div class="box insight">
+      <span class="box-tag">✅ 矩匹配：无向版的"频率计数"</span>
+      <p>令梯度为零，得 <strong>E<sub>θ</sub>[fᵢ] = E<sub>D</sub>[fᵢ]</strong>（对每个特征 i）：最优模型的特征期望必须等于数据中的特征频率——模型矩对齐数据矩，这就是<span class="term">矩匹配</span>（Moment Matching）。形式上就是 BN"填频率"的推广；但左边 E<sub>θ</sub>[fᵢ] 通过 Z(θ) 依赖<strong>全部</strong> θ，方程组互相纠缠，除最简模型外没有闭式解，只能迭代：梯度上升（每步先做一次推理算 E<sub>θ</sub>）、有隐变量时换 EM（第19章）、或<span class="term">迭代比例拟合</span>（Iterative Proportional Fitting, IPF）。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>"无向模型不过是换种写法，照样拿频率直接填格子"——错。BN 里频率就是答案，因为每个 CPD 各自归一化、参数互不相欠；MN 里频率 E<sub>D</sub>[fᵢ] 只是矩匹配方程的<strong>右半边</strong>，左半边随全体参数一起动，没有任何一个 θᵢ 能单独写成计数比。把频率硬填进去，得到的"模型"连矩匹配条件都不满足。</p>
+    </div>
+
+    <p><strong>第三步：一个能枚举到底的小例子，亲手摸"耦合"。</strong>链 X—Y—Z，全部二值；两个特征 f₁(x,y) = 1{x=y}、f₂(y,z) = 1{y=z}（邻居相等得 1 分），即 P(x,y,z) ∝ exp(θ₁f₁ + θ₂f₂)。8 种赋值全部列出：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>x, y, z</th><th>f₁</th><th>f₂</th><th>未归一化权重 exp(θ₁f₁+θ₂f₂)</th></tr>
+        <tr><td>0,0,0</td><td>1</td><td>1</td><td>e<sup>θ₁+θ₂</sup></td></tr>
+        <tr><td>0,0,1</td><td>1</td><td>0</td><td>e<sup>θ₁</sup></td></tr>
+        <tr><td>0,1,0</td><td>0</td><td>0</td><td>1</td></tr>
+        <tr><td>0,1,1</td><td>0</td><td>1</td><td>e<sup>θ₂</sup></td></tr>
+        <tr><td>1,0,0</td><td>0</td><td>1</td><td>e<sup>θ₂</sup></td></tr>
+        <tr><td>1,0,1</td><td>0</td><td>0</td><td>1</td></tr>
+        <tr><td>1,1,0</td><td>1</td><td>0</td><td>e<sup>θ₁</sup></td></tr>
+        <tr><td>1,1,1</td><td>1</td><td>1</td><td>e<sup>θ₁+θ₂</sup></td></tr>
+        <tr><th>Z(θ)</th><td colspan="3"><strong>2e<sup>θ₁+θ₂</sup> + 2e<sup>θ₁</sup> + 2e<sup>θ₂</sup> + 2</strong></td></tr>
+      </table>
+    </div>
+
+    <p>对它求 ∂logZ/∂θ₁：只有 f₁=1 的四行对 ∂Z/∂θ₁ 有贡献，分子是 2e<sup>θ₁+θ₂</sup>+2e<sup>θ₁</sup>，分母是整个 Z：</p>
+
+    <div class="formula">E<sub>θ</sub>[f₁] = <span class="frac"><span class="num-part">∂ log Z</span><span class="den-part">∂θ₁</span></span> = <span class="frac"><span class="num-part">2e<sup>θ₁+θ₂</sup> + 2e<sup>θ₁</sup></span><span class="den-part">2e<sup>θ₁+θ₂</sup> + 2e<sup>θ₁</sup> + 2e<sup>θ₂</sup> + 2</span></span></div>
+
+    <p>看分母：<strong>θ₂ 就站在 E<sub>θ</sub>[f₁] 的表达式里</strong>；对称地，θ₁ 也站在 E<sub>θ</sub>[f₂] 里。想定 θ₁ 必须先知道 θ₂，反之亦然——没有一个参数能被单独解出来，这就是"耦合"的具体形态。（这条链小到 Z 碰巧还能因式分解、把另一个参数约掉；一旦图里出现环或特征变多，这种运气立刻消失，E<sub>θ</sub>[fᵢ] 就钉死在全体 θ 上。）</p>
+
+    <p>代入数字感受一下迭代在干什么。θ₁=θ₂=0 时 Z = 2+2+2+2 = <strong>8</strong>，E<sub>θ</sub>[f₁] = 4/8 = <strong>0.5</strong>（全均匀，邻居自然一半概率相等）。把 θ₁ 拧到 ln3、θ₂ 保持 0：Z = 2·3+2·3+2+2 = <strong>16</strong>，E<sub>θ</sub>[f₁] = (2·3+2·3)/16 = 12/16 = <strong>0.75</strong>。若数据频率恰为 E<sub>D</sub>[f₁] = 0.75（且 E<sub>D</sub>[f₂] = 0.5，此点的模型值），梯度在这点为零——矩匹配达成；否则梯度继续推着 θ 走，而每走一步都得重算 Z 和这些期望。</p>
+
+    <p><strong>第四步：记住它在全书的位置。</strong>这个推导是<strong>第20章（马尔可夫网络学习）的前置</strong>：那里正式处理 MN 的参数学习，包括 CRF——条件模型的配分函数变成 Z(x)，<strong>随每条样本的观测 x 变化</strong>，梯度仍是"数据计数 − 模型期望"，只是期望要对每条样本各算一遍：推理负担从"每步一次"涨到"每步 M 次"。伪似然、对比散度等技术，本质上都是在绕开这一步。</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th></th><th>贝叶斯网络（本章）</th><th>马尔可夫网络（第20章）</th></tr>
+        <tr><td>似然结构</td><td>按节点分解</td><td>logZ(θ) 全局耦合</td></tr>
+        <tr><td>MLE</td><td>闭式：频率计数</td><td>无闭式解，只能迭代</td></tr>
+        <tr><td>梯度</td><td>简单计数</td><td>数据计数 − 模型期望（需推理）</td></tr>
+        <tr><td>结构学习评分</td><td>可分解（第18章）</td><td>不可分解（第20章）</td></tr>
+      </table>
+    </div>
+
+    <div class="box idea">
+      <span class="box-tag">💡 本章真正的收获</span>
+      <p>记住这张对照表。第4章埋下的账——"Z 难算"——在参数学习这里第一次兑现。第20章的全部技术（伪似然、对比散度、CRF）都可以理解为一件事：<strong>绕开 logZ(θ)</strong>。</p>
+    </div>
+
+    <!-- 回忆卡片 17.6 -->
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 17.6-1</div>
+              <div class="q-text">为什么无向模型的 MLE 没有闭式解？卡在哪个量上？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              卡在 log Z(θ)：它依赖全部参数且要对全体赋值求和，使似然无法按节点分解，"令导数为零"得到互相纠缠的方程组。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 17.6-2</div>
+              <div class="q-text">MN 似然梯度由哪两项组成？哪一项难算、为什么？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              数据特征计数 Σₘfᵢ(x⁽ᵐ⁾)（好算）− M·E_θ[fᵢ] 模型期望（难算：要在当前模型下做推理才能求）。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 概念卡 ============ -->
+    <h2><span class="sec-no">🃏</span>概念卡：本章概念的一分钟画像</h2>
+    <p>翻面前先自问：这个概念我能用一句话讲清楚吗？</p>
+    <div class="flip-grid">
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 1</div>
+            <div class="q-text">似然分解（Likelihood Decomposition）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">P(D|θ) = ∏ᵢ[∏ₘ P(xᵢ⁽ᵐ⁾|paᵢ⁽ᵐ⁾;θᵢ)]，全局似然拆成每个 CPD 的局部项。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">让全局学习变成 n 个独立小问题，是 BN 易学性的根源。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">分科考试：每科单独阅卷，互不干扰。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为是近似——交换连乘顺序是恒等变形，分文不差。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">Ch17 全部闭式解的基础；Ch19 EM 的 M 步仍靠它。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 2</div>
+            <div class="q-text">最大似然估计（MLE）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">θ̂ = argmax P(D|θ)；表 CPD 下 = 频率计数 #(x,u)/#(u)。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">给"参数从哪来"一个唯一、可计算、数据驱动的答案。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">看到什么信什么：频率即概率。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为它总是最优——小样本时高方差，未见事件直接判 0。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">数据充足时的默认选择；EM 的 M 步内核（Ch19）。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 3</div>
+            <div class="q-text">零概率灾难（Zero-Frequency Problem）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">未观测配置的 MLE 概率为 0，使任何含该配置的样本似然整体为 0。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">它本身是被解决的问题：MLE 的结构性缺陷。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">一个人考零分，全班的总成绩单被判作废。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为多收数据就能根治——样本永远有限，长尾永远存在。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">任何要用似然评估/推理的系统上线前的必检项。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 4</div>
+            <div class="q-text">拉普拉斯平滑（Laplace Smoothing）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">θ̂ = (#(x,u)+α) / (#(u)+α·|Val(X)|)，每个格子加伪计数 α 再归一化。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">消灭零概率，给未见事件留一个非零地板。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">每个选项先发 α 张保底票，再按真实得票分配。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为 α 越大越好——α 过大把分布抹成均匀，抹掉真实信号。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">文本分类、小样本 CPD；与 Dirichlet 先验的贝叶斯估计等价。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 5</div>
+            <div class="q-text">Dirichlet 先验与等价样本量（Dirichlet Prior / ESS）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">多项 CPD 的共轭先验 Dir(α₁…α_K)；后验 = 先验参数加计数；ESS N′=Σα。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">让"平滑"从补丁变成原则：先验即伪样本，后验有闭式。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">预先看过 N′ 个虚拟样本，再和真数据一起数。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为先验免费——先验错了，小数据下它比噪声更误导。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">小数据、需要不确定性量化、BDe 评分（Ch18）的基石。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 6</div>
+            <div class="q-text">logZ(θ) 耦合（Partition-Function Coupling）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">MN 的 Z(θ) 依赖全部参数且需全局求和，使似然不可分解。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">它是被绕开的对象：MN 学习困难的总根源。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">全班调分：动一个人的分，所有人的排名都变。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为只是"算得慢"——它还让梯度必须做推理，让结构评分不可分解。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">Ch20 全部技术的靶子：伪似然、CD、CRF 都在绕它。</span></div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- ============ 分层习题 ============ -->
+    <h2><span class="sec-no">📝</span>分层习题</h2>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>判断对错：<strong>完全数据下，BN 各 CPD 的 MLE 必须联合优化，因为所有参数共享同一个似然函数。</strong>说明理由。</div>
+      <details>
+        <summary>提示</summary>
+        <p>回到似然分解：每个 θᵢ 出现在几个方括号里？</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">错。似然分解 P(D|θ) = ∏ᵢ[∏ₘ P(xᵢ⁽ᵐ⁾|paᵢ⁽ᵐ⁾;θᵢ)] 中，每个 θᵢ 只出现在自己的方括号内，各括号可以独立最大化。"共享同一个似然"在乘法结构下不构成耦合——这正是 BN 参数学习简单的根本原因。联合优化只在似然不可分解时（如无向模型的 logZ 耦合）才被迫出现。</div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>判断对错：<strong>拉普拉斯平滑的 α 越大，参数估计越准确。</strong>说明理由。</div>
+      <details>
+        <summary>提示</summary>
+        <p>α 的贝叶斯含义是什么？α 趋于无穷时估计趋于什么分布？</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">错。α 是伪计数，等价于 Dirichlet 先验的强度。α 越大，估计越被拉向均匀分布（先验形状），与真实数据无关；α→∞ 时任何 CPD 行都变成均匀分布，数据信号被彻底淹没。正确说法是：α 控制先验与数据的权衡，数据少时适度 α 防过拟合，数据多时小 α 即可——它是一个需要根据数据量和先验信念权衡的超参数，不是越大越准。</div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>学生网络中 Easy,Low 行的计数为 (A, B, C) = (15, 10, 5)。手算：① 该行的全部 MLE 条目；② 加一平滑（α=1）后的全部条目。</div>
+      <details>
+        <summary>提示</summary>
+        <p>MLE 除以行合计；平滑后分子加 1、分母加 |Val(G)| = 3。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p>行合计 = 15+10+5 = 30。</p>
+          <p>① MLE：P(A) = 15/30 = <strong>0.500</strong>；P(B) = 10/30 ≈ <strong>0.333</strong>；P(C) = 5/30 ≈ <strong>0.167</strong>。</p>
+          <p>② 加一平滑（分母 30+3 = 33）：P(A) = 16/33 ≈ <strong>0.485</strong>；P(B) = 11/33 = <strong>1/3 ≈ 0.333</strong>；P(C) = 6/33 ≈ <strong>0.182</strong>。</p>
+          <p>观察：高频项（A）被略微压低，低频项（C）被抬高——平滑把概率质量从高频向低频转移，方向朝均匀。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>硬币先验 Dir(2,2)，抛 4 次得 3 正 1 反。手算：① 后验分布；② 下一次为正的贝叶斯预测；③ 与 MLE 比较并解释差异来源。</div>
+      <details>
+        <summary>提示</summary>
+        <p>后验参数 = 先验参数 + 对应计数；预测 = 后验期望 = 归一化后的后验参数。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p>① 后验 = Dir(2+3, 2+1) = <strong>Dir(5, 3)</strong>。</p>
+          <p>② P(正|D) = 5/(5+3) = 5/8 = <strong>0.625</strong>。</p>
+          <p>③ MLE = 3/4 = 0.75，比贝叶斯预测高 0.125。差异来源：先验 Dir(2,2) 的等价样本量 N′=4，相当于预先见过 2 正 2 反；贝叶斯预测实为 (3+2)/(4+4)，是 4 个真实样本与 4 个虚拟样本的折中。真实数据增至 400 条时先验影响可忽略——数据与先验按"样本数"加权竞争。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l3">L3 建模应用</span>某医院用已知结构的 BN 做辅助诊断：Disease（流感/感冒/罕见病R）→ Cough（咳嗽）、Disease → Fever（发烧）。收集 202 条完整病历：流感 80 例（咳嗽 70、发烧 60）；感冒 120 例（咳嗽 40、发烧 30）；罕见病 R 仅 2 例（咳嗽 2、发烧 0）。① 估计三张 CPD；② 指出哪一行最危险、为什么；③ 给出修复方案并重算该行。</div>
+      <details>
+        <summary>提示</summary>
+        <p>每个症状一张以 Disease 为条件的 CPD；注意 R 行的样本量和发烧计数。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p>① P(Cough|Disease)：流感 70/80 = 0.875；感冒 40/120 ≈ 0.333；R 2/2 = 1.0。P(Fever|Disease)：流感 60/80 = 0.75；感冒 30/120 = 0.25；R 0/2 = <strong>0</strong>。</p>
+          <p>② R 行最危险：只有 2 个样本，P(Fever|R)=0 是零概率——若一个 R 病人发烧，模型给他的病历概率为 0，可能直接排除正确诊断。而且 2 个样本给出的 1.0 / 0 两个极端值都极不可靠。</p>
+          <p>③ 修复：拉普拉斯平滑 α=1（或等价 Dir(1,1) 先验）。R 行发烧 CPD 重估：P(Fever|R) = (0+1)/(2+2) = <strong>0.25</strong>；咳嗽 P(Cough|R) = (2+1)/(2+2) = <strong>0.75</strong>。更彻底的做法：R 太罕见时引入医学先验（如 Dir(5,5)）而非均匀先验，或直接合并到"其他疾病"类别。</p>
+        </div>
+      </details>
+    </div>
+
+    <!-- ============ 本章自测 ============ -->
+    <h2><span class="sec-no">✍️</span>本章自测</h2>
+    <p class="quiz-hint">点击选项判分，答错会给出原因。</p>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 1</div>
+      <div class="q-stem">完全数据下 BN 似然可以按节点分解的根本原因是：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 样本之间相互独立</li>
+        <li data-opt="b">B. 联合分布按图结构因子化，每个 θᵢ 只属于一个局部族项</li>
+        <li data-opt="c">C. 每个变量的取值个数有限</li>
+        <li data-opt="d">D. 数据量足够大</li>
+      </ul>
+      <div class="quiz-explain">选 B。分解来自 BN 的因子化定义：换序连乘后每个 θᵢ 只出现在一个方括号中。A（样本独立）只保证似然是样本的连乘，不保证能按节点拆分；C、D 与分解无关——无向模型同样样本独立、同样有限取值，却因 logZ 无法分解。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="c">
+      <div class="q-no">自测 2</div>
+      <div class="q-stem">例 1 计数表中，P(G = B | D=Easy, I=High) 的 MLE 是：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 5/130 ≈ 0.038</li>
+        <li data-opt="b">B. 5/40 = 0.125</li>
+        <li data-opt="c">C. 5/35 ≈ 0.143</li>
+        <li data-opt="d">D. 5/30 ≈ 0.167</li>
+      </ul>
+      <div class="quiz-explain">选 C。MLE 是"父节点配置 = (Easy,High)"这一行内的频率：分母是行合计 35，不是总样本 130（A 错——那是联合频率不是条件概率），也不是其他行的合计（B、D 错）。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="a">
+      <div class="q-no">自测 3</div>
+      <div class="q-stem">关于零概率灾难，下列说法正确的是：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 一个 CPD 条目为 0，可能使整个测试集的似然为 0</li>
+        <li data-opt="b">B. 只要训练数据量足够大，就不会发生</li>
+        <li data-opt="c">C. 它只影响那个未出现配置本身，不影响其他样本</li>
+        <li data-opt="d">D. 拉普拉斯平滑会消除灾难，同时不改变任何非零条目</li>
+      </ul>
+      <div class="quiz-explain">选 A。似然是连乘，一个因子为 0 全体为 0。B 错：真实世界的长尾永远存在未观测配置。C 错：灾难恰恰在于连乘把 0 传播到整条样本乃至整个数据集。D 错：平滑重新归一化，所有条目都会轻微变化（高频被压低、低频被抬高）。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="d">
+      <div class="q-no">自测 4</div>
+      <div class="q-stem">先验 Dir(2,2)，观测 3 正 1 反。下一次为正的贝叶斯预测是：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 3/4 = 0.75</li>
+        <li data-opt="b">B. 3/5 = 0.6</li>
+        <li data-opt="c">C. 4/8 = 0.5</li>
+        <li data-opt="d">D. 5/8 = 0.625</li>
+      </ul>
+      <div class="quiz-explain">选 D。后验 Dir(2+3, 2+1) = Dir(5,3)，预测 = 5/(5+3) = 0.625。A 是 MLE，忘了先验；B 错把先验当成分母只加一次；C 误以为后验仍是均匀。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 5</div>
+      <div class="q-stem">关于无向模型（MN）的参数学习，下列说法<strong>错误</strong>的是：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 对数似然含 −M·logZ(θ) 项</li>
+        <li data-opt="b">B. 与 BN 一样，MLE 也有频率计数的闭式解</li>
+        <li data-opt="c">C. 似然梯度包含模型期望 E_θ[fᵢ]，计算它需要推理</li>
+        <li data-opt="d">D. logZ(θ) 依赖所有参数，使似然无法按节点分解</li>
+      </ul>
+      <div class="quiz-explain">选 B（"错误的是"）。MN 的 Z(θ) 把所有参数耦进同一个全局归一化，似然不可分解，MLE 无闭式解，只能迭代优化——这正是第20章的主题。A、C、D 都是对困难的正确描述。</div>
+    </div>
+
+    <!-- ============ 三句话复述 ============ -->
+    <div class="retell">
+      <h3>🗣️ 用自己的话，三句话讲完本章</h3>
+      <p class="retell-sub">对着空气（或室友）说出这三句。说卡壳的那句，回去重读对应小节。</p>
+      <details>
+        <summary>句1：这章解决什么问题？——</summary>
+        <div class="retell-answer">参考答案：结构已知、每条样本所有变量都被观测时，怎么把 CPD 里的数字填出来——这是四种学习场景里最简单的一种，也是其他场景的地基。</div>
+      </details>
+      <details>
+        <summary>句2：核心机制是什么？——</summary>
+        <div class="retell-answer">参考答案：BN 因子分解让似然按节点拆开，每个 CPD 独立求解：表 CPD 的 MLE 就是频率计数；零计数会引爆零概率灾难，用拉普拉斯平滑或等价的 Dirichlet 贝叶斯估计（伪计数 + 后验预测）修复；广义 CPD 退化为回归（最小二乘/逻辑回归）。</div>
+      </details>
+      <details>
+        <summary>句3：它和前后章怎么分工？——</summary>
+        <div class="retell-answer">参考答案：本章假设结构已知（第18章去掉这个假设）、数据完全（第19章去掉这个假设）、模型有向（第20章换无向，logZ 让计数失效）。本章的"计数"还是第19章 EM 之 M 步的内核。</div>
+      </details>
+    </div>
+
+    <!-- ============ 复习计划 ============ -->
+    <div class="review-plan">
+      <h3>🔁 间隔复习计划</h3>
+      <p>回忆本身比重读有效 10 倍。到点只做一件事：翻卡 + 重做标记题。</p>
+      <table>
+        <tr><th>时间点</th><th>复习内容</th><th>预计用时</th></tr>
+        <tr><td>第 1 天</td><td>概念卡 1–6 全部 + 回忆卡 17.2-1、17.3-2、17.4-2</td><td>10 分钟</td></tr>
+        <tr><td>第 3 天</td><td>概念卡 3、5、6（零概率/Dirichlet/logZ 耦合）+ 重做自测错题 + L2 第 2 题</td><td>8 分钟</td></tr>
+        <tr><td>第 7 天</td><td>三句话复述出声说一遍 + 回忆卡 17.1-2、17.6-1 + L2 第 1 题重算</td><td>10 分钟</td></tr>
+        <tr><td>第 15 天</td><td>只做合上书挑战；六条全过则本章毕业，卡在哪条就重读对应小节</td><td>15 分钟</td></tr>
+      </table>
+    </div>
+
+    <!-- 合上书挑战 -->
+    <div class="final-challenge">
+      <h3>📕 合上书挑战</h3>
+      <p class="fc-sub">现在关掉这个页面（或遮住屏幕），拿一张纸，凭记忆完成以下任务。全部做完再回来核对——这是本章真正的毕业考试。</p>
+      <ol id="ch17-challenge-list">
+        <li><span class="fc-check"></span>写出 BN 完全数据的似然分解公式，并解释"每个 θᵢ 只出现在一个方括号里"为什么意味着独立优化</li>
+        <li><span class="fc-check"></span>写出表 CPD 的 MLE 公式，并对 Easy,High 行 (30,5,0) 算出全部三个条目</li>
+        <li><span class="fc-check"></span>用自己的话讲清零概率灾难的连锁反应（一个 0 → 样本为 0 → 测试集为 0），并用 α=1 重算 P̂(G=A|Hard,Low)</li>
+        <li><span class="fc-check"></span>写出 Dirichlet 后验更新与后验预测公式；用 Dir(2,2)+3正1反 算出预测 0.625，并说出等价样本量的含义</li>
+        <li><span class="fc-check"></span>说出线性高斯、logistic、表格三类 CPD 的 MLE 各是什么算法，哪个没有闭式解</li>
+        <li><span class="fc-check"></span>回答本章的主线问题：为什么"结构已知 + 数据完全"时参数学习就是计数加平滑，而无向模型不行？（一句话）</li>
+      </ol>
+    </div>
+
+    <div class="complete-zone">
+      <button class="btn-complete" id="ch17-btn-complete" onclick="markDone()">✓ 我已完成本章（含合上书挑战）</button>
+    </div>
+
+    <div class="chapter-nav">
+      <a href="chapter-16.html"><span class="nav-dir">← 上一章</span>第16章 学习模型：概述</a>
+      <a href="chapter-18.html" class="next"><span class="nav-dir">下一章 →</span>第18章 结构学习</a>
+    </div>
+
+  </div>
+</div>
+
+<footer class="footer">
+  <div class="wrap">第17章 完全数据参数学习 · PGM 互动讲义 · 基于 Koller &amp; Friedman (2009)</div>
+</footer>
+
+<script src="assets/mermaid.min.js"></script>
+<script>
+mermaid.initialize({
+  startOnLoad: true,
+  theme: "base",
+  themeVariables: {
+    primaryColor: "#e3edf7",
+    primaryBorderColor: "#1d5f9e",
+    primaryTextColor: "#1d5f9e",
+    lineColor: "#5c554b",
+    secondaryColor: "#fbeedd",
+    tertiaryColor: "#f5f1e8",
+    fontFamily: "-apple-system, PingFang SC, sans-serif",
+    fontSize: "14px"
+  },
+  flowchart: { curve: "linear", htmlLabels: false }
+});
+</script>
+<script>
+// 自测题判分
+document.querySelectorAll(".quiz-block").forEach(block => {
+  const answer = block.dataset.answer;
+  const explain = block.querySelector(".quiz-explain");
+  block.querySelectorAll(".quiz-opts li").forEach(li => {
+    li.addEventListener("click", () => {
+      const opts = block.querySelectorAll(".quiz-opts li");
+      opts.forEach(o => o.classList.add("disabled"));
+      if (li.dataset.opt === answer) {
+        li.classList.add("correct");
+      } else {
+        li.classList.add("wrong");
+        block.querySelector(`[data-opt="${answer}"]`).classList.add("correct");
+      }
+      explain.classList.add("show");
+    });
+  });
+});
+
+// 合上书清单打勾
+document.querySelectorAll("#ch17-challenge-list li").forEach(li => {
+  li.addEventListener("click", () => li.classList.toggle("checked"));
+});
+
+// 完成标记 → localStorage（第17章）
+const KEY = "pgm_progress_v1";
+function loadProgress() {
+  try { return JSON.parse(localStorage.getItem(KEY)) || {}; } catch (e) { return {}; }
+}
+const progress = loadProgress();
+const btn = document.getElementById("ch17-btn-complete");
+if (progress[17] && progress[17].done) {
+  btn.textContent = "✓ 已完成 · 再次点击重置";
+  btn.classList.add("done");
+}
+function markDone() {
+  const p = loadProgress();
+  if (p[17] && p[17].done) {
+    delete p[17];
+    btn.textContent = "✓ 我已完成本章（含合上书挑战）";
+    btn.classList.remove("done");
+  } else {
+    p[17] = { done: true, completedAt: Date.now(), reviewsDone: 0 };
+    btn.textContent = "✓ 已完成 · 复习提醒已开启";
+    btn.classList.add("done");
+  }
+  localStorage.setItem(KEY, JSON.stringify(p));
+}
+</script>
+
+</body>
+</html>

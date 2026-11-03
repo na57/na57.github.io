@@ -1,0 +1,742 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第3章 贝叶斯网络 · PGM 互动讲义</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+<nav class="topbar">
+  <div class="topbar-inner">
+    <span class="brand"><a href="index.html" style="color:inherit">← 学习地图</a></span>
+    <span class="crumb">阶段一 · 表示 / 第3章</span>
+  </div>
+</nav>
+
+<div class="wrap">
+
+  <div class="lecture-head">
+    <span class="ch-label">CHAPTER 03 · 表示</span>
+    <h1>贝叶斯网络</h1>
+    <p class="lead">全书最核心的章节。从这里开始，概率图模型才真正展开。</p>
+  </div>
+
+  <!-- 本章定位 -->
+  <div class="position-bar">
+    <strong>本章在主线上的位置：</strong>图编码条件独立性 → <u>分布因此可以因子分解</u> → 推理得以高效 → 从数据中学习。<br>
+    第3章回答主线上的第一个问题：<strong>如何用一张有向图紧凑地表示一个高维概率分布？</strong>
+    <div class="map-inline">
+      <span class="node">Ch1-2 铺垫</span><span class="arrow">→</span>
+      <span class="node here">Ch3 贝叶斯网络</span><span class="arrow">→</span>
+      <span class="node">Ch4 马尔可夫网络（无向版）</span><span class="arrow">→</span>
+      <span class="node">Ch9 推理（用这张图算概率）</span><span class="arrow">→</span>
+      <span class="node">Ch18 结构学习（从数据学这张图）</span>
+    </div>
+  </div>
+
+  <!-- 学习目标 -->
+  <div class="objectives">
+    <h4>🎯 学完本章，合上书你应该能：</h4>
+    <ol>
+      <li>说出贝叶斯网络的两个组成部分，并写出联合分布的因子分解公式</li>
+      <li>画出"学生例子"的 DAG，并解释每条边的含义</li>
+      <li>辨认三种基本路径结构，说出各自的独立性结论——尤其是 V-结构为什么反直觉</li>
+      <li>给定一个小型 DAG，手工判断两组变量是否 d-分离</li>
+      <li>解释为什么从数据中无法恢复某些边的方向（I-等价）</li>
+    </ol>
+  </div>
+
+  <div class="lecture">
+
+    <!-- ============ 3.1 ============ -->
+    <h2><span class="sec-no">3.1</span>为什么需要贝叶斯网络：从维度诅咒说起</h2>
+
+    <p>要对 <span class="var">n</span> 个随机变量做概率推理，原则上你需要完整的联合分布 P(X₁, X₂, …, Xₙ)。如果每个变量取 d 个值，你需要 dⁿ 个参数。100 个二元变量就是 2¹⁰⁰ ≈ 10³⁰ 个参数——<strong>没有任何计算机存得下</strong>。</p>
+
+    <p>出路只有一条：<strong>利用变量之间的独立性结构，把大分布拆成小因子的乘积</strong>。</p>
+
+    <p>最极端的情况是所有变量相互独立：</p>
+
+    <div class="formula">P(X₁, X₂, …, Xₙ) = P(X₁) · P(X₂) · … · P(Xₙ)</div>
+
+    <p>参数从指数级降到线性级。但现实中变量很少完全独立。于是退而求其次——<strong>朴素贝叶斯</strong>：假设给定类别 C 后，所有特征条件独立：</p>
+
+    <div class="formula">P(C, X₁, …, Xₙ) = P(C) · ∏ P(Xᵢ | C)</div>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>朴素贝叶斯的假设太强（所有特征只通过类别关联）。<strong>贝叶斯网络的核心思想就是放宽这个假设</strong>：用一张图来精确声明"谁直接影响谁"，而不是假设所有人都只依赖同一个原因。图越贴近真实结构，模型就越紧凑又越准确。</p>
+    </div>
+
+    <!-- 回忆卡片 3.1 -->
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <p class="recall-hint">不要直接点开。先在心里或纸上说出答案，再翻面核对。</p>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 3.1-1</div>
+              <div class="q-text">100 个二元变量的联合分布需要多少参数？PGM 靠什么解决这个问题？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              约 2¹⁰⁰ ≈ 10³⁰ 个。PGM 靠利用条件独立结构，把联合分布因子分解为若干小因子的乘积，参数量从指数级降到多项式级。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 3.1-2</div>
+              <div class="q-text">朴素贝叶斯做了什么假设？贝叶斯网络相对它放宽了什么？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              朴素贝叶斯假设：给定类别 C 后，所有特征相互条件独立。BN 放宽为：用一张 DAG 精确指定每个变量直接依赖哪些变量，不再假设所有特征只有一个共同依赖。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 3.2 ============ -->
+    <h2><span class="sec-no">3.2</span>贝叶斯网络的定义：图 + 条件概率表</h2>
+
+    <p>一个贝叶斯网络由两部分组成：</p>
+    <ul>
+      <li><strong>结构 𝒢</strong>：一个有向无环图（DAG）。节点是随机变量，有向边 X → Y 表示 X <em>直接影响</em> Y。</li>
+      <li><strong>参数 Θ</strong>：每个节点 Xᵢ 携带一个<span class="term">条件概率分布</span>（CPD）：P(Xᵢ | Pa(Xᵢ))，其中 Pa(Xᵢ) 是 Xᵢ 在图中的父节点集合。</li>
+    </ul>
+
+    <p>两者合起来，给出全书最重要的公式——<strong>链式法则的图结构化版本</strong>：</p>
+
+    <div class="formula">P(X₁, X₂, …, Xₙ) = ∏<sub>i=1…n</sub> P(Xᵢ | Pa(Xᵢ))</div>
+
+    <p>读法：<strong>联合分布 = 每个变量"以自己父节点为条件"的概率的乘积</strong>。图告诉你每个 P(Xᵢ | ·) 里该填谁。</p>
+
+    <h3>学生例子（Student Example）</h3>
+    <p>这是全书反复使用的经典例子，务必熟悉。一位教授要根据学生情况写推荐信：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>变量</th><th>含义</th><th>取值</th></tr>
+        <tr><td><strong>D</strong></td><td>课程难度 Difficulty</td><td>简单 / 困难</td></tr>
+        <tr><td><strong>I</strong></td><td>学生智力 Intelligence</td><td>低 / 高</td></tr>
+        <tr><td><strong>G</strong></td><td>成绩 Grade</td><td>A / B / C</td></tr>
+        <tr><td><strong>S</strong></td><td>SAT 分数</td><td>低 / 高</td></tr>
+        <tr><td><strong>L</strong></td><td>推荐信质量 Letter</td><td>弱 / 强</td></tr>
+      </table>
+    </div>
+
+    <div class="figure">
+      <svg viewBox="0 0 460 250" width="460" role="img" aria-label="学生例子的贝叶斯网络">
+        <defs>
+          <marker id="arr" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto">
+            <path d="M0,0 L9,4.5 L0,9 z" fill="#1d5f9e"></path>
+          </marker>
+        </defs>
+        <!-- 边 -->
+        <line x1="95" y1="55" x2="185" y2="110" stroke="#1d5f9e" stroke-width="2" marker-end="url(#arr)"></line>
+        <line x1="335" y1="55" x2="245" y2="110" stroke="#1d5f9e" stroke-width="2" marker-end="url(#arr)"></line>
+        <line x1="360" y1="70" x2="385" y2="110" stroke="#1d5f9e" stroke-width="2" marker-end="url(#arr)"></line>
+        <line x1="215" y1="150" x2="215" y2="190" stroke="#1d5f9e" stroke-width="2" marker-end="url(#arr)"></line>
+        <!-- 节点 -->
+        <g font-family="-apple-system, PingFang SC, sans-serif" font-size="15" font-weight="700">
+          <circle cx="80" cy="40" r="24" fill="#e3edf7" stroke="#1d5f9e" stroke-width="2"></circle>
+          <text x="80" y="45" text-anchor="middle" fill="#1d5f9e">D</text>
+          <circle cx="350" cy="40" r="24" fill="#e3edf7" stroke="#1d5f9e" stroke-width="2"></circle>
+          <text x="350" y="45" text-anchor="middle" fill="#1d5f9e">I</text>
+          <circle cx="215" cy="130" r="24" fill="#fbeedd" stroke="#c4651f" stroke-width="2.5"></circle>
+          <text x="215" y="135" text-anchor="middle" fill="#c4651f">G</text>
+          <circle cx="390" cy="130" r="24" fill="#e3edf7" stroke="#1d5f9e" stroke-width="2"></circle>
+          <text x="390" y="135" text-anchor="middle" fill="#1d5f9e">S</text>
+          <circle cx="215" cy="215" r="24" fill="#e3edf7" stroke="#1d5f9e" stroke-width="2"></circle>
+          <text x="215" y="220" text-anchor="middle" fill="#1d5f9e">L</text>
+        </g>
+        <g font-family="-apple-system, PingFang SC, sans-serif" font-size="11.5" fill="#8a8175">
+          <text x="80" y="14" text-anchor="middle">难度</text>
+          <text x="350" y="14" text-anchor="middle">智力</text>
+          <text x="258" y="126">成绩</text>
+          <text x="428" y="126">SAT</text>
+          <text x="252" y="211">推荐信</text>
+        </g>
+      </svg>
+      <div class="caption">图 3.1 学生例子的 DAG。注意 G 处是一个 V-结构：D → G ← I（后面要考）。</div>
+    </div>
+
+    <p>按因子分解公式展开：</p>
+
+    <div class="formula">P(D, I, G, S, L) = P(D) · P(I) · P(G | D, I) · P(S | I) · P(L | G)</div>
+
+    <p><strong>参数对比</strong>（假设 G 取 3 个值，其余二元）：</p>
+    <ul>
+      <li>完整联合分布：2×2×3×2×2 − 1 = <strong>47</strong> 个自由参数</li>
+      <li>贝叶斯网络：1 + 1 + 8 + 2 + 3 = <strong>15</strong> 个参数</li>
+    </ul>
+    <p>变量越多差距越恐怖——这就是因子分解的意义。</p>
+
+    <!-- 回忆卡片 3.2 -->
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 3.2-1</div>
+              <div class="q-text">不看讲义，写出贝叶斯网络的因子分解公式，并解释 Pa(Xᵢ) 是什么。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              P(X₁,…,Xₙ) = ∏ᵢ P(Xᵢ | Pa(Xᵢ))。Pa(Xᵢ) 是 Xᵢ 在 DAG 中的父节点集合——图结构决定了每个条件概率"以谁为条件"。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 3.2-2</div>
+              <div class="q-text">画出学生例子的 DAG（5 个变量、4 条边），并写出它的因子分解。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              D→G，I→G，I→S，G→L。<br>
+              P(D,I,G,S,L) = P(D)·P(I)·P(G|D,I)·P(S|I)·P(L|G)。<br>
+              注意 G 处形成 V-结构 D→G←I。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 3.3 ============ -->
+    <h2><span class="sec-no">3.3</span>d-分离：用图读出独立性</h2>
+
+    <p>这是本章——也是全书——<strong>最核心、最实用的工具</strong>。它要回答的问题是：<em>给定这张图，观察到某些变量后，另外两个变量还相关吗？</em></p>
+
+    <p>答案不需要任何概率计算，只需要看图的连通性。秘诀在于：<strong>任何长路径都可以分解为三种基本的两节点结构</strong>，每种结构有自己的"通断规则"。</p>
+
+    <div class="figure">
+      <svg viewBox="0 0 720 210" width="720" role="img" aria-label="三种基本路径结构">
+        <defs>
+          <marker id="arr2" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto">
+            <path d="M0,0 L9,4.5 L0,9 z" fill="#5c554b"></path>
+          </marker>
+        </defs>
+        <g font-family="-apple-system, PingFang SC, sans-serif">
+          <!-- 结构一：链式 -->
+          <g font-size="14" font-weight="700">
+            <circle cx="60" cy="80" r="22" fill="#fff" stroke="#5c554b" stroke-width="2"></circle>
+            <text x="60" y="85" text-anchor="middle">X</text>
+            <circle cx="150" cy="80" r="22" fill="#fbeedd" stroke="#c4651f" stroke-width="2.5"></circle>
+            <text x="150" y="85" text-anchor="middle" fill="#c4651f">Z</text>
+            <circle cx="240" cy="80" r="22" fill="#fff" stroke="#5c554b" stroke-width="2"></circle>
+            <text x="240" y="85" text-anchor="middle">Y</text>
+          </g>
+          <line x1="82" y1="80" x2="126" y2="80" stroke="#5c554b" stroke-width="2" marker-end="url(#arr2)"></line>
+          <line x1="172" y1="80" x2="216" y2="80" stroke="#5c554b" stroke-width="2" marker-end="url(#arr2)"></line>
+          <text x="150" y="135" text-anchor="middle" font-size="13.5" font-weight="700" fill="#2b2620">① 链式（间接因果）</text>
+          <text x="150" y="158" text-anchor="middle" font-size="12.5" fill="#5c554b">观测 Z ⟹ 阻断</text>
+
+          <!-- 结构二：共同原因 -->
+          <g font-size="14" font-weight="700">
+            <circle cx="480" cy="50" r="22" fill="#fbeedd" stroke="#c4651f" stroke-width="2.5"></circle>
+            <text x="480" y="55" text-anchor="middle" fill="#c4651f">Z</text>
+            <circle cx="420" cy="130" r="22" fill="#fff" stroke="#5c554b" stroke-width="2"></circle>
+            <text x="420" y="135" text-anchor="middle">X</text>
+            <circle cx="540" cy="130" r="22" fill="#fff" stroke="#5c554b" stroke-width="2"></circle>
+            <text x="540" y="135" text-anchor="middle">Y</text>
+          </g>
+          <line x1="462" y1="65" x2="437" y2="112" stroke="#5c554b" stroke-width="2" marker-end="url(#arr2)"></line>
+          <line x1="498" y1="65" x2="523" y2="112" stroke="#5c554b" stroke-width="2" marker-end="url(#arr2)"></line>
+          <text x="480" y="180" text-anchor="middle" font-size="13.5" font-weight="700" fill="#2b2620">② 共同原因（分叉）</text>
+          <text x="480" y="200" text-anchor="middle" font-size="12.5" fill="#5c554b">观测 Z ⟹ 阻断</text>
+
+          <!-- 结构三：V-结构 -->
+          <g font-size="14" font-weight="700">
+            <circle cx="620" cy="45" r="22" fill="#fff" stroke="#5c554b" stroke-width="2"></circle>
+            <text x="620" y="50" text-anchor="middle">X</text>
+            <circle cx="700" cy="45" r="22" fill="#fff" stroke="#5c554b" stroke-width="2"></circle>
+            <text x="700" y="50" text-anchor="middle">Y</text>
+            <circle cx="660" cy="130" r="22" fill="#fae9e7" stroke="#b03a2e" stroke-width="2.5"></circle>
+            <text x="660" y="135" text-anchor="middle" fill="#b03a2e">Z</text>
+          </g>
+          <line x1="630" y1="65" x2="649" y2="110" stroke="#5c554b" stroke-width="2" marker-end="url(#arr2)"></line>
+          <line x1="690" y1="65" x2="671" y2="110" stroke="#5c554b" stroke-width="2" marker-end="url(#arr2)"></line>
+          <text x="660" y="180" text-anchor="middle" font-size="13.5" font-weight="700" fill="#2b2620">③ V-结构（汇聚）</text>
+          <text x="660" y="200" text-anchor="middle" font-size="12.5" fill="#b03a2e">观测 Z ⟹ 反而激活！</text>
+        </g>
+      </svg>
+      <div class="caption">图 3.2 三种基本两节点路径结构。前两种"观测即阻断"，第三种恰好相反。</div>
+    </div>
+
+    <h3>逐个理解</h3>
+
+    <p><strong>① 链式 X → Z → Y</strong>：X 通过 Z 间接影响 Y。<em>例子：火灾 → 烟雾 → 警报。</em>一旦你知道了烟雾浓度，火情本身对警报的猜测不再提供新信息：<strong>X ⊥ Y | Z</strong>。</p>
+
+    <p><strong>② 共同原因 X ← Z → Y</strong>：Z 同时导致 X 和 Y。<em>例子：季节 → 流感，季节 → 过敏。</em>季节固定后，得没得流感不会改变你对过敏的判断：<strong>X ⊥ Y | Z</strong>。</p>
+
+    <p><strong>③ V-结构 X → Z ← Y</strong>：X 和 Y 共同导致 Z。规则与前两种<strong>恰好相反</strong>：</p>
+    <ul>
+      <li>不观测 Z 时：X 和 Y <strong>独立</strong>（X ⊥ Y）</li>
+      <li>观测 Z（或 Z 的后代）后：X 和 Y 变得<strong>相关</strong>（X ⊥̸ Y | Z）</li>
+    </ul>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ V-结构：全书最反直觉的概念</span>
+      <p><strong>例子</strong>：学生例子中 智力(I) → 成绩(G) ← 难度(D)。一个学生聪明与否、课程难不难，本来毫不相干（I ⊥ D）。</p>
+      <p>但一旦你得知他<strong>成绩是 C</strong>（观测了 G），再告诉你"这门课很简单"（D=简单），你立刻会推断"这学生可能不太聪明"——I 和 D 突然相关了。这叫<strong>解释消除</strong>（Explaining Away）：两个原因竞争解释同一个结果，确认一个就削弱另一个。</p>
+      <p>这个机制解释了现实中大量的"选择偏差"：比如"被名校录取的学生里，家境和天赋负相关"——因为录取是 V-结构的汇聚点。</p>
+    </div>
+
+    <h3>d-分离的正式规则</h3>
+    <div class="box insight">
+      <span class="box-tag">✅ 判定规则</span>
+      <p>路径 X₁ — X₂ — … — Xₙ 在给定观测集 Z 下<strong>被阻断</strong>，当且仅当路径上存在某个三节点段满足以下任一条件：</p>
+      <p>① 链式或共同原因（→ Z →、← Z →、← Z ←）且 <strong>Z 被观测</strong>；<br>
+      ② V-结构（→ Z ←）且 <strong>Z 及其所有后代都未被观测</strong>。</p>
+      <p>如果 X 和 Y 之间的<strong>每一条</strong>路径都被阻断，则 X ⊥ Y | Z——称 X 与 Y 被 Z <span class="term">d-分离</span>。</p>
+    </div>
+
+    <p><strong>在学生例子上练手</strong>（对照图 3.1）：</p>
+    <ul>
+      <li>D ⊥ I？——D 和 I 之间唯一路径 D → G ← I 是 V-结构，G 未观测 ⟹ <strong>独立</strong> ✓</li>
+      <li>D ⊥ I | G？——观测了 G，V-结构被激活 ⟹ <strong>不独立</strong> ✗（这就是解释消除）</li>
+      <li>D ⊥ S | I？——路径 D → G ← I → S：在 I 处是链式结构且 I 被观测 ⟹ 阻断 ⟹ <strong>独立</strong> ✓</li>
+    </ul>
+
+    <!-- 回忆卡片 3.3 -->
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 3.3-1</div>
+              <div class="q-text">说出三种基本路径结构，以及各自的"观测 Z 后通断规则"。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              ① 链式 X→Z→Y：观测 Z 阻断。<br>
+              ② 共同原因 X←Z→Y：观测 Z 阻断。<br>
+              ③ V-结构 X→Z←Y：观测 Z（或其后代）反而<b>激活</b>；不观测才是阻断。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 3.3-2</div>
+              <div class="q-text">用一句话向没学过的人解释"解释消除"（Explaining Away）。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              一个结果若有多个互不相干的候选原因，一旦结果发生，确认其中一个原因就会降低对其他原因的相信程度。例：知道成绩差、又知道课程很难，就不太会怪学生笨。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 3.4 ============ -->
+    <h2><span class="sec-no">3.4</span>反过来：从分布到图（I-Map 与 I-等价）</h2>
+
+    <p>3.3 节回答的是"给定图，分布满足哪些独立性"。这一节反过来问：<strong>给定一个分布，哪张图能表示它？</strong>这个问题是第 18 章结构学习的理论根基。</p>
+
+    <ul>
+      <li><strong>I-Map（独立映射）</strong>：图 𝒢 说"独立"的地方，分布 P 确实独立，即 I(𝒢) ⊆ I(P)。完全图（任意两节点相连）永远是 I-Map——它什么都不声明，自然不会错。我们要的是<strong>最小 I-Map</strong>：再删任何一条边就不再是 I-Map。</li>
+      <li><strong>P-Map（完美映射）</strong>：图与分布的独立性完全一致，I(𝒢) = I(P)。<strong>P-Map 不一定存在</strong>——有些分布的独立结构没有 DAG 能完美表达。</li>
+    </ul>
+
+    <h3>I-等价：方向不是都能学出来的</h3>
+    <p>一个惊人的事实：X → Y → Z、X ← Y → Z、X ← Y ← Z 三张图编码的独立性集合<strong>完全相同</strong>（都只有 X ⊥ Z | Y）。它们互为 <span class="term">I-等价</span>。</p>
+
+    <div class="box insight">
+      <span class="box-tag">✅ 判定定理</span>
+      <p>两个 DAG <strong>I-等价，当且仅当</strong>：① 骨架相同（忽略方向后的无向图一样）；② V-结构集合相同。</p>
+      <p>推论：只有 V-结构（X→Z←Y）的方向可以从独立性信息中确定。因此从纯观测数据学结构（第 18 章），<strong>最多只能学到等价类</strong>，而不是唯一的图。要从"相关"跨到"因果方向"，需要额外信息：时间顺序、干预实验、或领域知识（第 21 章）。</p>
+    </div>
+
+    <!-- 回忆卡片 3.4 -->
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 3.4-1</div>
+              <div class="q-text">I-Map 和 P-Map 的区别是什么？哪个不一定存在？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              I-Map：图声明的独立性在分布中都成立（图是分布的"子集式"描述，永远存在，完全图就是）。P-Map：图与分布的独立性完全一致——不一定存在。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 3.4-2</div>
+              <div class="q-text">两张 DAG I-等价的充要条件是什么？为什么这对结构学习是个坏消息？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              骨架相同 + V-结构集合相同。坏消息：观测数据只能提供独立性信息，因此结构学习无法区分 I-等价的图——边的方向很多时候学不出来，只能学到等价类（PDAG）。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 概念卡 ============ -->
+    <h2><span class="sec-no">🃏</span>概念卡：本章概念的一分钟画像</h2>
+    <p>翻面前先自问：这个概念我能用一句话讲清楚吗？</p>
+    <div class="flip-grid">
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 1</div>
+            <div class="q-text">贝叶斯网络（Bayesian Network）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">DAG 𝒢 + 每个节点以其父节点为条件的 CPD，两部分共同定义联合分布。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">用"每个变量只依赖少数父节点"把指数级联合分布压成一堆小表。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">只记录每个变量的"直属上级"，不记它对全宇宙的依赖。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">把箭头读成"必然因果"。在纯 BN 里箭头先是独立性声明，因果解释要第21章的额外假设。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">全书的第一个具体模型；第5-8章都是它的变体。</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 2</div>
+            <div class="q-text">因子分解（Factorization）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">P(X₁…Xₙ) = ∏ᵢ P(Xᵢ | Pa(Xᵢ))——联合分布 = 各节点 CPD 的乘积。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">把链式法则里的"依赖所有前驱"砍成"只依赖父节点"，参数随之骤减。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">链式法则的"图结构化紧凑版"：每条边砍掉一批条件。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">忘了因子分解与图的独立性声明互为充要——能分解 ⟺ 满足局部马尔可夫性。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">第9章变量消去的起点就是这一行乘积式。</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 3</div>
+            <div class="q-text">d-分离（d-Separation）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">X 与 Y 之间的所有路径都被观测集 Z 阻断 ⟹ X ⊥ Y | Z。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">纯看图（不算概率）就能读出任意条件独立性——把代数问题变成几何问题。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">路径是水管：链式/分叉观测中间节点就堵住，V-结构反而观测才打通。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">只看一条路径通就下结论——必须所有路径都被阻断才算 d-分离。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">第18章 PC 算法、第21章后门准则的判定引擎。</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 4</div>
+            <div class="q-text">V-结构与解释消除（Explaining Away）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">X→Z←Y：两个原因汇入同一结果；观测 Z（或其子孙）会"激活"路径，使 X、Y 由独立变相关。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">刻画"知道结果后，一个原因解释走了另一个原因"的推理模式。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">知道被录取了，家境普通反而抬高才华的可信度（伯克森悖论）。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">方向记反——链式/分叉是"观测才断"，V-结构是"观测才通"。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">I-等价判定（3.4节）和第21章对撞偏差的根源。</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 5</div>
+            <div class="q-text">I-Map / P-Map</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">I-Map：图声明的独立性在分布中都成立（I(𝒢) ⊆ I(P)）；P-Map：两者完全一致（I(𝒢) = I(P)）。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">回答"给定分布，哪张图能表示它"——结构学习的目标定义。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">I-Map 是"说的都对但可能漏"，P-Map 是"一字不差的画像"。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为 P-Map 总存在——有些分布的独立结构没有 DAG 能完美表达。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">第18章结构学习：要找的是最小 I-Map，最好逼近 P-Map。</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 6</div>
+            <div class="q-text">I-等价（I-Equivalence）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">两张 DAG 编码完全相同的独立性集合 ⟺ 骨架相同 + V-结构集合相同。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">精确圈定了"纯观测数据能学到什么"的边界。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">X→Y→Z、X←Y→Z、X←Y←Z 是三件"穿起来不同但保暖性一样"的衣服。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为数据够多方向就能学出来——等价类内部方向永远不可分辨，与样本量无关。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">第18章结构学习的根本局限；第21章要跨到因果必须引入额外信息。</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 分层习题 ============ -->
+    <h2><span class="sec-no">📝</span>分层习题</h2>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>链式结构 X → Z → Y 中，观测 Z 之后 X 和 Y 仍然相关。对吗？</div>
+      <details>
+        <summary>提示</summary>
+        <p>对照三种基本路径结构的"观测后通/断"表。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">不对。链式结构中 Z 是中间节点，观测它会阻断路径，故 X ⊥ Y | Z 成立。易错点：和 V-结构记反——X→Z←Y 才是"观测 Z 反而连通"。口诀：链式分叉"观测才断"，V-结构"观测才通"。</div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>"完全图（任意两节点相连）是任何分布的 P-Map。"这个说法对吗？</div>
+      <details>
+        <summary>提示</summary>
+        <p>P-Map 要求 I(𝒢) = I(P)，两边都要相等。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">不对，它只是 I-Map。完全图不声明任何独立性（I(𝒢) = ∅），自然 ⊆ I(P)——"什么都不承诺，自然不会错"。但 P-Map 要求反向也成立：分布里真实存在的独立性图也得声明，完全图做不到。易错点：I-Map 只要求"图说的都对"，P-Map 要求"说的全对且说全"。</div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>学生例子（图 3.1）：D、I、S、L 为二元，G 为三元。分解为 P(D)·P(I)·P(G|D,I)·P(S|I)·P(L|G)。验证总自由参数恰为 15。</div>
+      <details>
+        <summary>提示</summary>
+        <p>k 个父节点的 CPD：参数数 = 父节点组合数 ×（自身取值数 − 1）。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">P(D)：1；P(I)：1；P(G|D,I)：父组合 2×2=4，G 三元各 2 个 → 4×2=8；P(S|I)：2×1=2；P(L|G)：3×1=3。<br>合计 1+1+8+2+3 = 15 ✓。<br>对比完整联合分布：2×2×3×2×2 − 1 = 47 个——图结构砍掉约 2/3。变量一多，差距从"2/3"变成"天文 vs 线性"。</div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>学生例子（图 3.1）中分别判定：① L ⊥ I（不观测任何变量）？② L ⊥ I | G？说明每条路径上发生了什么。</div>
+      <details>
+        <summary>提示</summary>
+        <p>L 与 I 之间只有一条路径：L ← G ← I。看中间节点 G 属于哪种结构。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">路径 L←G←I 是链式结构（I→G→L 倒着走），G 是中间节点。<br>① 不观测 G：路径连通，L 与 I 相关（智力影响成绩、成绩影响推荐信）——L ⊥ I 不成立。<br>② 观测 G：链式中间节点被观测 → 路径阻断 → L ⊥ I | G 成立。<br>注意别选 V-结构来分析：虽然 G 也是 I→G←D 的汇聚点，但那是"G 与 D 之间"的事，与 L—I 这条路径无关。</div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l3">L3 建模应用</span>场景：睡眠质量 Q 和复习时长 R 共同影响考试成绩 E，E 又影响能否拿奖学金 W。① 画出 DAG；② 写出因子分解；③ 指出图中的 V-结构；④ 已知某同学成绩差（E=差），"他睡得少"和"他复习少"还独立吗？用解释消除说明。</div>
+      <details>
+        <summary>提示</summary>
+        <p>两个原因一个结果，先想谁是汇聚点；观测汇聚点会发生什么？</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">① Q → E ← R，E → W。<br>② P(Q)·P(R)·P(E|Q,R)·P(W|E)。<br>③ V-结构：Q → E ← R（E 是汇聚点）。<br>④ 不独立了。Q ⊥ R 边际成立（睡眠和复习原本各不相干），但观测 E=差 激活了 V-结构：若知道他复习很充分，成绩差就更可能"怪"睡眠——解释消除。这正是学生例子里 I 与 D 在观测 G 后联动的同款机制。</div>
+      </details>
+    </div>
+
+    <!-- ============ 自测 ============ -->
+    <h2><span class="sec-no">✍️</span>本章自测</h2>
+    <p>不看上面的内容，独立作答。答错立刻回到对应小节重学，不要攒着。</p>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">第 1 题 · 因子分解</div>
+      <div class="q-stem">某 BN 有边 A→C、B→C。它的联合分布因子分解为：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. P(A)·P(B)·P(C)</li>
+        <li data-opt="b">B. P(A)·P(B)·P(C | A, B)</li>
+        <li data-opt="c">C. P(C)·P(A | C)·P(B | C)</li>
+        <li data-opt="d">D. P(A | B, C)·P(B | A, C)·P(C)</li>
+      </ul>
+      <div class="quiz-explain">每个节点以父节点为条件：A 和 B 无父节点，C 的父节点是 {A, B}。答案 B。注意 A 和 B 是 V-结构的两个父节点，边际独立但给定 C 后相关。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="c">
+      <div class="q-stem">第 2 题 · d-分离<br>学生例子（图 3.1）中，"S ⊥ D | G"是否成立？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 成立，因为 S 和 D 没有直接边</li>
+        <li data-opt="b">B. 成立，因为观测 G 阻断了所有路径</li>
+        <li data-opt="c">C. 不成立，因为观测 G 激活了 V-结构</li>
+        <li data-opt="d">D. 无法判断</li>
+      </ul>
+      <div class="quiz-explain">路径 S ← I → G ← D：观测 G 使 V-结构 I→G←D 被激活，路径连通，所以 S 和 D 在观测 G 后相关（已知 SAT 低且成绩差，课程难度信息会改变你对智力的推断）。答案 C。直觉：G 是"汇聚点"，观测它会把它上游的原因都联动起来。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="a">
+      <div class="q-no">第 3 题 · V-结构直觉</div>
+      <div class="q-stem">"才华 → 被录取 ← 家境"是 V-结构。以下哪个现象是它的直接推论？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 在被录取的学生中，才华和家境呈负相关</li>
+        <li data-opt="b">B. 在全体人群中，才华和家境呈负相关</li>
+        <li data-opt="c">C. 才华和家境永远无关，无论是否只看录取者</li>
+        <li data-opt="d">D. 家境好的学生一定更有才华</li>
+      </ul>
+      <div class="quiz-explain">全体人群中才华 ⊥ 家境（边际独立）。但"只看录取者"= 观测了 V-结构的汇聚点，激活了两原因的关联：家境普通的人被录取，更可能靠才华。答案 A。这就是著名的"伯克森悖论"（Berkson's paradox）。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">第 4 题 · I-等价</div>
+      <div class="q-stem">以下哪组 DAG <strong>不</strong>互为 I-等价？（提示：检查 V-结构）</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. X→Y→Z 与 X←Y←Z</li>
+        <li data-opt="b">B. X→Y→Z 与 X→Y←Z</li>
+        <li data-opt="c">C. X←Y→Z 与 X←Y←Z</li>
+        <li data-opt="d">D. X→Y→Z 与 X←Y→Z</li>
+      </ul>
+      <div class="quiz-explain">I-等价要求骨架相同 + V-结构相同。选项 B 中第二张图 X→Y←Z 含 V-结构（独立性集合为空：X 与 Z 无条件独立……不，是 X⊥Z 边际成立而条件不成立），而 X→Y→Z 没有 V-结构。两者独立性集合不同。答案 B。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="c">
+      <div class="q-no">第 5 题 · 参数计数</div>
+      <div class="q-stem">5 个二元变量的链式 BN：X₁→X₂→X₃→X₄→X₅。完整联合分布 vs BN 分解，各需多少自由参数？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 31 与 10</li>
+        <li data-opt="b">B. 32 与 5</li>
+        <li data-opt="c">C. 31 与 9</li>
+        <li data-opt="d">D. 32 与 10</li>
+      </ul>
+      <div class="quiz-explain">完整联合分布：2⁵−1 = 31。BN：X₁ 需要 1 个参数，其余 4 个节点各有一个二元父节点、各需 2 个参数：1 + 4×2 = 9。答案 C。</div>
+    </div>
+
+    <!-- ============ 三句话复述 ============ -->
+    <div class="retell">
+      <h3>🗣️ 用自己的话，三句话讲完本章</h3>
+      <p>对着空气（或室友）说出这三句。说卡壳的那句，回去重读对应小节。</p>
+      <details>
+        <summary>句1：这章解决什么问题？——</summary>
+        <div class="retell-answer">参考答案：高维联合分布存不下、算不动；贝叶斯网络用"DAG + 局部 CPD"把它紧凑表示出来，并让独立性可以直接从图上读。</div>
+      </details>
+      <details>
+        <summary>句2：核心机制是什么？——</summary>
+        <div class="retell-answer">参考答案：因子分解（联合分布 = 各节点 CPD 乘积）与 d-分离（链式/分叉观测阻断、V-结构观测激活）是一体两面，共同回答"图声明了哪些独立性"。</div>
+      </details>
+      <details>
+        <summary>句3：它和前后章怎么分工？——</summary>
+        <div class="retell-answer">参考答案：本章给"有向"表示的全部基础；第4章给出"无向"的另一半（马尔可夫网络）；3.4 节的 I-等价直接预告第18章结构学习的天花板。</div>
+      </details>
+    </div>
+
+    <!-- ============ 间隔复习计划 ============ -->
+    <div class="review-plan">
+      <h3>🔁 间隔复习计划</h3>
+      <p>回忆本身比重读有效 10 倍。到点只做一件事：翻卡 + 重做标记题。</p>
+      <table>
+        <tr><th>时间点</th><th>复习内容</th><th>预计用时</th></tr>
+        <tr><td>第 1 天</td><td>概念卡 1–6 + 回忆卡 3.1-1、3.1-2（写定义）</td><td>10 分钟</td></tr>
+        <tr><td>第 3 天</td><td>概念卡（重点复习翻错的）+ 回忆卡 3.2-1、3.3-1（画三种结构）</td><td>10 分钟</td></tr>
+        <tr><td>第 7 天</td><td>三句话复述 + 重做 L2 d-分离判定题</td><td>10 分钟</td></tr>
+        <tr><td>第 15 天</td><td>只重做合上书挑战 + 回忆卡 3.4-2（I-等价）；能全过就毕业</td><td>12 分钟</td></tr>
+      </table>
+    </div>
+
+    <!-- 合上书挑战 -->
+    <div class="final-challenge">
+      <h3>📕 合上书挑战</h3>
+      <p class="fc-sub">现在关掉这个页面（或遮住屏幕），拿一张纸，凭记忆完成以下任务。全部做完再回来核对——这是本章真正的毕业考试。</p>
+      <ol id="challenge-list">
+        <li><span class="fc-check"></span>写出贝叶斯网络的定义（两部分）和因子分解公式</li>
+        <li><span class="fc-check"></span>画出学生例子的完整 DAG（5 变量 4 条边），并写出其联合分布分解</li>
+        <li><span class="fc-check"></span>画出三种基本路径结构，标注"观测 Z 后通还是断"</li>
+        <li><span class="fc-check"></span>用自己的话解释 V-结构的"解释消除"，并举一个本章以外的生活例子</li>
+        <li><span class="fc-check"></span>说出 I-等价的判定条件，以及它对"从数据学因果方向"意味着什么</li>
+        <li><span class="fc-check"></span>回答本章的"主线问题"：贝叶斯网络如何把一个高维分布变紧凑？（一句话）</li>
+      </ol>
+    </div>
+
+    <div class="complete-zone">
+      <button class="btn-complete" id="btn-complete" onclick="markDone()">✓ 我已完成本章（含合上书挑战）</button>
+    </div>
+
+    <div class="chapter-nav">
+      <a href="chapter-02.html"><span class="nav-dir">← 上一章</span>第2章 背景知识</a>
+      <a href="chapter-04.html" class="next"><span class="nav-dir">下一章 →</span>第4章 马尔可夫网络</a>
+    </div>
+
+  </div>
+</div>
+
+<footer class="footer">
+  <div class="wrap">第3章 贝叶斯网络 · PGM 互动讲义 · 基于 Koller &amp; Friedman (2009)</div>
+</footer>
+
+<script>
+// 自测题逻辑
+document.querySelectorAll(".quiz-block").forEach(block => {
+  const answer = block.dataset.answer;
+  const explain = block.querySelector(".quiz-explain");
+  block.querySelectorAll(".quiz-opts li").forEach(li => {
+    li.addEventListener("click", () => {
+      const opts = block.querySelectorAll(".quiz-opts li");
+      opts.forEach(o => o.classList.add("disabled"));
+      if (li.dataset.opt === answer) {
+        li.classList.add("correct");
+      } else {
+        li.classList.add("wrong");
+        block.querySelector(`[data-opt="${answer}"]`).classList.add("correct");
+      }
+      explain.classList.add("show");
+    });
+  });
+});
+
+// 合上书清单打勾
+document.querySelectorAll("#challenge-list li").forEach(li => {
+  li.addEventListener("click", () => li.classList.toggle("checked"));
+});
+
+// 完成标记 → localStorage
+const KEY = "pgm_progress_v1";
+function loadProgress() {
+  try { return JSON.parse(localStorage.getItem(KEY)) || {}; } catch (e) { return {}; }
+}
+const progress = loadProgress();
+const btn = document.getElementById("btn-complete");
+if (progress[3] && progress[3].done) {
+  btn.textContent = "✓ 已完成 · 再次点击重置";
+  btn.classList.add("done");
+}
+function markDone() {
+  const p = loadProgress();
+  if (p[3] && p[3].done) {
+    delete p[3];
+    btn.textContent = "✓ 我已完成本章（含合上书挑战）";
+    btn.classList.remove("done");
+  } else {
+    p[3] = { done: true, completedAt: Date.now(), reviewsDone: 0 };
+    btn.textContent = "✓ 已完成 · 复习提醒已开启";
+    btn.classList.add("done");
+  }
+  localStorage.setItem(KEY, JSON.stringify(p));
+}
+</script>
+
+</body>
+</html>

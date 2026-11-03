@@ -1,0 +1,1016 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第12章 近似推理：粒子方法 · PGM 互动讲义</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+<nav class="topbar">
+  <div class="topbar-inner">
+    <span class="brand"><a href="index.html" style="color:inherit">← 学习地图</a></span>
+    <span class="crumb">阶段二 · 推理 / 第12章</span>
+  </div>
+</nav>
+
+<div class="wrap">
+
+  <div class="lecture-head">
+    <span class="ch-label">CHAPTER 12 · 推理</span>
+    <h1>近似推理：粒子方法</h1>
+    <p class="lead">分布太复杂就采样；样本不够就加权重、重采样。</p>
+  </div>
+
+  <!-- 本章定位 -->
+  <div class="position-bar">
+    <strong>本章在主线上的位置：</strong>精确推理（Ch9/10）被树宽卡死、置信传播（Ch11）在强环上失效 → <u>改用随机样本逼近分布：正向采样 → 加权 → 重采样 → 马尔可夫链</u> → 第13章回答另一个问题（最可能的赋值），第15章把粒子滤波用到动态网络。<br>
+    第12章回答主线上的第七个问题：<strong>当分布复杂到无法精确计算时，如何用一堆随机样本近似回答"概率是多少"？</strong>
+    <div class="map-inline">
+      <span class="node">Ch11 置信传播（确定性近似，强环失效）</span><span class="arrow">→</span>
+      <span class="node here">Ch12 粒子方法（随机近似，渐进精确）</span><span class="arrow">→</span>
+      <span class="node">Ch13 MAP推理（换问题：最可能的赋值）</span><span class="arrow">→</span>
+      <span class="node">Ch15 动态网络中的推理（粒子滤波的主战场）</span>
+    </div>
+  </div>
+
+  <!-- 学习目标 -->
+  <div class="objectives">
+    <h4>🎯 学完本章，合上书你应该能：</h4>
+    <ol>
+      <li>说出为什么精确推理和置信传播都会失效，以及采样为什么能绕开这堵墙</li>
+      <li>写出蒙特卡洛估计的公式，并手算出给定样本数下估计量的标准差（如 p=0.3、M=100 时 σ≈0.046）</li>
+      <li>对一个小型贝叶斯网络执行正向采样与似然加权，写出每个样本的权重并算出加权估计</li>
+      <li>写出重要性采样的权重公式 w = p̃/q，解释权重退化与有效样本量为什么崩塌</li>
+      <li>对一个 2 变量的联合分布手跑吉布斯采样若干步，说清 burn-in 与样本相关性</li>
+      <li>对 3 个粒子的粒子滤波逐时刻列出采样值、权重、归一化权重与重采样结果</li>
+    </ol>
+  </div>
+
+  <div class="lecture">
+
+    <!-- 推导主线 -->
+    <div class="figure">
+      <div class="mermaid">
+flowchart LR
+  A["Ch9/10 被树宽卡死<br>Ch11 在强环上失效"] --> B["换思路：用样本逼近分布<br>正向采样"]
+  B --> C["误差按 1/根号M 缩小<br>但证据让样本大量作废"]
+  C --> D["证据不采样 改加权<br>似然加权与重要性采样"]
+  D --> E["权重退化<br>少数粒子拿走几乎全部权重"]
+  E --> F["重采样与马尔可夫链<br>粒子滤波与吉布斯采样"]
+  F --> G["代价：误差不消失只缩小<br>且答不了 MAP 那是另一个问题"]
+  classDef hot fill:#fbeedd,stroke:#c4651f,stroke-width:2.5px,color:#c4651f;
+  classDef danger fill:#fae9e7,stroke:#b03a2e,stroke-width:2.5px,color:#b03a2e;
+  class B hot;
+  class G danger;
+      </div>
+      <div class="caption">本章推导主线：每一步都在回答"为什么需要下一步"。终点（红色）是本章买下的账单——采样误差永远存在，只能缩小；而且"最可能的赋值是什么"是采样回答不好的另一个问题，留给第 13 章。</div>
+    </div>
+
+    <!-- ============ 12.1 ============ -->
+    <h2><span class="sec-no">12.1</span>为什么采样：精确推理的墙，与蒙特卡洛的绕墙术</h2>
+
+    <p>第 9、10 章的精确推理（变量消去、团树）复杂度随<span class="term">树宽</span>指数增长——图一稠密就算不动。第 11 章的置信传播是近似，但在强环（环多且势函数强耦合）上要么不收敛、要么误差无保证。两条路都撞墙之后，还剩一条完全不同的思路：<strong>不算分布，从分布里抽样</strong>。</p>
+
+    <p>这套思路统称<span class="term">蒙特卡洛方法</span>（Monte Carlo Method）：要估计期望 E<sub>P</sub>[f(X)]，就从 P 采 M 个样本 x⁽¹⁾,…,x⁽ᴹ⁾，用样本均值近似：</p>
+
+    <div class="formula">E<sub>P</sub>[f(X)] ≈ <span class="frac"><span class="num-part">1</span><span class="den-part">M</span></span> ∑<sub>m=1</sub><sup>M</sup> f(x⁽ᵐ⁾)</div>
+
+    <p><span class="term">大数定律</span>（Law of Large Numbers）保证：M → ∞ 时样本均值收敛到真值。特别地，取 f 为示性函数（事件是否发生），"概率"就变成了"频率"——P(Y=y) ≈ 样本中 Y=y 的比例。这就是"频率→概率"的直觉：样本是分布的投票，票越多，结果越接近真实分布。</p>
+
+    <h3>正向采样：贝叶斯网络上的第一条流水线</h3>
+    <p>在贝叶斯网络上采样简单得近乎朴素——<span class="term">正向采样</span>（Forward Sampling）：</p>
+    <ol>
+      <li>把节点按<strong>拓扑序</strong>排好（父节点先于子节点）；</li>
+      <li>依次处理：轮到节点 Xᵢ 时，它的父节点值已确定，直接从 CPD P(Xᵢ | Pa(Xᵢ) 的已采样值) 里抽一个；</li>
+      <li>走完一遍得到一个完整样本；重复 M 遍得 M 个独立样本。</li>
+    </ol>
+
+    <h3>例 1：云→雨网络，10 个样本估一个概率</h3>
+    <p>网络：C（多云）→ R（下雨）。P(c¹)=0.5；P(r¹|c¹)=0.8，P(r¹|c⁰)=0.2。真实边际 P(r¹) = 0.5×0.8 + 0.5×0.2 = <strong>0.5</strong>。现在假装不知道，用正向采样估计它。采 10 个样本（先抛 C，再按 C 抛 R）：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>样本 m</th><th>采到的 C</th><th>按 P(R|C) 采到的 R</th><th>R=1？</th></tr>
+        <tr><td>1</td><td>1</td><td>1</td><td>✓</td></tr>
+        <tr><td>2</td><td>0</td><td>0</td><td></td></tr>
+        <tr><td>3</td><td>1</td><td>1</td><td>✓</td></tr>
+        <tr><td>4</td><td>1</td><td>0</td><td></td></tr>
+        <tr><td>5</td><td>0</td><td>1</td><td>✓</td></tr>
+        <tr><td>6</td><td>1</td><td>1</td><td>✓</td></tr>
+        <tr><td>7</td><td>0</td><td>0</td><td></td></tr>
+        <tr><td>8</td><td>1</td><td>1</td><td>✓</td></tr>
+        <tr><td>9</td><td>0</td><td>0</td><td></td></tr>
+        <tr><td>10</td><td>1</td><td>1</td><td>✓</td></tr>
+      </table>
+    </div>
+
+    <p>估计值 P̂(r¹) = 7/10 = <strong>0.7</strong>，与真值 0.5 差了 0.2。这不是算法错了，而是 M=10 太小——这个估计的标准差是 √(0.5×0.5/10) ≈ <strong>0.158</strong>，0.7 落在真值的一个多标准差之内，完全正常。<strong>采样估计天然带噪声，问题只是噪声多大、多快消失</strong>——这正是下一节要算的账。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>采样把"推理"变成"统计"：不再对分布做符号演算，而是让分布自己生成例子，再用频率读答案。好处是<strong>与树宽无关</strong>——图再复杂，正向采样一步一次 CPD 查表，单个样本的代价永远很小。代价是答案带随机误差，这就是后面所有节要对付的东西。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>"采样结果是近似，所以不如精确推理严谨"——位置摆反了。采样是<strong>渐进精确</strong>（M→∞ 收敛到真值）且通常无偏的方法；第 11 章的变分近似反而有偏且误差不可控。真正的权衡是：采样用随机误差换通用性，变分用系统性偏差换速度和确定性。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 12.1-1</div>
+              <div class="q-text">正向采样在贝叶斯网络上的三步流程是什么？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              ①按拓扑序排节点；②依次从 P(Xᵢ|父节点已采样值) 采样；③重复 M 遍得 M 个独立样本，用频率估计概率。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 12.1-2</div>
+              <div class="q-text">采样方法与变分方法（Ch11）在"误差性质"上的本质区别是什么？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              采样：随机误差，通常无偏，M→∞ 渐进精确，方差随样本量下降。变分：确定性近似，有系统性偏差，收敛到局部最优，误差一般无法量化。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 12.2 ============ -->
+    <h2><span class="sec-no">12.2</span>误差有多快消失：1/√M 的硬账</h2>
+
+    <p>上一节末尾留下一个必须量化的问题：估计的噪声到底多大、缩小得多快？答案整齐得惊人。</p>
+
+    <p>设要估计事件概率 p（如 P(r¹)=0.5 的特例），每个样本是一次伯努利试验，估计量 p̂ =（命中次数）/M。伯努利变量的方差是 p(1−p)，M 个独立样本的均值方差缩小 M 倍：</p>
+
+    <div class="formula">Var(p̂) = <span class="frac"><span class="num-part">p(1−p)</span><span class="den-part">M</span></span> ，标准差 σ(p̂) = <span class="frac"><span class="num-part">√(p(1−p))</span><span class="den-part">√M</span></span> ∝ <span class="frac"><span class="num-part">1</span><span class="den-part">√M</span></span></div>
+
+    <h3>例 2：手算两个量级，感受 1/√M 有多"慢"</h3>
+    <p>估计一个 p = 0.3 的事件（比如某症状出现的概率）：</p>
+    <ul>
+      <li><strong>M = 100</strong>：σ = √(0.3×0.7/100) = √0.0021 ≈ <strong>0.046</strong>。也就是说估计值常见地在 0.3 ± 0.05 之间晃——只能报到小数点后一位。</li>
+      <li><strong>M = 10000</strong>：σ = √(0.21/10000) ≈ <strong>0.0046</strong>。样本翻 100 倍，误差只缩到 1/10。</li>
+      <li><strong>想把误差减半？</strong>σ ∝ 1/√M ⟹ 需要 <strong>4 倍</strong>样本。想再缩一位小数（误差 ÷10），需要 <strong>100 倍</strong>样本。</li>
+    </ul>
+
+    <div class="box insight">
+      <span class="box-tag">✅ 判定规则</span>
+      <p>蒙特卡洛误差的铁律：<strong>方差 ∝ 1/M，标准差 ∝ 1/√M</strong>。它与问题的维度、图的树宽都无关——这是采样方法能在高维复杂模型上存活的根本原因；但 1/√M 也意味着精度是用样本量硬买来的，每一位小数都要 100 倍的样本。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 罕见事件是采样的大敌</span>
+      <p>若 p = 0.01（罕见证据），想让标准差降到 0.005 以下，需要 M ≥ p(1−p)/0.005² = 0.0099/0.000025 ≈ <strong>40 万</strong>个样本——其中约 99% 的样本根本没命中事件，白白生成。下一节的"证据"问题，本质上就是罕见事件问题的重灾区。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 12.2-1</div>
+              <div class="q-text">写出蒙特卡洛估计量的方差与标准差公式，并说出"误差减半需要多少样本"。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              Var(p̂) = p(1−p)/M，σ = √(p(1−p))/√M ∝ 1/√M。误差减半需要 4 倍样本；误差缩小 10 倍需要 100 倍样本。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 12.2-2</div>
+              <div class="q-text">为什么 1/√M 这一定律对高维复杂模型反而是好消息？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              因为收敛速率只取决于样本数 M，与维度、树宽无关——精确推理随树宽爆炸时，采样的误差增长是零。维度灾难打不垮蒙特卡洛，但精度提升也贵。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 12.3 ============ -->
+    <h2><span class="sec-no">12.3</span>证据来了怎么办：拒绝采样与似然加权</h2>
+
+    <p>到目前为止我们只估计了先验查询 P(Y)。真实推理几乎总是带证据的：P(Y | E=e)。最直接的改造是<span class="term">拒绝采样</span>（Rejection Sampling）：正向采样照跑，<strong>把不满足 E=e 的样本整张扔掉</strong>，用剩下的估计：</p>
+
+    <div class="formula">P(Y=y | E=e) ≈ <span class="frac"><span class="num-part">#{Y=y 且 E=e 的样本}</span><span class="den-part">#{E=e 的样本}</span></span></div>
+
+    <p>毛病一眼可见：若 P(e)=0.01，1000 个样本平均只剩 10 个可用——结合 12.2 的账，这等于把 M 直接砍掉两个数量级。<strong>样本是我们花钱买的，不能扔。</strong></p>
+
+    <h3>似然加权：证据不采样，改成"记账"</h3>
+    <p><span class="term">似然加权</span>（Likelihood Weighting）的改造：证据变量<strong>不再采样，直接钉死为观测值</strong>，其余变量照常按拓扑序采样。但这样样本不再来自正确分布，于是给每个样本记一个权重来补偿——权重就是所有证据变量在当前父节点配置下的似然乘积：</p>
+
+    <div class="formula">w(x) = ∏<sub>e ∈ E</sub> P(e | Pa(e) 的采样值)</div>
+
+    <div class="formula">P(Y=y | E=e) ≈ <span class="frac"><span class="num-part">∑<sub>m: Y⁽ᵐ⁾=y</sub> w⁽ᵐ⁾</span><span class="den-part">∑<sub>m</sub> w⁽ᵐ⁾</span></span></div>
+
+    <h3>例 3：云→雨→湿草地，4 个加权样本</h3>
+    <p>网络：C → R → W。P(c¹)=0.5；P(r¹|c¹)=0.8，P(r¹|c⁰)=0.2；P(w¹|r¹)=0.9，P(w¹|r⁰)=0.1。证据：观察到草地湿了 <strong>w¹</strong>。目标：P(r¹ | w¹)（真值 = 0.9×0.5/(0.9×0.5+0.1×0.5) = <strong>0.9</strong>）。</p>
+    <p>似然加权：C、R 照常采样，W 固定为 1，权重 w = P(w¹|R 的采样值）：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>样本</th><th>采到 C</th><th>采到 R</th><th>W（固定）</th><th>权重 w = P(w¹|R)</th></tr>
+        <tr><td>1</td><td>1</td><td>1</td><td>1</td><td>0.9</td></tr>
+        <tr><td>2</td><td>0</td><td>0</td><td>1</td><td>0.1</td></tr>
+        <tr><td>3</td><td>1</td><td>1</td><td>1</td><td>0.9</td></tr>
+        <tr><td>4</td><td>0</td><td>1</td><td>1</td><td>0.9</td></tr>
+      </table>
+    </div>
+
+    <p>加权估计：P̂(r¹|w¹) = (0.9+0.9+0.9)/(0.9+0.1+0.9+0.9) = 2.7/2.8 ≈ <strong>0.964</strong>（真值 0.9；M=4 的噪声在意料之中）。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 直觉：拒绝采样 vs 似然加权</span>
+      <p>拒绝采样是"不合证据就撕掉"；似然加权是"每个样本都交一份'我与证据的相容度'成绩单"。若 P(e)=0.01，拒绝采样 1000 个样本只剩约 10 个，似然加权 <strong>1000 个全留着</strong>，各带一份小权重。效率差距正比于 1/P(e)——证据越罕见，似然加权赢得越多。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 似然加权的软肋：证据在"根部"</span>
+      <p>权重只由证据的似然决定。若证据变量靠近网络的根（如证据是 C），它的父节点为空，权重退化为先验 P(e)——所有样本权重几乎相同，等于没利用证据信息；更糟的情况是证据很多时，每个样本权重都是一堆小数的乘积，权重方差爆炸——这正是下一节"权重退化"的预演。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 12.3-1</div>
+              <div class="q-text">似然加权中，证据变量怎么处理？样本权重等于什么？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              证据变量不采样、固定为观测值；其余变量按拓扑序照常采样。权重 w = ∏<sub>e∈E</sub> P(e | Pa(e) 的采样值)，即所有证据的似然乘积。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 12.3-2</div>
+              <div class="q-text">证据概率为 1% 时，拒绝采样和似然加权的有效样本量各是多少（总样本 1000）？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              拒绝采样平均只剩约 10 个样本；似然加权 1000 个全保留、各带权重。效率差 ≈ 1/P(e) = 100 倍。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 12.4 ============ -->
+    <h2><span class="sec-no">12.4</span>重要性采样：从"好采"的分布借样本，用权重还债</h2>
+
+    <p>似然加权是一种特殊的加权采样。把它推到极致就是一般框架<span class="term">重要性采样</span>（Importance Sampling）：当无法（或不愿）直接从目标分布 P 采样时，改从一个容易采的<span class="term">提议分布</span>（Proposal Distribution）Q 采样，再用权重纠正"借样本"带来的偏差：</p>
+
+    <div class="formula">w(x) = <span class="frac"><span class="num-part">p̃(x)</span><span class="den-part">q(x)</span></span> ， E<sub>P</sub>[f(X)] = E<sub>Q</sub>[ f(X)·w(X) ]</div>
+
+    <p>其中 p̃ 是未归一化的目标（如马尔可夫网络里 ∏ψ<sub>C</sub>，配分函数 Z 算不出——恰好绕开它）。实际用归一化估计（自归一化重要性采样）：</p>
+
+    <div class="formula">E<sub>P</sub>[f] ≈ <span class="frac"><span class="num-part">∑<sub>m</sub> w⁽ᵐ⁾ f(x⁽ᵐ⁾)</span><span class="den-part">∑<sub>m</sub> w⁽ᵐ⁾</span></span></div>
+
+    <p>对 Q 的三条要求：① 支撑集包含 P 的支撑（P(x)&gt;0 ⟹ q(x)&gt;0，否则有些区域永远采不到）；② 形状尽量接近 P；③ 容易采样。</p>
+
+    <h3>例 4：三状态小分布的手算</h3>
+    <p>目标 P 在 {a, b, c} 上：p = (0.1, 0.3, 0.6)。提议 Q：q = (0.5, 0.3, 0.2)（Q 偏爱 a，与 P 错位）。权重 w = p/q：w(a)=0.2，w(b)=1.0，w(c)=3.0。</p>
+    <p>从 Q 采 6 个样本：a, a, b, a, c, b（Q 下 a 最多，符合预期）：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>样本</th><th>w = p/q</th><th>对估计的贡献</th></tr>
+        <tr><td>a</td><td>0.2</td><td rowspan="6">Σw = 0.2+0.2+1+0.2+3+1 = 5.6<br>P̂(a) = 0.6/5.6 ≈ 0.107（真值 0.1）<br>P̂(b) = 2.0/5.6 ≈ 0.357（真值 0.3）<br>P̂(c) = 3.0/5.6 ≈ 0.536（真值 0.6）</td></tr>
+        <tr><td>a</td><td>0.2</td></tr>
+        <tr><td>b</td><td>1.0</td></tr>
+        <tr><td>a</td><td>0.2</td></tr>
+        <tr><td>c</td><td>3.0</td></tr>
+        <tr><td>b</td><td>1.0</td></tr>
+      </table>
+    </div>
+
+    <p>注意 c 只被采到 1 次（Q 不偏爱它），但它权重 3.0——靠权重把"采少了"补回来。这就是重要性采样的全部机制：<strong>Q 负责提供覆盖率，权重负责纠偏</strong>。</p>
+
+    <h3>权重退化：当纠偏变成独裁</h3>
+    <p>如果 Q 与 P 错位严重，权重会变得极端不均匀。极端例子：5 个粒子的权重是 (100, 1, 1, 1, 1)。归一化后第一个粒子占 100/104 ≈ 96%——任何估计几乎都是它一个粒子说了算，其余 4 个白采了。这就是<span class="term">权重退化</span>（Weight Degeneracy）。</p>
+    <p>量化工具是<span class="term">有效样本量</span>（Effective Sample Size）：</p>
+
+    <div class="formula">M<sub>eff</sub> = <span class="frac"><span class="num-part">(∑<sub>m</sub> w⁽ᵐ⁾)²</span><span class="den-part">∑<sub>m</sub> (w⁽ᵐ⁾)²</span></span> = <span class="frac"><span class="num-part">1</span><span class="den-part">∑<sub>m</sub> (w̄⁽ᵐ⁾)²</span></span></div>
+
+    <p>代入 (100,1,1,1,1)：M<sub>eff</sub> = 104²/(10000+4) = 10816/10004 ≈ <strong>1.08</strong>——5 个粒子的信息量约等于 1 个。权重全相等时 M<sub>eff</sub>=M（最好）；一个粒子独占时 M<sub>eff</sub>=1（最坏）。</p>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 高维是权重退化的放大器</span>
+      <p>权重是许多因子（似然）的乘积，变量越多，权重之间的比值越悬殊——log 权重的方差随维度线性增长，意味着典型情况下 M<sub>eff</sub> 随维度<strong>指数级</strong>萎缩。这不是调 Q 能轻易治好的，它是"用一套静态权重纠正整条采样链"这个思路的内在极限。出路有两条：周期性重采样（12.6），或干脆放弃独立样本、改用马尔可夫链（12.5）。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 12.4-1</div>
+              <div class="q-text">写出重要性采样的权重公式与归一化估计公式，说出对 Q 的三条要求。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              w = p̃/q；估计 = Σw⁽ᵐ⁾f(x⁽ᵐ⁾)/Σw⁽ᵐ⁾。Q 的要求：支撑覆盖 P、形状接近 P、容易采样。用 p̃ 而非 p 的好处：绕开配分函数 Z。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 12.4-2</div>
+              <div class="q-text">什么是权重退化？有效样本量 M_eff 在 (100,1,1,1,1) 下约等于多少？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              权重退化：少数粒子拿走几乎全部权重，其余样本形同虚设。M_eff = (Σw)²/Σw² ≈ 1.08——5 个粒子只顶 1 个用。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 12.5 ============ -->
+    <h2><span class="sec-no">12.5</span>MCMC 与吉布斯采样：造一条通往目标分布的链</h2>
+
+    <p>重要性采样要求每个样本独立地从 Q 采——Q 选不好就全盘退化。<span class="term">马尔可夫链蒙特卡洛</span>（Markov Chain Monte Carlo, MCMC）换了玩法：不追求独立样本，而是构造一条<strong>马尔可夫链</strong>，让链的<span class="term">平稳分布</span>（Stationary Distribution）恰好等于目标分布 P。然后从链上依次取状态当样本——链跑得足够久之后，它访问各状态的频率就逼近 P。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 直觉</span>
+      <p>把状态空间想象成地图，目标分布 P 是各地的海拔。MCMC 是一条会"偏爱往高处走"的随机游走链：短期看它走到哪算哪（样本彼此相关），长期看它在各地停留的时间比例收敛到海拔——平稳分布就是这条链的长期"居住分布"。</p>
+    </div>
+
+    <h3>吉布斯采样：PGM 上最顺手的 MCMC</h3>
+    <p><span class="term">吉布斯采样</span>（Gibbs Sampling）的规则：固定其余变量的当前值，轮流把每个变量按它自己的条件分布重采一次：</p>
+
+    <div class="formula">Xᵢ⁽新⁾ ~ P(Xᵢ | X<sub>−i</sub>⁽当前⁾)</div>
+
+    <p>为什么它天生适合图模型？回忆第 4 章：<strong>给定马尔可夫毯，节点与世界其余部分独立</strong>。所以上面的全条件分布只需看 Xᵢ 的邻居：</p>
+
+    <div class="formula">P(Xᵢ | X<sub>−i</sub>) ∝ ∏<sub>C: Xᵢ ∈ C</sub> ψ<sub>C</sub>(X<sub>C</sub>)</div>
+
+    <p>每次更新只是一次小规模查表归一化——与全图大小无关。</p>
+
+    <div class="figure">
+      <div class="mermaid">
+flowchart LR
+  S["当前状态 (x, y)"] --> X["固定 y<br>从 P(X｜y) 重采 x"]
+  X --> Y["固定新 x<br>从 P(Y｜x) 重采 y"]
+  Y --> S2["新状态 (x', y')<br>追加到链上"]
+  S2 -->|"下一轮扫描"| X
+  classDef hot fill:#fbeedd,stroke:#c4651f,stroke-width:2.5px,color:#c4651f;
+  class X hot;
+  class Y hot;
+      </div>
+      <div class="caption">图 12.1 吉布斯采样的一次扫描：每一步只动一个变量，其余钉死在当前值。该看的是两个橙色节点——每次重采只碰一个局部条件分布，这正是它在图模型上廉价的原因；下面例 5 的 5 步表就是这条轮替链的逐帧展开。</div>
+    </div>
+
+    <h3>例 5：两个二元变量的小链，手跑 5 步</h3>
+    <p>联合分布 P(X,Y)：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th></th><th>y=0</th><th>y=1</th><th>行和 P(X)</th></tr>
+        <tr><th>x=0</th><td>0.5</td><td>0.1</td><td>0.6</td></tr>
+        <tr><th>x=1</th><td>0.2</td><td>0.2</td><td>0.4</td></tr>
+        <tr><th>列和 P(Y)</th><td>0.7</td><td>0.3</td><td>1.0</td></tr>
+      </table>
+    </div>
+
+    <p>先备好两张条件分布表（全条件 = 行/列内归一化）：</p>
+    <ul>
+      <li>P(X|y=0) = (0.5/0.7, 0.2/0.7) ≈ (0.714, 0.286)；P(X|y=1) = (0.1/0.3, 0.2/0.3) ≈ (0.333, 0.667)</li>
+      <li>P(Y|x=0) = (0.5/0.6, 0.1/0.6) ≈ (0.833, 0.167)；P(Y|x=1) = (0.2/0.4, 0.2/0.4) = (0.5, 0.5)</li>
+    </ul>
+
+    <p>初始化 (x,y) = (0,0)，轮流重采（括号内是该步用的条件分布与采到的值）：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>步</th><th>重采谁</th><th>条件分布</th><th>采到</th><th>新状态</th></tr>
+        <tr><td>1</td><td>X | y=0</td><td>(0.714, 0.286)</td><td>x=0</td><td>(0,0)</td></tr>
+        <tr><td>2</td><td>Y | x=0</td><td>(0.833, 0.167)</td><td>y=1</td><td>(0,1)</td></tr>
+        <tr><td>3</td><td>X | y=1</td><td>(0.333, 0.667)</td><td>x=1</td><td>(1,1)</td></tr>
+        <tr><td>4</td><td>Y | x=1</td><td>(0.5, 0.5)</td><td>y=1</td><td>(1,1)</td></tr>
+        <tr><td>5</td><td>X | y=1</td><td>(0.333, 0.667)</td><td>x=0</td><td>(0,1)</td></tr>
+      </table>
+    </div>
+
+    <p>跑上几百步后，链停留在 (0,0)、(0,1)、(1,0)、(1,1) 的频率会逼近 (0.5, 0.1, 0.2, 0.2)——用频率读出边际与期望。</p>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 两个必须记账的代价</span>
+      <p>① <strong>燃烧期</strong>（Burn-in）：链从任意初值出发，前面的样本带有初值的"口音"，必须丢弃一段（如例 5 若从极小概率状态出发，前几十步不算数）。② <strong>样本相关</strong>：相邻样本只差一个变量（例 5 中状态从 (0,0) 挪到 (0,1) 用了一步），不是独立的——M 个链上样本的信息量少于 M 个独立样本，实际误差缩小慢于 1/√M。对多峰分布，链可能长期困在一个峰里（混合缓慢），这时频率估计会严重失真。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 12.5-1</div>
+              <div class="q-text">吉布斯采样每一步从什么分布采样？为什么这个分布在图模型上容易算？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              从全条件分布 P(Xᵢ | X₋ᵢ) 采样。它 ∝ 含 Xᵢ 的势函数乘积，只依赖马尔可夫毯（邻居）——局部查表即可，与全图大小无关。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 12.5-2</div>
+              <div class="q-text">MCMC 的样本为什么不能直接用"1/√M"估计误差？burn-in 又解决什么？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              链上相邻样本相关，有效信息量小于 M，误差缩小慢于 1/√M。Burn-in 丢弃链的前段，消除初始值带来的偏差，让后续样本近似来自平稳分布。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 12.6 ============ -->
+    <h2><span class="sec-no">12.6</span>粒子滤波：时间会流动，粒子要跟上</h2>
+
+    <p>第 15 章的主角——动态系统（DBN/HMM）——带来一个新场景：状态随时间演化，观测不断到来，我们要<strong>在线地</strong>维护 P(X⁽ᵗ⁾ | o⁽¹:ᵗ⁾)。对每个时刻重新跑一遍采样太浪费；<span class="term">粒子滤波</span>（Particle Filter），也叫<span class="term">序贯重要性重采样</span>（Sequential Importance Resampling, SIR），让 M 个加权粒子随时间滚动前进，每一时刻做三件事：</p>
+
+    <ol>
+      <li><strong>传播</strong>（Proposal）：每个粒子按转移模型采样下一步 x⁽ᵗ⁺¹⁾ ~ P(X⁽ᵗ⁺¹⁾ | x⁽ᵗ⁾)；</li>
+      <li><strong>加权</strong>（Weight）：新观测到来，权重乘上似然 w ← w · P(o⁽ᵗ⁺¹⁾ | x⁽ᵗ⁺¹⁾)，再归一化；</li>
+      <li><strong>重采样</strong>（Resample）：若 M<sub>eff</sub> 低于阈值，按权重有放回地重抽 M 个粒子，权重重置为 1/M——把算力从"死胡同"粒子转移到高权重区域。</li>
+    </ol>
+
+    <div class="figure">
+      <div class="mermaid">
+flowchart LR
+  P["传播<br>按转移模型推粒子"] --> W["加权<br>乘观测似然并归一化"]
+  W --> C{"M_eff 低于阈值？"}
+  C -->|"是"| R["重采样<br>按权重重抽 权重重置 1/M"]
+  C -->|"否"| N["保留粒子与权重"]
+  R -->|"回到传播"| P
+  N -->|"回到传播"| P
+  classDef hot fill:#fbeedd,stroke:#c4651f,stroke-width:2.5px,color:#c4651f;
+  class C hot;
+      </div>
+      <div class="caption">图 12.2 粒子滤波（SIR）的一轮循环：传播 → 加权 → 视情况重采样，然后回到传播迎接下一时刻。该看的是橙色的判断节点——M<sub>eff</sub> 是重采样的守门员，它决定了何时把算力从低权重粒子转移到高权重区域；例 6 中 t=1 触发重采样、t=2 再次触发，走的就是这张图的两个分支。</div>
+    </div>
+
+    <h3>例 6：机器人定位，3 个粒子的完整权重演化</h3>
+    <p>机器人在三个位置 {1, 2, 3} 间移动。转移模型 P(X⁽ᵗ⁺¹⁾|X⁽ᵗ⁾)：</p>
+    <ul>
+      <li>从 1：(0.7, 0.3, 0)；从 2：(0.2, 0.6, 0.2)；从 3：(0, 0.3, 0.7)</li>
+    </ul>
+    <p>观测"看到门 d"的似然：P(d|x=1)=0.1，P(d|x=2)=0.9，P(d|x=3)=0.2。</p>
+
+    <p><strong>t=0</strong>：先验均匀，粒子 A=1，B=2，C=3，权重各 1/3。</p>
+
+    <p><strong>t=1 · 传播</strong>：A：1→1（0.7 抽到）；B：2→2（0.6）；C：3→3（0.7）。<strong>加权</strong>：观测到门 d，各乘似然：<br>w = (⅓×0.1, ⅓×0.9, ⅓×0.2) ∝ (0.1, 0.9, 0.2)，归一化（和为 1.2）：w̄ = (0.083, 0.750, 0.167)。</p>
+    <p>有效样本量 M<sub>eff</sub> = 1/(0.083²+0.750²+0.167²) = 1/0.572 ≈ <strong>1.75</strong> &lt; 阈值（取 2）⟹ <strong>重采样</strong>：按 w̄ 有放回抽 3 次。累积区间 [0, 0.083) 属 A，[0.083, 0.833) 属 B，[0.833, 1] 属 C。抽到随机数 0.30、0.60、0.95 ⟹ B、B、C。新粒子集 {2, 2, 3}，权重重置 1/3。</p>
+
+    <p><strong>t=2 · 传播</strong>：B₁：2→2（0.6）；B₂：2→3（0.2 抽到）；C：3→3（0.7）。<strong>加权</strong>：又观测到门 d，乘似然 (0.9, 0.2, 0.2)，归一化（和 1.3）：w̄ ≈ (0.692, 0.154, 0.154)。</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>时刻</th><th>粒子</th><th>传播后采样值</th><th>观测似然</th><th>权重（未归一化）</th><th>归一化权重 w̄</th><th>重采样结果</th></tr>
+        <tr><td>t=0</td><td>A / B / C</td><td>1 / 2 / 3</td><td>—</td><td>1/3 各</td><td>0.333 / 0.333 / 0.333</td><td>—</td></tr>
+        <tr><td>t=1</td><td>A / B / C</td><td>1 / 2 / 3</td><td>0.1 / 0.9 / 0.2</td><td>0.1 / 0.9 / 0.2</td><td>0.083 / 0.750 / 0.167</td><td>B, B, C → {2, 2, 3}</td></tr>
+        <tr><td>t=2</td><td>B₁ / B₂ / C</td><td>2 / 3 / 3</td><td>0.9 / 0.2 / 0.2</td><td>0.9 / 0.2 / 0.2</td><td>0.692 / 0.154 / 0.154</td><td>M_eff≈1.4，触发下一轮重采样</td></tr>
+      </table>
+    </div>
+
+    <p>两个时刻后，滤波分布给出 P(X⁽²⁾=2|d,d) ≈ 0.69、P(X⁽²⁾=3|d,d) ≈ 0.31——粒子云跟着证据一起移动到了"门附近"。</p>
+
+    <h3>例 6（续）：再跑两轮，看"粒子贫化"如何发生</h3>
+    <p>t=2 已触发重采样（见上表）。别停在这里——继续滚动两轮，看权重退化与重采样的长期拉锯战。</p>
+
+    <p><strong>t=2 · 重采样</strong>：按 w̄ = (0.692, 0.154, 0.154) 有放回抽 3 次，随机数 0.10、0.50、0.80 ⟹ B₁、B₁、B₂。新粒子集 {2, 2, 3}，权重重置 1/3。<strong>留意家谱：三个粒子全部源自 t=0 的粒子 B——C 此刻灭绝</strong>（A 早在 t=1 重采样时就已灭绝）。</p>
+
+    <p><strong>t=3 · 传播</strong>：B₁a：2→2（0.6）；B₁b：2→1（0.2 抽到）；B₂：3→2（0.3 抽到）。取值 {2, 1, 2}。<strong>加权</strong>：这次机器人<strong>没有</strong>看到门（观测 ¬d，似然 P(¬d|x) = (0.9, 0.1, 0.8)），取值 (2,1,2) 乘似然 (0.1, 0.9, 0.1)，归一化（和 1.1）：w̄ = (0.091, <strong>0.818</strong>, 0.091)——<strong>82% 的权重塌到单个粒子上</strong>。M<sub>eff</sub> = 1/(0.091²+0.818²+0.091²) = 1/0.686 ≈ <strong>1.46</strong> &lt; 2 ⟹ <strong>重采样</strong>：随机数 0.10、0.60、0.95 ⟹ 中间粒子抽中两份、尾部一份，新粒子集 {1, 1, 2}，权重重置 1/3。</p>
+
+    <p><strong>t=4 · 传播</strong>：1→2（0.3）、1→2（0.3）、2→2（0.6）——三个粒子全部落到状态 2。<strong>加权</strong>：又看到门 d，三者似然同为 0.9，w̄ = (1/3, 1/3, 1/3)，M<sub>eff</sub> = <strong>3.0</strong>，表面满分。</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>时刻</th><th>粒子（家谱）</th><th>传播后取值</th><th>观测</th><th>归一化权重 w̄</th><th>M<sub>eff</sub></th><th>重采样后</th></tr>
+        <tr><td>t=3</td><td>B₁a / B₁b / B₂（全源自 B）</td><td>2 / 1 / 2</td><td>¬d</td><td>0.091 / <strong>0.818</strong> / 0.091</td><td><strong>1.46</strong></td><td>{1, 1, 2}（仍全源自 B）</td></tr>
+        <tr><td>t=4</td><td>三粒子同源同值</td><td>2 / 2 / 2</td><td>d</td><td>1/3 各</td><td>3.0</td><td>无需触发——但取值与家谱都已塌成单点</td></tr>
+      </table>
+    </div>
+
+    <p>把四个时刻连起来看：M<sub>eff</sub> 轨迹 1.75 →（触发）→（触发）→ 1.46 → 3.0，权重退化一次次被重采样"还账"；但<strong>家谱账户在另一边持续失血</strong>——t=1 后 A 灭绝，t=2 后 C 灭绝，t=4 连粒子取值都塌成同一个点。<strong>这就是粒子贫化（Sample Impoverishment）：重采样修复的是权重分布，修复不了多样性。</strong>t=4 的 M<sub>eff</sub> = 3.0 是个错觉：三个"有效样本"是同一个值的三份拷贝、源自同一个祖先；若真实状态此刻不在 2，粒子云里没有一个替它说话，滤波会自信地报错。所以工程上的规矩是"少重采样、巧重采样"：阈值触发（如 M/2）减少杀戮次数，系统/分层重采样降低随机性，必要时加 MCMC 扰动步让复制品"变异"——这些都只是缓解。<strong>粒子贫化和 12.4 的权重退化一样，是序贯蒙特卡洛的慢性病：治标的药一直有，治本的没有。</strong></p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 三个环节各自治一种病</span>
+      <p>传播治"状态在动"（先验推进）；加权治"证据说话"（似然纠偏，同 12.4）；重采样治"权重退化"（12.4 的账单到期就还一次，把粒子复制到高权重区、淘汰低权重区）。三者循环就是完整的序贯蒙特卡洛。这也是机器人 SLAM、目标跟踪、金融时序滤波的标准件。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 重采样不是免费的</span>
+      <p>重采样用"复制"换掉"多样性"：频繁的运气不好会让所有粒子都源自同一个祖先（样本贫乏），过度重采样还会放大噪声。工程上只在 M<sub>eff</sub> 低于阈值（如 M/2）时才重采样，正是为了压制这个副作用。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 12.6-1</div>
+              <div class="q-text">粒子滤波每个时刻的三步是什么？各自用什么分布/公式？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              传播：x' ~ P(X'|x)；加权：w ← w·P(o|x') 并归一化；重采样：M_eff 过低时按 w̄ 有放回抽 M 个，权重重置 1/M。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 12.6-2</div>
+              <div class="q-text">例 6 中 t=1 时为什么触发重采样？重采样前后的粒子集与权重各是什么？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              t=1 归一化权重 (0.083, 0.75, 0.167)，M_eff≈1.75 &lt; 2，触发重采样。重采样后粒子集 {2, 2, 3}，权重统一重置为 1/3。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 12.7 ============ -->
+    <h2><span class="sec-no">12.7</span>本章终点与下一章起点：从"概率是多少"到"最可能是什么"</h2>
+
+    <p>回看整条主线：精确推理被树宽卡死 → 用样本逼近分布（正向采样）→ 证据让样本作废，改为加权（似然加权、重要性采样）→ 权重退化逼出重采样与马尔可夫链（粒子滤波、吉布斯采样）。所有方法的共同底盘是蒙特卡洛恒等式，共同的账单是 <strong>1/√M</strong>：误差不消失，只能用样本量缩小。</p>
+
+    <p>但有一类问题，粒子方法天生答不好：<strong>"最可能的完整赋值是什么？"</strong>——比如图像去噪要的不是每个像素的边际概率，而是整张最可能的干净图；语音识别要的是最可能的一句话。这叫 <span class="term">MAP 推理</span>（MAP Inference）。用采样回答它很笨拙：要恰好多次采到同一个最大值才能发现它，而概率质量可能分散在海量"次优"赋值上。问题换了，算法也得换——第 13 章专门为这个问题设计武器（组合优化视角下的和-积变max-积）。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 一句话收束</span>
+      <p>第 12 章回答"概率是多少"：分布太复杂就采样，样本不够就加权重、重采样，误差按 1/√M 缩小但永不归零。第 13 章回答"最可能的赋值是什么"：那是优化问题，不再是统计问题。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 12.7-1</div>
+              <div class="q-text">为什么采样方法回答 MAP 问题很笨拙？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              MAP 要找到概率最大的那个赋值；采样按频率工作，概率质量可能分散在海量次优赋值上，单一最大赋值未必被采到足够多次。MAP 是优化问题，需要专门的算法（Ch13）。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 12.7-2</div>
+              <div class="q-text">用一句话串起本章五种方法被依次引入的原因。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              精确推理撞墙 → 正向采样；证据作废样本 → 似然加权/重要性采样；权重退化 → 重采样（粒子滤波）或改用马尔可夫链（吉布斯采样）；共同代价：1/√M。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 概念卡 ============ -->
+    <h2><span class="sec-no">🃏</span>概念卡：本章概念的一分钟画像</h2>
+    <p>翻面前先自问：这个概念我能用一句话讲清楚吗？</p>
+    <div class="flip-grid">
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 1</div>
+            <div class="q-text">正向采样（Forward Sampling）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">按拓扑序依次从各节点 CPD 采样，得到联合分布的独立样本。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">精确推理被树宽卡死后，用频率估计概率的底线方法。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">让模型自己"讲故事"，听多了就知道什么情节常见。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为它能直接处理证据——带证据时大量样本被拒，效率崩塌。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">无证据的先验查询；一切粒子方法的基础动作。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 2</div>
+            <div class="q-text">似然加权（Likelihood Weighting）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">证据变量固定为观测值不采样，样本按证据似然乘积 w=∏P(e|Pa(e)) 加权。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">拒绝采样在罕见证据下丢弃几乎全部样本的问题。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">不撕卷子，改让每张卷子交一份"与证据的相容度"成绩。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为它万无一失——证据靠近根部或多证据时权重方差照样爆炸。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">BN 上的证据查询；是重要性采样在 BN 上的特例。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 3</div>
+            <div class="q-text">重要性采样（Importance Sampling）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">从提议分布 Q 采样，用 w=p̃/q 加权，归一化估计 Σwf/Σw。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">P 无法直接采样（如配分函数未知）时的通用估计框架。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">借别人家的选票，按"代表度"折算成自己家的票数。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为 Q 只需好采——Q 不覆盖 P 的支撑会系统性漏掉整块区域。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">复杂分布求期望；粒子滤波的加权环节就是序贯重要性采样。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 4</div>
+            <div class="q-text">权重退化与有效样本量（Weight Degeneracy / ESS）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">权重极度不均使估计被少数粒子主导；M_eff=(Σw)²/Σw² 量化了"实际顶几个样本用"。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">诊断加权采样何时名存实亡，并触发重采样。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">100 个人开会，一个人嗓门占 96%——等于只有他在场。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为多采样本就能治好——高维下 M_eff 随维度指数萎缩，须靠重采样/换算法。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">一切加权采样的健康检查；粒子滤波重采样的触发器。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 5</div>
+            <div class="q-text">吉布斯采样（Gibbs Sampling）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">MCMC 的一种：轮流从各变量的全条件分布 P(Xᵢ|X₋ᵢ) 重采样，链的平稳分布即目标分布。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">重要性采样需要一个全局好 Q 的难题——改为局部逐步移动。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">擦黑板：每次只擦写一个格子，擦够久整块板子就是目标分布的样子。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">把链上样本当独立样本——它们相关，且前段样本须作为 burn-in 丢弃。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">MRF/一般 PGM 后验采样；全条件分布只依赖马尔可夫毯，故与图结构天然契合。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 6</div>
+            <div class="q-text">粒子滤波（Particle Filter / SIR）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">动态模型上的序贯采样：每时刻循环"传播→按观测加权→权重退化则重采样"。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">状态随时间演化时在线维护滤波分布 P(X⁽ᵗ⁾|o⁽¹:ᵗ⁾)。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">撒一把芝麻跟踪移动的蚂蚁：芝麻随蚂蚁爬，不像的地方把芝麻捡走撒到像的地方。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为重采样越多越好——它消耗粒子多样性，只在 M_eff 过低时才该触发。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">Ch15 动态网络推理、SLAM、目标跟踪、时序滤波。</span></div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- ============ 分层习题 ============ -->
+    <h2><span class="sec-no">📝</span>分层习题</h2>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>判断对错：<strong>重要性采样要求提议分布 Q 与目标分布 P 尽量相同，Q ≠ P 时估计就是错的。</strong>说明理由。</div>
+      <details>
+        <summary>提示</summary>
+        <p>权重 w = p̃/q 是干什么用的？Q 真正不可违反的条件是什么？</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">错。重要性采样的全部意义就在于 Q 不必等于 P——权重 w=p̃/q 精确地纠正了"从 Q 采样"带来的偏差（自归一化形式下一阶无偏、M→∞ 收敛）。Q 只需满足：支撑覆盖 P、容易采样，且尽量接近 P 以降低权重方差。Q=P 时权重恒为 1，是最有效的特例，但不是正确性的前提。真正的风险是 Q 与 P 严重错位导致的权重退化，那是效率问题而非正确性问题。</div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>判断对错：<strong>吉布斯采样跑够久之后，取出的相邻样本相互独立，因此误差严格按 1/√M 缩小。</strong>说明理由。</div>
+      <details>
+        <summary>提示</summary>
+        <p>每步只改一个变量——相邻两个样本差多少？独立是 1/√M 律的什么条件？</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">错。吉布斯采样每步只重采一个变量，其余原样保留，相邻样本高度相关（自相关通常为正），跑久之后收敛的是"分布"而非"独立性"。相关样本的有效信息量小于独立样本，故误差缩小慢于 1/√M（常写成 1/√M_eff）。此外 burn-in 之前的样本带初值偏差，必须丢弃。正确说法：链足够长时，样本（去 burn-in、必要时稀释）的经验分布逼近目标分布。</div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>要用蒙特卡洛估计一个 p=0.1 的事件概率，要求估计量的标准差不超过 0.01。手算：至少需要多少样本？若把精度要求提高到 0.001，样本量变成多少倍？</div>
+      <details>
+        <summary>提示</summary>
+        <p>写出 σ = √(p(1−p)/M) ≤ 0.01，解 M。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p>σ = √(0.1×0.9/M) = √(0.09/M) ≤ 0.01</p>
+          <p>⟹ 0.09/M ≤ 0.0001 ⟹ M ≥ 0.09/0.0001 = <strong>900</strong> 个样本。</p>
+          <p>精度提高到 0.001（误差缩小 10 倍）：M ≥ 0.09/0.000001 = <strong>90000</strong>，即 <strong>100 倍</strong>样本——这正是 1/√M 律的直接后果：误差缩 10 倍，样本乘 100。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>粒子滤波，3 个粒子，状态 {1,2}。t 时刻粒子为 {1, 1, 2}，权重各 1/3。转移：P(X'=1|x=1)=0.8，P(X'=2|x=1)=0.2；P(X'=1|x=2)=0.3，P(X'=2|x=2)=0.7。观测似然：P(o|x=1)=0.2，P(o|x=2)=0.9。设传播时三个粒子分别采到 1、2、2。手算 t+1 时刻的归一化权重、M_eff，并判断是否触发重采样（阈值 2.0）。</div>
+      <details>
+        <summary>提示</summary>
+        <p>权重 ← 权重×似然，再归一化；M_eff = 1/Σw̄²。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p>传播后粒子：{1, 2, 2}（权重仍各 1/3）。</p>
+          <p>加权：w ∝ (⅓×0.2, ⅓×0.9, ⅓×0.9) ∝ (0.2, 0.9, 0.9)，和为 2.0。</p>
+          <p>归一化权重：w̄ = (<strong>0.1, 0.45, 0.45</strong>)。</p>
+          <p>M_eff = 1/(0.1² + 0.45² + 0.45²) = 1/(0.01+0.2025+0.2025) = 1/0.415 ≈ <strong>2.41</strong>。</p>
+          <p>2.41 &gt; 2.0 ⟹ <strong>不触发重采样</strong>，直接进入下一时刻。滤波分布：P(X=1|o) ≈ 0.1，P(X=2|o) ≈ 0.9。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l3">L3 建模应用</span>仓库巡检机器人沿一条环形走廊移动，每 10 秒可能原地或移动到相邻区段；身上的门磁传感器能以一定准确率报告"当前是否在某扇门前"。仓库有 50 个区段。老板要求：实时给出"机器人当前最可能在哪些区段"的概率分布。① 选模型并画图；② 写出因子分解；③ 说明为什么不用精确推理（Ch10 团树），而选择粒子滤波。</div>
+      <details>
+        <summary>提示</summary>
+        <p>隐藏状态是什么、观测是什么、时序结构是什么？50 个区段的状态空间对精确推理意味着什么？想想"在线"二字。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p>① 模型：隐马尔可夫模型（HMM，即 Ch6 的 DBN 模板）：隐藏变量 X⁽ᵗ⁾ ∈ {1,…,50}（区段），观测 O⁽ᵗ⁾（门磁读数）。结构：X⁽ᵗ⁾ → X⁽ᵗ⁺¹⁾ 与 X⁽ᵗ⁾ → O⁽ᵗ⁾。</p>
+          <p>② 因子分解：P(X⁽⁰:ᵀ⁾, O⁽¹:ᵀ⁾) = P(X⁽⁰⁾) ∏<sub>t</sub> P(X⁽ᵗ⁺¹⁾|X⁽ᵗ⁾) · ∏<sub>t</sub> P(O⁽ᵗ⁾|X⁽ᵗ⁾)。</p>
+          <p>③ 为什么粒子滤波：精确推理（前向-后向/团树）在 HMM 上其实可行（链状结构树宽小），本题真正的约束是"在线、实时、不断流"——粒子滤波以固定代价 O(M) 每时刻增量更新滤波分布，天然适配流式观测；且当模型升级（非线性运动、非高斯噪声、地图改变）时精确递推会失效，而粒子滤波只要求"能采样转移、能算似然"。取 M=500~1000 个粒子，每时刻：按运动模型传播 → 乘门磁似然 → M_eff 过低则重采样，归一化权重即"当前在哪些区段"的分布。这正是 Ch15 动态网络推理的主战场。</p>
+        </div>
+      </details>
+    </div>
+
+    <!-- ============ 本章自测 ============ -->
+    <h2><span class="sec-no">✍️</span>本章自测</h2>
+    <p class="quiz-hint">点击选项判分，答错会给出原因。</p>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 1</div>
+      <div class="q-stem">用 M 个独立样本估计事件概率，估计量的标准差随 M 如何变化？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 按 1/M 缩小</li>
+        <li data-opt="b">B. 按 1/√M 缩小</li>
+        <li data-opt="c">C. 按指数速度缩小</li>
+        <li data-opt="d">D. 不确定，取决于问题的维度</li>
+      </ul>
+      <div class="quiz-explain">选 B。Var(p̂)=p(1−p)/M，开根号得 σ∝1/√M。A 错在混淆了方差与标准差（方差确实按 1/M）；C 错，蒙特卡洛没有指数收敛；D 错——1/√M 与维度无关，这正是采样方法抗高维的本钱。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="c">
+      <div class="q-no">自测 2</div>
+      <div class="q-stem">证据 E=e 的概率只有 0.1%。用拒绝采样估计 P(Y|e)，采 10000 个正向样本，平均能用于估计的样本约有多少个？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 10000</li>
+        <li data-opt="b">B. 1000</li>
+        <li data-opt="c">C. 10</li>
+        <li data-opt="d">D. 0</li>
+      </ul>
+      <div class="quiz-explain">选 C。留下的比例 = P(e) = 0.001，10000×0.001 = 10 个——σ 高达 √(p(1−p)/10)，估计几乎不可用。A 是似然加权的有效样本数（全部保留但加权）；B 对应 P(e)=10% 的情形；D 错，期望是 10 而非 0，只是太少。这正是引入似然加权的动机。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="a">
+      <div class="q-no">自测 3</div>
+      <div class="q-stem">似然加权中，一个样本的权重等于什么？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 所有证据变量在其父节点采样值下的 CPD 之积 ∏P(e|Pa(e))</li>
+        <li data-opt="b">B. 该样本完整赋值的联合概率 P(x)</li>
+        <li data-opt="c">C. 1/M（所有样本等权）</li>
+        <li data-opt="d">D. 证据概率 P(e) 的倒数</li>
+      </ul>
+      <div class="quiz-explain">选 A。证据不采样而钉死，偏差由"证据在当前父节点配置下的似然"之积来补偿。B 错——若按联合概率加权，证据未发生的样本权重为 0，就退回了拒绝采样；C 错，等权是正向采样的情形；D 错，1/P(e) 是重要性采样在"均匀提议"下的特例，不是似然加权的权重。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="d">
+      <div class="q-no">自测 4</div>
+      <div class="q-stem">某次重要性采样得到 4 个样本，归一化权重为 (0.97, 0.01, 0.01, 0.01)。有效样本量 M_eff 最接近多少？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 4</li>
+        <li data-opt="b">B. 2.5</li>
+        <li data-opt="c">C. 0.25</li>
+        <li data-opt="d">D. 1.06</li>
+      </ul>
+      <div class="quiz-explain">选 D。M_eff = 1/Σw̄² = 1/(0.9409+3×0.0001) = 1/0.9412 ≈ 1.06——4 个样本只顶 1 个用，典型的权重退化。A 错，那是权重全相等时的上限；B 对应权重中度不均；C 错，M_eff 的下限是 1 而不是小于 1。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 5</div>
+      <div class="q-stem">吉布斯采样每一步更新变量 Xᵢ 时，从哪个分布采样？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 先验 P(Xᵢ)</li>
+        <li data-opt="b">B. 全条件分布 P(Xᵢ | 其余变量的当前值)</li>
+        <li data-opt="c">C. 均匀分布</li>
+        <li data-opt="d">D. 联合分布 P(X₁,…,Xₙ)</li>
+      </ul>
+      <div class="quiz-explain">选 B。吉布斯采样轮流从 P(Xᵢ|X₋ᵢ) 重采；由马尔可夫毯性质，它只依赖 Xᵢ 的邻居（含 Xᵢ 的势函数乘积归一化），计算是局部的。A 错，先验不含其他变量的信息；C 错，均匀采样无法保证平稳分布是目标分布；D 错，若能从联合分布直接采样，就根本不需要 MCMC。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="a">
+      <div class="q-no">自测 6</div>
+      <div class="q-stem">粒子滤波一个时刻内的正确操作顺序是：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 传播（按转移模型采样）→ 加权（乘观测似然并归一化）→ 需要时重采样</li>
+        <li data-opt="b">B. 重采样 → 传播 → 加权</li>
+        <li data-opt="c">C. 加权 → 传播 → 重采样</li>
+        <li data-opt="d">D. 传播 → 重采样 → 加权</li>
+      </ul>
+      <div class="quiz-explain">选 A。先把粒子推进到新时刻（先验），再用新观测纠偏（似然），最后检查权重退化决定是否重采样（用归一化权重）。B 错，先重采样会用旧权重淘汰尚未见到新证据的粒子；C 错，观测似然必须作用在传播后的新状态上；D 错，加权之前没有新权重，无从判断退化。</div>
+    </div>
+
+    <!-- ============ 三句话复述 ============ -->
+    <div class="retell">
+      <h3>🗣️ 用自己的话，三句话讲完本章</h3>
+      <p class="retell-sub">对着空气（或室友）说出这三句。说卡壳的那句，回去重读对应小节。</p>
+      <details>
+        <summary>句1：这章解决什么问题？——</summary>
+        <div class="retell-answer">参考答案：精确推理（Ch9/10）随树宽指数爆炸、置信传播（Ch11）在强环上失效；本章用随机样本（粒子）的经验分布去逼近真实分布，以渐进精确的方式回答"概率是多少"，代价是带随机误差。</div>
+      </details>
+      <details>
+        <summary>句2：核心机制是什么？——</summary>
+        <div class="retell-answer">参考答案：正向采样按拓扑序从 BN 抽样，误差按 1/√M 缩小；证据来了改加权（似然加权、重要性采样 w=p̃/q）；权重退化（M_eff 崩塌）逼出重采样（粒子滤波：传播-加权-重采样）与马尔可夫链（吉布斯采样：按只依赖马尔可夫毯的全条件分布逐变量重采，经 burn-in 后链的平稳分布即目标分布）。</div>
+      </details>
+      <details>
+        <summary>句3：它和前后章怎么分工？——</summary>
+        <div class="retell-answer">参考答案：Ch11 是确定性近似（快但有偏），本章是随机近似（慢、带噪但渐进精确），两者互补；本章回答"概率是多少"，第 13 章回答"最可能的赋值是什么"（MAP，优化问题）；粒子滤波将在第 15 章成为动态网络推理的标准工具。</div>
+      </details>
+    </div>
+
+    <!-- ============ 复习计划 ============ -->
+    <div class="review-plan">
+      <h3>🔁 间隔复习计划</h3>
+      <p>回忆本身比重读有效 10 倍。到点只做一件事：翻卡 + 重做标记题。</p>
+      <table>
+        <tr><th>时间点</th><th>复习内容</th><th>预计用时</th></tr>
+        <tr><td>第 1 天</td><td>概念卡 1–6 全部 + 回忆卡 12.2-1、12.4-2、12.6-1</td><td>10 分钟</td></tr>
+        <tr><td>第 3 天</td><td>概念卡 3、4、5（重要性采样/权重退化/吉布斯）+ 重做自测错题 + L2 第 2 题（粒子滤波手算）</td><td>8 分钟</td></tr>
+        <tr><td>第 7 天</td><td>三句话复述出声说一遍 + 回忆卡 12.3-1、12.5-2 + 重推例 2 的误差账</td><td>10 分钟</td></tr>
+        <tr><td>第 15 天</td><td>只做合上书挑战；六条全过则本章毕业，卡在哪条就重读对应小节</td><td>15 分钟</td></tr>
+      </table>
+    </div>
+
+    <!-- 合上书挑战 -->
+    <div class="final-challenge">
+      <h3>📕 合上书挑战</h3>
+      <p class="fc-sub">现在关掉这个页面（或遮住屏幕），拿一张纸，凭记忆完成以下任务。全部做完再回来核对——这是本章真正的毕业考试。</p>
+      <ol id="challenge-list">
+        <li><span class="fc-check"></span>写出蒙特卡洛估计公式与 Var(p̂)=p(1−p)/M，并算出 p=0.3、M=100 与 M=10000 时的标准差</li>
+        <li><span class="fc-check"></span>对 C→R→W 网络（本章参数）做似然加权：说明权重怎么算，并用 4 个样本估出 P(r¹|w¹)</li>
+        <li><span class="fc-check"></span>写出重要性采样的权重与归一化估计公式、对 Q 的三条要求，以及 M_eff 公式</li>
+        <li><span class="fc-check"></span>对例 5 的 2×2 联合分布，写出两张全条件分布表并手跑吉布斯采样 3 步</li>
+        <li><span class="fc-check"></span>写出粒子滤波三步循环，并重演例 6 中 t=1 的加权与重采样全过程</li>
+        <li><span class="fc-check"></span>回答本章的主线问题：分布复杂到无法精确计算时，如何回答"概率是多少"？（一句话）</li>
+      </ol>
+    </div>
+
+    <div class="complete-zone">
+      <button class="btn-complete" id="btn-complete" onclick="markDone()">✓ 我已完成本章（含合上书挑战）</button>
+    </div>
+
+    <div class="chapter-nav">
+      <a href="chapter-11.html"><span class="nav-dir">← 上一章</span>第11章 近似推理：置信传播</a>
+      <a href="chapter-13.html" class="next"><span class="nav-dir">下一章 →</span>第13章 MAP推理</a>
+    </div>
+
+  </div>
+</div>
+
+<footer class="footer">
+  <div class="wrap">第12章 近似推理：粒子方法 · PGM 互动讲义 · 基于 Koller &amp; Friedman (2009)</div>
+</footer>
+
+<script src="assets/mermaid.min.js"></script>
+<script>
+mermaid.initialize({
+  startOnLoad: true,
+  theme: "base",
+  themeVariables: {
+    primaryColor: "#e3edf7",
+    primaryBorderColor: "#1d5f9e",
+    primaryTextColor: "#1d5f9e",
+    lineColor: "#5c554b",
+    secondaryColor: "#fbeedd",
+    tertiaryColor: "#f5f1e8",
+    fontFamily: "-apple-system, PingFang SC, sans-serif",
+    fontSize: "14px"
+  },
+  flowchart: { curve: "linear", htmlLabels: false }
+});
+</script>
+<script>
+// 自测题逻辑
+document.querySelectorAll(".quiz-block").forEach(block => {
+  const answer = block.dataset.answer;
+  const explain = block.querySelector(".quiz-explain");
+  block.querySelectorAll(".quiz-opts li").forEach(li => {
+    li.addEventListener("click", () => {
+      const opts = block.querySelectorAll(".quiz-opts li");
+      opts.forEach(o => o.classList.add("disabled"));
+      if (li.dataset.opt === answer) {
+        li.classList.add("correct");
+      } else {
+        li.classList.add("wrong");
+        block.querySelector(`[data-opt="${answer}"]`).classList.add("correct");
+      }
+      explain.classList.add("show");
+    });
+  });
+});
+
+// 合上书清单打勾
+document.querySelectorAll("#challenge-list li").forEach(li => {
+  li.addEventListener("click", () => li.classList.toggle("checked"));
+});
+
+// 完成标记 → localStorage（第12章）
+const KEY = "pgm_progress_v1";
+function loadProgress() {
+  try { return JSON.parse(localStorage.getItem(KEY)) || {}; } catch (e) { return {}; }
+}
+const progress = loadProgress();
+const btn = document.getElementById("btn-complete");
+if (progress[12] && progress[12].done) {
+  btn.textContent = "✓ 已完成 · 再次点击重置";
+  btn.classList.add("done");
+}
+function markDone() {
+  const p = loadProgress();
+  if (p[12] && p[12].done) {
+    delete p[12];
+    btn.textContent = "✓ 我已完成本章（含合上书挑战）";
+    btn.classList.remove("done");
+  } else {
+    p[12] = { done: true, completedAt: Date.now(), reviewsDone: 0 };
+    btn.textContent = "✓ 已完成 · 复习提醒已开启";
+    btn.classList.add("done");
+  }
+  localStorage.setItem(KEY, JSON.stringify(p));
+}
+</script>
+
+</body>
+</html>

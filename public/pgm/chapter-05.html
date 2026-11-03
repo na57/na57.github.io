@@ -1,0 +1,824 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第5章 局部概率模型 · PGM 互动讲义</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+<nav class="topbar">
+  <div class="topbar-inner">
+    <span class="brand"><a href="index.html" style="color:inherit">← 学习地图</a></span>
+    <span class="crumb">阶段一 · 表示 / 第5章</span>
+  </div>
+</nav>
+
+<div class="wrap">
+
+  <div class="lecture-head">
+    <span class="ch-label">CHAPTER 05 · 表示</span>
+    <h1>局部概率模型</h1>
+    <p class="lead">图结构定了，每个节点还要一张条件概率表——父节点一多，表就爆炸。本章问：能不能用结构假设换参数？</p>
+  </div>
+
+  <!-- 本章定位 -->
+  <div class="position-bar">
+    <strong>本章在主线上的位置：</strong>Ch3/Ch4 定了图结构（谁依赖谁）→ <u>本章把每个节点的 CPD 从"大表"换成紧凑的参数化形式</u> → 参数越少，Ch17 的参数学习越可行，Ch7 的连续变量也有了入口。<br>
+    第5章回答主线上的第三个问题：<strong>在图结构不变的前提下，如何用更少的参数表示每个节点的条件分布？</strong>
+    <div class="map-inline">
+      <span class="node">Ch3-4 图模型（骨架已定，CPD 待填）</span><span class="arrow">→</span>
+      <span class="node here">Ch5 局部概率模型（压缩 CPD）</span><span class="arrow">→</span>
+      <span class="node">Ch7 高斯网络（连续 CPD 系统化）</span><span class="arrow">→</span>
+      <span class="node">Ch17 参数学习（参数少才学得动）</span>
+    </div>
+  </div>
+
+  <!-- 学习目标 -->
+  <div class="objectives">
+    <h4>🎯 学完本章，合上书你应该能：</h4>
+    <ol>
+      <li>手算任意表格 CPD 的自由参数数（k 个 d 元父节点 → dᵏ 行），说出爆炸发生在哪一步</li>
+      <li>给定上下文特定的依赖描述，画出树 CPD 并数出叶节点参数，写出对应的 CSI 声明</li>
+      <li>写出 Noisy-Or 公式，并从 k 个噪声参数手算出完整的 2ᵏ 行条件概率表</li>
+      <li>用 sigmoid 函数手算 Logistic CPD 的具体数值（给定权重与输入）</li>
+      <li>面对一个场景，判断该选确定性 CPD、树 CPD、Noisy-Or、Logistic 还是 CLG，并说出代价</li>
+      <li>解释为什么上下文特定独立性（CSI）无法被标准 d-分离读出</li>
+    </ol>
+  </div>
+
+  <div class="lecture">
+
+    <!-- 推导主线 -->
+    <div class="figure">
+      <div class="mermaid">
+flowchart LR
+  A["表格 CPD：k 个父节点<br>行数 2ᵏ 指数爆炸"] --> B["观察：CPD 行与行之间<br>往往有规律"]
+  B --> C["用结构假设压缩参数"]
+  C --> D["确定性 CPD<br>值是父节点的函数"]
+  C --> E["树 CPD<br>上下文特定独立 CSI"]
+  C --> F["Noisy-Or<br>因果影响独立 ICI"]
+  C --> G["Logistic / CLG<br>连续变量进门"]
+  D --> H["代价：CSI 无法被 d-分离读出<br>每种机制都是一条强假设"]
+  E --> H
+  F --> H
+  G --> H
+  classDef hot fill:#fbeedd,stroke:#c4651f,stroke-width:2.5px,color:#c4651f;
+  classDef danger fill:#fae9e7,stroke:#b03a2e,stroke-width:2.5px,color:#b03a2e;
+  class C hot;
+  class H danger;
+      </div>
+      <div class="caption">本章推导主线：表格爆炸 → 发现行间规律 → 四类机制各以一条假设换参数 → 终点（红色）是账单：压缩引入的独立性图谱读不出来，且假设一旦错了模型就系统性失真。</div>
+    </div>
+
+    <!-- ============ 5.1 ============ -->
+    <h2><span class="sec-no">5.1</span>为什么表格 CPD 会爆炸：把参数一个一个数出来</h2>
+
+    <p>第 3 章告诉我们：贝叶斯网络 = 图 + 每个节点一张<span class="term">条件概率表</span>（Conditional Probability Distribution, CPD）。当时我们默认 CPD 就是一张表：每种父节点取值组合对应一行，行内给出子节点各取值的概率。第 4 章又给了无向图这套"骨架"。但骨架搭好之后，一个被刻意回避的问题浮出来：<strong>这些表到底有多大？</strong></p>
+
+    <h3>手算例 1：参数计数</h3>
+    <p>设节点 X 是二值的（如"是否发烧"），有 k 个二值父节点（k 个可能病因）。表格 CPD 需要为<strong>每一种父节点组合</strong>写一行，共 2ᵏ 行；每行里 P(x⁰) 与 P(x¹) 和为 1，只有 1 个自由参数。所以自由参数总数 = 行数 = <strong>2ᵏ</strong>。逐个数：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>k（父节点数）</th><th>父节点组合数（行数）</th><th>自由参数数</th></tr>
+        <tr><td>1</td><td>2¹ = 2</td><td>2</td></tr>
+        <tr><td>2</td><td>2² = 4</td><td>4</td></tr>
+        <tr><td>3</td><td>2³ = 8</td><td>8</td></tr>
+        <tr><td>5</td><td>2⁵ = 32</td><td>32</td></tr>
+        <tr><td>10</td><td>2¹⁰ = 1024</td><td><strong>1024</strong></td></tr>
+        <tr><td>20</td><td>2²⁰ ≈ 1.05 × 10⁶</td><td><strong>约 105 万</strong></td></tr>
+      </table>
+    </div>
+
+    <p>一般地，若每个父节点取 d 个值、子节点取 m 个值，则行数 = dᵏ，自由参数数 = <strong>dᵏ · (m − 1)</strong>。指数在 k 上——这就是爆炸的精确位置。</p>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 爆炸不只是存储问题</span>
+      <p>1024 个参数意味着：想用数据估计这张表，每种父节点组合都得见过足够多的样本。组合数指数增长，数据需求也指数增长——这就是第 17 章参数学习里"数据不够、过拟合"的直接根源。<strong>省参数就是省数据。</strong></p>
+    </div>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>爆炸的根源是表格 CPD "一视同仁"地对待全部 2ᵏ 行——它不允许行与行之间共享任何规律。但真实世界里的 CPD 几乎总有规律：某些行完全相同、某些父节点在某些情形下根本无关、多个原因的影响各自独立……<strong>本章就是把这些"行间规律"逐条形式化，每条规律换一批参数。</strong></p>
+    </div>
+
+    <!-- 回忆卡片 5.1 -->
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 5.1-1</div>
+              <div class="q-text">节点 X 有 k 个 d 元父节点，X 有 m 个取值。表格 CPD 有多少行、多少自由参数？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              dᵏ 行；自由参数 dᵏ·(m−1)（每行概率和为 1，扣掉一个）。指数在父节点个数 k 上。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 5.1-2</div>
+              <div class="q-text">表格 CPD 参数爆炸为什么同时也是"学习"问题，而不只是存储问题？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              每种父节点组合都需要足够样本才能估计对应行；组合随 k 指数增长，数据需求也指数增长，直接制约第 17 章的参数学习。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 5.2 ============ -->
+    <h2><span class="sec-no">5.2</span>第一类规律：有些行被钉死（确定性 CPD），有些父节点在特定情形下无关（树 CPD 与 CSI）</h2>
+
+    <p>上一节说爆炸源于"行间无规律"。最简单的规律是：<strong>给定父节点后，子节点的值被完全钉死</strong>。</p>
+
+    <h3>确定性 CPD（Deterministic CPD）</h3>
+    <p>如果 X = f(Pa(X)) 是父节点的<strong>函数</strong>，那么</p>
+
+    <div class="formula">P(X = f(<span class="var">pa</span>) | <span class="var">pa</span>) = 1</div>
+
+    <p>每行都是一个 0/1 的退化分布，<strong>自由参数为 0</strong>。例子：数字电路里的 OR 门 Z = X ∨ Y（4 行表，每行概率非 0 即 1）；物理关系 Z = X + Y。确定性依赖虽然极端，在电路诊断、方程约束类问题里却非常自然——而且它会改变推理的难度（确定性等式可以直接传播取值）。</p>
+
+    <h3>树 CPD（Tree-CPD）：不同上下文，看不同的父节点</h3>
+    <p>更常见的情形是：子节点<strong>在某些父节点取值下</strong>，对其余父节点"免疫"。看一个具体例子。</p>
+
+    <h3>手算例 2：Job 录用——树 CPD 的叶节点 vs 完整表的行数</h3>
+    <p>招聘场景：J = 是否录用（二值），父节点三个：A = 实习经历（强/弱）、L = 推荐信（强/弱）、S = SAT 分数（高/低）。完整表格 CPD 需要 2³ = 8 行、8 个自由参数。</p>
+
+    <p>但真实决策过程是：<strong>实习强的候选人直接录用概率 0.9，雇主根本不看推荐信和 SAT</strong>；实习弱的，才看推荐信；推荐信强的，再看 SAT。画成决策树：</p>
+
+    <div class="figure">
+      <div class="mermaid">
+flowchart TB
+  R{"实习 A?"} -->|强| T1["P(录用)=0.9"]
+  R -->|弱| N1{"推荐信 L?"}
+  N1 -->|强| N2{"SAT S?"}
+  N2 -->|高| T2["P(录用)=0.7"]
+  N2 -->|低| T3["P(录用)=0.3"]
+  N1 -->|弱| T4["P(录用)=0.05"]
+  classDef hot fill:#fbeedd,stroke:#c4651f,stroke-width:2.5px,color:#c4651f;
+  class T1,T2,T3,T4 hot;
+      </div>
+      <div class="caption">图 5.1 Job 例子的树 CPD：内部节点（蓝）测试父节点，叶节点（橙）给出分布。注意"实习强"分支一刀切断了 L 与 S。</div>
+    </div>
+
+    <p><strong>数参数</strong>：这棵树有 <strong>4 个叶节点</strong>，每个叶是一个 Bernoulli 分布（1 个自由参数），共 <strong>4 个自由参数</strong>——完整表是 8 个。省下的 4 个来自两处"免疫"：</p>
+    <ul>
+      <li>A = 强的分支：1 个叶顶替了完整表里的 4 行（L、S 的 4 种组合全共享一个分布）；</li>
+      <li>A = 弱且 L = 弱的分支：1 个叶顶替了 2 行（S 的 2 种取值共享一个分布）。</li>
+    </ul>
+    <p>一般结论：<strong>树 CPD 的自由参数数 = 叶节点数 ×（每叶分布的自由参数数）</strong>。树越"不平衡"（早分支早收叶），省得越多。</p>
+
+    <h3>上下文特定独立性（CSI）</h3>
+    <p>树 CPD 里"在某些取值下无关"的现象有正式名字：<span class="term">上下文特定独立性</span>（Context-Specific Independence, CSI）。</p>
+
+    <p><strong>定义</strong>：X 与 Y 在给定 Z 与<strong>上下文 C = c</strong> 下独立，记作</p>
+
+    <div class="formula">X ⊥<sub>c</sub> Y | Z, C = c</div>
+
+    <p>意思是：只在 C 取特定值 c 的那些"世界切片"里，X ⊥ Y | Z 才成立；C 取别的值时未必。Job 例子里：</p>
+    <ul>
+      <li>J ⊥<sub>c</sub> {L, S} | A = 强（实习强时，推荐信与 SAT 都不再影响录用）；</li>
+      <li>J ⊥<sub>c</sub> S | L, A = 弱, L = 弱（实习弱且推荐信弱时，SAT 也不影响）。</li>
+    </ul>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ CSI 读不出图</span>
+      <p>这是本章最重要的警示：<strong>标准 d-分离只能读出"对所有上下文都成立"的独立性</strong>。Job 例子里图上有边 L→J、S→J，d-分离永远不会告诉你"L 有时不影响 J"——这条信息藏在 CPD 的内部结构里，图上完全不可见。要利用 CSI 加速推理，需要扩展的图算法（书上 5.x 节），这是第 9、10 章推理算法的一个增强方向。</p>
+    </div>
+
+    <div class="box idea">
+      <span class="box-tag">💡 直觉</span>
+      <p>表格 CPD 把 2ᵏ 行当作 2ᵏ 个互不相干的"格子"；树 CPD 承认格子之间有<strong>层级结构</strong>——先问哪个变量、在哪个分支下其余变量失效。参数压缩 = 让共享同一命运的行合并成一个叶。</p>
+    </div>
+
+    <!-- 回忆卡片 5.2 -->
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 5.2-1</div>
+              <div class="q-text">Job 例子的树 CPD（图 5.1）有几个叶节点？比完整表省了几个参数？省在哪里？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              4 个叶 → 4 个参数，比完整表 8 个省一半。省在：A=强分支 1 叶顶 4 行；A=弱且 L=弱分支 1 叶顶 2 行。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 5.2-2</div>
+              <div class="q-text">写出 CSI 的记法，并解释为什么 d-分离读不出 CSI。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              X ⊥<sub>c</sub> Y | Z, C=c：只在 C 取 c 的上下文里独立。d-分离只看图的拓扑，而 CSI 成立与否取决于父节点的具体取值——信息在 CPD 内部，不在图上。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 5.3 ============ -->
+    <h2><span class="sec-no">5.3</span>第二类规律：多个原因各自独立地起作用（ICI 与 Noisy-Or）</h2>
+
+    <p>上一节的规律是"某些父节点在某些情形下无关"。还有一种更结构化的规律：在医学诊断里，发烧可能由流感、感冒、过敏中<strong>任何一个</strong>引起——多个原因像多扇独立的"门"，每扇门各自有一定概率把结果"顶开"，且各门的失效互不相关。这就是<span class="term">因果影响独立性</span>（Independence of Causal Influence, ICI）：<strong>每个父节点对子节点的影响通过一个独立的噪声机制传递，各机制之间互不干扰</strong>。</p>
+
+    <h3>Noisy-Or 模型</h3>
+    <p>ICI 最经典的实例是<span class="term">Noisy-Or</span> 模型，适用于全二值变量。设 X 有父节点 Y₁,…,Yₖ。语义：X 为真，当且仅当<strong>至少一个</strong>为真的父节点"成功激活"了它；第 i 个父节点单独激活失败的概率记为 λ<sub>i</sub>（失效概率）。各激活通道独立，所以"X 为假"要求<strong>所有</strong>活跃通道都失败：</p>
+
+    <div class="formula">P(x⁰ | y₁,…,yₖ) = ∏<sub>i : yᵢ = 1</sub> λ<sub>i</sub></div>
+
+    <p>（没有父节点激活时，乘积为空 = 1，即 X 必为假——这是"无渗漏"版本。）P(x¹ | …) = 1 − 上式。<strong>参数数：k 个 λ，而不是 2ᵏ 行。</strong></p>
+
+    <h3>手算例 3：三个病因，从 3 个参数推出全部 8 行</h3>
+    <p>设发烧 F 的病因：流感 Y₁、感冒 Y₂、过敏 Y₃，失效概率 λ₁ = 0.2、λ₂ = 0.4、λ₃ = 0.6。<strong>只用这 3 个数</strong>，把完整 8 行表一行一行算出来。逐行套用公式（P(f⁰) = 活跃病因的 λ 连乘）：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>Y₁ 流感</th><th>Y₂ 感冒</th><th>Y₃ 过敏</th><th>活跃病因</th><th>P(f⁰ | …) 计算</th><th>P(f⁰)</th><th>P(f¹)</th></tr>
+        <tr><td>0</td><td>0</td><td>0</td><td>无</td><td>空乘积 = 1</td><td>1.0</td><td>0.0</td></tr>
+        <tr><td>1</td><td>0</td><td>0</td><td>{Y₁}</td><td>λ₁</td><td>0.2</td><td>0.8</td></tr>
+        <tr><td>0</td><td>1</td><td>0</td><td>{Y₂}</td><td>λ₂</td><td>0.4</td><td>0.6</td></tr>
+        <tr><td>0</td><td>0</td><td>1</td><td>{Y₃}</td><td>λ₃</td><td>0.6</td><td>0.4</td></tr>
+        <tr><td>1</td><td>1</td><td>0</td><td>{Y₁,Y₂}</td><td>0.2 × 0.4</td><td>0.08</td><td>0.92</td></tr>
+        <tr><td>1</td><td>0</td><td>1</td><td>{Y₁,Y₃}</td><td>0.2 × 0.6</td><td>0.12</td><td>0.88</td></tr>
+        <tr><td>0</td><td>1</td><td>1</td><td>{Y₂,Y₃}</td><td>0.4 × 0.6</td><td>0.24</td><td>0.76</td></tr>
+        <tr><td>1</td><td>1</td><td>1</td><td>{Y₁,Y₂,Y₃}</td><td>0.2 × 0.4 × 0.6</td><td>0.048</td><td><strong>0.952</strong></td></tr>
+      </table>
+    </div>
+
+    <p><strong>参数对比：3 vs 8</strong>。而且这 3 个参数有清晰的物理含义（每个病因单独致病的失败率），比"第 7 行 P(f¹)=0.88"这种无结构的表格数字<strong>更容易从专家处获取、也更容易从数据中学准</strong>。病因加到 10 个时，优势变成 10 vs 1024。</p>
+
+    <div class="figure">
+      <div class="mermaid">
+flowchart LR
+  Y1["Y1 流感"] -- "失效概率 0.2" --> Z["OR：至少一个激活成功"]
+  Y2["Y2 感冒"] -- "失效概率 0.4" --> Z
+  Y3["Y3 过敏"] -- "失效概率 0.6" --> Z
+  Z --> F["F 发烧"]
+  classDef hot fill:#fbeedd,stroke:#c4651f,stroke-width:2.5px,color:#c4651f;
+  class Z hot;
+      </div>
+      <div class="caption">图 5.2 Noisy-Or 的因果图景：每个病因经一条独立的"噪声通道"汇入一个确定性 OR。各通道的失效互不相关——这就是 ICI 的全部假设。</div>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ Noisy-Or 是强假设，不是万能压缩器</span>
+      <p>它假设：①各病因独立起作用（不存在"流感 + 过敏同时得会格外危险"这类交互）；②X 为假 ⟺ 全部激活失败（无其他杂因）。假设不满足时，压缩换来的不是省参数而是<strong>系统性偏差</strong>。变体：可加一个"渗漏参数" λ₀ 表示未知病因；有序多值变量用 Noisy-Max / Noisy-Min。</p>
+    </div>
+
+    <div class="box idea">
+      <span class="box-tag">💡 直觉</span>
+      <p>树 CPD 的规律在"行"上（哪些行共享分布）；ICI 的规律在"列"上（每个父节点一列影响，各列以乘法方式复合）。两者压缩的是不同方向的冗余。</p>
+    </div>
+
+    <!-- 回忆卡片 5.3 -->
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 5.3-1</div>
+              <div class="q-text">写出 Noisy-Or 的公式，并说清 λᵢ 的含义与模型的参数数。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              P(x⁰|y) = ∏_{i:yᵢ=1} λᵢ。λᵢ 是第 i 个父节点单独激活失败的概率；k 个父节点只需 k 个参数（对比表格的 2ᵏ）。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 5.3-2</div>
+              <div class="q-text">Noisy-Or 里"ICI（因果影响独立）"具体指哪两件事独立？为什么这是强假设？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              每个父节点的影响经独立的噪声通道传递，各通道的失效事件互不相关。它排除了病因间的交互作用（如"两病齐发格外严重"），现实不满足时模型会系统性失真。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 5.4 ============ -->
+    <h2><span class="sec-no">5.4</span>连续变量进门：Logistic CPD 手算，以及 CLG 的一句话预告</h2>
+
+    <p>到目前为止，父节点、子节点都是离散的。现实中变量常常是连续的：学习时长、收入、体温。连续变量一旦进门，表格 CPD 连"行"都写不出来（父节点取值无穷多）。本章只开两扇小门，<strong>系统处理留给第 7 章（高斯网络）与第 14 章（混合网络推理）</strong>。</p>
+
+    <h3>父连续、子离散：Logistic CPD（Sigmoid）</h3>
+    <p>子节点 Y 二值、父节点 X₁,…,Xₖ 可取连续值时，标准选择是把父节点影响的<strong>线性加权和</strong>压进 sigmoid 函数——这就是<span class="term">Logistic CPD</span>（也叫 sigmoid CPD）：</p>
+
+    <div class="formula">P(y¹ | x₁,…,xₖ) = σ(w₀ + ∑<sub>i</sub> w<sub>i</sub>x<sub>i</sub>)，其中 σ(z) = <span class="frac"><span class="num-part">1</span><span class="den-part">1 + e<sup>−z</sup></span></span></div>
+
+    <p>σ 把任意实数 z 平滑压到 (0,1)：z→−∞ 时趋于 0，z = 0 时恰为 0.5，z→+∞ 时趋于 1。w<sub>i</sub> 是第 i 个父节点影响的强度与方向，w₀ 是基线。<strong>参数数：k+1 个权重</strong>，与父节点取值个数无关——表格的 2ᵏ 在这里彻底消失。</p>
+
+    <h3>手算例 4：把 sigmoid 的数值一个一个摁出来</h3>
+    <p>设录用模型 P(y¹ | G, A) = σ(−3 + 2G + 2A)，G、A ∈ {0,1}（成绩好、实习强）。先摁 σ 的几个关键点（记住 e¹ ≈ 2.718，e² ≈ 7.389，e³ ≈ 20.086）：</p>
+    <ul>
+      <li>σ(−3) = 1/(1+e³) = 1/(1+20.086) = 1/21.086 ≈ <strong>0.047</strong></li>
+      <li>σ(−1) = 1/(1+e¹) = 1/(1+2.718) = 1/3.718 ≈ <strong>0.269</strong></li>
+      <li>σ(0) = 1/(1+1) = <strong>0.5</strong></li>
+      <li>σ(1) = 1/(1+e⁻¹) = 1/(1+0.368) = 1/1.368 ≈ <strong>0.731</strong></li>
+    </ul>
+    <p>代入四种 (G, A) 组合：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>G</th><th>A</th><th>z = −3+2G+2A</th><th>P(y¹) = σ(z)</th></tr>
+        <tr><td>0</td><td>0</td><td>−3</td><td>≈ 0.047</td></tr>
+        <tr><td>1</td><td>0</td><td>−1</td><td>≈ 0.269</td></tr>
+        <tr><td>0</td><td>1</td><td>−1</td><td>≈ 0.269</td></tr>
+        <tr><td>1</td><td>1</td><td>+1</td><td>≈ 0.731</td></tr>
+      </table>
+    </div>
+
+    <p>注意两个结构性质：①G 与 A 权重相同 → 两行概率相等，这是线性形式的必然结果（想表达"实习比成绩重要"就调权重）；②z 每加 2，概率沿 S 形曲线爬升一段——影响是<strong>可加的、单调的</strong>，没有交互项。父节点换成连续值（如 GPA = 3.7）也直接代入，无需离散化。这把贝叶斯网络和逻辑回归/神经网络直接接上了：一个 sigmoid CPD 就是一层神经元。</p>
+
+    <h3>父离散、子连续：CLG 的一句话预告</h3>
+    <p>反过来的组合——父节点离散、子节点连续——常用<span class="term">条件线性高斯</span>（Conditional Linear Gaussian, CLG）：<strong>每种父节点配置下，子节点是一个（线性）高斯分布</strong>。例如体温计读数 T 连续，依赖是否发烧 F：</p>
+
+    <div class="formula">p(T | f⁰) = 𝒩(36.6, σ₀²)，p(T | f¹) = 𝒩(38.5, σ₁²)</div>
+
+    <p>若父节点也连续，则均值可以是父节点的线性函数（如 T 的均值 = a·体温真值 + b）。<strong>高斯分布的性质、参数估计、以及离散-连续混合网络如何推理，全部留给第 7 章和第 14 章</strong>——本章只需要记住"CLG 存在、它解决'父离散子连续'这一格"即可。</p>
+
+    <h3>手算例 5：给定父配置，把一次 CLG 条件密度摁到底</h3>
+    <p>预告太抽象，摁一次数字就有手感了。设体温计读数 T（连续）有两个父节点：F = 是否发烧（离散），X = 体温真值（连续）。CLG 给每种离散工况一套线性高斯参数：</p>
+
+    <div class="formula">p(T | f⁰, x) = 𝒩(0.98x + 0.86 ; 0.04)，&nbsp;&nbsp; p(T | f¹, x) = 𝒩(0.98x + 0.86 ; 0.25)</div>
+
+    <p>（发烧时出汗蒸发干扰测量，读数波动更大：σ₀ = 0.2 vs σ₁ = 0.5。）</p>
+
+    <p><strong>第一步：代入父配置 X = 37.0、F = f⁰，定出条件分布</strong>。均值 = 连续父的线性函数：0.98 × 37.0 + 0.86 = 36.26 + 0.86 = <strong>37.12</strong>；方差取离散父对应的那一套：σ₀² = <strong>0.04</strong>。于是 p(T | f⁰, x=37.0) = 𝒩(37.12, 0.04)——均值随连续父线性滑动、方差沿离散父切换，CLG 的两个特征各就各位。</p>
+
+    <p><strong>第二步：算密度值</strong>。问读数 T = 37.2 在两种工况下各有多"典型"。一维高斯密度 p(t) = 1/(√(2π)σ) · exp(−(t−μ)²/(2σ²))，取 √(2π) ≈ 2.507，同一偏差 37.2 − 37.12 = 0.08：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>工况</th><th>前置系数 1/(2.507σ)</th><th>指数部分</th><th>p(37.2 | …)</th></tr>
+        <tr><td>f⁰（σ = 0.2）</td><td>1/(2.507 × 0.2) ≈ 1.995</td><td>exp(−0.08² / 0.08) = exp(−0.08) ≈ 0.923</td><td>1.995 × 0.923 ≈ <strong>1.84</strong></td></tr>
+        <tr><td>f¹（σ = 0.5）</td><td>1/(2.507 × 0.5) ≈ 0.798</td><td>exp(−0.08² / 0.5) = exp(−0.0128) ≈ 0.987</td><td>0.798 × 0.987 ≈ <strong>0.79</strong></td></tr>
+      </table>
+    </div>
+
+    <p>解读：均值同为 37.12，但方差沿离散父翻倍多，同一条读数的密度从 1.84 掉到 0.79——<strong>方差越大，钟形越扁，同一偏离就越"不典型"</strong>。两个提醒：密度值可以大于 1（它不是概率，只有比较和积分才有意义）；若 F 本身也要边缘化，T 就变成两座钟的叠加——高斯混合，那是第 7.4 节和第 14 章的账单。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 全章统一视角</span>
+      <p>四类机制是同一个交易：<strong>拿一条关于世界的假设，换一批参数</strong>。确定性 CPD 押"关系是函数"；树 CPD 押"某些上下文下部分父节点无关"；Noisy-Or 押"各原因独立起作用"；Logistic/CLG 押"影响是线性（再套一个固定的形状）"。假设越准，省得越多；假设越错，偏得越远。</p>
+    </div>
+
+    <!-- 回忆卡片 5.4 -->
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 5.4-1</div>
+              <div class="q-text">写出 Logistic CPD 的公式。σ(0) 等于多少？k 个父节点需要几个参数？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              P(y¹|x) = σ(w₀ + Σ wᵢxᵢ)，σ(z)=1/(1+e⁻ᶻ)。σ(0)=0.5。只需 k+1 个权重，与父节点取值数无关。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 5.4-2</div>
+              <div class="q-text">CLG 处理哪种变量组合？它的核心形式是什么？本章对高斯数学的态度是什么？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              父离散、子连续（或父连续时均值线性依赖）。每种父配置对应一个（线性）高斯分布。高斯细节不在本章展开，留给第 7 章与第 14 章。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 概念卡 ============ -->
+    <h2><span class="sec-no">🃏</span>概念卡：本章概念的一分钟画像</h2>
+    <p>翻面前先自问：这个概念我能用一句话讲清楚吗？</p>
+    <div class="flip-grid">
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 1</div>
+            <div class="q-text">确定性 CPD（Deterministic CPD）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">X = f(Pa(X))：给定父节点，子节点取值概率为 1 地确定。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">逻辑门、物理方程等严格关系，用 0 个参数表达一张 CPD。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">查表不如代入公式：输入定了，输出就钉死了。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为它让推理变平凡——确定性等式可传播取值，但也会使某些概率为 0，需谨慎处理证据。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">电路诊断、约束模型；Noisy-Or 可看作"确定性 OR + 独立噪声"。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 2</div>
+            <div class="q-text">树 CPD（Tree-CPD）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">用决策树表示 CPD：内部节点测试某个父节点，叶节点给出该路径（上下文）下的分布。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">不同父节点配置下子节点只依赖部分父节点时，完整表的行大量冗余。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">分诊台：先问最关键的问题，某些答案一出来，其余问题就不用问了。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为参数数 = 内部节点数——是<strong>叶节点数</strong>（每叶一个分布）。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">规则型决策过程；Ch9-10 推理中利用 CSI 加速的入口。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 3</div>
+            <div class="q-text">上下文特定独立性（CSI）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">X ⊥<sub>c</sub> Y | Z, C=c：只在 C 取特定值 c 的上下文里成立的条件独立。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">刻画"某些情形下才成立"的独立性，是树 CPD 压缩力的来源。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">语境决定相关性：实习一强，推荐信就"失聪"了。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为 d-分离能读出它——CSI 取决于变量取值，不在图拓扑上，标准 d-分离完全看不见。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">利用 CPD 内部结构加速精确推理（Ch9/10 的增强方向）。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 4</div>
+            <div class="q-text">因果影响独立性（ICI）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">每个父节点经独立的噪声机制影响子节点，各机制的随机性互不相关。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">多原因场景（k 个病因）的 CPD 从 2ᵏ 行压到每原因一个机制。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">多扇独立上锁的门：结果出不来 ⟺ 每扇门都恰好没开。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为它免费——它排除了原因间的交互作用，假设错了就是系统性偏差。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">医学诊断、故障诊断；Noisy-Or / Noisy-Max 都是它的实例。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 5</div>
+            <div class="q-text">Noisy-Or 模型</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">P(x⁰|y) = ∏_{i:yᵢ=1} λᵢ：X 为假 ⟺ 所有活跃病因都激活失败。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">k 个二元病因的 CPD 只需 k 个失效概率，而非 2ᵏ 个表格行。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">每个病因一把枪，各自以概率 1−λᵢ 打响；全部哑火才不发病。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">忘记"无渗漏"前提（无活跃病因时 X 必为假）；需要时加渗漏参数 λ₀。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">诊断网络标配；BN2TCR 等经典医学模型；Ch17 里它是参数学习的友好目标。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 6</div>
+            <div class="q-text">Logistic CPD（Sigmoid CPD）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">P(y¹|x) = σ(w₀ + Σ wᵢxᵢ)，σ(z)=1/(1+e⁻ᶻ)，父节点可连续。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">父节点连续时表格 CPD 连行都写不出；sigmoid 用 k+1 个权重覆盖无穷多输入。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">影响先线性相加，再过一个 S 形软开关压成概率。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为它能表达任意交互——线性形式意味着各父影响可加，等权父节点的组合必然等概率。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">连续/混合父节点 + 二值子节点；与逻辑回归、神经网络的接口。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 7</div>
+            <div class="q-text">条件线性高斯（CLG）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">每种父节点（离散）配置下，连续子节点服从一个（均值可线性依赖连续父的）高斯分布。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">"父离散、子连续"这一格的参数化（如体温读数依赖是否发烧）。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">每种离散状态配一口"钟形曲线"，状态切换 = 换钟。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">与 Logistic CPD 记反——Logistic 是父连续子离散，CLG 是父离散子连续。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">Ch7 高斯网络系统展开；Ch14 混合网络推理处理它带来的困难。</span></div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- ============ 分层习题 ============ -->
+    <h2><span class="sec-no">📝</span>分层习题</h2>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>判断对错：<strong>表格 CPD 的行数只取决于父节点的个数，与每个父节点有多少取值无关。</strong>说明理由。</div>
+      <details>
+        <summary>提示</summary>
+        <p>行数 = 父节点取值的组合数。把"每个父 3 个值"和"每个父 2 个值"各代一次试试。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">错。行数是各父节点取值数的<strong>乘积</strong>：k 个 d 元父节点 → dᵏ 行。同样 3 个父节点，二值时 2³=8 行，三值时 3³=27 行。爆炸的指数在父节点<strong>个数</strong> k 上，但底数 d（每父取值数）同样决定基数——两个维度都能让表变大。</div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>判断对错：<strong>既然树 CPD 揭示了 CSI，那么用第 3 章的 d-分离算法照样能把这些独立性从图上读出来。</strong>说明理由。</div>
+      <details>
+        <summary>提示</summary>
+        <p>d-分离的输入只有图拓扑（节点与边），它能看见 CPD 表里"某些行相等"这件事吗？</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">错。d-分离只看图的连通结构，而 CSI（如 J ⊥<sub>c</sub> S | A=强）成立与否取决于父节点的<strong>具体取值</strong>——这是 CPD 内部的结构，图上边 S→J 照常存在，d-分离永远判定"相连即可能相关"。读出 CSI 需要扩展算法（结合 CPD 结构），这正是本章"代价"节点在主线图上的含义。</div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>节点 X 为二值，有 4 个父节点，每个父节点取 3 个值。(a) 完整表格 CPD 有多少行、多少自由参数？(b) 若改用树 CPD 且树有 9 个叶节点，自由参数多少？压缩比多少？</div>
+      <details>
+        <summary>提示</summary>
+        <p>行数 = 各父取值数的乘积；每行自由参数 = m−1（X 二值所以是 1）；树 CPD 参数 = 叶节点数 × 每叶参数。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p>(a) 行数 = 3 × 3 × 3 × 3 = 3⁴ = <strong>81 行</strong>。X 二值，每行 P(x⁰)+P(x¹)=1，自由参数 1 个，故自由参数总数 = 81 × 1 = <strong>81</strong>。</p>
+          <p>(b) 树 CPD：每个叶是一个 Bernoulli 分布（1 个自由参数），9 个叶 → <strong>9 个自由参数</strong>。压缩比 = 81 / 9 = <strong>9 倍</strong>。注意：省参数的前提是真实 CPD 确实有"72 行可与另外 9 行共享分布"的结构——树形状必须与现实吻合。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>Noisy-Or：X 有两个病因父节点 Y₁（病毒）、Y₂（细菌），失效概率 λ₁ = 0.3、λ₂ = 0.5。写出完整 CPD 的全部 4 行（P(x⁰) 与 P(x¹)），并验证各行归一化。</div>
+      <details>
+        <summary>提示</summary>
+        <p>P(x⁰) = 活跃病因的 λ 连乘；无活跃病因时为空乘积 = 1；P(x¹) = 1 − P(x⁰)。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p>逐行：</p>
+          <p>① (Y₁=0, Y₂=0)：无活跃病因，P(x⁰) = 1，P(x¹) = 0。和 = 1 ✓</p>
+          <p>② (1, 0)：P(x⁰) = λ₁ = 0.3，P(x¹) = 1 − 0.3 = 0.7。和 = 1 ✓</p>
+          <p>③ (0, 1)：P(x⁰) = λ₂ = 0.5，P(x¹) = 1 − 0.5 = 0.5。和 = 1 ✓</p>
+          <p>④ (1, 1)：P(x⁰) = λ₁·λ₂ = 0.3 × 0.5 = 0.15，P(x¹) = 1 − 0.15 = <strong>0.85</strong>。和 = 1 ✓</p>
+          <p>2 个参数（0.3 与 0.5）生成了 4 行表；若用表格需 4 个自由参数。病因升到 10 个时对比变为 10 vs 1024。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l3">L3 建模应用</span>发热门诊建模：发烧 F（二值）可能由三个病因引起——流感、肺炎、中暑（均二值）；体温计读数 T 是连续变量，依赖 F。画出图、为每个 CPD 选择本章的合适形式并说明理由、写出联合分布的因子分解式。</div>
+      <details>
+        <summary>提示</summary>
+        <p>三个独立病因 → 想到哪种 ICI 模型？T 连续、其父 F 离散 → 本章哪一格？</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p>图：流感 Y₁、肺炎 Y₂、中暑 Y₃ 三个无父节点 → 共同指向 F；F → T。</p>
+          <p>CPD 选择：①P(F | Y₁,Y₂,Y₃) 用 <strong>Noisy-Or</strong>：病因各自独立致病、无交互的假设在门诊场景近似合理，3 个 λ 替代 8 行表；若存在"无病因也发烧"的可能，加渗漏参数 λ₀。②p(T | F) 用 <strong>CLG</strong>：F 离散、T 连续，每种 F 取值配一个高斯（如 𝒩(36.6, σ₀²) 与 𝒩(38.5, σ₁²)），高斯细节引用第 7 章。</p>
+          <p>因子分解：P(Y₁)·P(Y₂)·P(Y₃)·P(F|Y₁,Y₂,Y₃)·p(T|F)。</p>
+          <p>代价声明：Noisy-Or 排除了"流感+肺炎并发格外高热"这类交互；CLG 假设读数噪声是高斯形——两者都是拿假设换参数的赌注。</p>
+        </div>
+      </details>
+    </div>
+
+    <!-- ============ 本章自测 ============ -->
+    <h2><span class="sec-no">✍️</span>本章自测</h2>
+    <p class="quiz-hint">点击选项判分，答错会给出原因。</p>
+
+    <div class="quiz-block" data-answer="c">
+      <div class="q-no">自测 1</div>
+      <div class="q-stem">节点 X 为二值，有 10 个二值父节点。完整表格 CPD 的自由参数数是多少？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 20</li>
+        <li data-opt="b">B. 100</li>
+        <li data-opt="c">C. 1024</li>
+        <li data-opt="d">D. 2048</li>
+      </ul>
+      <div class="quiz-explain">选 C。行数 = 2¹⁰ = 1024，X 二值时每行 1 个自由参数，共 1024。A 错在把指数当成乘法（2×10）；B 错在当成平方；D 错在多乘了 X 的取值数——每行两概率和为 1，要扣掉一个。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 2</div>
+      <div class="q-stem">树 CPD 的自由参数数由什么决定？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 内部节点（测试节点）的个数</li>
+        <li data-opt="b">B. 叶节点的个数 × 每个叶分布的自由参数数</li>
+        <li data-opt="c">C. 树的深度</li>
+        <li data-opt="d">D. 父节点个数 k 决定的 2ᵏ</li>
+      </ul>
+      <div class="quiz-explain">选 B。每个叶给出该上下文下的一个完整分布，参数集中在叶上。A 错：内部节点只是路由，不含概率；C 错：深度与参数无直接关系（一棵深而秃的树可能叶很少）；D 错：那正是树 CPD 要摆脱的完整表行数。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="c">
+      <div class="q-no">自测 3</div>
+      <div class="q-stem">Noisy-Or 中，Y₁ = 1、Y₂ = 1，λ₁ = 0.4、λ₂ = 0.5。P(x¹ | y₁=1, y₂=1) 等于多少？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 0.2</li>
+        <li data-opt="b">B. 0.7</li>
+        <li data-opt="c">C. 0.8</li>
+        <li data-opt="d">D. 0.9</li>
+      </ul>
+      <div class="quiz-explain">选 C。P(x⁰) = λ₁·λ₂ = 0.4×0.5 = 0.2，故 P(x¹) = 1 − 0.2 = 0.8。A 错在把 P(x⁰) 当成答案；B 错在只算 1−λ₁（漏掉第二条通道）；D 错在用 1−λ₁λ₂/2 之类无依据的拼凑——公式是失效概率连乘取补。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="d">
+      <div class="q-no">自测 4</div>
+      <div class="q-stem">关于上下文特定独立性（CSI），下列说法正确的是：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 它对所有父节点取值都成立，因此可以被 d-分离读出</li>
+        <li data-opt="b">B. 它只在马尔可夫网络中存在，贝叶斯网络没有</li>
+        <li data-opt="c">C. 它会增加 CPD 的参数数量</li>
+        <li data-opt="d">D. 它只在特定上下文（某些变量的特定赋值）下成立，标准 d-分离读不出它</li>
+      </ul>
+      <div class="quiz-explain">选 D。CSI 的定义里就带着上下文 C=c；d-分离只看图拓扑，看不到 CPD 内部"哪些行共享分布"。A 正好说反；B 错：CSI 是 CPD 层面的性质，与图有向无向无关；C 错：CSI 是参数压缩的来源（如树 CPD），不是负担。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 5</div>
+      <div class="q-stem">场景：父节点是连续的"学习时长"，子节点是二值的"是否通过考试"。本章哪个 CPD 形式最合适？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 条件线性高斯（CLG）</li>
+        <li data-opt="b">B. Logistic CPD（sigmoid）</li>
+        <li data-opt="c">C. Noisy-Or</li>
+        <li data-opt="d">D. 树 CPD</li>
+      </ul>
+      <div class="quiz-explain">选 B。父连续、子二值正是 Logistic CPD 的格子：k+1 个权重，σ(线性加权和) 给出概率。A 错在把组合记反——CLG 是父离散、子连续；C 错：Noisy-Or 处理多个二值病因，不适合连续父；D 错：连续变量无法做树的离散测试（除非先离散化，那就丢了信息）。</div>
+    </div>
+
+    <!-- ============ 三句话复述 ============ -->
+    <div class="retell">
+      <h3>🗣️ 用自己的话，三句话讲完本章</h3>
+      <p class="retell-sub">对着空气（或室友）说出这三句。说卡壳的那句，回去重读对应小节。</p>
+      <details>
+        <summary>句1：这章解决什么问题？——</summary>
+        <div class="retell-answer">参考答案：图结构定了之后，每个节点的表格 CPD 随父节点数指数爆炸（k 个二元父节点 → 2ᵏ 行），存不下也学不准。本章问：能否用更紧凑的参数化替换大表。</div>
+      </details>
+      <details>
+        <summary>句2：核心机制是什么？——</summary>
+        <div class="retell-answer">参考答案：观察 CPD 行与行之间的规律，每条规律形式化为一种假设、换一批参数——确定性 CPD（函数关系，0 参数）、树 CPD（上下文特定独立，参数=叶数）、Noisy-Or/ICI（各原因独立起作用，k 个参数）、Logistic 与 CLG（连续变量进门，线性形式）。</div>
+      </details>
+      <details>
+        <summary>句3：它和前后章怎么分工？——</summary>
+        <div class="retell-answer">参考答案：Ch3/4 管图的骨架，本章管骨架上每个节点的"内部装修"；CLG 只开了个头，高斯数学留给第 7 章、混合推理留给第 14 章；压缩后的少参数模型是第 17 章参数学习能成功的前提；利用 CSI 加速推理是第 9/10 章的增强方向。</div>
+      </details>
+    </div>
+
+    <!-- ============ 复习计划 ============ -->
+    <div class="review-plan">
+      <h3>🔁 间隔复习计划</h3>
+      <p>回忆本身比重读有效 10 倍。到点只做一件事：翻卡 + 重做标记题。</p>
+      <table>
+        <tr><th>时间点</th><th>复习内容</th><th>预计用时</th></tr>
+        <tr><td>第 1 天</td><td>概念卡 1–7 全部 + 回忆卡 5.1-1、5.2-1、5.3-1、5.4-1</td><td>10 分钟</td></tr>
+        <tr><td>第 3 天</td><td>概念卡 3、5、6（CSI / Noisy-Or / Logistic）+ 重做自测错题 + L2 第 2 题</td><td>8 分钟</td></tr>
+        <tr><td>第 7 天</td><td>三句话复述出声说一遍 + 回忆卡 5.2-2、5.3-2 + 重摁一遍手算例 3 的 8 行表</td><td>10 分钟</td></tr>
+        <tr><td>第 15 天</td><td>只做合上书挑战；六条全过则本章毕业，卡在哪条就重读对应小节</td><td>15 分钟</td></tr>
+      </table>
+    </div>
+
+    <!-- 合上书挑战 -->
+    <div class="final-challenge">
+      <h3>📕 合上书挑战</h3>
+      <p class="fc-sub">现在关掉这个页面（或遮住屏幕），拿一张纸，凭记忆完成以下任务。全部做完再回来核对——这是本章真正的毕业考试。</p>
+      <ol id="ch05-challenge-list">
+        <li><span class="fc-check"></span>写出表格 CPD 参数计数公式 dᵏ·(m−1)，并算出 10 个二值父节点时的行数与参数数</li>
+        <li><span class="fc-check"></span>画出 Job 例子的树 CPD，数出叶节点数，写出它揭示的两条 CSI 声明</li>
+        <li><span class="fc-check"></span>写出 Noisy-Or 公式，用 λ₁=0.2、λ₂=0.4、λ₃=0.6 手算出全部 8 行（含 P(f¹|1,1,1)=0.952）</li>
+        <li><span class="fc-check"></span>写出 sigmoid 定义，手摁 σ(−3)、σ(−1)、σ(0)、σ(1) 四个值（精确到小数点后两位）</li>
+        <li><span class="fc-check"></span>说出五种 CPD 形式各自的假设、参数数与适用场景，并指出 CLG 的高斯细节留给哪章</li>
+        <li><span class="fc-check"></span>回答本章的主线问题：在图结构不变的前提下，如何用更少的参数表示每个节点的条件分布？（一句话）</li>
+      </ol>
+    </div>
+
+    <div class="complete-zone">
+      <button class="btn-complete" id="ch05-btn-complete" onclick="markDone()">✓ 我已完成本章（含合上书挑战）</button>
+    </div>
+
+    <div class="chapter-nav">
+      <a href="chapter-04.html"><span class="nav-dir">← 上一章</span>第4章 马尔可夫网络</a>
+      <a href="chapter-06.html" class="next"><span class="nav-dir">下一章 →</span>第6章 基于模板的表示</a>
+    </div>
+
+  </div>
+</div>
+
+<footer class="footer">
+  <div class="wrap">第5章 局部概率模型 · PGM 互动讲义 · 基于 Koller &amp; Friedman (2009)</div>
+</footer>
+
+<script src="assets/mermaid.min.js"></script>
+<script>
+mermaid.initialize({
+  startOnLoad: true,
+  theme: "base",
+  themeVariables: {
+    primaryColor: "#e3edf7",
+    primaryBorderColor: "#1d5f9e",
+    primaryTextColor: "#1d5f9e",
+    lineColor: "#5c554b",
+    secondaryColor: "#fbeedd",
+    tertiaryColor: "#f5f1e8",
+    fontFamily: "-apple-system, PingFang SC, sans-serif",
+    fontSize: "14px"
+  },
+  flowchart: { curve: "linear", htmlLabels: false }
+});
+</script>
+<script>
+// 自测题逻辑
+document.querySelectorAll(".quiz-block").forEach(block => {
+  const answer = block.dataset.answer;
+  const explain = block.querySelector(".quiz-explain");
+  block.querySelectorAll(".quiz-opts li").forEach(li => {
+    li.addEventListener("click", () => {
+      const opts = block.querySelectorAll(".quiz-opts li");
+      opts.forEach(o => o.classList.add("disabled"));
+      if (li.dataset.opt === answer) {
+        li.classList.add("correct");
+      } else {
+        li.classList.add("wrong");
+        block.querySelector(`[data-opt="${answer}"]`).classList.add("correct");
+      }
+      explain.classList.add("show");
+    });
+  });
+});
+
+// 合上书清单打勾
+document.querySelectorAll("#ch05-challenge-list li").forEach(li => {
+  li.addEventListener("click", () => li.classList.toggle("checked"));
+});
+
+// 完成标记 → localStorage（第5章）
+const KEY = "pgm_progress_v1";
+function loadProgress() {
+  try { return JSON.parse(localStorage.getItem(KEY)) || {}; } catch (e) { return {}; }
+}
+const progress = loadProgress();
+const btn = document.getElementById("ch05-btn-complete");
+if (progress[5] && progress[5].done) {
+  btn.textContent = "✓ 已完成 · 再次点击重置";
+  btn.classList.add("done");
+}
+function markDone() {
+  const p = loadProgress();
+  if (p[5] && p[5].done) {
+    delete p[5];
+    btn.textContent = "✓ 我已完成本章（含合上书挑战）";
+    btn.classList.remove("done");
+  } else {
+    p[5] = { done: true, completedAt: Date.now(), reviewsDone: 0 };
+    btn.textContent = "✓ 已完成 · 复习提醒已开启";
+    btn.classList.add("done");
+  }
+  localStorage.setItem(KEY, JSON.stringify(p));
+}
+</script>
+
+</body>
+</html>

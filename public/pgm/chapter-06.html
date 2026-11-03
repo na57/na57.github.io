@@ -1,0 +1,843 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第6章 基于模板的表示 · PGM 互动讲义</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+<nav class="topbar">
+  <div class="topbar-inner">
+    <span class="brand"><a href="index.html" style="color:inherit">← 学习地图</a></span>
+    <span class="crumb">阶段一 · 表示 / 第6章</span>
+  </div>
+</nav>
+
+<div class="wrap">
+
+  <div class="lecture-head">
+    <span class="ch-label">CHAPTER 06 · 表示</span>
+    <h1>基于模板的表示</h1>
+    <p class="lead">同一套模型要复用到成百上千个对象上：我们定义的是"模型生成器"，而不是整张图。</p>
+  </div>
+
+  <!-- 本章定位 -->
+  <div class="position-bar">
+    <strong>本章在主线上的位置：</strong>单个 CPD 怎么写紧凑（Ch5）→ <u>同一份结构与参数怎么复制到成千上万个变量上（Ch6）</u> → 展开后的大网络怎么做推理（Ch15）、怎么做学习（Ch17）。<br>
+    第6章回答主线上的第三个问题：<strong>当变量个数本身不固定——随时间步、文档数、实体数增长——如何仍然紧凑地定义一个联合分布？</strong>
+    <div class="map-inline">
+      <span class="node">Ch5 局部概率模型（把单个 CPD 写紧凑）</span><span class="arrow">→</span>
+      <span class="node here">Ch6 基于模板的表示（把整张图写成可复制的模板）</span><span class="arrow">→</span>
+      <span class="node">Ch15 动态网络中的推理（在展开的 DBN 上利用重复结构）</span><span class="arrow">→</span>
+      <span class="node">Ch17 完全数据参数学习（参数共享让千步数据估一套参数）</span>
+    </div>
+  </div>
+
+  <!-- 学习目标 -->
+  <div class="objectives">
+    <h4>🎯 学完本章，合上书你应该能：</h4>
+    <ol>
+      <li>说出三种"变量数量不固定"的场景（时间、实例、对象与关系），并为每种场景配上对应的模板模型</li>
+      <li>写出 DBN 的展开公式，并对一个小型两变量 DBN 手算两个时间步的转移概率乘积</li>
+      <li>给定模板与规模，手算"共享参数"与"不共享参数"两种方案的参数个数，解释差距的来源</li>
+      <li>画出嵌套盘子图（学生–课程），写出它对 N 个学生、M 门课实例化后的联合分布因子分解</li>
+      <li>说清"共享结构"与"共享参数"的区别，并解释为什么学习可行性主要来自后者</li>
+      <li>解释"模板模型不是新的模型类"：展开后为什么第 3、4 章的结论与第 9–11 章的算法照常适用</li>
+    </ol>
+  </div>
+
+  <div class="lecture">
+
+    <!-- 推导主线 -->
+    <div class="figure">
+      <div class="mermaid">
+flowchart LR
+  A["变量数量不固定<br>时间 实例 对象关系"] --> B["定义模板<br>而非整张图"]
+  B --> C["实例化 展开<br>得到普通 BN"]
+  C --> D["参数共享<br>让学习可行"]
+  D --> E["代价：ground 网络巨大稠密<br>推理学习必须利用重复结构"]
+  classDef hot fill:#fbeedd,stroke:#c4651f,stroke-width:2.5px,color:#c4651f;
+  classDef danger fill:#fae9e7,stroke:#b03a2e,stroke-width:2.5px,color:#b03a2e;
+  class B hot;
+  class E danger;
+      </div>
+      <div class="caption">本章推导主线：每一步都在回答"为什么需要下一步"。终点（红色）是本章买下的账单——展开后的地面网络大到没法直接算，这笔账要到第 15、17 章去还。</div>
+    </div>
+
+    <!-- ============ 6.1 ============ -->
+    <h2><span class="sec-no">6.1</span>为什么固定变量集不够：三种重复</h2>
+
+    <p>第 3–5 章有一个从没说出口的假设：<strong>变量集合是固定的</strong>。我们手里有一张确定的变量清单 {X₁, …, Xₙ}，画一张固定的图，填一组固定的 CPD，完事。学生例子只有 5 个变量，画得清清楚楚。</p>
+
+    <p>但现实里大量场景根本不给你这张固定清单：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>场景</th><th>变量为什么不固定</th><th>重复的是什么</th><th>对应模板模型</th></tr>
+        <tr><td><strong>时序数据</strong>（语音、股价、传感器）</td><td>每多过一个时间步，就多出一套变量</td><td>同一个"时刻切片"沿<strong>时间</strong>复制</td><td>动态贝叶斯网络（6.2）</td></tr>
+        <tr><td><strong>独立样本</strong>（文档分类、批量化验）</td><td>每多来一个样本，就多出一套变量</td><td>同一个"样本内部结构"沿<strong>实例</strong>复制</td><td>盘子模型（6.3）</td></tr>
+        <tr><td><strong>关系数据</strong>（学校、社交网络、知识图谱）</td><td>实体和关系的数量随数据集变化</td><td>同一类<strong>对象与关系</strong>的局部结构复制</td><td>概率关系模型（6.4）</td></tr>
+      </table>
+    </div>
+
+    <p>三种场景的共同点是：<strong>结构在重复</strong>。1000 个时间步的传感器网络里，第 t 步和第 t+1 步之间的依赖关系，和第 500 步与第 501 步之间的一模一样；100 个学生的成绩模型里，每个学生的"智力 → 成绩"结构也完全相同。我们反复在画同一张小图，只是份数不同。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>既然重复的是同一张小图，就不要画 1000 次——<strong>定义一次"小图的模样"，再说清楚"复制多少份、按什么规则接起来"</strong>。这就是<span class="term">基于模板的表示</span>（Template-Based Representation）：我们定义的不是一个模型，而是一个<strong>模型生成器</strong>。给定具体的规模（T 个时间步、N 个学生），它能自动实例化出一张普通的大图。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>"变量多就画大一点的图呗"——不行。第一，变量个数往往<strong>事先未知</strong>（要处理多长的序列？多少个文档？），你没法为"无限长"画图；第二，就算有限，1000 个时间步 × 每步 10 个变量 = 一万个节点的图，人手画不出、也填不了那么多 CPD。模板解决的是<strong>定义层面</strong>的不可行，不只是画图层面的麻烦。</p>
+    </div>
+
+    <!-- 回忆卡片 6.1 -->
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 6.1-1</div>
+              <div class="q-text">三种"变量数量不固定"的场景分别沿什么维度重复？各对应哪个模板模型？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              时间维重复 → 动态贝叶斯网络（DBN）；实例维重复（i.i.d. 样本）→ 盘子模型；对象与关系维重复 → 概率关系模型（PRM）。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 6.1-2</div>
+              <div class="q-text">模板模型与前几章模型的根本区别是什么？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              前几章直接定义一个固定变量集上的图与分布；模板模型定义的是"模型生成器"——可复用的局部模板 + 复制规则，给定规模后才实例化出具体的图。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 6.2 ============ -->
+    <h2><span class="sec-no">6.2</span>动态贝叶斯网络：两个模板与展开</h2>
+
+    <p>先看时间维的重复。监测一个病人：每小时记录一次状态与体征，序列长度不定。我们需要的不是"第 1 小时的图、第 2 小时的图……"，而是<strong>描述"任意相邻两小时关系"的一张模板</strong>。</p>
+
+    <p><span class="term">动态贝叶斯网络</span>（Dynamic Bayesian Network, DBN）用<strong>两个模板</strong>定义整条时间链：</p>
+    <ol>
+      <li><strong>初始网络 B₀</strong>：定义 t = 0 时刻各变量的联合分布 P(𝒳⁽⁰⁾)，就是一张普通的小 BN；</li>
+      <li><strong>转移网络 B→</strong>：定义从任意时刻 t 到 t+1 的转移分布，也叫<span class="term">两片时间片贝叶斯网络</span>（2-TBN, Two-Time-slice Bayesian Network）：</li>
+    </ol>
+
+    <div class="formula">P(𝒳⁽ᵗ⁺¹⁾ | 𝒳⁽ᵗ⁾) = ∏<sub>i=1</sub><sup>n</sup> P(Xᵢ⁽ᵗ⁺¹⁾ | Pa(Xᵢ⁽ᵗ⁺¹⁾))</div>
+
+    <p>其中 Xᵢ⁽ᵗ⁺¹⁾ 的父节点可以是同一时刻的变量，也可以是前一时刻的变量。通常作<strong>一阶马尔可夫假设</strong>：父节点只落在 t 与 t+1 两个时间片内，不直接依赖更早的历史。</p>
+
+    <div class="figure">
+      <div class="mermaid">
+flowchart LR
+  subgraph B0["初始网络 B₀：t 等于 0"]
+    S0["S(0)"] --> A0["A(0)"]
+  end
+  subgraph BT["转移网络 B→：从 t 到 t+1"]
+    ST["S(t)"] --> SN["S(t+1)"]
+    SN --> AN["A(t+1)"]
+  end
+  classDef hot fill:#fbeedd,stroke:#c4651f,stroke-width:2.5px,color:#c4651f;
+  class ST,SN hot;
+      </div>
+      <div class="caption">图 6.1 一个 DBN 的两个模板。左：B₀ 只管 t=0 的先验。右：B→ 是"跨时间片"的模板——橙色节点是片间依赖（S(t)→S(t+1)），它定义一次，就对所有 t 生效。</div>
+    </div>
+
+    <h3>展开：模板如何变成普通的大网络</h3>
+    <p>给定时长 T，把 B→ 复制 T−1 份、首尾相接，就得到一个覆盖 0 到 T 时刻的<strong>普通贝叶斯网络</strong>。这个操作叫<span class="term">展开</span>（Unrolling），展开后的联合分布是：</p>
+
+    <div class="formula">P(𝒳⁽⁰:ᵀ⁾) = P(𝒳⁽⁰⁾) · ∏<sub>t=0</sub><sup>T−1</sup> P(𝒳⁽ᵗ⁺¹⁾ | 𝒳⁽ᵗ⁾) = P(𝒳⁽⁰⁾) · ∏<sub>t=0</sub><sup>T−1</sup> ∏<sub>i</sub> P(Xᵢ⁽ᵗ⁺¹⁾ | Pa(Xᵢ⁽ᵗ⁺¹⁾))</div>
+
+    <h3>例 1（手算）：HMM 展开 T 步，共享与不共享参数差多少</h3>
+    <p><span class="term">隐马尔可夫模型</span>（Hidden Markov Model, HMM）是最简单的 DBN：<strong>只有一个隐变量</strong> Z（取 K 个状态）<strong>和一个观测变量</strong> X（取 M 个符号）。展开后是一条"隐状态链 + 每步一个观测"的链式网络：</p>
+
+    <div class="figure">
+      <div class="mermaid">
+flowchart LR
+  Z1["Z(1)"] --> Z2["Z(2)"] --> Z3["Z(3)"] --> Z4["……"] --> ZT["Z(T)"]
+  Z1 --> X1["X(1)"]
+  Z2 --> X2["X(2)"]
+  Z3 --> X3["X(3)"]
+  ZT --> XT["X(T)"]
+  classDef hot fill:#fbeedd,stroke:#c4651f,stroke-width:2.5px,color:#c4651f;
+  class Z1,Z2,Z3,ZT hot;
+      </div>
+      <div class="caption">图 6.2 HMM 展开 T 步：橙色是隐状态链（一步马尔可夫转移），每个隐状态向下生成一个观测。它就是 DBN 取"每片只有 Z、X 两个变量"的特例。</div>
+    </div>
+
+    <p>其联合分布直接套用展开公式：</p>
+    <div class="formula">P(Z⁽¹:ᵀ⁾, X⁽¹:ᵀ⁾) = P(Z⁽¹⁾) · ∏<sub>t=1</sub><sup>T−1</sup> P(Z⁽ᵗ⁺¹⁾ | Z⁽ᵗ⁾) · ∏<sub>t=1</sub><sup>T</sup> P(X⁽ᵗ⁾ | Z⁽ᵗ⁾)</div>
+
+    <p>现在数参数（取 K = 3 个隐状态、M = 4 个观测符号、T = 1000 步）。三张表各自需要多少独立参数、要多少份：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>CPD</th><th>每张表的独立参数</th><th>共享参数（所有步用同一张表）</th><th>不共享（每步各填一张表）</th></tr>
+        <tr><td>初始 P(Z⁽¹⁾)</td><td>K−1 = 2</td><td>1 份 = 2</td><td>1 份 = 2</td></tr>
+        <tr><td>转移 P(Z⁽ᵗ⁺¹⁾|Z⁽ᵗ⁾)</td><td>K(K−1) = 6</td><td>1 份 = 6</td><td>(T−1) 份 = 999×6 = 5994</td></tr>
+        <tr><td>发射 P(X⁽ᵗ⁾|Z⁽ᵗ⁾)</td><td>K(M−1) = 9</td><td>1 份 = 9</td><td>T 份 = 1000×9 = 9000</td></tr>
+        <tr><td><strong>合计</strong></td><td>—</td><td><strong>17</strong></td><td><strong>14996</strong></td>
+      </tr>
+    </div>
+
+    <p><strong>17 对 14996，差了将近 900 倍。</strong>这不只是省纸的问题：不共享时，第 537 步的转移表只有穿越第 537 步的那部分数据能提供估计依据——平均每步一条序列只经过一个数据点，14996 个参数根本学不出来；共享后，<strong>全部 1000 步的数据合力估计同一张 6 参数转移表</strong>，学习立刻变得可行。这就是第 17 章参数学习在时序模型上的标准做法。</p>
+
+    <h3>共享结构 ≠ 共享参数：必须分清的两件事</h3>
+    <p>例 1 里其实发生了两层"复制"，把它们搅在一起是本章最常见的混乱，单独讲透：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th></th><th>共享结构（Shared Structure）</th><th>共享参数（Shared Parameters）</th></tr>
+        <tr><td><strong>含义</strong></td><td>每个副本的<strong>图的形状</strong>相同：同样几个变量、同样几条边、同样的父子关系</td><td>每个副本的 CPD 里填的是<strong>同一份数值</strong>：θ<sup>(1)</sup> = θ<sup>(2)</sup> = … = θ<sup>(T)</sup></td></tr>
+        <tr><td><strong>回答的问题</strong></td><td>"谁依赖谁"在各副本间一致</td><td>"依赖有多强"在各副本间一致</td></tr>
+        <tr><td><strong>没有它会怎样</strong></td><td>连"复制"都无从谈起，每步是一张随意的图</td><td>参数个数随副本数爆炸（14996），学习不可行</td></tr>
+        <tr><td><strong>类比</strong></td><td>同一户型图盖了 1000 套房</td><td>1000 套房连建材标号都相同</td></tr>
+      </table>
+    </div>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p><span class="term">参数共享</span>（Parameter Sharing）才是模板模型的学习引擎：它把"T 个时间步"从"T 倍参数"变成"T 倍数据"。共享结构只给你形状，共享参数才让你用 1000 步的数据估一套 17 个参数的模型。<strong>结构共享省的是描述长度，参数共享救的是统计可行性。</strong></p>
+    </div>
+
+    <h3>例 2（手算）：两变量 DBN 两个时间步的转移概率乘积</h3>
+    <p>一台设备的监控：S(t) ∈ {s⁰ 正常, s¹ 故障} 是隐状态，A(t) ∈ {a⁰ 不响, a¹ 响} 是报警器。模板如下——B₀：P(s⁰⁽⁰⁾) = 0.9；发射（每步相同）：P(a¹|s⁰) = 0.05，P(a¹|s¹) = 0.95；转移 B→：P(s⁰⁽ᵗ⁺¹⁾|s⁰⁽ᵗ⁾) = 0.98，P(s¹⁽ᵗ⁺¹⁾|s¹⁽ᵗ⁾) = 0.90（即故障后 10% 概率被修好）。</p>
+
+    <div class="figure">
+      <div class="mermaid">
+flowchart LR
+  subgraph T0["时间片 0"]
+    S0["S(0)"] --> A0["A(0)"]
+  end
+  subgraph T1["时间片 1"]
+    S1["S(1)"] --> A1["A(1)"]
+  end
+  subgraph T2["时间片 2"]
+    S2["S(2)"] --> A2["A(2)"]
+  end
+  S0 --> S1
+  S1 --> S2
+      </div>
+      <div class="caption">图 6.3 设备监控 DBN 展开 3 个时间片。片间只有 S→S 一条边（马尔可夫假设），片内 S→A 是发射边——所有片内、片间边分别共享同一份 CPD。</div>
+    </div>
+
+    <p><strong>目标</strong>：求一条具体历史 P(S(0)=s⁰, A(0)=a⁰, S(1)=s⁰, A(1)=a¹, S(2)=s¹, A(2)=a¹)。按展开公式逐项乘：</p>
+    <ol>
+      <li>初始片：P(S(0)=s⁰) = 0.9；P(A(0)=a⁰|S(0)=s⁰) = 1 − 0.05 = <strong>0.95</strong></li>
+      <li>第一步转移：P(S(1)=s⁰|S(0)=s⁰) = <strong>0.98</strong>；发射：P(A(1)=a¹|S(1)=s⁰) = <strong>0.05</strong>（正常却误报）</li>
+      <li>第二步转移：P(S(2)=s¹|S(1)=s⁰) = 1 − 0.98 = <strong>0.02</strong>（正常转故障）；发射：P(A(2)=a¹|S(2)=s¹) = <strong>0.95</strong></li>
+      <li>全部相乘：0.9 × 0.95 = 0.855；× 0.98 = 0.8379；× 0.05 = 0.041895；× 0.02 = 0.0008379；× 0.95 ≈ <strong>7.96 × 10⁻⁴</strong></li>
+    </ol>
+    <p>6 个因子，分别来自 B₀（2 个）和 B→ 的两份拷贝（各 2 个）——注意第 2、3 步用的是<strong>同一份</strong>转移表与发射表，这就是参数共享在公式里的样子。</p>
+
+    <p><strong>HMM 与更一般的 DBN</strong>：HMM 只是"每片一个隐变量 + 一个观测"的特例；DBN 允许每片有多个相互关联的隐变量与多个观测（比如同时跟踪位置、速度、油量）。若变量是连续的且转移与观测都是线性高斯的（X⁽ᵗ⁺¹⁾ = A·X⁽ᵗ⁾ + ε，ε ~ 𝒩(0, Q)），就得到<span class="term">线性动态系统</span>（Linear Dynamical System, LDS）——卡尔曼滤波正是它上面的精确推理。高斯 CPD 的细节见第 7 章，动态网络上的推理见第 15 章，本章只管"怎么表示"。</p>
+
+    <!-- 回忆卡片 6.2 -->
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 6.2-1</div>
+              <div class="q-text">DBN 由哪两个模板组成？写出展开后的联合分布公式。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              初始网络 B₀（t=0 的先验）+ 转移网络 B→（2-TBN，t→t+1 的转移）。P(𝒳⁽⁰:ᵀ⁾) = P(𝒳⁽⁰⁾)·∏<sub>t</sub> P(𝒳⁽ᵗ⁺¹⁾|𝒳⁽ᵗ⁾)。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 6.2-2</div>
+              <div class="q-text">共享结构和共享参数的区别是什么？为什么学习可行性主要来自后者？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              共享结构 = 各副本图形状相同；共享参数 = 各副本用同一份 CPD 数值。共享参数让参数数不随副本数增长（17 vs 14996），全部副本的数据合力估一套参数，学习才可行。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 6.3 ============ -->
+    <h2><span class="sec-no">6.3</span>盘子模型：复制的语法</h2>
+
+    <p>DBN 处理的是时间维的复制；换到"实例维"——N 份独立同分布的样本——复制规则更简单：没有片间依赖，每份样本内部结构相同、彼此独立。<span class="term">盘子模型</span>（Plate Model）为这种复制发明了一套图形语法：画一个矩形框（<strong>盘子</strong>），框里的变量对盘中每个实例各复制一份。</p>
+
+    <p>盘子里可以被复制的东西叫<span class="term">模板变量</span>（Template Variable）：带"下标槽位"的变量，如 X(n) 表示"第 n 个实例的 X"。槽位由盘子填充后，才变成真正的随机变量。盘子外的变量不复制，被所有实例共享（比如分类问题里的类标号先验）。</p>
+
+    <h3>例 3（手算）：学生–课程嵌套盘子的实例化与参数计数</h3>
+    <p>盘子可以<strong>嵌套</strong>，表达多层重复。大学成绩模型：每个学生 s 有一个智力 I(s)，每门课 c 有一个难度 D(c)，成绩 G(s, c) 同时依赖这两个——它是"学生"与"课程"两个盘子的交集，对每个 (s, c) 组合各复制一份：</p>
+
+    <div class="figure">
+      <div class="mermaid">
+flowchart TB
+  subgraph PS["盘子：学生 s（共 N 份）"]
+    I["I(s) 智力"]
+  end
+  subgraph PC["盘子：课程 c（共 M 份）"]
+    D["D(c) 难度"]
+  end
+  subgraph PX["交集盘子：每个学生对 (s, c)（共 N×M 份）"]
+    G["G(s, c) 成绩"]
+  end
+  I --> G
+  D --> G
+      </div>
+      <div class="caption">图 6.4 学生–课程盘子模型。G(s,c) 处在两个盘子的交集里（嵌套盘子的含义）：N 个学生 × M 门课，共 N×M 份成绩变量，每份的父结构都是同一个 I(s)、D(c)。</div>
+    </div>
+
+    <p><strong>第一步：写实例化后的联合分布。</strong>把盘子填满——N 个学生、M 门课，ground 网络（见 6.4）的联合分布是：</p>
+
+    <div class="formula">P = ∏<sub>s=1</sub><sup>N</sup> P(I(s)) · ∏<sub>c=1</sub><sup>M</sup> P(D(c)) · ∏<sub>s=1</sub><sup>N</sup> ∏<sub>c=1</sub><sup>M</sup> P(G(s,c) | I(s), D(c))</div>
+
+    <p>取最小的 N = 2、M = 2 完全展开（i₁=I(s₁)，d₁=D(c₁)，g₁₂=G(s₁,c₂)，……）：</p>
+
+    <div class="formula">P = P(i₁)·P(i₂)·P(d₁)·P(d₂) · P(g₁₁|i₁,d₁)·P(g₁₂|i₁,d₂)·P(g₂₁|i₂,d₁)·P(g₂₂|i₂,d₂)</div>
+
+    <div class="figure">
+      <div class="mermaid">
+flowchart TB
+  I1["I(s₁)"] --> G11["G(s₁,c₁)"]
+  I1 --> G12["G(s₁,c₂)"]
+  I2["I(s₂)"] --> G21["G(s₂,c₁)"]
+  I2 --> G22["G(s₂,c₂)"]
+  D1["D(c₁)"] --> G11
+  D1 --> G21
+  D2["D(c₂)"] --> G12
+  D2 --> G22
+  classDef hot fill:#fbeedd,stroke:#c4651f,stroke-width:2.5px,color:#c4651f;
+  class G11,G12,G21,G22 hot;
+      </div>
+      <div class="caption">图 6.5 N=2、M=2 实例化后的 ground 网络：4 个成绩变量（橙色），每个都是同一模板形状"一智力 + 一难度 → 一成绩"的拷贝——共享结构；若所有拷贝再用同一份 CPD 数值，就是参数共享。</div>
+    </div>
+
+    <p><strong>第二步：数参数。</strong>设 I、D 均为二值，G 取三值（A/B/C）。每张 CPD 的独立参数：P(I) 需 1 个，P(D) 需 1 个，P(G|I,D) 有 2×2 = 4 种父赋值、每种 3−1 = 2 个独立参数，共 8 个。</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>方案</th><th>P(I) 部分</th><th>P(D) 部分</th><th>P(G|I,D) 部分</th><th>总计（N=100, M=10）</th></tr>
+        <tr><td><strong>共享参数</strong></td><td>1 份 = 1</td><td>1 份 = 1</td><td>1 份 = 8</td><td><strong>10</strong></td></tr>
+        <tr><td><strong>不共享</strong></td><td>N 份 = 100</td><td>M 份 = 10</td><td>N×M 份 = 8000</td><td><strong>8110</strong></td>
+      </tr>
+    </div>
+
+    <p>又是同样的故事：<strong>10 对 8110</strong>。而且共享参数版本的参数个数与 N、M <strong>无关</strong>——学生从 100 涨到 100000，模型还是 10 个参数，只是数据更多了。这就是模板表示的威力：模型复杂度与数据规模解耦。</p>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>"盘子里所有复制出来的变量彼此独立"——错。复制只说明结构相同、CPD 共享；变量之间是否独立要看图。图 6.5 中 G(s₁,c₁) 与 G(s₁,c₂) 共享父节点 I(s₁)，不观测它时二者<strong>相关</strong>（同一个学生的两门成绩当然相关）。实例间的独立只在给定共享父节点后才成立。</p>
+    </div>
+
+    <!-- 回忆卡片 6.3 -->
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 6.3-1</div>
+              <div class="q-text">盘子语义：盘子内外的变量在实例化时分别怎么处理？什么是模板变量？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              盘内变量对盘中每个实例复制一份，盘外变量不复制、全体共享。模板变量是带槽位的变量（如 G(s,c)），槽位被盘子填充后才成为真正的随机变量。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 6.3-2</div>
+              <div class="q-text">写出学生–课程盘子模型实例化后的联合分布（N 学生、M 课程）。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              P = ∏<sub>s</sub> P(I(s)) · ∏<sub>c</sub> P(D(c)) · ∏<sub>s,c</sub> P(G(s,c)|I(s),D(c))。共享参数下总参数数与 N、M 无关。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 6.4 ============ -->
+    <h2><span class="sec-no">6.4</span>关系模型与地面化的代价</h2>
+
+    <p>盘子模型的复制规则是"数个数"：N 个学生、M 门课，各复制多少份。但真实数据里，对象之间的连接本身就是信息的一部分——哪个学生选了哪门课、哪位教授教哪门课，因数据集而异。<span class="term">概率关系模型</span>（Probabilistic Relational Model, PRM）把盘子推广到<strong>对象 + 关系</strong>的世界：</p>
+    <ul>
+      <li><strong>对象类</strong>：学生、课程、教授——每类有自己的属性（智力、难度、教学水平），相当于模板变量；</li>
+      <li><strong>关系</strong>：选修(s, c)、授课(t, c)——决定实例化时"谁的 CPD 里接上谁"；</li>
+      <li><span class="term">guard 条件</span>（Guard）：一条逻辑条件，指定依赖在什么关系下生效。例如："若学生 s 选修课程 c <strong>且</strong> c 由教授 t 授课，则 G(s,c) 依赖 D(c) 与 t 的教学水平"——依赖不是对所有对象对都成立，只对满足 guard 的组合成立。</li>
+    </ul>
+    <p>给定一个具体数据库（具体的学生、课程、选修记录），PRM 按 guard 自动实例化出一张普通 BN。同样的思想还有以"一阶逻辑公式 + 权重"为模板的<span class="term">马尔可夫逻辑网络</span>（Markov Logic Network, MLN）——每条逻辑公式是一个生成马尔可夫网络因子的模板，知道名字即可，细节超出本章。</p>
+
+    <h3>地面化：账单来了</h3>
+    <p>无论是展开（DBN）还是实例化（盘子、PRM），最终都要落地成一张具体的、普通的大网络——这个过程统称<span class="term">地面化</span>（Grounding），产物叫 <strong>ground 网络</strong>。它的规模有多吓人？</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>模板</th><th>规模设定</th><th>ground 网络的变量数</th></tr>
+        <tr><td>HMM（Z、X 两变量）</td><td>T = 10000 步语音</td><td>2 × 10000 = <strong>2 万</strong></td></tr>
+        <tr><td>学生–课程盘子</td><td>N = 1000 学生，M = 100 课程</td><td>1000 + 100 + 1000×100 = <strong>约 10.1 万</strong>（其中成绩变量 10 万个）</td></tr>
+        <tr><td>PRM（加教授与授课关系）</td><td>再加 200 教授、guard 连接</td><td>同上量级，且成绩节点有 3 个父节点，网络<strong>更稠密</strong></td></tr>
+      </table>
+    </div>
+
+    <p>10 万个节点的贝叶斯网络，直接在它上面跑第 9 章的朴素变量消去是完全不现实的。但注意 ground 网络不是一张"任意"的大网——它是同一模板的成千上万份拷贝，<strong>结构高度重复</strong>。第 15 章（动态网络中的推理）正是利用这种重复：不在整张展开图上推理，而是只维护"当前时间片"的接口状态，沿时间前向/后向传递消息（HMM 的前向–后向算法、卡尔曼滤波都是这个思想）。学习的可行性则来自 6.2 的参数共享——这两根救命稻草都直接长在"重复"上。</p>
+
+    <div class="box insight">
+      <span class="box-tag">✅ 本章最重要的收束</span>
+      <p><strong>模板模型不是一类新的概率模型，而是一种记法、一门语言。</strong>DBN、盘子、PRM 展开之后，就是第 3 章的普通贝叶斯网络（MLN 展开后是第 4 章的马尔可夫网络）。因此第 3、4 章的一切结论——因子分解、d-分离/图分离、I-等价——对 ground 网络逐字成立；第 9–11 章的推理算法在数学上全部适用，只是工程上必须利用重复结构才跑得动。本章没有引入新的语义，只引入了新的<strong>语法</strong>。</p>
+    </div>
+
+    <h3>本章小结：四种表示，一张对照表</h3>
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>模型</th><th>模板</th><th>重复维度</th><th>实例化方式</th></tr>
+        <tr><td>BN / MN（Ch3–5）</td><td>无</td><td>无</td><td>固定图</td></tr>
+        <tr><td>DBN</td><td>B₀ + B→（2-TBN）</td><td>时间</td><td>按时间步展开（Unrolling）</td></tr>
+        <tr><td>盘子模型</td><td>盘子 + 模板变量</td><td>实例（i.i.d.）</td><td>按实例数复制</td></tr>
+        <tr><td>PRM</td><td>对象类 + 关系 + guard</td><td>对象与关系</td><td>按数据库实例地面化</td></tr>
+      </table>
+    </div>
+
+    <!-- 回忆卡片 6.4 -->
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 6.4-1</div>
+              <div class="q-text">PRM 相对盘子模型多出了什么能力？guard 条件起什么作用？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              盘子只会"数个数"复制；PRM 能表达对象与关系（选修、授课），依赖可以经由关系连接。guard 是逻辑条件，指定依赖对哪些对象组合生效——只有满足 guard 的组合才在 ground 网络里连边。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 6.4-2</div>
+              <div class="q-text">为什么说"模板模型不是新的模型类"？ground 网络的代价是什么？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              展开/实例化后就是普通 BN（或 MN），第 3、4 章结论照旧成立——它只是记法。代价：ground 网络变量数爆炸且稠密（10 万级），推理与学习必须利用重复结构（Ch15、Ch17）。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 概念卡 ============ -->
+    <h2><span class="sec-no">🃏</span>概念卡：本章概念的一分钟画像</h2>
+    <p>翻面前先自问：这个概念我能用一句话讲清楚吗？</p>
+    <div class="flip-grid">
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 1</div>
+            <div class="q-text">模板变量（Template Variable）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">带下标槽位的变量（如 G(s,c)），槽位被盘子/关系填充后实例化为真正的随机变量。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">变量个数未知时，无法逐个枚举变量；模板变量用一份定义代表任意多份拷贝。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">Excel 里的公式 "=A1*B1"：往下一拖，每行各得一个真实单元格。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">把它当成一个普通变量——它本身不是随机变量，填了槽位才是。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">盘子模型与 PRM 的基本构件；第 17 章模板参数学习的主角。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 2</div>
+            <div class="q-text">动态贝叶斯网络（Dynamic Bayesian Network）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">用初始网络 B₀ 与转移网络 B→（2-TBN）定义任意长度时序模型的模板。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">序列长度不固定，无法预先画出整条链。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">电影的"相邻两帧规则"：只描述帧与帧怎么衔接，任意时长都适用。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为 DBN 是一种"会随时间变化的网络"——图本身静态，变化的是展开的长度。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">语音、追踪、传感器序列；HMM/LDS 是它的特例；第 15 章推理的主战场。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 3</div>
+            <div class="q-text">盘子模型（Plate Model）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">用矩形框圈出要按实例复制的模板变量，盘内复制、盘外共享的图形语法。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">N 份 i.i.d. 样本结构相同，逐个画 N 份既不现实也无法表达"N 未知"。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">复印机：放一页母版，出来 N 份，母版外的图章每份都共享。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为盘内复制出的变量彼此独立——共享父节点会让它们相关。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">文档分类、批量样本建模；贝叶斯统计文献的标准画法。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 4</div>
+            <div class="q-text">展开与地面化（Unrolling / Grounding）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">把模板按给定规模实例化成一张普通大网络的过程；产物称 ground 网络。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">连接"模板语言"与"普通 BN/MN 语义"：一切概率含义由展开后的网络定义。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">宏展开：写的是宏，跑的是展开后的完整代码。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为 ground 网络必须真的建出来才能推理——Ch15 恰恰靠"不建全图"取胜。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">理解模板语义的桥梁；Ch15 动态推理的反面教材（直接展开太贵）。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 5</div>
+            <div class="q-text">参数共享（Parameter Sharing）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">模板的所有副本使用同一份 CPD 数值（θ⁽¹⁾=θ⁽²⁾=…）；区别于只复制形状的共享结构。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">不共享时参数随副本数线性爆炸（17 vs 14996），数据摊到每个参数上只剩一点。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">全班共用一本习题答案：1000 次练习改进同一本，而不是各写各的。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">与"共享结构"混为一谈——结构相同是前提，参数相同才让学习可行。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">Ch17 模板模型的参数估计；卷积神经网络的权重共享也是同一思想。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 6</div>
+            <div class="q-text">概率关系模型（Probabilistic Relational Model）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">以对象类、属性、关系为模板，按 guard 条件在数据库实例上地面化出 BN 的语言。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">盘子只会数个数；PRM 让依赖沿着"选修、授课"这类关系边连接。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">数据库的 ER 图 + 概率：表结构是模板，填入行后才长出具体的图。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为关系是装饰——关系决定了 ground 网络的拓扑，换一批关系就换一张图。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">知识图谱、社交网络、推荐系统；MLN 是它的无向近亲。</span></div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- ============ 分层习题 ============ -->
+    <h2><span class="sec-no">📝</span>分层习题</h2>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>判断对错：<strong>模板模型是一类新的概率模型，表达能力超出了普通的 BN/MN。</strong>说明理由。</div>
+      <details>
+        <summary>提示</summary>
+        <p>追问：一个盘子模型实例化之后，得到的那个东西是什么？它的概率语义由谁定义？</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">错。模板模型展开/地面化之后就是普通的贝叶斯网络（MLN 展开后是马尔可夫网络），它的联合分布、独立性语义全部由展开后的普通图定义。因此第 3、4 章的结论（因子分解、d-分离、图分离）逐字适用，第 9–11 章的推理算法在数学上也照常适用。模板模型引入的是<strong>记法/语言</strong>层面的抽象——表达更紧凑、可随规模伸缩——而不是语义上的新模型类。说它"表达能力更强"是混淆了"描述的紧凑性"与"分布族的表达能力"。</div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>判断对错：<strong>DBN 中"参数共享"指的是每个时间步可以有各自不同的转移概率表，但表的结构（行列数）相同。</strong></div>
+      <details>
+        <summary>提示</summary>
+        <p>回忆例 1 的参数计数：17 与 14996 这两个数字各自对应哪种方案？</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">错。题干描述的是<strong>共享结构</strong>（各副本图形状、CPD 表形状相同）加<strong>不共享参数</strong>（各表数值不同）——这正是参数爆炸到 14996 的方案。参数共享恰恰相反：所有时间步使用<strong>同一份</strong>转移表数值，θ<sup>(1)</sup>=θ<sup>(2)</sup>=…=θ<sup>(T)</sup>，整个模型只有 17 个参数。两者必须分清：结构共享省描述长度，参数共享救统计可行性。</div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>一个 HMM：隐状态 K = 3 个取值，观测符号 M = 4 个取值，序列长度 T = 100。分别手算"共享参数"与"完全不共享参数"两种方案所需的独立参数总数（初始分布只有一份，转移分布有 T−1 处使用，发射分布有 T 处使用）。</div>
+      <details>
+        <summary>提示</summary>
+        <p>三张表各自的独立参数：初始 K−1；转移 K(K−1)；发射 K(M−1)。共享时每样一份；不共享时转移乘 (T−1)、发射乘 T。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p><strong>每张表的独立参数</strong>：初始 P(Z⁽¹⁾)：K−1 = 2；转移 P(Z⁽ᵗ⁺¹⁾|Z⁽ᵗ⁾)：3 个父状态 × 每行 (3−1) = K(K−1) = 6；发射 P(X⁽ᵗ⁾|Z⁽ᵗ⁾)：3 个状态 × 每行 (4−1) = K(M−1) = 9。</p>
+          <p><strong>共享参数</strong>：初始 1 份 × 2 + 转移 1 份 × 6 + 发射 1 份 × 9 = 2 + 6 + 9 = <strong>17</strong>。</p>
+          <p><strong>不共享参数</strong>：初始 1 份 × 2 = 2；转移 (T−1) 份 = 99 × 6 = 594；发射 T 份 = 100 × 9 = 900；合计 2 + 594 + 900 = <strong>1496</strong>。</p>
+          <p>结论：100 步的短序列下差距已是 17 对 1496（约 88 倍），且共享方案的参数数与 T 无关——T 涨到 10000，它仍是 17。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>学生–课程盘子模型（图 6.4）：I、D 二值，G 三值。现有 N = 50 个学生、M = 5 门课。手算共享参数与不共享参数两种方案的总参数数，并写出实例化联合分布的一般形式。</div>
+      <details>
+        <summary>提示</summary>
+        <p>CPD 表大小：P(I) 为 1，P(D) 为 1，P(G|I,D) 为 2×2 种父赋值 × (3−1) = 8。不共享时三者的份数分别是 N、M、N×M。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p><strong>实例化联合分布</strong>：P = ∏<sub>s=1</sub><sup>N</sup> P(I(s)) · ∏<sub>c=1</sub><sup>M</sup> P(D(c)) · ∏<sub>s,c</sub> P(G(s,c)|I(s),D(c))。</p>
+          <p><strong>共享参数</strong>：三种 CPD 各一份：1 + 1 + 8 = <strong>10</strong>（与 N、M 无关）。</p>
+          <p><strong>不共享参数</strong>：P(I) 共 N 份 = 50 × 1 = 50；P(D) 共 M 份 = 5 × 1 = 5；P(G|I,D) 共 N×M = 250 份 = 250 × 8 = 2000。合计 50 + 5 + 2000 = <strong>2055</strong>。</p>
+          <p>10 对 2055：参数共享把"50 个学生 250 条成绩记录"变成估计 10 个参数的全部数据；不共享时 250 条记录要估 2000 个成绩参数，每条记录摊 8 个参数，必然过拟合。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l3">L3 建模应用</span>评教系统：学校想预测"学生 s 在课程 c 上的成绩 G(s,c)"（三值）。已知：每门课 c 有难度 D(c)（二值）且由恰好一位教授 t 授课，教授有教学水平 Q(t)（二值）；每个学生 s 有智力 I(s)（二值）。全校 1000 个学生、80 门课、200 位教授。要求：①选择合适的模板语言并说明理由；②画出（或文字描述）模板结构，标明模板变量、盘子/关系与 guard；③写出实例化后的因子分解；④算出共享参数总数。</div>
+      <details>
+        <summary>提示</summary>
+        <p>先问：依赖"G 依赖 Q(t)"是对所有 (s,t) 成立，还是只对满足某种关系的组合成立？需要关系与 guard 时该选谁？参数数：三种先验各 1 个；G 有 2×2×2 = 8 种父赋值，每种 3−1 = 2 个独立参数。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p><strong>① 选 PRM</strong>。纯盘子模型只能按个数复制，而这里"成绩的父节点包括授课教授"依赖<strong>关系</strong>（授课 t→c、选修 s→c），需要 guard 条件来限定依赖生效的对象组合——这是 PRM 的领土。</p>
+          <p><strong>② 模板结构</strong>：三个对象类——学生（属性 I(s)）、课程（属性 D(c)）、教授（属性 Q(t)）；关系——授课 Teaches(t,c)、选修 Takes(s,c)。依赖：<span class="term">guard</span> 为"Takes(s,c) ∧ Teaches(t,c)"：满足该关系的 (s,c,t) 组合上，G(s,c) 的父节点为 I(s)、D(c)、Q(t)。</p>
+          <p><strong>③ 因子分解</strong>：P = ∏<sub>s</sub> P(I(s)) · ∏<sub>c</sub> P(D(c)) · ∏<sub>t</sub> P(Q(t)) · ∏<sub>(s,c)∈Takes</sub> P(G(s,c) | I(s), D(c), Q(t(c)))，其中 t(c) 是课程 c 的授课教授（由 Teaches 关系唯一确定）。</p>
+          <p><strong>④ 共享参数总数</strong>：P(I)、P(D)、P(Q) 各 1 个，共 3；P(G|I,D,Q)：2×2×2 = 8 种父赋值 × 2 = 16。合计 3 + 16 = <strong>19</strong> 个参数——与 1000 学生、80 门课、200 教授、8 万条选课记录的规模完全解耦。</p>
+        </div>
+      </details>
+    </div>
+
+    <!-- ============ 本章自测 ============ -->
+    <h2><span class="sec-no">✍️</span>本章自测</h2>
+    <p class="quiz-hint">点击选项判分，答错会给出原因。</p>
+
+    <div class="quiz-block" data-answer="c">
+      <div class="q-no">自测 1</div>
+      <div class="q-stem">要给一段长度不定的心率监测序列（隐状态：心脏工况；观测：每分钟的读数）建模，最合适的模板模型是：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 盘子模型：每分钟是盘子里的一份拷贝</li>
+        <li data-opt="b">B. 概率关系模型：每分钟是一个对象</li>
+        <li data-opt="c">C. 动态贝叶斯网络：B₀ 给初始状态，B→ 给相邻两分钟的转移</li>
+        <li data-opt="d">D. 普通贝叶斯网络：画一张固定 60 个节点的图</li>
+      </ul>
+      <div class="quiz-explain">选 C。序列沿时间维重复且有跨时刻依赖（当前工况依赖上一分钟），正是 DBN 的 B₀ + B→ 结构。A 错：盘子的拷贝彼此无片间依赖，表达不了"上一分钟影响下一分钟"。B 错：PRM 处理的是对象与关系，不是时间链。D 错：序列长度不固定，60 分钟后的数据无处安放，且无法共享参数。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 2</div>
+      <div class="q-stem">HMM：K = 3 个隐状态、M = 4 个观测符号、T = 1000 步，全程共享参数。独立参数总数是：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 12</li>
+        <li data-opt="b">B. 17</li>
+        <li data-opt="c">C. 14996</li>
+        <li data-opt="d">D. 随 T 增长，无法确定</li>
+      </ul>
+      <div class="quiz-explain">选 B。初始 K−1 = 2，转移 K(K−1) = 6，发射 K(M−1) = 9，共享时各一份：2+6+9 = 17。A 错在只算了状态数相关的量、漏掉观测表的 9。C 是不共享方案的数字（2 + 999×6 + 1000×9）。D 错：参数共享下参数数与 T 完全无关——这正是共享的意义。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="d">
+      <div class="q-no">自测 3</div>
+      <div class="q-stem">关于"共享结构"与"共享参数"，下列说法正确的是：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 两者是同一回事的两种叫法</li>
+        <li data-opt="b">B. 共享参数指各副本图形状相同，共享结构指 CPD 数值相同</li>
+        <li data-opt="c">C. 学习的可行性主要来自共享结构</li>
+        <li data-opt="d">D. 共享结构=副本形状相同；共享参数=副本用同一份 CPD 数值；学习可行性主要来自后者</li>
+      </ul>
+      <div class="quiz-explain">选 D。A 错：两者可独立成立（可以结构相同而参数各异）。B 把两个定义说反了。C 错：只共享结构时参数数仍随副本数爆炸（14996），每个参数分到的数据极少；是参数共享让全部副本的数据合力估计一套参数，学习才可行。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="a">
+      <div class="q-no">自测 4</div>
+      <div class="q-stem">下列关于模板模型与前几章关系的说法，正确的是：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 展开/实例化后就是普通 BN/MN，第 3、4 章结论与第 9–11 章算法照常适用</li>
+        <li data-opt="b">B. 模板模型的分布族严格大于 BN/MN，需要新的独立性理论</li>
+        <li data-opt="c">C. 参数共享是图结构本身的数学要求，不共享就不合法</li>
+        <li data-opt="d">D. 展开后的 ground 网络不再满足任何条件独立性</li>
+      </ul>
+      <div class="quiz-explain">选 A。模板只是记法，语义由 ground 网络定义，所以旧结论逐字成立。B 错：没有新的分布族，只是描述更紧凑。C 错：不共享参数完全合法，只是参数爆炸、学不出来。D 错：ground 网络是普通 BN，d-分离照常读出大量条件独立性（如给定隐状态链后观测的独立结构）。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="c">
+      <div class="q-no">自测 5</div>
+      <div class="q-stem">1000 个学生、100 门课的成绩数据库，盘子模型地面化后约 10 万个成绩变量。关于这个 ground 网络，下列说法正确的是：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 变量太多，说明模板模型失败了，应该放弃</li>
+        <li data-opt="b">B. ground 网络虽大但结构任意，推理只能硬算</li>
+        <li data-opt="c">C. ground 网络巨大但高度重复；推理（Ch15）与学习（Ch17）都必须利用这种重复结构，而不是直接在全图上硬算</li>
+        <li data-opt="d">D. 展开只需做一次，所以规模无所谓</li>
+      </ul>
+      <div class="quiz-explain">选 C。A 错：地面化是语义定义的方式，实际推理可以不全展开（如前向–后向算法只维护时间片接口）。B 错：结构不是任意的，而是同一模板的重复拷贝——这正是可利用之处。D 错："只展开一次"不改变 10 万节点上朴素变量消去的指数级代价。</div>
+    </div>
+
+    <!-- ============ 三句话复述 ============ -->
+    <div class="retell">
+      <h3>🗣️ 用自己的话，三句话讲完本章</h3>
+      <p class="retell-sub">对着空气（或室友）说出这三句。说卡壳的那句，回去重读对应小节。</p>
+      <details>
+        <summary>句1：这章解决什么问题？——</summary>
+        <div class="retell-answer">参考答案：前几章假设变量集合固定，但时序、批量样本、关系数据里变量数量随时间/数据规模增长，根本无法预先画出整张图；本章用"可复用模板 + 复制规则"来定义模型生成器，而不是定义单个模型。</div>
+      </details>
+      <details>
+        <summary>句2：核心机制是什么？——</summary>
+        <div class="retell-answer">参考答案：DBN 用初始网络 B₀ 和转移网络 B→ 沿时间展开；盘子模型用盘子和模板变量沿实例复制（可嵌套）；PRM 用对象类、关系和 guard 沿数据库实例地面化。三者都靠共享结构 + 共享参数把副本组织起来，展开后就是普通 BN/MN。</div>
+      </details>
+      <details>
+        <summary>句3：它和前后章怎么分工？——</summary>
+        <div class="retell-answer">参考答案：第 3–5 章管"固定图的表示"，本章管"可伸缩的表示"，表示阶段到此收齐；代价是 ground 网络巨大稠密——推理如何利用重复结构交给第 15 章，参数共享下的学习交给第 17 章。</div>
+      </details>
+    </div>
+
+    <!-- ============ 复习计划 ============ -->
+    <div class="review-plan">
+      <h3>🔁 间隔复习计划</h3>
+      <p>回忆本身比重读有效 10 倍。到点只做一件事：翻卡 + 重做标记题。</p>
+      <table>
+        <tr><th>时间点</th><th>复习内容</th><th>预计用时</th></tr>
+        <tr><td>第 1 天</td><td>概念卡 1–6 全部 + 回忆卡 6.2-1、6.2-2、6.3-2</td><td>10 分钟</td></tr>
+        <tr><td>第 3 天</td><td>概念卡 2、5（DBN、参数共享）+ 重做自测错题 + L2 两道参数计数题</td><td>8 分钟</td></tr>
+        <tr><td>第 7 天</td><td>三句话复述出声说一遍 + 回忆卡 6.1-1、6.4-1、6.4-2</td><td>10 分钟</td></tr>
+        <tr><td>第 15 天</td><td>只做合上书挑战；七条全过则本章毕业，卡在哪条就重读对应小节</td><td>15 分钟</td></tr>
+      </table>
+    </div>
+
+    <!-- 合上书挑战 -->
+    <div class="final-challenge">
+      <h3>📕 合上书挑战</h3>
+      <p class="fc-sub">现在关掉这个页面（或遮住屏幕），拿一张纸，凭记忆完成以下任务。全部做完再回来核对——这是本章真正的毕业考试。</p>
+      <ol id="ch06-challenge-list">
+        <li><span class="fc-check"></span>说出三种"变量数量不固定"的场景，并各配上对应的模板模型与重复维度</li>
+        <li><span class="fc-check"></span>写出 DBN 的展开公式，画出 HMM 展开 3 个时间步的图</li>
+        <li><span class="fc-check"></span>手算 K=3、M=4、T=1000 的 HMM 在共享与不共享参数下的参数数（17 vs 14996）</li>
+        <li><span class="fc-check"></span>画出学生–课程嵌套盘子图，写出 N=2、M=2 时实例化后的完整联合分布</li>
+        <li><span class="fc-check"></span>用一句话说清共享结构与共享参数的区别，并解释为什么学习可行性主要来自参数共享</li>
+        <li><span class="fc-check"></span>解释"模板模型不是新的模型类"：展开后什么照旧适用？代价（ground 网络）是什么？</li>
+        <li><span class="fc-check"></span>回答本章的主线问题：变量数量不固定时，如何仍然紧凑地定义一个联合分布？（一句话）</li>
+      </ol>
+    </div>
+
+    <div class="complete-zone">
+      <button class="btn-complete" id="ch06-btn-complete" onclick="markDone()">✓ 我已完成本章（含合上书挑战）</button>
+    </div>
+
+    <div class="chapter-nav">
+      <a href="chapter-05.html"><span class="nav-dir">← 上一章</span>第5章 局部概率模型</a>
+      <a href="chapter-07.html" class="next"><span class="nav-dir">下一章 →</span>第7章 高斯网络</a>
+    </div>
+
+  </div>
+</div>
+
+<footer class="footer">
+  <div class="wrap">第6章 基于模板的表示 · PGM 互动讲义 · 基于 Koller &amp; Friedman (2009)</div>
+</footer>
+
+<script src="assets/mermaid.min.js"></script>
+<script>
+mermaid.initialize({
+  startOnLoad: true,
+  theme: "base",
+  themeVariables: {
+    primaryColor: "#e3edf7",
+    primaryBorderColor: "#1d5f9e",
+    primaryTextColor: "#1d5f9e",
+    lineColor: "#5c554b",
+    secondaryColor: "#fbeedd",
+    tertiaryColor: "#f5f1e8",
+    fontFamily: "-apple-system, PingFang SC, sans-serif",
+    fontSize: "14px"
+  },
+  flowchart: { curve: "linear", htmlLabels: false }
+});
+</script>
+<script>
+// 自测题逻辑
+document.querySelectorAll(".quiz-block").forEach(block => {
+  const answer = block.dataset.answer;
+  const explain = block.querySelector(".quiz-explain");
+  block.querySelectorAll(".quiz-opts li").forEach(li => {
+    li.addEventListener("click", () => {
+      const opts = block.querySelectorAll(".quiz-opts li");
+      opts.forEach(o => o.classList.add("disabled"));
+      if (li.dataset.opt === answer) {
+        li.classList.add("correct");
+      } else {
+        li.classList.add("wrong");
+        block.querySelector(`[data-opt="${answer}"]`).classList.add("correct");
+      }
+      explain.classList.add("show");
+    });
+  });
+});
+
+// 合上书清单打勾
+document.querySelectorAll("#ch06-challenge-list li").forEach(li => {
+  li.addEventListener("click", () => li.classList.toggle("checked"));
+});
+
+// 完成标记 → localStorage（第6章）
+const KEY = "pgm_progress_v1";
+function loadProgress() {
+  try { return JSON.parse(localStorage.getItem(KEY)) || {}; } catch (e) { return {}; }
+}
+const progress = loadProgress();
+const btn = document.getElementById("ch06-btn-complete");
+if (progress[6] && progress[6].done) {
+  btn.textContent = "✓ 已完成 · 再次点击重置";
+  btn.classList.add("done");
+}
+function markDone() {
+  const p = loadProgress();
+  if (p[6] && p[6].done) {
+    delete p[6];
+    btn.textContent = "✓ 我已完成本章（含合上书挑战）";
+    btn.classList.remove("done");
+  } else {
+    p[6] = { done: true, completedAt: Date.now(), reviewsDone: 0 };
+    btn.textContent = "✓ 已完成 · 复习提醒已开启";
+    btn.classList.add("done");
+  }
+  localStorage.setItem(KEY, JSON.stringify(p));
+}
+</script>
+
+</body>
+</html>

@@ -1,0 +1,734 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第18章 结构学习 · PGM 互动讲义</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+<nav class="topbar">
+  <div class="topbar-inner">
+    <span class="brand"><a href="index.html" style="color:inherit">← 学习地图</a></span>
+    <span class="crumb">阶段三 · 学习 / 第18章</span>
+  </div>
+</nav>
+
+<div class="wrap">
+
+  <div class="lecture-head">
+    <span class="ch-label">CHAPTER 18 · 学习</span>
+    <h1>结构学习</h1>
+    <p class="lead">参数好求，是因为结构给了。那结构从哪来——给候选图打分，在图的空间里搜索。</p>
+  </div>
+
+  <!-- 本章定位 -->
+  <div class="position-bar">
+    <strong>本章在主线上的位置：</strong>第17章假设"结构已知"，于是参数学习退化为计数 → <u>本章撤掉这个假设：图本身也要从数据中学</u> → 第19章撤掉"数据完全"，第20章换到无向模型。<br>
+    第18章回答主线问题：<strong>没有人告诉你变量之间的依赖结构时，能不能让数据自己说出来？</strong>答案是"能，但有代价"——搜索空间超指数增长，而且 I-等价注定你只能学到等价类，不是唯一的图。
+    <div class="map-inline">
+      <span class="node">Ch17 完全数据参数学习（结构已知）</span><span class="arrow">→</span>
+      <span class="node here">Ch18 结构学习（评分 + 搜索）</span><span class="arrow">→</span>
+      <span class="node">Ch19 不完全数据（EM 迭代）</span><span class="arrow">→</span>
+      <span class="node">Ch20 马尔可夫网络学习</span><span class="arrow">→</span>
+      <span class="node">Ch21 因果推断（结构 → 因果的鸿沟）</span>
+    </div>
+  </div>
+
+  <!-- 学习目标 -->
+  <div class="objectives">
+    <h4>🎯 学完本章，合上书你应该能：</h4>
+    <ol>
+      <li>说出结构学习比参数学习难在哪两个层面：搜索空间超指数、I-等价导致方向不可辨识</li>
+      <li>写出 BIC 评分公式，解释惩罚项为什么必须存在（过拟合的具体机制）</li>
+      <li>对小型计数表手算两个候选结构的 BIC 并选出胜者</li>
+      <li>解释评分的可分解性如何让局部搜索成为可能，说出爬山算法的三种合法操作</li>
+      <li>说出为什么必须给结构学习加树宽/入度约束（学出的模型要能做推理）</li>
+      <li>描述 PC 算法的三个步骤，并解释为什么它的输出只能是 PDAG 而非 DAG</li>
+    </ol>
+  </div>
+
+  <div class="lecture">
+
+    <!-- 推导主线 -->
+    <div class="figure">
+      <div class="mermaid">
+flowchart LR
+  A["结构未知<br>只有数据"] --> B["候选图超指数多<br>无法穷举"]
+  B --> C["评分函数：<br>似然 − 复杂度惩罚"]
+  C --> D["评分可分解<br>局部操作只重算一族"]
+  D --> E["爬山搜索<br>加边/删边/反转边"]
+  E --> F["X→Y 与 Y→X 似然相同<br>I-等价不可区分"]
+  F --> G["代价：只能学到等价类 PDAG<br>小样本时基本靠先验"]
+  classDef hot fill:#fbeedd,stroke:#c4651f,stroke-width:2.5px,color:#c4651f;
+  classDef danger fill:#fae9e7,stroke:#b03a2e,stroke-width:2.5px,color:#b03a2e;
+  class C hot;
+  class G danger;
+      </div>
+      <div class="caption">本章推导主线：评分函数（橙色）是全场主角——它同时解决"哪个结构好"和"怎么高效搜"。终点（红色）是结构学习的固有天花板：观测数据对 I-等价结构一视同仁。</div>
+    </div>
+
+    <!-- ============ 18.1 ============ -->
+    <h2><span class="sec-no">18.1</span>结构学习难在哪：超指数空间 + I-等价</h2>
+
+    <p>第17章我们假设图结构 𝒢 已知，学习只是"填数字"。本章问一个更深的问题：<strong>如果没人告诉你图长什么样呢？</strong>这正是现实——基因调控网络没人画好给你，症状之间的因果没人排好序。</p>
+
+    <h3>第一道难关：搜索空间超指数增长</h3>
+    <p>n 个节点上可能的 DAG 有多少个？</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>n（节点数）</th><th>2</th><th>3</th><th>4</th><th>5</th><th>10</th></tr>
+        <tr><td>DAG 数量</td><td>3</td><td>25</td><td>543</td><td>29,281</td><td>≈ 4.2 × 10¹⁸</td></tr>
+      </table>
+    </div>
+
+    <p>这不是指数，是<span class="term">超指数</span>（Super-exponential）增长——比 2ⁿ 快得多。10 个变量就有 4.2 亿亿个候选图，穷举连门都没有。<strong>结构学习本质上是一个离散组合优化问题</strong>，而且被证明是 NP-hard 的。</p>
+
+    <h3>第二道难关：I-等价——数据天生分不清方向</h3>
+    <p>更微妙的困难：即使你有无穷多数据、无穷算力，有些结构之间<strong>永远无法区分</strong>。回忆第3章的<span class="term">I-等价</span>（I-Equivalence）：两张图若编码完全相同的独立性集合，就叫 I-等价。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>对两个变量 X、Y：X→Y 和 Y→X 编码的独立性集合完全相同（都是"无独立性"），它们可以用不同的 CPD 参数化<strong>同一个联合分布</strong>。既然如此，任何数据集给这两张图的似然都一样——数据对它们一视同仁。所以结构学习的输出只能是<strong>等价类</strong>（表示为 PDAG：部分有向无环图），只有 V-结构（X→Z←Y 这类）的方向能被数据锁定，因为它们携带不同的独立性。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>"数据够多就能学出因果方向"——错。方向辨识需要的是 V-结构、干预实验或时间顺序，不是样本量。X→Y 与 Y→X 在任何样本量下似然完全相同（18.2 节会当场算给你看）。这是"相关 ≠ 因果"在算法层面的精确表述，也是第21章存在的理由。</p>
+    </div>
+
+    <!-- 回忆卡片 18.1 -->
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 18.1-1</div>
+              <div class="q-text">结构学习的两道难关分别是什么？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              ① 搜索空间超指数（10 节点 ≈ 4.2×10¹⁸ 个 DAG），穷举不可能；② I-等价：X→Y 与 Y→X 编码相同独立性，数据无法区分方向，只能学到等价类。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 18.1-2</div>
+              <div class="q-text">哪类子结构的方向可以被数据锁定？为什么？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              V-结构（X→Z←Y，且 X、Y 不相邻）。它携带"X ⊥ Y 无条件、给定 Z 后相关"的独特独立性，与其他定向编码的独立性不同，所以在数据中有可检验的指纹。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 18.2 ============ -->
+    <h2><span class="sec-no">18.2</span>评分函数：似然必须减去惩罚</h2>
+
+    <p>既然不能穷举，至少得能"比较"：给任意一张候选图 𝒢 打一个分数 Score(𝒢 : D)，分数越高越好。最天真的候选是<strong>似然</strong>——用第17章的 MLE 填好参数，算 log P(D | 𝒢)。但它有一个致命缺陷：</p>
+
+    <h3>过拟合：加边永远不会降低似然</h3>
+    <p>给任何节点加一个父节点，CPD 就多了一张按新配置细分的表——模型自由度变大，拟合数据只会更好或持平。<strong>推到极限：让每个节点以所有其他节点为父节点的"饱和模型"，其似然就是经验分布本身，全场最高。</strong>但它是零泛化的死记硬背：参数比数据点还多，新数据一来立刻崩盘。</p>
+
+    <div class="box insight">
+      <span class="box-tag">✅ 核心机制</span>
+      <p>似然只奖励"拟合得好"，从不惩罚"模型复杂"。结构学习需要的评分必须自带<span class="term">奥卡姆剃刀</span>：拟合收益必须超过复杂度代价，一条边才配存在。</p>
+    </div>
+
+    <h3>BIC 评分：拟合 − 复杂度</h3>
+    <p>最常用的<span class="term">BIC 评分</span>（Bayesian Information Criterion）：</p>
+
+    <div class="formula">Score<sub>BIC</sub>(𝒢 : D) = ℓ(θ̂<sub>𝒢</sub> : D) − <span class="frac"><span class="num-part">k</span><span class="den-part">2</span></span> · ln M</div>
+
+    <p>其中 ℓ 是该结构下用 MLE 参数达到的对数似然，k 是自由参数总数（所有 CPD 的独立条目数），M 是样本量。第二项就是惩罚：<strong>每个自由参数收半条 ln M 的"税"</strong>。样本越多税越贵，但似然项随 M 线性增长而惩罚只随 ln M 增长——数据足够时真结构总会胜出；数据少时，惩罚自动把模型压简单。这正体现了"小数据信简单、大数据容复杂"的自动权衡。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 一句话记住 MDL 视角</span>
+      <p>BIC 与<span class="term">最小描述长度</span>（Minimum Description Length, MDL）同源：最好的结构 = "描述模型所需的比特 + 用模型描述数据所需的比特" 最小的那个。复杂模型自身描述就贵，天然被罚。</p>
+    </div>
+
+    <h3>例 1：完整手算——16 个样本，两个结构对决</h3>
+    <p>两个二元变量 X、Y，M = 16 个样本的计数：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th></th><th>Y=0</th><th>Y=1</th><th>行合计</th></tr>
+        <tr><td>X=0</td><td>7</td><td>1</td><td>8</td></tr>
+        <tr><td>X=1</td><td>1</td><td>7</td><td>8</td></tr>
+      </table>
+    </div>
+
+    <p><strong>候选 G₀（无边，X ⊥ Y）</strong>：MLE 为 P(X=0) = P(Y=0) = 8/16 = 0.5，P(X=1) = P(Y=1) = 0.5。每个样本的似然 = 0.5 × 0.5 = 0.25：</p>
+    <div class="formula">ℓ₀ = 16 × ln 0.25 ≈ 16 × (−1.386) = <strong>−22.18</strong>，k = 2（X 一个参数 + Y 一个参数）</div>
+    <div class="formula">BIC₀ = −22.18 − <span class="frac"><span class="num-part">2</span><span class="den-part">2</span></span> ln 16 ≈ −22.18 − 2.77 = <strong>−24.95</strong></div>
+
+    <p><strong>候选 G₁（X→Y）</strong>：P(X=0) = P(X=1) = 0.5；条件表 P(Y=0|X=0) = 7/8 = 0.875，P(Y=1|X=0) = 1/8 = 0.125，P(Y=0|X=1) = 0.125，P(Y=1|X=1) = 0.875。14 个样本走 0.875、2 个走 0.125，且每个样本再乘 P(X) = 0.5：</p>
+    <div class="formula">ℓ₁ = 16 ln 0.5 + 14 ln 0.875 + 2 ln 0.125 ≈ −11.09 − 1.87 − 4.16 = <strong>−17.12</strong></div>
+    <div class="formula">BIC₁ = −17.12 − <span class="frac"><span class="num-part">3</span><span class="den-part">2</span></span> ln 16 ≈ −17.12 − 4.16 = <strong>−21.28</strong></div>
+
+    <p>判决：<strong>BIC₁ (−21.28) &gt; BIC₀ (−24.95)，边 X→Y 成立</strong>。似然提升了 5.06，代价只有 1.39 的惩罚——这笔交易划算。注意惩罚项在干什么：它替我们问"这 5.06 的提升，是真信号还是 16 个样本里的运气？"答案是真信号。</p>
+
+    <h3>当场演示 I-等价</h3>
+    <p>再算 <strong>Y→X</strong>：P(Y=0) = 8/16 = 0.5，P(X=0|Y=0) = 7/8 = 0.875……完全对称的计数表给出 <strong>完全相同的 ℓ = −17.12</strong>，k 也相同，BIC 相同。<strong>数据宣布：X→Y 与 Y→X 打平，永远打平。</strong>这就是 I-等价在评分函数上的投影——评分再高也只能选出等价类。</p>
+
+    <!-- 回忆卡片 18.2 -->
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 18.2-1</div>
+              <div class="q-text">写出 BIC 评分公式并解释每一项。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              Score = ℓ(θ̂:D) − (k/2)·ln M。ℓ = MLE 下对数似然（拟合项）；k = 自由参数数，(k/2)ln M = 复杂度惩罚，每个参数收半条 ln M 的税。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 18.2-2</div>
+              <div class="q-text">为什么"加边永不降低似然"意味着纯似然不能当评分？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              加边增加自由度，拟合只会变好，饱和模型（经验分布）似然最高但零泛化。纯似然没有复杂度概念，必然选出最复杂的图——必须加惩罚项才有结构选择能力。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 18.3 ============ -->
+    <h2><span class="sec-no">18.3</span>搜索：可分解性让局部贪婪成为可能</h2>
+
+    <p>评分有了，但 4.2×10¹⁸ 个候选怎么搜？救星是 BN 评分的<span class="term">可分解性</span>（Decomposability）——和第17章似然分解同源：</p>
+
+    <div class="formula">Score(𝒢 : D) = ∑<sub>i=1</sub><sup>n</sup> FamScore(Xᵢ, Pa(Xᵢ) : D)</div>
+
+    <p>总分 = 每个节点（连同其父节点集）的局部得分之和。<strong>这意味着：对图做一次局部改动（加/删/反转一条边），只有一两个"族"的分数变化，其余 n−2 项原封不动。</strong>不用重算全图，只需缓存每个 (节点, 父节点集) 组合的局部分——搜索从"全局重估"变成"局部增量更新"。</p>
+
+    <h3>爬山搜索（Hill Climbing）</h3>
+    <ol>
+      <li>从初始图开始（常用空图）；</li>
+      <li>每轮考察所有合法操作：<strong>加边、删边、反转边</strong>（保持无环）；</li>
+      <li>执行评分提升最大的那个操作；</li>
+      <li>没有任何操作能提升时停止——到达局部最优。</li>
+    </ol>
+
+    <p>变体：给定变量拓扑序的 <strong>K2 算法</strong>（每个节点只向前面的节点找父节点，搜索空间大幅收缩）；多次随机重启缓解局部最优。实践中 n ≤ 100 时爬山 + 缓存 + 重启相当好用。</p>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 局部最优是常态</span>
+      <p>爬山只看一步之内的提升，会卡在局部最优。更糟的是"方向陷阱"：先加上了 A→B，后来 B→A 才是对的，但反转操作未必能一步爬出。多重启、禁忌搜索是标准对策。</p>
+    </div>
+
+    <h3>为什么必须加约束：树宽与入度上限</h3>
+    <p>还有一个工程现实：<strong>学出来的模型是要拿去做推理的</strong>。第9–10章说过，精确推理的复杂度随图的<span class="term">树宽</span>（Treewidth）指数增长。如果结构学习不加约束，评分函数可能选出一张推理根本跑不动的稠密图——学得再准也用不了。所以实践中必须加：</p>
+    <ul>
+      <li><strong>最大入度约束</strong>：每个节点父节点数 ≤ d（同时控制 CPD 参数量 2^d 的爆炸）；</li>
+      <li><strong>树宽约束</strong>：限制候选图的树宽（如 ≤ 4），保证学出的模型推理可行。可惜"树宽受限的结构学习"本身也是 NP-hard，通常用启发式近似执行。</li>
+    </ul>
+
+    <!-- 回忆卡片 18.3 -->
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 18.3-1</div>
+              <div class="q-text">评分可分解性是什么？它给搜索带来什么好处？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              Score = Σᵢ FamScore(Xᵢ, Pa(Xᵢ))。好处：局部改动只影响一两个族，增量重算即可，局部贪婪搜索（爬山）因此可行。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 18.3-2</div>
+              <div class="q-text">爬山的三种合法操作？为什么必须加入度/树宽约束？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              加边、删边、反转边（保持无环）。约束原因：学出的模型要做推理，树宽大→精确推理指数级；入度大→CPD 参数 2^d 爆炸。不加约束会学到"评高分但用不了"的图。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 18.4 ============ -->
+    <h2><span class="sec-no">18.4</span>PC 算法：用独立性检验代替搜索</h2>
+
+    <p>评分搜索的哲学是"比较谁拟合得好"。另一条路线是<span class="term">约束方法</span>（Constraint-Based）：不比较模型，直接问数据"<strong>哪些条件独立性成立？</strong>"，用答案反推图结构。代表是 <span class="term">PC 算法</span>：</p>
+
+    <ol>
+      <li><strong>学骨架</strong>：从完全无向图开始。对每对节点 (X, Y)，从小到大枚举条件集 S，做条件独立性检验 X ⊥ Y | S；只要找到某个 S 使独立性成立，就删边并记录分离集 S。</li>
+      <li><strong>定向 V-结构</strong>：对每对不相邻但有公共邻居 Z 的 X、Y——若 Z <strong>不在</strong>它们的分离集里，说明"给定 Z 后 X、Y 反而相关"，正是 V-结构的指纹，定向为 X→Z←Y。</li>
+      <li><strong>传播方向</strong>：用约束规则（避免成环、避免新 V-结构）尽可能多地确定剩余边的方向。定不了的就留作无向边。</li>
+    </ol>
+
+    <p>输出是 <span class="term">PDAG</span>（Partially Directed Acyclic Graph）：有向边是数据能锁定的方向，无向边是 I-等价中不可辨识的部分——<strong>PC 算法诚实地承认自己的认识论极限</strong>。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 一个现实：小样本时结构学习基本靠先验</span>
+      <p>两条路线都怕小样本。评分路线：样本少时惩罚项主导，倾向删光所有边；约束路线：条件独立性检验在小样本下功效极低，"检验不出相关"会被误判为"独立"，漏掉真边。结论：<strong>数据少时，结构学习的答案主要由先验决定</strong>——比如稀疏偏好 P(𝒢) ∝ α<sup>|edges|</sup>（α &lt; 1，边越多先验越低），或领域专家指定的禁边/必边。这不是缺陷，是诚实：结构本来就是比参数强得多的断言，它需要相应的证据强度。</p>
+    </div>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th></th><th>评分搜索（爬山/K2）</th><th>约束方法（PC）</th></tr>
+        <tr><td>核心操作</td><td>比较候选图得分</td><td>做条件独立性检验</td></tr>
+        <tr><td>输出</td><td>一个 DAG（等价类代表）</td><td>PDAG（诚实保留不确定方向）</td></tr>
+        <tr><td>小样本软肋</td><td>惩罚主导 → 过度稀疏</td><td>检验功效低 → 假独立、漏边</td></tr>
+        <tr><td>计算</td><td>缓存局部分后较快</td><td>快，但检验次数随条件集爆炸</td></tr>
+      </table>
+    </div>
+
+    <!-- 回忆卡片 18.4 -->
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 18.4-1</div>
+              <div class="q-text">PC 算法的三个步骤？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              ① 骨架：CI 检验找到分离集则删边；② 定向 V-结构：公共邻居不在分离集 → X→Z←Y；③ 传播方向：避免成环与新 V-结构，剩下留无向，输出 PDAG。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 18.4-2</div>
+              <div class="q-text">为什么小样本下"检验不出相关"不等于"独立"？后果是什么？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              小样本下检验功效低，真相关也可能不显著；PC 会误判为独立并删边。后果：漏真边、方向不定——结构学习在小数据时答案主要由稀疏先验决定。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 概念卡 ============ -->
+    <h2><span class="sec-no">🃏</span>概念卡：本章概念的一分钟画像</h2>
+    <p>翻面前先自问：这个概念我能用一句话讲清楚吗？</p>
+    <div class="flip-grid">
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 1</div>
+            <div class="q-text">超指数搜索空间（Super-exponential Search Space）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">n 节点 DAG 数增长快于指数：n=10 时 ≈ 4.2×10¹⁸，穷举不可能。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">它是被绕开的对象：逼出"评分 + 局部搜索"范式。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">在比宇宙原子还多的地图上找宝藏，只能靠指南针（评分）爬山，不能走遍。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为加大算力能硬解——NP-hard 且超指数，算力毫无胜算。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">理解一切结构学习算法为何都是启发式的前提。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 2</div>
+            <div class="q-text">BIC 评分（Bayesian Information Criterion）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">Score = ℓ(θ̂:D) − (k/2)·ln M：拟合项减复杂度惩罚。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">给"加不加这条边"一个自动权衡拟合与复杂度的裁判。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">每个参数收半条 ln M 的税：边要交得起税才配存在。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为惩罚项是凑的——它与 MDL、贝叶斯边际似然的渐近形式同源。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">评分搜索的默认裁判；小样本自动偏好稀疏结构。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 3</div>
+            <div class="q-text">过拟合与惩罚项（Overfitting / Penalty）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">加边永不降低似然；饱和模型似然最高但零泛化。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">它解释评分函数为什么必须含复杂度项。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">背书能拿满分，但不会做题；参数比数据多 = 背书。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为"似然高 = 模型好"——训练似然只反映记忆，不反映泛化。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">一切模型选择场景的共同敌人，不只是结构学习。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 4</div>
+            <div class="q-text">可分解性（Decomposability）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">Score(𝒢:D) = Σᵢ FamScore(Xᵢ, Pa(Xᵢ):D)，总分是族分之和。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">让局部改动只需增量重算，爬山搜索因此高效可行。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">改一扇窗只需重算这间房的得分，整栋楼不动。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为所有模型都有——无向模型因 logZ 不可分解（Ch20）。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">一切评分搜索算法的效率基石；与 Ch17 似然分解同源。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 5</div>
+            <div class="q-text">I-等价与 PDAG（I-Equivalence / PDAG）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">编码相同独立性集合的 DAG 互为 I-等价；PDAG 用无向边表示不可辨识方向。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">诚实表达"观测数据到底能学到什么"。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">X→Y 与 Y→X 是同一分布的两套说辞，数据分不清谁在念稿。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为数据量大就能定方向——只有 V-结构/干预/时间信息能定。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">解释结构学习输出、通往因果推断（Ch21）的桥。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 6</div>
+            <div class="q-text">树宽约束（Treewidth Constraint）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">限制候选结构的树宽/入度上限，保证学出的图推理可行。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">防止评分选出"拟合好但推理跑不动"的稠密图。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">买车不能只看速度，还要看你的路能不能开。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为约束只为省参数——它首先是推理复杂度的闸门。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">学出的模型要做推理/决策的一切工程场景。</span></div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- ============ 分层习题 ============ -->
+    <h2><span class="sec-no">📝</span>分层习题</h2>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>判断对错：<strong>样本量足够大时，结构学习可以确定所有边的方向。</strong>说明理由。</div>
+      <details>
+        <summary>提示</summary>
+        <p>想想 X→Y 与 Y→X 在大样本下的似然关系；方向辨识靠什么信息？</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">错。I-等价是样本量无法克服的：X→Y 与 Y→X 参数化同一个联合分布族，任何样本量下似然完全相同。大样本只能让"哪些边存在、哪些是 V-结构"判断更准；方向辨识需要的是 V-结构指纹、干预实验或时间/领域信息，不是更多观测数据。</div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>判断对错：<strong>BIC 的惩罚项随样本量 M 增长，所以数据越多越倾向选简单模型。</strong>说明理由。</div>
+      <details>
+        <summary>提示</summary>
+        <p>比较似然项与惩罚项各自随 M 的增长速度。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">错。似然项 ℓ 随 M <strong>线性</strong>增长（每样本贡献一个 log 因子），惩罚项只随 <strong>ln M</strong> 增长。数据越多，真实信号带来的似然差越大、相对惩罚越微不足道，BIC 越敢选复杂结构。数据越少惩罚才越主导、越倾向简单模型——方向恰好相反。</div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>沿用例 1 的 16 样本计数表（(0,0)=7, (0,1)=1, (1,0)=1, (1,1)=7）。手算：① G₀（无边）与 G₁（X→Y）的 BIC；② 解释胜者及惩罚项的作用。</div>
+      <details>
+        <summary>提示</summary>
+        <p>ℓ₀ = 16 ln 0.25；ℓ₁ = 16 ln 0.5 + 14 ln 0.875 + 2 ln 0.125；惩罚 = (k/2) ln 16，k₀=2，k₁=3。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p>① ℓ₀ = 16 × (−1.386) ≈ −22.18，BIC₀ = −22.18 − (2/2)×2.773 ≈ <strong>−24.95</strong>。</p>
+          <p>ℓ₁ = −11.09 − 1.87 − 4.16 ≈ −17.12，BIC₁ = −17.12 − (3/2)×2.773 ≈ <strong>−21.28</strong>。</p>
+          <p>② G₁ 胜出（−21.28 &gt; −24.95）：边带来的似然提升 5.06 远超新增一个参数的惩罚 1.39，判定为真信号而非噪声。若计数更平（如 (4,4,4,4)），ℓ 提升趋近 0，惩罚使无边模型胜出——惩罚项正是"边存在的证据门槛"。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>在 G₁（X→Y）基础上考虑 G₂：再加一条 Z→Y（Z 是与 Y 无关的二元变量）。定性分析：ℓ 大约变化多少？k 变化多少？BIC 会怎么判？</div>
+      <details>
+        <summary>提示</summary>
+        <p>Z 与 Y 无关时，新 CPD 的条件表和原来的表几乎一样；数一下新增的自由参数。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p>ℓ：Z ⊥ Y 时，P(Y|X,Z) ≈ P(Y|X)，似然提升 ≈ 0（只有 16 样本的噪声级波动，量级远小于 1）。</p>
+          <p>k：Y 的条件表从 2 个自由参数（每个 X 配置 1 个）变成 4 个（X×Z 四配置各 1 个），<strong>新增 2 个自由参数</strong>，惩罚增加 (2/2)·ln 16 ≈ 2.77。</p>
+          <p>BIC：得分净变化 ≈ 0 − 2.77 &lt; 0，<strong>G₂ 被否决</strong>。这就是惩罚项在实战中挡掉伪边的标准过程——无关变量带来的噪声级提升，交不起每个参数 1.39 的税。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l3">L3 建模应用</span>四个变量 A、B、C、D。独立性检验结果：A ⊥ D（空集即成立）；B ⊥ D | {C}；其余所有检验都拒绝独立。① 用 PC 算法画出骨架；② 定向所有能定的 V-结构；③ 指出哪些边方向不可定，并说明原因。</div>
+      <details>
+        <summary>提示</summary>
+        <p>从完全图开始，按检验结果删边；然后检查每对不相邻节点的公共邻居是否在其分离集中。B—C 定向拿不准时，把 B→C 与 C→B 各自宣布的 B、D 独立性写出来，与检验结果逐条对账——有一个方向会两头都说错话。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p>① 骨架：完全图有 6 条边。A⊥D（S=∅）→ 删 A—D；B⊥D|{C}（S={C}）→ 删 B—D。剩 4 条边：<strong>A—B、A—C、B—C、C—D</strong>。</p>
+          <p>② V-结构检查：不相邻对为 (A,D) 和 (B,D)。对 (A,D)：公共邻居是 C，C ∉ S(A,D)=∅ → 定向 <strong>A→C←D</strong>。对 (B,D)：公共邻居 C，而 C ∈ S(B,D)={C} → <strong>不定 V-结构</strong>（恰是"给定 C 独立"的链/分叉模式）。</p>
+          <p>③ 先定 B—C：候选定向与检验结果的逐条对账见下，结论是只能定为 <strong>C→B</strong>。再定 A—B：此时若取 B→A，则 A→C→B→A 首尾相接成环，DAG 不允许——为避免成环，A—B 必须定为 <strong>A→B</strong>（A 与 C 相邻，A→B←C 不构成新 V-结构，合法）。最终输出是一张全有向 DAG：<strong>A→C←D、C→B、A→B</strong>——本题没有任何边"不可定"，I-等价类恰好只剩一个成员。</p>
+          <p>把 B—C 这一步的定向推理展开成一次完整对账。无向边 B—C 只有两种候选定向：</p>
+          <p><strong>定向甲：B→C</strong>。此时 D→C 已定，B 与 D 不相邻却共指 C——在 C 处<strong>新增一个 V-结构 B→C←D</strong>。V-结构的语义是"两个父节点无条件独立、给定公共子节点后相关"，即这个定向宣布：B ⊥ D（边际独立），且 B ⊥̸ D | C（条件相关）。</p>
+          <p><strong>定向乙：C→B</strong>。C 处只保留已定的 A→C←D，不新增任何 V-结构；B、D 之间只剩链式路径 B←C←D，宣布的是"边际相关、给定 C 独立"。</p>
+          <div class="tbl-wrap">
+            <table>
+              <tr><th>候选定向</th><th>宣布的 B、D 关系</th><th>检验结果</th><th>判决</th></tr>
+              <tr><td>B→C（新增 B→C←D）</td><td>B ⊥ D 边际独立；给定 C 后相关</td><td>B ⊥ D 被拒绝（"其余所有检验都拒绝独立"）；B ⊥ D | {C} 成立</td><td>两条全反 ⟹ 排除</td></tr>
+              <tr><td>C→B（无新 V-结构）</td><td>链 B←C←D：边际相关；给定 C 独立</td><td>同上</td><td>全部吻合 ⟹ 采纳</td></tr>
+            </table>
+          </div>
+          <p>对账结果：B→C 新增的 V-结构把检验确认的相关（B、D 边际相关）说成了独立，又把检验确认的独立（B ⊥ D | {C}）说成了相关——与数据两头冲突，这个方向被排除；<strong>只剩反向 C→B</strong>。这正是 18.4 节 PC 第 ③ 步"避免新 V-结构"的传播规则在一次具体定向上的执行：D→C 已定、B 与 D 不相邻，B—C 就必须背向 C。</p>
+          <p>⚠️ 订正：本题曾把 A—B 写成"方向不可定"，这是错的。错因是只检查了两条定向是否产生新 V-结构（都不产生），漏掉了另一条传播规则——避免成环：B→A 会造成 A→C→B→A 的有向环。两条规则（不新增 V-结构、不成环）都过完，才算检查完毕。</p>
+          <p>📖 回看：V-结构的判定与语义（为何"两父无条件独立、观测汇聚点后反而相关"）见第 3 章 §3.3「d-分离：用图读出独立性」；"只有 V-结构的方向能被独立性信息锁定"的判定定理见 §3.4「反过来：从分布到图（I-Map 与 I-等价）」。</p>
+        </div>
+      </details>
+    </div>
+
+    <!-- ============ 本章自测 ============ -->
+    <h2><span class="sec-no">✍️</span>本章自测</h2>
+    <p class="quiz-hint">点击选项判分，答错会给出原因。</p>
+
+    <div class="quiz-block" data-answer="c">
+      <div class="q-no">自测 1</div>
+      <div class="q-stem">结构学习不能用纯似然做评分，根本原因是：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 似然计算太慢</li>
+        <li data-opt="b">B. 似然公式在无环图上有定义困难</li>
+        <li data-opt="c">C. 加边永不降低似然，复杂模型永远胜出，零泛化</li>
+        <li data-opt="d">D. 似然对缺失数据没有定义</li>
+      </ul>
+      <div class="quiz-explain">选 C。自由度单调增 → 训练似然单调不减，饱和模型满分但等于背诵数据。A 是工程问题不是原理障碍；B 错，似然定义良好；D 与结构学习评分无关（缺失数据是第19章的事）。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 2</div>
+      <div class="q-stem">例 1 中 16 样本下 G₁（X→Y）的 BIC 约为：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. −24.95</li>
+        <li data-opt="b">B. −21.28</li>
+        <li data-opt="c">C. −17.12</li>
+        <li data-opt="d">D. −22.18</li>
+      </ul>
+      <div class="quiz-explain">选 B。ℓ₁ ≈ −17.12 减去惩罚 (3/2)·ln16 ≈ 4.16，得 −21.28。C 是未加惩罚的似然；A 是 G₀ 的 BIC；D 是 G₀ 的似然——注意区分"似然"与"评分"。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="a">
+      <div class="q-no">自测 3</div>
+      <div class="q-stem">评分可分解性带来的直接好处是：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 局部改动只需重算受影响的族，爬山搜索高效</li>
+        <li data-opt="b">B. 可以并行采样数据</li>
+        <li data-opt="c">C. 保证找到全局最优结构</li>
+        <li data-opt="d">D. 消除 I-等价带来的不可辨识</li>
+      </ul>
+      <div class="quiz-explain">选 A。分解使 Score 变化量 = 一两个 FamScore 的差，缓存后每次操作 O(1) 评估。C 错——可分解只让搜索快，不保证全局最优（爬山照样卡局部最优）；D 错——I-等价是分布层面的不可辨识，与计算方式无关。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="d">
+      <div class="q-no">自测 4</div>
+      <div class="q-stem">PC 算法中，X 与 Y 不相邻且有公共邻居 Z，什么条件下定向为 X→Z←Y？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. Z 在 X、Y 的分离集中</li>
+        <li data-opt="b">B. Z 与 X、Y 都强相关</li>
+        <li data-opt="c">C. X、Y 在给定 Z 后独立</li>
+        <li data-opt="d">D. Z 不在 X、Y 的分离集中</li>
+      </ul>
+      <div class="quiz-explain">选 D。V-结构的指纹是"X、Y 边际独立，给定 Z 后相关"——即把 X、Y 分开的条件集里不含 Z。A 与 D 相反，对应的是链/分叉结构；C 说的恰是链/分叉的独立性，方向不定。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 5</div>
+      <div class="q-stem">为什么结构学习实践中必须加入度/树宽约束？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 否则评分函数没有定义</li>
+        <li data-opt="b">B. 学出的模型要做推理，树宽大则推理指数级；入度大则 CPD 参数量爆炸</li>
+        <li data-opt="c">C. 否则 PC 算法无法运行</li>
+        <li data-opt="d">D. 否则无法计算条件独立性检验</li>
+      </ul>
+      <div class="quiz-explain">选 B。结构学习的产品是要服役的模型：推理复杂度随树宽指数增长（Ch9–10），CPD 行数随入度 2^d 增长。A、C、D 都把因果关系说反——约束是下游可用性的闸门，不是上游算法的需要。</div>
+    </div>
+
+    <!-- ============ 三句话复述 ============ -->
+    <div class="retell">
+      <h3>🗣️ 用自己的话，三句话讲完本章</h3>
+      <p class="retell-sub">对着空气（或室友）说出这三句。说卡壳的那句，回去重读对应小节。</p>
+      <details>
+        <summary>句1：这章解决什么问题？——</summary>
+        <div class="retell-answer">参考答案：结构未知时，如何从数据中发现变量间的依赖图——这是参数学习的前提，也是最贴近"从数据发现知识"的学习任务。</div>
+      </details>
+      <details>
+        <summary>句2：核心机制是什么？——</summary>
+        <div class="retell-answer">参考答案：评分 + 搜索。评分函数（BIC = 似然 − (k/2)lnM）自带复杂度惩罚，挡住"加边永不亏"的过拟合；评分可分解使爬山搜索（加/删/反转边）只需局部增量重算；另一条路线 PC 算法用条件独立性检验直接建图。</div>
+      </details>
+      <details>
+        <summary>句3：它的天花板在哪、和前后章什么关系？——</summary>
+        <div class="retell-answer">参考答案：I-等价注定只能学到等价类（PDAG），方向要靠 V-结构/干预/先验；小样本下答案主要由稀疏先验决定。本章沿用第17章的"结构已知时参数好求"作为每个候选图的评分内核，其输出的结构将喂给第19章（数据不全时怎么办）与第21章（从结构到因果）。</div>
+      </details>
+    </div>
+
+    <!-- ============ 复习计划 ============ -->
+    <div class="review-plan">
+      <h3>🔁 间隔复习计划</h3>
+      <p>回忆本身比重读有效 10 倍。到点只做一件事：翻卡 + 重做标记题。</p>
+      <table>
+        <tr><th>时间点</th><th>复习内容</th><th>预计用时</th></tr>
+        <tr><td>第 1 天</td><td>概念卡 1–6 全部 + 回忆卡 18.2-1、18.3-1、18.4-1</td><td>10 分钟</td></tr>
+        <tr><td>第 3 天</td><td>概念卡 2、5（BIC/I-等价）+ 重做自测错题 + L2 第 1 题重算</td><td>8 分钟</td></tr>
+        <tr><td>第 7 天</td><td>三句话复述出声说一遍 + 回忆卡 18.1-2、18.4-2 + L3 题重做骨架部分</td><td>10 分钟</td></tr>
+        <tr><td>第 15 天</td><td>只做合上书挑战；六条全过则本章毕业，卡在哪条就重读对应小节</td><td>15 分钟</td></tr>
+      </table>
+    </div>
+
+    <!-- 合上书挑战 -->
+    <div class="final-challenge">
+      <h3>📕 合上书挑战</h3>
+      <p class="fc-sub">现在关掉这个页面（或遮住屏幕），拿一张纸，凭记忆完成以下任务。全部做完再回来核对——这是本章真正的毕业考试。</p>
+      <ol id="ch18-challenge-list">
+        <li><span class="fc-check"></span>说出结构学习的两道难关（搜索空间、I-等价），各给一句话解释</li>
+        <li><span class="fc-check"></span>写出 BIC 评分公式，解释为什么纯似然不能当评分（过拟合机制）</li>
+        <li><span class="fc-check"></span>对 16 样本例 ((0,0)=7,(0,1)=1,(1,0)=1,(1,1)=7) 重算 G₀ 与 G₁ 的 BIC 并选出胜者</li>
+        <li><span class="fc-check"></span>说明评分可分解性如何让爬山搜索高效，列出爬山的三种合法操作</li>
+        <li><span class="fc-check"></span>写出 PC 算法三步骤，并解释为什么输出只能是 PDAG</li>
+        <li><span class="fc-check"></span>回答本章主线问题：参数好求是因为结构给了；那结构从哪来，为什么注定只能学到等价类？（一句话）</li>
+      </ol>
+    </div>
+
+    <div class="complete-zone">
+      <button class="btn-complete" id="ch18-btn-complete" onclick="markDone()">✓ 我已完成本章（含合上书挑战）</button>
+    </div>
+
+    <div class="chapter-nav">
+      <a href="chapter-17.html"><span class="nav-dir">← 上一章</span>第17章 完全数据参数学习</a>
+      <a href="chapter-19.html" class="next"><span class="nav-dir">下一章 →</span>第19章 不完全数据下的学习</a>
+    </div>
+
+  </div>
+</div>
+
+<footer class="footer">
+  <div class="wrap">第18章 结构学习 · PGM 互动讲义 · 基于 Koller &amp; Friedman (2009)</div>
+</footer>
+
+<script src="assets/mermaid.min.js"></script>
+<script>
+mermaid.initialize({
+  startOnLoad: true,
+  theme: "base",
+  themeVariables: {
+    primaryColor: "#e3edf7",
+    primaryBorderColor: "#1d5f9e",
+    primaryTextColor: "#1d5f9e",
+    lineColor: "#5c554b",
+    secondaryColor: "#fbeedd",
+    tertiaryColor: "#f5f1e8",
+    fontFamily: "-apple-system, PingFang SC, sans-serif",
+    fontSize: "14px"
+  },
+  flowchart: { curve: "linear", htmlLabels: false }
+});
+</script>
+<script>
+// 自测题判分
+document.querySelectorAll(".quiz-block").forEach(block => {
+  const answer = block.dataset.answer;
+  const explain = block.querySelector(".quiz-explain");
+  block.querySelectorAll(".quiz-opts li").forEach(li => {
+    li.addEventListener("click", () => {
+      const opts = block.querySelectorAll(".quiz-opts li");
+      opts.forEach(o => o.classList.add("disabled"));
+      if (li.dataset.opt === answer) {
+        li.classList.add("correct");
+      } else {
+        li.classList.add("wrong");
+        block.querySelector(`[data-opt="${answer}"]`).classList.add("correct");
+      }
+      explain.classList.add("show");
+    });
+  });
+});
+
+// 合上书清单打勾
+document.querySelectorAll("#ch18-challenge-list li").forEach(li => {
+  li.addEventListener("click", () => li.classList.toggle("checked"));
+});
+
+// 完成标记 → localStorage（第18章）
+const KEY = "pgm_progress_v1";
+function loadProgress() {
+  try { return JSON.parse(localStorage.getItem(KEY)) || {}; } catch (e) { return {}; }
+}
+const progress = loadProgress();
+const btn = document.getElementById("ch18-btn-complete");
+if (progress[18] && progress[18].done) {
+  btn.textContent = "✓ 已完成 · 再次点击重置";
+  btn.classList.add("done");
+}
+function markDone() {
+  const p = loadProgress();
+  if (p[18] && p[18].done) {
+    delete p[18];
+    btn.textContent = "✓ 我已完成本章（含合上书挑战）";
+    btn.classList.remove("done");
+  } else {
+    p[18] = { done: true, completedAt: Date.now(), reviewsDone: 0 };
+    btn.textContent = "✓ 已完成 · 复习提醒已开启";
+    btn.classList.add("done");
+  }
+  localStorage.setItem(KEY, JSON.stringify(p));
+}
+</script>
+
+</body>
+</html>

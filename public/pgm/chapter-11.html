@@ -1,0 +1,881 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第11章 近似推理：置信传播 · PGM 互动讲义</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+<nav class="topbar">
+  <div class="topbar-inner">
+    <span class="brand"><a href="index.html" style="color:inherit">← 学习地图</a></span>
+    <span class="crumb">阶段二 · 推理 / 第11章</span>
+  </div>
+</nav>
+
+<div class="wrap">
+
+  <div class="lecture-head">
+    <span class="ch-label">CHAPTER 11 · 推理</span>
+    <h1>近似推理：置信传播</h1>
+    <p class="lead">树上精确、带环近似——本章的任务不是说"近似所以差不多就行"，而是说清<strong>近似到底近似成了什么</strong>。</p>
+  </div>
+
+  <!-- 本章定位 -->
+  <div class="position-bar">
+    <strong>本章在主线上的位置：</strong>团树算法在树宽大的图上（网格、稠密图）计算爆炸 → <u>把消息传递规则从树上直接搬到带环图，得到实用但有损的 Loopy BP；它求的不是真实边缘，而是 Bethe 自由能的驻点</u> → 当近似质量不可控时，第 12 章换一条完全不同的路：采样。<br>
+    第11章回答主线上的第七个问题：<strong>精确推理不可行时，能不能把树上那套消息规则直接搬到带环图上？搬过去之后算出来的究竟是什么？</strong>
+    <div class="map-inline">
+      <span class="node">Ch10 团树算法（树上精确消息传播）</span><span class="arrow">→</span>
+      <span class="node here">Ch11 置信传播（树上精确 / 带环近似）</span><span class="arrow">→</span>
+      <span class="node">Ch12 粒子方法（用采样代替消息）</span><span class="arrow">→</span>
+      <span class="node">Ch15 动态网络推理（时序模型中的近似滤波）</span>
+    </div>
+  </div>
+
+  <!-- 学习目标 -->
+  <div class="objectives">
+    <h4>🎯 学完本章，合上书你应该能：</h4>
+    <ol>
+      <li>写出置信传播的消息更新公式与置信计算公式，并说出树上每条消息的含义</li>
+      <li>用归纳论证解释：为什么树上的消息传递是精确的（不重复计数）</li>
+      <li>写出 Bethe 熵与 Bethe 自由能的形式，说出"BP 不动点 ⟺ Bethe 驻点"这条定理</li>
+      <li>在一个 3 节点小环上纸笔跑两轮 Loopy BP 消息迭代</li>
+      <li>用信息重复计数解释 Loopy BP 为什么"方向对、强度过信"，说出易收敛与易震荡的典型条件</li>
+      <li>说出 Loopy BP 与团树算法（Ch10）、粒子方法（Ch12）三者各自适用场景</li>
+    </ol>
+  </div>
+
+  <div class="lecture">
+
+    <!-- 推导主线 -->
+    <div class="figure">
+      <div class="mermaid">
+flowchart LR
+  A["Ch10 团树精确<br>但树宽一大就爆炸"] --> B["回到消息传递本身<br>树上的置信传播"]
+  B --> C["归纳论证<br>消息=子树证据汇总<br>无环所以不重复计数"]
+  C --> D["变分视角<br>BP 不动点 = Bethe 自由能驻点"]
+  D --> E["规则照搬进带环图<br>Loopy BP"]
+  E --> F["代价：求的是 Bethe 驻点<br>不保证收敛 收敛也非真边缘"]
+  classDef hot fill:#fbeedd,stroke:#c4651f,stroke-width:2.5px,color:#c4651f;
+  classDef danger fill:#fae9e7,stroke:#b03a2e,stroke-width:2.5px,color:#b03a2e;
+  class D hot;
+  class F danger;
+      </div>
+      <div class="caption">本章推导主线：每一步都回答"为什么需要下一步"。终点（红色）是本章买下的账单——带环 BP 求的从来不是真实边缘，而是 Bethe 自由能的驻点。</div>
+    </div>
+
+    <!-- ============ 11.1 ============ -->
+    <h2><span class="sec-no">11.1</span>从团树回到消息：树上的置信传播为什么精确</h2>
+
+    <p>第 10 章的团树算法给了精确推理的一般框架，但它有一个硬约束：团树的大小由原图的树宽决定。网格图的树宽是 min(m,n)，稠密图的树宽随节点数线性增长——树宽一大，团就大到无法存储，团树和变量消去一起失效。这正是第 4 章配分函数埋下的账单到期了。</p>
+
+    <p>但在放弃之前，先看一个被团树"包装"住了的事实：<strong>如果原图本身就是一棵树</strong>，团树消息传递可以甩掉团的包袱，直接在原图的节点之间传消息。这个直接版本就是<span class="term">置信传播</span>（Belief Propagation, BP）。先搞懂它在树上为什么精确，才有资格谈"搬到环上会丢掉什么"。</p>
+
+    <p>设无向图是树，每条边 (i,j) 上成对势 ψ<sub>ij</sub>(x<sub>i</sub>,x<sub>j</sub>)，每个节点上单元势 φ<sub>i</sub>(x<sub>i</sub>)（证据也折进这里）。节点 i 发给邻居 j 的<span class="term">消息</span>（Message）定义为：</p>
+
+    <div class="formula">m<sub>i→j</sub>(x<sub>j</sub>) = ∑<sub>x<sub>i</sub></sub> ψ<sub>ij</sub>(x<sub>i</sub>,x<sub>j</sub>) · φ<sub>i</sub>(x<sub>i</sub>) · ∏<sub>k∈N(i)∖j</sub> m<sub>k→i</sub>(x<sub>i</sub>)</div>
+
+    <p>其中 N(i)∖j 是"i 的除了 j 以外的邻居"。所有消息算完后，每个节点的<span class="term">置信</span>（Belief）为：</p>
+
+    <div class="formula">b<sub>i</sub>(x<sub>i</sub>) ∝ φ<sub>i</sub>(x<sub>i</sub>) ∏<sub>k∈N(i)</sub> m<sub>k→i</sub>(x<sub>i</sub>)</div>
+
+    <div class="box idea">
+      <span class="box-tag">💡 消息是什么</span>
+      <p>m<sub>i→j</sub> 是 i 对 j 说的一句话：<strong>"我这一侧整棵子树的全部证据，汇总成对你取值的看法。"</strong>它是一个关于 x<sub>j</sub> 的函数（与 x<sub>j</sub> 取值个数等长的向量），不是概率分布（不归一化）。</p>
+    </div>
+
+    <h3>例 1：链 A—B—C 上的完整手算（带证据）</h3>
+    <p>沿用第 4 章的链：三个二元变量 A—B—C，两条边上的势函数相同——两端取值相同得 10 分，不同得 1 分。现在加上证据：<strong>观测到 C = 0</strong>，即 φ<sub>C</sub>(c) 在 c=0 时为 1、c=1 时为 0；φ<sub>A</sub> = φ<sub>B</sub> = 1（无本地信息）。</p>
+
+    <p><strong>第一步：叶子消息 m<sub>C→B</sub>。</strong>C 是叶子（除 B 外没有别的邻居，乘积项为空）：</p>
+    <ul>
+      <li>m<sub>C→B</sub>(b=0) = ∑<sub>c</sub> ψ(b=0,c)·φ<sub>C</sub>(c) = ψ(0,0)·1 = <strong>10</strong></li>
+      <li>m<sub>C→B</sub>(b=1) = ∑<sub>c</sub> ψ(b=1,c)·φ<sub>C</sub>(c) = ψ(1,0)·1 = <strong>1</strong></li>
+    </ul>
+    <p>这条消息就是子树 {C} 的全部证据："我观测到自己是 0，所以你多半是 0（10 比 1）"。</p>
+
+    <p><strong>第二步：中继消息 m<sub>B→A</sub>。</strong>B 除 A 外的邻居只有 C：</p>
+    <ul>
+      <li>m<sub>B→A</sub>(a=0) = ∑<sub>b</sub> ψ(a=0,b)·φ<sub>B</sub>(b)·m<sub>C→B</sub>(b) = 10·10 + 1·1 = <strong>101</strong></li>
+      <li>m<sub>B→A</sub>(a=1) = 1·10 + 10·1 = <strong>20</strong></li>
+    </ul>
+    <p>这条消息汇总的是子树 {B,C} 的全部证据。</p>
+
+    <p><strong>第三步：算置信。</strong>A 只有 B 一个邻居：b<sub>A</sub>(a) ∝ {101, 20}，归一化得</p>
+
+    <div class="formula">P(a=0 | C=0) = <span class="frac"><span class="num-part">101</span><span class="den-part">121</span></span> ≈ 0.835</div>
+
+    <p><strong>第四步：与枚举对比验证。</strong>带证据后只剩 c=0 的 4 种赋值：φ₁φ₂ 取值分别为 (0,0,0)→100、(0,1,0)→1、(1,0,0)→10、(1,1,0)→10，合计 Z′ = 121，P(a=0|C=0) = (100+1)/121 = 101/121。<strong>一模一样。</strong>顺手再验 B：反方向 m<sub>A→B</sub>(b) = ∑<sub>a</sub> ψ(a,b) = {11, 11}，于是 b<sub>B</sub> ∝ m<sub>C→B</sub>·m<sub>A→B</sub> = {110, 11}，得 P(b=0|C=0) = 110/121 ≈ 0.909，与枚举 (100+10)/121 完全一致。</p>
+
+    <div class="figure">
+      <div class="mermaid">
+flowchart LR
+  C["C（证据节点 c=0）"] -->|"m(C到B) = (10, 1)"| B["B"]
+  B -->|"m(B到A) = (101, 20)"| A["A"]
+  A -->|"m(A到B) = (11, 11)"| B
+      </div>
+      <div class="caption">图 11.1 例 1 的消息流。每条消息 = 发送方一侧子树的证据汇总。看 C→B→A 这条链：证据只沿一个方向流动，绝不回头——这是精确的根。</div>
+    </div>
+
+    <h3>为什么精确：一个归纳论证</h3>
+
+    <div class="box insight">
+      <span class="box-tag">✅ 定理（树上 BP 的精确性）</span>
+      <p>在树上，任选一根，先由叶向根、再由根向叶传一遍消息（两遍即停），每条消息都精确等于"发送方一侧子树在给定接收方取值下的证据汇总"，根处及每个节点的置信 = 真实边缘分布。</p>
+    </div>
+
+    <p><strong>证明（对子树大小归纳）。</strong>把每条边 (i,j) 想成切断后 i 所在的那棵子树 T<sub>i→j</sub>。</p>
+    <ul>
+      <li><strong>基础步</strong>：i 是叶子，T<sub>i→j</sub> = {i}。此时 m<sub>i→j</sub>(x<sub>j</sub>) = Σ<sub>x<sub>i</sub></sub> ψ<sub>ij</sub>φ<sub>i</sub>——正是单节点子树上"势乘积对内部变量求和"的定义。✓</li>
+      <li><strong>归纳步</strong>：设进入 i 的所有消息 m<sub>k→i</sub>（k ∈ N(i)∖j）都已正确汇总各自子树 T<sub>k→i</sub>。<strong>因为树无环，这些子树两两不相交</strong>，且它们的并集加上 {i} 正好是 T<sub>i→j</sub>。于是消息公式中的乘积 ∏ m<sub>k→i</sub> 把各不相交子树的汇总相乘、乘上 φ<sub>i</sub> 与 ψ<sub>ij</sub>、再对 x<sub>i</sub> 求和——这正是 T<sub>i→j</sub> 上的边缘化定义。✓</li>
+    </ul>
+    <p>根节点的置信 = 各方向子树汇总之积 = 全图证据汇总，除以 Z 即精确边缘。∎</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 一句话抓住本质</span>
+      <p><strong>无环 ⟹ 各方向子树两两不相交 ⟹ 每份证据恰好被数一次。</strong>树上 BP 的精确性不是"迭代收敛"的功劳，而是图结构的功劳。记住这句话，11.3 节会看到环上哪里崩。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>"BP 是个迭代近似算法，要跑到收敛。"——在树上不对。树上消息依赖关系是有向无环的，两遍调度（先叶后根、再根后叶）就在有限步内<strong>精确结束</strong>，没有什么"收敛"可言。"迭代到收敛"这个概念是专门为带环图准备的。</p>
+    </div>
+
+    <!-- 回忆卡片 11.1 -->
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 11.1-1</div>
+              <div class="q-text">写出 BP 的消息更新公式与置信公式，并用一句话说明 m<sub>i→j</sub> 的含义。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              m<sub>i→j</sub>(x<sub>j</sub>) = Σ<sub>x<sub>i</sub></sub> ψ<sub>ij</sub>φ<sub>i</sub>∏<sub>k∈N(i)∖j</sub> m<sub>k→i</sub>；b<sub>i</sub>(x<sub>i</sub>) ∝ φ<sub>i</sub>∏<sub>k∈N(i)</sub> m<sub>k→i</sub>。含义：i 一侧子树的全部证据汇总成对 x<sub>j</sub> 的看法。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 11.1-2</div>
+              <div class="q-text">树上 BP 精确的根本原因是哪一条图性质？它保证了什么？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              无环。切断一条边后两侧子树不相交，所以各消息携带的证据集合两两不交——每份证据恰好被计一次，不重复也不遗漏。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 11.2 ============ -->
+    <h2><span class="sec-no">11.2</span>Bethe 自由能：精确性的另一种看法</h2>
+
+    <p>11.1 给出的回答是组合式的："精确，因为不重复计数"。本节换一种更深刻的看法——把推理看成一个<strong>优化问题</strong>。这个看法属于<span class="term">变分推断</span>（Variational Inference）的家族：真实后验 P 太难算，那就设一个目标函数，在"容易处理的候选对象"里找最优。</p>
+
+    <p>候选对象取什么？不再直接搜索联合分布（太大），而是搜索一组<span class="term">伪边缘</span>（Pseudo-marginal）：每个节点一个 b<sub>i</sub>(x<sub>i</sub>)，每条边一个 b<sub>ij</sub>(x<sub>i</sub>,x<sub>j</sub>)，只要求它们<strong>局部一致</strong>：</p>
+
+    <div class="formula">∑<sub>x<sub>j</sub></sub> b<sub>ij</sub>(x<sub>i</sub>,x<sub>j</sub>) = b<sub>i</sub>(x<sub>i</sub>)，∑<sub>x<sub>i</sub></sub> b<sub>i</sub>(x<sub>i</sub>) = 1，b ≥ 0</div>
+
+    <p>用这组簇边缘把联合分布"拼"出来的方式叫<span class="term">Bethe 近似</span>（Bethe Approximation）：</p>
+
+    <div class="formula">b(x) ≈ <span class="frac"><span class="num-part">∏<sub>(i,j)∈E</sub> b<sub>ij</sub>(x<sub>i</sub>,x<sub>j</sub>)</span><span class="den-part">∏<sub>i</sub> b<sub>i</sub>(x<sub>i</sub>)<sup>d<sub>i</sub>−1</sup></span></span></div>
+
+    <p>其中 d<sub>i</sub> 是节点 i 的度数。分母的幂次 d<sub>i</sub>−1 是在"配平"：每条边两端各数了一次 x<sub>i</sub>，共 d<sub>i</sub> 次，多出来的 d<sub>i</sub>−1 次要除掉。</p>
+
+    <h3>树上的一个漂亮事实：Bethe 拼接是精确的</h3>
+    <p>对一棵树的成对马尔可夫网络，取 b 为<strong>真实边缘</strong>，上面的拼接式<strong>精确等于联合分布</strong>：</p>
+
+    <div class="formula">P(x) = <span class="frac"><span class="num-part">∏<sub>(i,j)∈E</sub> P(x<sub>i</sub>,x<sub>j</sub>)</span><span class="den-part">∏<sub>i</sub> P(x<sub>i</sub>)<sup>d<sub>i</sub>−1</sup></span></span></div>
+
+    <p>在链 A—B—C 上验证：右边 = P(a,b)P(b,c)/P(b) = P(a|b)P(b)P(c|b) = P(a,b,c)（用了链上 A⊥C|B）。✓ 一般的树可对节点数归纳证明，思路与 11.1 相同：砍掉一条边，两边独立拼接。所以——<strong>树上的联合分布完全被"节点边缘 + 边边缘"决定，不含任何更高阶的信息</strong>。这正是 Bethe 近似在树上不丢任何东西的原因。</p>
+
+    <h3>Bethe 自由能</h3>
+    <p>把"拼出来的分布"代入自由能 F = 平均能量 − 熵，就得到<span class="term">Bethe 自由能</span>（Bethe Free Energy）F<sub>B</sub> = U<sub>B</sub> − H<sub>B</sub>。平均能量 U<sub>B</sub> 只用局部伪边缘就能算（每项期望只涉及一个因子）；熵按 Bethe 拼接展开成<span class="term">Bethe 熵</span>（Bethe Entropy）：</p>
+
+    <div class="formula">H<sub>B</sub> = ∑<sub>(i,j)∈E</sub> H(b<sub>ij</sub>) − ∑<sub>i</sub> (d<sub>i</sub>−1) H(b<sub>i</sub>)</div>
+
+    <p>对上面的树分解式两边取 −log 再取期望可知：在树上 Bethe 熵 = 真实熵。于是树上"最小化 F<sub>B</sub>（约束：局部一致）"就是精确推理。这条链条的最后一块拼图是一个深刻定理：</p>
+
+    <div class="box insight">
+      <span class="box-tag">✅ 定理（Yedidia–Freeman–Weiss, 2000）</span>
+      <p>在任意图（含带环图）上，<strong>置信传播的不动点 ⟺ Bethe 自由能在局部一致约束下的<span class="term">驻点</span>（Stationary Point）</strong>。树上的那个唯一驻点就是真实边缘；带环图上驻点可以有多个，且一般不等于真实边缘。</p>
+    </div>
+
+    <h3>证明骨架：构造拉格朗日函数，求偏导得 BP 方程</h3>
+    <p>"不动点 ⟺ 驻点"不是"取个 log 就得证"的巧合，而是一道可以走到底的约束优化题。骨架如下（完整版见 YFW 2000 原文，这里给出能纸笔跟读的四步）：</p>
+    <p><strong>第一步：把推理写成约束优化</strong>。min F<sub>B</sub>(b)，约束是局部一致（Σ<sub>x<sub>j</sub></sub> b<sub>ij</sub> = b<sub>i</sub>，每条有向边一条）与归一（Σ b<sub>i</sub> = 1）。</p>
+    <p><strong>第二步：构造拉格朗日函数</strong>——每条有向约束配乘子 λ<sub>j→i</sub>(x<sub>i</sub>)，归一化配 γ<sub>i</sub>：</p>
+
+    <div class="formula">L = F<sub>B</sub> + ∑<sub>(i,j)</sub> ∑<sub>x<sub>i</sub></sub> λ<sub>j→i</sub>(x<sub>i</sub>)·[∑<sub>x<sub>j</sub></sub> b<sub>ij</sub> − b<sub>i</sub>] + ∑<sub>i</sub> γ<sub>i</sub>·[∑<sub>x<sub>i</sub></sub> b<sub>i</sub> − 1]</div>
+
+    <p><strong>第三步：求偏导、置零</strong>。∂L/∂b<sub>ij</sub> = 0 给出 <strong>b<sub>ij</sub>(x<sub>i</sub>,x<sub>j</sub>) ∝ ψ<sub>ij</sub>(x<sub>i</sub>,x<sub>j</sub>)·e<sup>−λ<sub>j→i</sub>(x<sub>i</sub>) −λ<sub>i→j</sub>(x<sub>j</sub>)</sup></strong>——边信念 = 势 × 两端各一个"乘子因子"；∂L/∂b<sub>i</sub> = 0 给出 <strong>b<sub>i</sub>(x<sub>i</sub>)<sup>d<sub>i</sub>−1</sup> ∝ φ<sub>i</sub>(x<sub>i</sub>)<sup>−1</sup>·e<sup>−∑<sub>j</sub> λ<sub>j→i</sub>(x<sub>i</sub>)</sup></strong>。注意乘子已经按"每条有向边一个"排好——它们就是消息的胚胎。</p>
+    <p><strong>第四步：换元消去乘子</strong>。把 e<sup>−λ</sup> 的适当组合记作消息 m<sub>i→j</sub>，将两条驻点条件与边缘一致性联立，消去 λ 后化成的正是 11.1 的不动点方程：<strong>m<sub>i→j</sub>(x<sub>j</sub>) = ∑<sub>x<sub>i</sub></sub> ψ<sub>ij</sub>φ<sub>i</sub>∏<sub>k≠j</sub> m<sub>k→i</sub></strong>，且 <strong>b<sub>i</sub>(x<sub>i</sub>) ∝ φ<sub>i</sub>∏<sub>k</sub> m<sub>k→i</sub></strong>。</p>
+    <p><strong>反向验证（一行）</strong>：把 b<sub>ij</sub> ∝ ψ<sub>ij</sub>φ<sub>i</sub>φ<sub>j</sub>∏<sub>k≠j</sub>m<sub>k→i</sub>∏<sub>l≠i</sub>m<sub>l→j</sub> 对 x<sub>j</sub> 求和——其中 ∑<sub>x<sub>j</sub></sub> ψ<sub>ij</sub>φ<sub>j</sub>∏<sub>l≠i</sub>m<sub>l→j</sub> 恰好就是 m<sub>i→j</sub>(x<sub>i</sub>)（消息方程本身），于是 ∑<sub>x<sub>j</sub></sub> b<sub>ij</sub> = φ<sub>i</sub>∏<sub>k≠j</sub>m<sub>k→i</sub>·m<sub>i→j</sub> ∝ b<sub>i</sub> ✓，边缘一致性自动满足。</p>
+    <p><strong>结论</strong>：BP 迭代到不动点 ⟺ 找到一组 (b, λ) 使 ∂L = 0 ⟺ F<sub>B</sub> 在约束下的驻点。树上驻点唯一、就是真边缘；环上 F<sub>B</sub> 非凸，驻点可以有多个、甚至只是鞍点——这就是"收敛 ≠ 正确"的精确含义。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 这定理改变了提问方式</span>
+      <p>没有它，Loopy BP 是个"不知道为什么、有时候还挺灵"的民间偏方；有了它，问题从"BP 在算什么"变成精确的数学问题："Bethe 自由能的驻点离真实边缘有多远"。本章 11.3、11.4 都在回答它。</p>
+    </div>
+
+    <!-- 回忆卡片 11.2 -->
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 11.2-1</div>
+              <div class="q-text">写出 Bethe 熵的表达式，并说明为什么在树上它等于真实熵。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              H<sub>B</sub> = Σ<sub>(i,j)</sub> H(b<sub>ij</sub>) − Σ<sub>i</sub> (d<sub>i</sub>−1) H(b<sub>i</sub>)。因为树上联合分布精确分解为 ∏P<sub>ij</sub>/∏P<sub>i</sub><sup>d<sub>i</sub>−1</sup>，两边取 −log 取期望即得。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 11.2-2</div>
+              <div class="q-text">Yedidia–Freeman–Weiss 定理的内容是什么？它对理解 Loopy BP 意味着什么？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              BP 不动点 ⟺ Bethe 自由能的驻点。意味着 Loopy BP 求的从来不是真实边缘，而是一个近似目标函数（Bethe 自由能）的驻点；树上该驻点恰好精确，环上只是近似。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 11.3 ============ -->
+    <h2><span class="sec-no">11.3</span>Bethe 近似到底丢了什么：环上的高阶关联</h2>
+
+    <p>上一节说"Bethe 拼接在树上精确"。反过来说，它做的近似假设就可以精确表述了：<strong>假装联合分布完全由节点边缘和边边缘决定。</strong>这个假设在环上是假的，本节说清楚假在哪、后果是什么。</p>
+
+    <h3>环上有拼不回去的信息</h3>
+    <p>看一个三节点环 A—B—C—A。边数（3）等于节点数（3），Bethe 拼接是 b(a,b,c) ≈ b<sub>AB</sub>b<sub>BC</sub>b<sub>CA</sub> / (b<sub>A</sub>b<sub>B</sub>b<sub>C</sub>)。问题在于：<strong>环上真实联合分布可以携带"绕环一周"的整体关联</strong>——例如三个变量"同取值的个数为偶数"这类约束——它改变不了任何单节点和单边的边缘，却真实改变联合分布。任何只看节点边缘和边边缘的拼接公式，对这类信息<strong>原则上是盲的</strong>。用另一句话说：环上 Bethe 拼接的结果一般不是合法联合分布（可能不归一、与伪边缘不自洽），Bethe 熵也不再等于真实熵。丢掉的就是这部分高阶关联。</p>
+
+    <h3>信息重复计数：同一个事实的算法面孔</h3>
+    <p>上面的"盲"在算法层面有一个更直观的表现——<span class="term">信息重复计数</span>（Double Counting）。回忆 11.1 的精确性根源：无环保证各消息证据集两两不交。<strong>环上这个前提直接破产。</strong></p>
+
+    <div class="figure">
+      <div class="mermaid">
+flowchart TB
+  C["C（软证据 φC = (3,1)）"]
+  B["B"]
+  A["A"]
+  C ---|"路径一：直达"| A
+  C --- B
+  B --- A
+  linkStyle 0 stroke:#b03a2e,stroke-width:2.5px;
+  linkStyle 1 stroke:#c4651f,stroke-width:2.5px;
+  linkStyle 2 stroke:#c4651f,stroke-width:2.5px;
+      </div>
+      <div class="caption">图 11.2 重复计数的来源。C 处的证据沿两条路到达 A：红色直达路径 C→A，橙色绕行路径 C→B→A。A 的置信把两条路径的消息相乘——同一份证据被数了两遍。</div>
+    </div>
+
+    <p>具体地：C 的软证据既直接塑造 m<sub>C→A</sub>，又先塑造 m<sub>C→B</sub>、再经 m<sub>B→A</sub> 第二次进入 A。而 A 的置信公式是把这些消息<strong>全部相乘</strong>——乘法意味着"当作独立证据"。同一份证据被当成两份独立证据，结果方向通常没错（毕竟真的是同一份证据），<strong>强度却被放大</strong>：置信度系统性偏高，这就是<span class="term">过自信</span>（Overconfidence）。11.4 的例 2 会给出数字：BP 说 0.93，枚举说 0.74。</p>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>"环不大，误差应该不大。"——错。误差大小取决于环上耦合的强度，不取决于环的长度。3 节点的小环配上强耦合势（例 2、例 3），足以产生 0.93 vs 0.74 的失真，甚至震荡不收敛。反过来，很长的弱环可能几乎无损。</p>
+    </div>
+
+    <div class="box idea">
+      <span class="box-tag">💡 双重视角的合流</span>
+      <p>变分视角说"丢了环上的高阶关联"，算法视角说"消息绕环回来被当成新证据"——这是同一个缺陷的两张面孔：Bethe 熵在环上的计数错误，恰好对应消息在环上的重复计数。</p>
+    </div>
+
+    <!-- 回忆卡片 11.3 -->
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 11.3-1</div>
+              <div class="q-text">Bethe 近似的核心假设是什么？它在环上丢掉了哪类信息？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              假设联合分布由节点边缘与边边缘完全决定：b(x) ≈ ∏b<sub>ij</sub>/∏b<sub>i</sub><sup>d<sub>i</sub>−1</sup>。环上丢掉的是绕环一周的高阶关联（不改变任何低阶边缘、却改变联合分布的信息）。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 11.3-2</div>
+              <div class="q-text">用重复计数解释 Loopy BP 为什么会"过自信"。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              同一份证据沿环上不同路径多次到达同一节点，置信公式把各消息相乘，等于把它当成多份独立证据——方向不变，强度被放大，置信度系统性偏高。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 11.4 ============ -->
+    <h2><span class="sec-no">11.4</span>带环置信传播：规则照搬，性质全变</h2>
+
+    <p>现在做那件"明知故犯"的事：把 11.1 的消息规则原封不动地搬到带环图上，这就是<span class="term">带环置信传播</span>（Loopy Belief Propagation, Loopy BP）：</p>
+
+    <ol>
+      <li><strong>初始化</strong>：所有消息置为均匀（全 1）；</li>
+      <li><strong>迭代</strong>：每轮用消息公式刷新所有消息（同步或异步）；</li>
+      <li><strong>停止</strong>：消息变化小于阈值（判收敛），或到达最大轮数（认栽）。</li>
+    </ol>
+
+    <p>树上"两遍精确结束"的性质没有了——环上消息依赖成圈，只能反复迭代，而且有三件事都可能发生：<strong>收敛且接近、收敛但失真、震荡不收敛</strong>。下面两个完整例子各看一种。</p>
+
+    <h3>例 2：3 节点小环——收敛，但过自信</h3>
+    <p>图 11.2 的三角形 A—B—C—A，三条边上的势都是"相同 10 / 不同 1"，C 上有软证据 φ<sub>C</sub> = (3, 1)（c=0 的可能性是 c=1 的三倍）。<strong>先算标准答案</strong>：枚举 8 种赋值（权重 = 三边势之积 × φ<sub>C</sub>）：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>赋值 a,b,c</th><th>000</th><th>001</th><th>010</th><th>011</th><th>100</th><th>101</th><th>110</th><th>111</th></tr>
+        <tr><td>权重</td><td>3000</td><td>10</td><td>30</td><td>10</td><td>30</td><td>10</td><td>30</td><td>1000</td></tr>
+      </table>
+    </div>
+
+    <p>Z = 4120，真实边缘 P(a=0) = (3000+10+30+10)/4120 = 3050/4120 ≈ <strong>0.740</strong>。</p>
+
+    <p><strong>再跑 Loopy BP。</strong>由 A↔B 对称，只需追踪三条消息在 0 处的值：u = m<sub>C→A</sub>(0) = m<sub>C→B</sub>(0)，r = m<sub>B→A</sub>(0) = m<sub>A→B</sub>(0)，q = m<sub>A→C</sub>(0) = m<sub>B→C</sub>(0)。把消息公式展开并归一化，得到三条更新式：</p>
+
+    <div class="formula">u ← <span class="frac"><span class="num-part">29q + 1</span><span class="den-part">22q + 11</span></span>，　r ← <span class="frac"><span class="num-part">9u + 1</span><span class="den-part">11</span></span>，　q ← <span class="frac"><span class="num-part">9r + 1</span><span class="den-part">11</span></span></div>
+
+    <p>以 u 式为例看清来源：m<sub>C→A</sub>(0) ∝ Σ<sub>c</sub> ψ(c,0)·φ<sub>C</sub>(c)·m<sub>B→C</sub>(c) = 10·3·q + 1·1·(1−q) = 29q+1；而 m<sub>C→A</sub>(1) ∝ 3q + 10(1−q) = 10−7q；两者之和 22q+11 用于归一化。从均匀初始化逐轮迭代：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>轮次 t</th><th>u = m<sub>C→A</sub>(0)</th><th>r = m<sub>B→A</sub>(0)</th><th>q = m<sub>A→C</sub>(0)</th><th>b<sub>A</sub>(0)（由 r·u 归一化）</th></tr>
+        <tr><td>0（初始化）</td><td>0.500</td><td>0.500</td><td>0.500</td><td>0.500</td></tr>
+        <tr><td>1</td><td>0.705</td><td>0.500</td><td>0.500</td><td>0.705</td></tr>
+        <tr><td>2</td><td>0.705</td><td>0.667</td><td>0.500</td><td>0.827</td></tr>
+        <tr><td>3</td><td>0.705</td><td>0.667</td><td>0.637</td><td>0.827</td></tr>
+        <tr><td>4</td><td>0.779</td><td>0.667</td><td>0.637</td><td>0.876</td></tr>
+        <tr><td>5</td><td>0.779</td><td>0.728</td><td>0.637</td><td>0.904</td></tr>
+        <tr><td>7</td><td>0.801</td><td>0.728</td><td>0.687</td><td>0.915</td></tr>
+        <tr><td><strong>极限</strong></td><td><strong>0.810</strong></td><td><strong>0.754</strong></td><td><strong>0.708</strong></td><td><strong>≈ 0.93</strong></td></tr>
+      </table>
+    </div>
+
+    <p>（手算第一轮：u = (29×0.5+1)/(22×0.5+11) = 15.5/22 ≈ 0.705；第二轮 r = (9×0.705+1)/11 ≈ 0.667；b<sub>A</sub>(0) ∝ 0.705×0.667，对 (1−0.705)(1−0.667) 归一化 ≈ 0.827。）</p>
+
+    <p><strong>结果：消息顺利收敛，但 b<sub>A</sub>(0) ≈ 0.93，对比真实值 0.740——偏差高达 0.19。</strong>方向是对的（a=0 确实更可能），强度严重失真。原因正是 11.3 的重复计数：C 的证据经 C→A 与 C→B→A 两条路径被 A 数了两遍，且迭代中越数越"自信"。这就是"近似成了 Bethe 驻点而非真边缘"的具体长相。</p>
+
+    <h3>例 3：强耦合环——震荡不收敛</h3>
+    <p>把三条边换成<strong>强反铁磁势</strong>："两端不同得 100 分，相同得 1 分"（三角形因此受挫：三个变量不可能两两不同）。无证据。由对称性所有消息同值，记 x = m(0)，更新式为：</p>
+
+    <div class="formula">x ← <span class="frac"><span class="num-part">100 − 99x</span><span class="den-part">101</span></span></div>
+
+    <p>从一个微小的不均匀初值 x₀ = 0.9 出发：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>轮次 t</th><th>0</th><th>1</th><th>2</th><th>3</th><th>4</th><th>5</th></tr>
+        <tr><td>x<sub>t</sub> = m(0)</td><td>0.900</td><td>0.108</td><td>0.884</td><td>0.123</td><td>0.869</td><td>0.138</td></tr>
+      </table>
+    </div>
+
+    <p>消息在 0.9 与 0.1 之间来回翻转：更新斜率是 −99/101 ≈ −0.98，振幅每轮只衰减约 2%，要两百多轮才能平息。实践中表现为"震荡、判不了收敛"。势越接近确定性（如严格的 0/1），衰减越慢，多环图或异步调度下可真正永远振荡。</p>
+
+    <p>工程上的标准急救是<span class="term">阻尼</span>（Damping）：新消息不与计算值完全替换，而是加权平均</p>
+
+    <div class="formula">m<sup>(t)</sup> ← α · m<sup>(t−1)</sup> + (1−α) · m̂<sup>(t)</sup></div>
+
+    <p>α 常取 0.3–0.5。代价是收敛变慢，收益是压住震荡。</p>
+
+    <div class="box insight">
+      <span class="box-tag">✅ 收敛与失真的经验法则</span>
+      <p><strong>容易收敛且接近</strong>：环弱（势接近均匀）、证据多（证据切断环上的消息回路）、变量间相关弱。<strong>容易震荡/失真</strong>：强耦合环、近确定性势、受挫结构。而无论收敛与否，请记住本章的头条结论：<strong>带环 BP 求的不是边缘分布，而是 Bethe 自由能的驻点</strong>——收敛 ⟹ 是驻点，但驻点 ≠ 真实边缘。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 最常见误区</span>
+      <p>"算法收敛了，所以结果就是对的。"——例 2 就是反例：消息干干净净地收敛，答案却比真实值偏激 0.19。收敛只说明到达某个不动点，不动点离真实边缘的距离取决于环的强度，没有任何自带的误差条。要误差保证，得换方法（第 12 章的采样在极限下无偏）。</p>
+    </div>
+
+    <!-- 回忆卡片 11.4 -->
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 11.4-1</div>
+              <div class="q-text">Loopy BP 的三步算法流程是什么？与树上 BP 的调度有何本质不同？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              均匀初始化 → 迭代刷新全部消息 → 判收敛或到最大轮数停止。树上依赖无环、两遍有限步精确结束；环上依赖成圈，只能迭代且可能不收敛。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 11.4-2</div>
+              <div class="q-text">例 2 中 Loopy BP 收敛到 b<sub>A</sub>(0) ≈ 0.93 而真实值是 0.74。误差机制是什么？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              C 的证据经 C→A 与 C→B→A 两条路径被 A 重复计数，被当成两份独立证据相乘——方向正确、强度被放大（过自信）。这是 Bethe 驻点与真实边缘的差距。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 11.5 ============ -->
+    <h2><span class="sec-no">11.5</span>什么时候信它，以及通向采样的大门</h2>
+
+    <p>既然不保证收敛、收敛也不保证正确，Loopy BP 凭什么成为 PGM 里最常用的近似算法？凭两件事：<strong>实践中它经常好得出奇，而且快</strong>。图像去噪的网格 MRF、纠错码（LDPC/ turbo 码的译码本质就是 Loopy BP）、大规模因子图——大量"弱环 + 多证据"的实际模型里，它的误差小到可以忽略，速度比团树快几个数量级。同一套消息规则也适用于更一般的<span class="term">聚类图</span>（Cluster Graph，节点是变量簇），并有更高阶的推广（广义 BP / Kikuchi 近似、期望传播 EP），本章不展开——它们改善精度，但不改变"求的是某个近似自由能的驻点"这一本质。</p>
+
+    <p>实践中的自检清单：</p>
+    <ul>
+      <li><strong>多初始化</strong>：从几个不同初值出发，若收敛到不同不动点，说明结果不可信；</li>
+      <li><strong>加阻尼</strong>：震荡时先 α = 0.5 再调；</li>
+      <li><strong>小图对拍</strong>：在能枚举的小子图上与精确结果对比，估计失真量级；</li>
+      <li><strong>看势的强度</strong>：势接近确定性（比值悬殊）时默认它不可信。</li>
+    </ul>
+
+    <p>如果这些都救不回来——强耦合、需要误差保证、或者要算配分函数和任意事件的概率——那就该换一条<strong>完全不同</strong>的路：不再传确定性消息，改用随机采样逼近期望。这就是第 12 章的粒子方法（蒙特卡洛、马尔可夫链蒙特卡洛）：以计算时间换渐近无偏，样本趋于无穷时答案收敛到真值——恰好补上 Loopy BP 给不了的东西。</p>
+
+    <!-- 回忆卡片 11.5 -->
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 11.5-1</div>
+              <div class="q-text">说出至少三条判断 Loopy BP 结果是否可信的实践自检手段。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              多初始化看是否收敛到同一不动点；震荡时加阻尼；在可枚举的小图上与精确解对拍；检查势是否接近确定性（接近则默认不可信）。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 11.5-2</div>
+              <div class="q-text">Loopy BP 与第 12 章粒子方法各自的核心折中是什么？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              Loopy BP：确定性消息传递，快但只求得 Bethe 驻点、无误差保证。粒子方法：随机采样，慢且结果有方差，但样本足够时渐近无偏、可逼近任意概率量。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 概念卡 ============ -->
+    <h2><span class="sec-no">🃏</span>概念卡：本章概念的一分钟画像</h2>
+    <p>翻面前先自问：这个概念我能用一句话讲清楚吗？</p>
+    <div class="flip-grid">
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 1</div>
+            <div class="q-text">置信传播（Belief Propagation, BP）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">在图节点间按 m<sub>i→j</sub> = Σ ψφ∏m 规则传递局部消息、再用 b<sub>i</sub> ∝ φ∏m 汇总边缘的算法。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">树宽太大时团树失效，需要不构造大团的推理算法。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">每个节点向邻居捎话："我这边看到的全部证据，对你取值意味着这个。"</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为它本质是迭代近似——树上它两遍精确结束；迭代只为带环图存在。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">Ch12 的对照组；Ch15 时序模型滤波；编码、视觉等工程推理。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 2</div>
+            <div class="q-text">Bethe 自由能（Bethe Free Energy）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">F<sub>B</sub> = U<sub>B</sub> − H<sub>B</sub>，用伪边缘表示的平均能量减 Bethe 熵；BP 不动点即其驻点。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">回答"Loopy BP 到底在优化什么"，把启发式算法变成可分析的优化问题。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">近似版的"账房先生"：只数得清单点和单边的账，环上的联合账算不准。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为最小化它=精确推理——只在树上成立，环上它是近似目标。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">分析 BP 收敛性与误差；GBP/Kikuchi 是它的高阶推广。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 3</div>
+            <div class="q-text">Bethe 近似（Bethe Approximation）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">用 b(x) ≈ ∏b<sub>ij</sub>/∏b<sub>i</sub><sup>d<sub>i</sub>−1</sup> 由节点与边边缘拼接联合分布。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">联合分布存不下，只能存低阶边缘，需要一种拼回整体的规则。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">只有合照和双人照，硬拼全班关系网——树上够，环上不够。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为它总给出合法分布——环上拼接结果可能不归一、不自洽。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">理解 Loopy BP 误差来源；变分方法（Ch13 方向）的入门假设。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 4</div>
+            <div class="q-text">带环置信传播（Loopy BP）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">把 BP 消息规则照搬到带环图，迭代至收敛或放弃。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">实际图（网格、稠密图）几乎都有环，而精确算法全部失效。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">谣言在熟人圈里反复转述，每转一圈都被当成新消息。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为收敛即正确——收敛只到 Bethe 驻点，可以系统性过自信。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">图像 MRF、LDPC 译码、大规模因子图；Ch12 之前的默认首选。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 5</div>
+            <div class="q-text">信息重复计数（Double Counting）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">环上同一证据沿多条路径抵达同一节点，被置信公式当成多份独立证据相乘。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">解释 Loopy BP 误差的方向性：方向对、强度被放大。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">同一个人从两个群转告你同一件事，你却当成两条独立线索。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为环小误差就小——失真取决于环上耦合强度，不取决于环长。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">诊断 Loopy BP 失真；理解"过自信"现象；设计阻尼/区域法。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 6</div>
+            <div class="q-text">阻尼（Damping）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">m<sup>(t)</sup> ← α·m<sup>(t−1)</sup> + (1−α)·m̂<sup>(t)</sup>，新旧消息加权平均。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">强耦合环上消息来回翻转、无法判收敛。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">给荡秋千的人加阻力——幅度小了，停下也慢了。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为阻尼能修精度——它只压震荡，不改变不动点的位置。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">Loopy BP 实践标配；EP、GBP 等同族迭代算法同样使用。</span></div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- ============ 分层习题 ============ -->
+    <h2><span class="sec-no">📝</span>分层习题</h2>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>判断对错：<strong>只要 Loopy BP 收敛了，得到的就是真实的边缘分布。</strong>说明理由。</div>
+      <details>
+        <summary>提示</summary>
+        <p>回忆 Yedidia–Freeman–Weiss 定理：不动点对应什么目标函数的驻点？例 2 的数字说明了什么？</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">错。BP 不动点 ⟺ Bethe 自由能的驻点，而 Bethe 自由能在带环图上是近似目标。例 2 中消息干净地收敛，b<sub>A</sub>(0) ≈ 0.93 而真实边缘是 0.740——收敛与正确之间隔着"Bethe 驻点到真实边缘的距离"。只有树上驻点才恰好等于真实边缘。</div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>判断对错：<strong>在树上跑 BP，需要迭代很多轮直到消息收敛。</strong>说明理由。</div>
+      <details>
+        <summary>提示</summary>
+        <p>想想消息之间的依赖关系是什么形状的？"收敛"这个概念为谁准备？</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">错。树上消息的依赖关系是有向无环的：选定根后，先由叶向根、再由根向叶各传一遍（两遍调度），所有消息即被确定且精确——有限步结束，无迭代、无收敛问题。需要"迭代至收敛"的是带环图，因为环让消息依赖成圈，谁先谁后没有天然顺序。</div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>链 X—Y—Z，两条边上的势都是"相同 5 / 不同 2"，证据 Z = z⁰（硬证据）。手算 m<sub>Z→Y</sub>、m<sub>Y→X</sub> 与 b<sub>X</sub>，并用枚举验证。</div>
+      <details>
+        <summary>提示</summary>
+        <p>模仿例 1：叶子消息就是势函数的一列；中继消息做一次加权和；最后用 4 种赋值枚举对拍。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p>m<sub>Z→Y</sub>(y) = ψ(y, z⁰) = {y⁰: 5, y¹: 2}。</p>
+          <p>m<sub>Y→X</sub>(x⁰) = 5×5 + 2×2 = 29；m<sub>Y→X</sub>(x¹) = 2×5 + 5×2 = 20。</p>
+          <p>b<sub>X</sub> ∝ {29, 20}，故 P(x⁰|z⁰) = 29/49 ≈ 0.592。</p>
+          <p>枚举验证（z=0 的 4 种赋值）：(0,0,0)→25，(0,1,0)→4，(1,0,0)→10，(1,1,0)→10，Z′ = 49，P(x⁰|z⁰) = (25+4)/49 = 29/49。✓ 消息传递与枚举一致——树上的 BP 精确。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>对例 2 的 3 节点环（三边"相同 10 / 不同 1"，软证据 φ<sub>C</sub> = (3,1)），从均匀初始化出发，手算前两轮的 u、r 与第二轮结束时的 b<sub>A</sub>(0)；并解释为什么第二轮 b<sub>A</sub> 就已超过真实值 0.740。</div>
+      <details>
+        <summary>提示</summary>
+        <p>用更新式 u ← (29q+1)/(22q+11)，r ← (9u+1)/11；信念 b<sub>A</sub>(0) 由 r 与 u 之积归一化。注意第二轮时 r 已经带上了 C 经 B 绕行的信息。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p>第 1 轮（初值 q = 0.5）：u = (29×0.5+1)/(22×0.5+11) = 15.5/22 ≈ 0.7045；r 与 q 由均匀输入算出仍为 0.5。</p>
+          <p>第 2 轮：r = (9×0.7045+1)/11 = 7.34/11 ≈ 0.667。</p>
+          <p>b<sub>A</sub>(0) ∝ r·u = 0.667×0.7045 ≈ 0.470；b<sub>A</sub>(1) ∝ 0.333×0.2955 ≈ 0.098；归一化得 b<sub>A</sub>(0) ≈ 0.827，已高于真实值 0.740。</p>
+          <p>原因：r 是"C→B→A"绕环路径送来的证据，u 是"C→A"直达路径送来的证据，b<sub>A</sub> 把二者相乘——同一份 C 的证据被数了两遍。迭代越久，两边互相加强，极限时过冲到约 0.93。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l3">L3 建模应用</span>图像去噪：2×2 像素的二值图 X₁…X₄ 排成田字格（边：X₁—X₂、X₃—X₄、X₁—X₃、X₂—X₄），每像素还有带噪观测 Yᵢ 给出单元势 φᵢ(Xᵢ)。要用 Loopy BP 推断每个像素的干净值。请：(1) 写出 X₁ 发给 X₂ 的消息公式；(2) 数出图中有几个环；(3) 指出 X₁ 的证据到达 X₄ 有几条路径，后果是什么；(4) 给出两条提高可信度的实用对策。</div>
+      <details>
+        <summary>提示</summary>
+        <p>消息公式里 φ 是单元观测势；画一下田字格就能数环；找 X₁ 到 X₄ 的所有不重复路径。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p>(1) m<sub>1→2</sub>(x₂) = Σ<sub>x₁</sub> ψ₁₂(x₁,x₂)·φ₁(x₁)·m<sub>3→1</sub>(x₁)。</p>
+          <p>(2) 一个环：X₁—X₂—X₄—X₃—X₁（四元环）。</p>
+          <p>(3) 两条：X₁→X₂→X₄ 与 X₁→X₃→X₄。X₄ 的置信把两路消息相乘，X₁ 的观测证据被重复计数——若两路都指向同一取值，X₄ 会过自信。</p>
+          <p>(4) 对策一：加阻尼（α ≈ 0.5）抑制环上消息互相加强；对策二：多初始化跑几次看是否收敛到同一答案，并在可枚举的小块上与精确解对拍估计失真；也可升级为以整个四元环为一个区域的广义 BP（GBP），把环内关联整块处理。</p>
+        </div>
+      </details>
+    </div>
+
+    <!-- ============ 本章自测 ============ -->
+    <h2><span class="sec-no">✍️</span>本章自测</h2>
+    <p class="quiz-hint">点击选项判分，答错会给出原因。</p>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 1</div>
+      <div class="q-stem">树上置信传播之所以精确，根本原因是什么？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 消息迭代收敛速度快</li>
+        <li data-opt="b">B. 树无环，各消息汇总的子树证据两两不交，每份证据恰好计一次</li>
+        <li data-opt="c">C. 树上的势函数都归一化了</li>
+        <li data-opt="d">D. 因为采用两遍调度（先叶后根再回传）</li>
+      </ul>
+      <div class="quiz-explain">选 B。精确性的根源是图结构：无环 ⟹ 子树不交 ⟹ 不重复计数。A 错：树上 BP 两遍即停，谈不上"迭代收敛"。C 错：势函数本就不归一化，与精确性无关。D 错：两遍调度只是实现顺序，换成带环图再讲究的调度也不精确。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="c">
+      <div class="q-no">自测 2</div>
+      <div class="q-stem">Loopy BP 收敛后，我们得到的是：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 真实的边缘分布</li>
+        <li data-opt="b">B. 真实联合分布的 Bethe 拼接</li>
+        <li data-opt="c">C. Bethe 自由能在局部一致约束下的一个驻点</li>
+        <li data-opt="d">D. 配分函数的精确值</li>
+      </ul>
+      <div class="quiz-explain">选 C。Yedidia–Freeman–Weiss 定理：BP 不动点 ⟺ Bethe 自由能驻点。A 错：环上驻点一般不等于真实边缘（例 2：0.93 vs 0.74）。B 错：收敛的伪边缘拼出的不一定是合法联合分布。D 错：Bethe 自由能只给出 −ln Z 的近似。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 3</div>
+      <div class="q-stem">例 2 中 Loopy BP 收敛到 b<sub>A</sub>(0) ≈ 0.93，枚举得真实值 0.740。这个误差最准确的描述是：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 随机误差，换初始化就会消失</li>
+        <li data-opt="b">B. 系统性过自信：C 的证据被两条路径重复计数，方向对、强度被放大</li>
+        <li data-opt="c">C. 数值精度问题，加长浮点数位数可解决</li>
+        <li data-opt="d">D. 因为环太大导致的近似失效</li>
+      </ul>
+      <div class="quiz-explain">选 B。重复计数是系统性偏差：同一份证据被当成多份独立证据。A 错：换初始化不改变驻点的位置。C 错：与浮点精度无关。D 错：这只是 3 个节点的最小环——失真取决于环上耦合强度而非环长。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="d">
+      <div class="q-no">自测 4</div>
+      <div class="q-stem">下列哪种情形，Loopy BP 最可能震荡不收敛或严重失真？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 势函数接近均匀的弱环图</li>
+        <li data-opt="b">B. 证据很多的图</li>
+        <li data-opt="c">C. 树结构的图</li>
+        <li data-opt="d">D. 含强耦合、近确定性势的受挫环（如例 3 的强反铁磁三角）</li>
+      </ul>
+      <div class="quiz-explain">选 D。强耦合 + 受挫结构让消息更新斜率的绝对值接近甚至超过 1，迭代来回翻转。A、B 都是 Loopy BP 表现最好的情形（弱环近似无环；证据切断消息回路）。C 错：树上根本不存在收敛问题，两遍精确结束。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="a">
+      <div class="q-no">自测 5</div>
+      <div class="q-stem">阻尼 m<sup>(t)</sup> ← α·m<sup>(t−1)</sup> + (1−α)·m̂<sup>(t)</sup> 的作用与代价是：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 抑制震荡，使迭代更可能收敛；代价是收敛更慢，且不改变不动点位置</li>
+        <li data-opt="b">B. 提高不动点处的精度；代价是每轮多算一倍</li>
+        <li data-opt="c">C. 消除重复计数；代价是可能发散</li>
+        <li data-opt="d">D. 把 Bethe 驻点变成真实边缘；代价是只在小图上有效</li>
+      </ul>
+      <div class="quiz-explain">选 A。阻尼只是把更新步长减小，压住来回翻转，让迭代慢慢爬到原本就在那里的不动点。B、C、D 都把它说成了"修精度"的工具——不动点由消息方程决定，阻尼改变不了它，也就修不了 0.93 vs 0.74 那类系统性失真。</div>
+    </div>
+
+    <!-- ============ 三句话复述 ============ -->
+    <div class="retell">
+      <h3>🗣️ 用自己的话，三句话讲完本章</h3>
+      <p class="retell-sub">对着空气（或室友）说出这三句。说卡壳的那句，回去重读对应小节。</p>
+      <details>
+        <summary>句1：这章解决什么问题？——</summary>
+        <div class="retell-answer">参考答案：团树等精确推理在树宽大的图上计算爆炸，本章问：能否把树上的消息传递直接搬到带环图上做近似推理？搬过去之后算出来的到底是什么？</div>
+      </details>
+      <details>
+        <summary>句2：核心机制是什么？——</summary>
+        <div class="retell-answer">参考答案：置信传播在节点间传"子树证据汇总"式的消息——树上因无环不重复计数而精确；搬到带环图即成 Loopy BP，迭代至收敛。定理保证：其不动点恰好是 Bethe 自由能的驻点；环上该驻点一般不是真实边缘，且因证据沿环重复计数而系统性过自信，强耦合时甚至震荡不收敛。</div>
+      </details>
+      <details>
+        <summary>句3：它和前后章怎么分工？——</summary>
+        <div class="retell-answer">参考答案：Ch10 精确但受树宽限制；本章快、实用（图像 MRF、译码）但只到 Bethe 驻点、无误差保证；当近似质量不可控或要算配分函数时，第 12 章换采样路线——以时间换渐近无偏。</div>
+      </details>
+    </div>
+
+    <!-- ============ 复习计划 ============ -->
+    <div class="review-plan">
+      <h3>🔁 间隔复习计划</h3>
+      <p>回忆本身比重读有效 10 倍。到点只做一件事：翻卡 + 重做标记题。</p>
+      <table>
+        <tr><th>时间点</th><th>复习内容</th><th>预计用时</th></tr>
+        <tr><td>第 1 天</td><td>概念卡 1–6 全部 + 回忆卡 11.1-1、11.2-1、11.4-1</td><td>10 分钟</td></tr>
+        <tr><td>第 3 天</td><td>概念卡 2、4、5（Bethe 自由能/Loopy BP/重复计数）+ 重做自测错题 + L2 两题</td><td>10 分钟</td></tr>
+        <tr><td>第 7 天</td><td>三句话复述出声说一遍 + 回忆卡 11.2-2、11.3-1、11.4-2 + 重推例 1</td><td>12 分钟</td></tr>
+        <tr><td>第 15 天</td><td>只做合上书挑战；七条全过则本章毕业，卡在哪条就重读对应小节</td><td>15 分钟</td></tr>
+      </table>
+    </div>
+
+    <!-- 合上书挑战 -->
+    <div class="final-challenge">
+      <h3>📕 合上书挑战</h3>
+      <p class="fc-sub">现在关掉这个页面（或遮住屏幕），拿一张纸，凭记忆完成以下任务。全部做完再回来核对——这是本章真正的毕业考试。</p>
+      <ol id="challenge-list">
+        <li><span class="fc-check"></span>写出 BP 的消息更新公式与置信公式，并标注每个符号的含义</li>
+        <li><span class="fc-check"></span>用归纳法说清树上 BP 为什么精确（关键词：子树、两两不交、不重复计数）</li>
+        <li><span class="fc-check"></span>手算例 1：链 A—B—C（同 10/异 1，证据 C=0），推出 P(a=0|C=0) = 101/121</li>
+        <li><span class="fc-check"></span>写出 Bethe 熵与 Bethe 自由能的形式，说出"BP 不动点 ⟺ Bethe 驻点"定理及其含义</li>
+        <li><span class="fc-check"></span>用重复计数解释例 2 为什么收敛到 0.93 而真实值是 0.74</li>
+        <li><span class="fc-check"></span>说出 Loopy BP 易收敛与易震荡的两类条件，并写出阻尼公式</li>
+        <li><span class="fc-check"></span>回答本章的主线问题：带环置信传播求的到底是什么？（一句话）</li>
+      </ol>
+    </div>
+
+    <div class="complete-zone">
+      <button class="btn-complete" id="btn-complete" onclick="markDone()">✓ 我已完成本章（含合上书挑战）</button>
+    </div>
+
+    <div class="chapter-nav">
+      <a href="chapter-10.html"><span class="nav-dir">← 上一章</span>第10章 精确推理：团树算法</a>
+      <a href="chapter-12.html" class="next"><span class="nav-dir">下一章 →</span>第12章 近似推理：粒子方法</a>
+    </div>
+
+  </div>
+</div>
+
+<footer class="footer">
+  <div class="wrap">第11章 近似推理：置信传播 · PGM 互动讲义 · 基于 Koller &amp; Friedman (2009)</div>
+</footer>
+
+<script src="assets/mermaid.min.js"></script>
+<script>
+mermaid.initialize({
+  startOnLoad: true,
+  theme: "base",
+  themeVariables: {
+    primaryColor: "#e3edf7",
+    primaryBorderColor: "#1d5f9e",
+    primaryTextColor: "#1d5f9e",
+    lineColor: "#5c554b",
+    secondaryColor: "#fbeedd",
+    tertiaryColor: "#f5f1e8",
+    fontFamily: "-apple-system, PingFang SC, sans-serif",
+    fontSize: "14px"
+  },
+  flowchart: { curve: "linear", htmlLabels: false }
+});
+</script>
+<script>
+// 自测题逻辑
+document.querySelectorAll(".quiz-block").forEach(block => {
+  const answer = block.dataset.answer;
+  const explain = block.querySelector(".quiz-explain");
+  block.querySelectorAll(".quiz-opts li").forEach(li => {
+    li.addEventListener("click", () => {
+      const opts = block.querySelectorAll(".quiz-opts li");
+      opts.forEach(o => o.classList.add("disabled"));
+      if (li.dataset.opt === answer) {
+        li.classList.add("correct");
+      } else {
+        li.classList.add("wrong");
+        block.querySelector(`[data-opt="${answer}"]`).classList.add("correct");
+      }
+      explain.classList.add("show");
+    });
+  });
+});
+
+// 合上书清单打勾
+document.querySelectorAll("#challenge-list li").forEach(li => {
+  li.addEventListener("click", () => li.classList.toggle("checked"));
+});
+
+// 完成标记 → localStorage（第11章）
+const KEY = "pgm_progress_v1";
+function loadProgress() {
+  try { return JSON.parse(localStorage.getItem(KEY)) || {}; } catch (e) { return {}; }
+}
+const progress = loadProgress();
+const btn = document.getElementById("btn-complete");
+if (progress[11] && progress[11].done) {
+  btn.textContent = "✓ 已完成 · 再次点击重置";
+  btn.classList.add("done");
+}
+function markDone() {
+  const p = loadProgress();
+  if (p[11] && p[11].done) {
+    delete p[11];
+    btn.textContent = "✓ 我已完成本章（含合上书挑战）";
+    btn.classList.remove("done");
+  } else {
+    p[11] = { done: true, completedAt: Date.now(), reviewsDone: 0 };
+    btn.textContent = "✓ 已完成 · 复习提醒已开启";
+    btn.classList.add("done");
+  }
+  localStorage.setItem(KEY, JSON.stringify(p));
+}
+</script>
+
+</body>
+</html>

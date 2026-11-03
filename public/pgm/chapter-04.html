@@ -1,0 +1,873 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第4章 马尔可夫网络 · PGM 互动讲义</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+<nav class="topbar">
+  <div class="topbar-inner">
+    <span class="brand"><a href="index.html" style="color:inherit">← 学习地图</a></span>
+    <span class="crumb">阶段一 · 表示 / 第4章</span>
+  </div>
+</nav>
+
+<div class="wrap">
+
+  <div class="lecture-head">
+    <span class="ch-label">CHAPTER 04 · 表示</span>
+    <h1>马尔可夫网络</h1>
+    <p class="lead">贝叶斯网络的"对称版"：当关系没有方向，无向图登场。</p>
+  </div>
+
+  <!-- 本章定位 -->
+  <div class="position-bar">
+    <strong>本章在主线上的位置：</strong>有向图编码因果结构 → <u>无向图编码对称依赖，分布写成团上势函数的乘积</u> → 两类图都是推理（Ch9–11）和学习（Ch20）的输入。<br>
+    第4章回答主线上的第二个问题：<strong>当变量间的依赖天然对称、无法指定方向时，如何紧凑表示联合分布？</strong>
+    <div class="map-inline">
+      <span class="node">Ch3 贝叶斯网络（有向，CPD）</span><span class="arrow">→</span>
+      <span class="node here">Ch4 马尔可夫网络（无向，势函数）</span><span class="arrow">→</span>
+      <span class="node">Ch9-11 推理（变量消去/信念传播都跑在无向图上）</span><span class="arrow">→</span>
+      <span class="node">Ch20 马尔可夫网络学习（配分函数让学习变难）</span>
+    </div>
+  </div>
+
+  <!-- 学习目标 -->
+  <div class="objectives">
+    <h4>🎯 学完本章，合上书你应该能：</h4>
+    <ol>
+      <li>说出一类贝叶斯网络表达不了的对称依赖，并解释为什么强行定向会引入假独立</li>
+      <li>写出吉布斯分布的因子分解公式，说清势函数与条件概率表的本质区别</li>
+      <li>给定一张小型无向图，找出它的所有最大团，并写出对应的因子分解</li>
+      <li>用图分离判断无向图中的条件独立性，并说出三种马尔可夫性质何时等价</li>
+      <li>手工把一个贝叶斯网络道德化为马尔可夫网络，指出转换中丢失了哪条独立性</li>
+    </ol>
+  </div>
+
+  <div class="lecture">
+
+    <!-- 推导主线 -->
+    <div class="figure">
+      <div class="mermaid">
+flowchart LR
+  A["Ch3 的有向边<br>遇到对称关系"] --> B["改用无向边<br>节点 = 变量"]
+  B --> C["怎么给联合分布<br>参数化？势函数"]
+  C --> D["势函数不归一化<br>需要全局配分函数 Z"]
+  D --> E["独立性怎么读？<br>图分离"]
+  E --> F["与 BN 互转<br>道德化"]
+  F --> G["代价：Z 难算<br>推理学习都受影响"]
+  classDef hot fill:#fbeedd,stroke:#c4651f,stroke-width:2.5px,color:#c4651f;
+  classDef danger fill:#fae9e7,stroke:#b03a2e,stroke-width:2.5px,color:#b03a2e;
+  class C hot;
+  class G danger;
+      </div>
+      <div class="caption">本章推导主线：每一步都在回答"为什么需要下一步"。终点（红色）是本章买下的账单——它将一直付到第 9、10、20 章。</div>
+    </div>
+
+    <!-- ============ 4.1 ============ -->
+    <h2><span class="sec-no">4.1</span>为什么有向图不够用：一个无法定向的关系</h2>
+
+    <p>上一章的贝叶斯网络要求每条边都有方向。方向意味着"谁影响谁"——这在因果链条里很自然。但很多真实关系<strong>根本没有方向</strong>：相邻像素互相约束、朋友关系彼此对称、分子间作用力双向。强行给这种关系定向，不只是"别扭"，而是会<strong>丢失独立性信息</strong>。</p>
+
+    <h3>误解例子（Misconception Example）</h3>
+    <p>四个学生 A、B、C、D 组成学习小组，两两之间有误解的"传染"关系：<strong>(A,B)、(B,C)、(C,D)、(D,A)</strong> 四对相邻同学会互相影响，而且只有这四对。我们想表达的全部独立性只有两条：</p>
+    <ul>
+      <li>A ⊥ C | {B, D}（给定 B 和 D 的状态，A 和 C 互不影响）</li>
+      <li>B ⊥ D | {A, C}（同理）</li>
+    </ul>
+
+    <p>现在试试用贝叶斯网络表达它。BN 的图必须以这个四元环为<span class="term">骨架</span>（Skeleton，即忽略方向后的无向图）。有一条图论事实：<strong>任何无弦环（长度 ≥ 4 的环）的无环定向，必然产生至少一个 V-结构</strong>。比如下面这种定向：</p>
+
+    <div class="figure">
+      <div class="mermaid">
+flowchart TB
+  subgraph T["目标：只有四条无向边"]
+    A1["A"] --- B1["B"]
+    B1 --- C1["C"]
+    C1 --- D1["D"]
+    D1 --- A1
+  end
+  subgraph F["一种失败的定向（被迫出现 V-结构 A到B 和 C到B）"]
+    A2["A"] --> B2["B"]
+    C2["C"] --> B2
+    C2 --> D2["D"]
+    A2 --> D2
+  end
+  classDef danger fill:#fae9e7,stroke:#b03a2e,stroke-width:2.5px,color:#b03a2e;
+  class B2 danger;
+      </div>
+      <div class="caption">图 4.1 左：想表达的对称关系（四元环）。右：任何无环定向都逃不掉 V-结构——这里 B 处形成 A→B←C，而 V-结构会强制声明 A ⊥ C（无条件独立）。</div>
+    </div>
+
+    <p>V-结构 A→B←C 的语义（回忆第 3 章）是：<strong>A 和 C 无条件独立，只在给定 B 时才相关</strong>。但在我们的学习小组里，A 和 C 明明通过两条路径（A-B-C 与 A-D-C）互相影响，无条件独立是<strong>假的</strong>！换任何一种定向，你都会在某个角落制造出一个这样的 V-结构，从而被迫声明一条不该有的独立性。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>有向图的独立性语义是"方向敏感"的（V-结构靠方向区分通断）。对称关系没有方向可用，所以任何定向都会多报独立、漏报依赖。<strong>出路：干脆用无向边</strong>，让"相连 = 直接相关"这一件事说清全部结构。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>"无向图只是偷懒的有向图"——错。两类图能表达的独立性集合<strong>互不包含</strong>：V-结构的"给定共同效应才相关"只有有向图能表达；四元环这类对称依赖只有无向图能干净表达。4.5 节会精确展开。</p>
+    </div>
+
+    <!-- 回忆卡片 4.1 -->
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 4.1-1</div>
+              <div class="q-text">误解例子里，我们想表达的四元环上只有哪两条条件独立性？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              A ⊥ C | {B, D} 和 B ⊥ D | {A, C}。就这两条，别的相关性都真实存在。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 4.1-2</div>
+              <div class="q-text">为什么任何以四元环为骨架的 DAG 都必然丢失信息？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              无弦环的无环定向必含 V-结构；V-结构强制声明一对节点无条件独立，而四元环上任意两个节点都经两条路径相关，所以这条独立性是假的。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 4.2 ============ -->
+    <h2><span class="sec-no">4.2</span>参数化：势函数、吉布斯分布与配分函数</h2>
+
+    <p>图定了（无向），接下来要回答：联合分布怎么写？BN 的答案是"每个节点一个条件概率表 P(Xᵢ|Pa(Xᵢ))"。但无向图没有父节点概念，CPD 无处安放。无向图的参数单元是<span class="term">因子</span>（Factor）——也叫<span class="term">势函数</span>（Potential Function）：</p>
+
+    <p><strong>定义</strong>：因子 φ 是一个从某组变量的赋值映到<strong>非负实数</strong>的函数。它不要求和为 1——它不是概率，只是"这组取值有多相容"的打分。</p>
+
+    <p>把分布在整张图上组装起来的方式叫<span class="term">吉布斯分布</span>（Gibbs Distribution）：</p>
+
+    <div class="formula">P(X₁, …, Xₙ) = <span class="frac"><span class="num-part">1</span><span class="den-part">Z</span></span> ∏<sub>C ∈ 团</sub> ψ<sub>C</sub>(X<sub>C</sub>)</div>
+
+    <p>其中每个 ψ<sub>C</sub> 定义在图的一个团 C 上（团的概念 4.3 节严格化），<span class="term">配分函数</span>（Partition Function）</p>
+
+    <div class="formula">Z = ∑<sub>x₁,…,xₙ</sub> ∏<sub>C</sub> ψ<sub>C</sub>(x<sub>C</sub>)</div>
+
+    <p>是把所有赋值下的乘积加总起来的归一化常数——它保证整个东西真的是概率分布。</p>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 配分函数是本章埋下的"账"</span>
+      <p>Z 要对<strong>所有变量赋值求和</strong>，是指数级复杂度。BN 里每个 CPD 自带归一化，没有这个问题；MN 把归一化推迟到了全局，换来表达对称性的自由，代价是算边际概率都要先过 Z 这一关。这正是第 9–11 章（推理）和第 20 章（学习）头疼的根源。</p>
+    </div>
+
+    <h3>例 1：一条链上的完整手算</h3>
+    <p>三个二元变量 A—B—C 排成一条链，两个因子 φ₁(A,B) 与 φ₂(B,C) 都是同一个打分：<strong>两端取值相同得 10 分，不同得 1 分</strong>（刻画"邻居倾向一致"）：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>a</th><th>b</th><th>φ₁(a,b)</th><th></th><th>b</th><th>c</th><th>φ₂(b,c)</th></tr>
+        <tr><td>0</td><td>0</td><td>10</td><td></td><td>0</td><td>0</td><td>10</td></tr>
+        <tr><td>0</td><td>1</td><td>1</td><td></td><td>0</td><td>1</td><td>1</td></tr>
+        <tr><td>1</td><td>0</td><td>1</td><td></td><td>1</td><td>0</td><td>1</td></tr>
+        <tr><td>1</td><td>1</td><td>10</td><td></td><td>1</td><td>1</td><td>10</td></tr>
+      </table>
+    </div>
+
+    <p><strong>第一步：枚举全部 2³ = 8 种赋值，算未归一化权重</strong> P̃(a,b,c) = φ₁(a,b)·φ₂(b,c)：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>赋值</th><th>φ₁</th><th>φ₂</th><th>P̃</th></tr>
+        <tr><td>0,0,0</td><td>10</td><td>10</td><td><strong>100</strong></td></tr>
+        <tr><td>0,0,1</td><td>10</td><td>1</td><td>10</td></tr>
+        <tr><td>0,1,0</td><td>1</td><td>1</td><td>1</td></tr>
+        <tr><td>0,1,1</td><td>1</td><td>10</td><td>10</td></tr>
+        <tr><td>1,0,0</td><td>1</td><td>10</td><td>10</td></tr>
+        <tr><td>1,0,1</td><td>1</td><td>1</td><td>1</td></tr>
+        <tr><td>1,1,0</td><td>10</td><td>1</td><td>10</td></tr>
+        <tr><td>1,1,1</td><td>10</td><td>10</td><td><strong>100</strong></td></tr>
+      </table>
+    </div>
+
+    <p><strong>第二步：算配分函数</strong> Z = 100+10+1+10+10+1+10+100 = <strong>242</strong>。于是 P(0,0,0) = 100/242 ≈ 0.41——"全 0"与"全 1"两种整齐状态合计拿走了约 83% 的概率质量，这正是"邻居一致"打分想表达的意思。</p>
+
+    <p><strong>第三步：算边际与条件概率，观察依赖如何传播</strong>：</p>
+    <ul>
+      <li>P(a⁰) = (100+10+1+10)/242 = 121/242 = <strong>0.5</strong>（先验上 A 均匀）</li>
+      <li>P(a⁰|b⁰) = (100+10)/(100+10+10+1) = 110/121 ≈ <strong>0.91</strong>（看到邻居 B=0，A 几乎确定是 0）</li>
+      <li>P(a⁰|c⁰) = (100+1)/(100+1+10+10) = 101/121 ≈ <strong>0.83</strong>（隔着 B，C 的信息仍能传过来，只是变弱）</li>
+    </ul>
+
+    <div class="box idea">
+      <span class="box-tag">💡 直觉</span>
+      <p>无向图里没有"谁先谁后"，依赖像热传导一样沿边双向流动：观察任何节点，都会通过因子重新加权所有连通的赋值。注意第三步我们是从 8 行枚举里硬加出来的——<strong>变量一多就得有更好的算法</strong>，这就是第 9 章变量消去要干的事。</p>
+    </div>
+
+    <!-- 回忆卡片 4.2 -->
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 4.2-1</div>
+              <div class="q-text">势函数和条件概率表有什么本质区别？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              势函数只是非负的相容性打分，不归一化、没有"条件"方向；CPD 是归一化的条件概率，带方向（父→子）。MN 靠全局配分函数 Z 统一归一化。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 4.2-2</div>
+              <div class="q-text">写出吉布斯分布公式，并解释 Z 为什么贵。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              P(X) = (1/Z)·∏<sub>C</sub> ψ<sub>C</sub>(X<sub>C</sub>)，Z = Σ<sub>x</sub> ∏<sub>C</sub> ψ<sub>C</sub>(x<sub>C</sub>)。Z 要枚举全部赋值求和，复杂度随变量数指数增长。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 4.3 ============ -->
+    <h2><span class="sec-no">4.3</span>团与独立性：无向图上怎么读结构</h2>
+
+    <p>上一节例子里的因子都定义在"边"上。一般地，因子可以定义在更大的变量组上，而这个组的形状由图决定。</p>
+
+    <p><strong>定义</strong>：<span class="term">团</span>（Clique）是图中两两相连的一组节点。<span class="term">最大团</span>（Maximal Clique）是不能再加进任何节点的团。吉布斯分布的标准参数化是：<strong>每个最大团一个势函数</strong>。</p>
+
+    <div class="figure">
+      <div class="mermaid">
+flowchart LR
+  A["A"] --- B["B"]
+  B --- C["C"]
+  A --- C
+  C --- D["D"]
+  C --- E["E"]
+  D --- E
+  classDef hot fill:#fbeedd,stroke:#c4651f,stroke-width:2.5px,color:#c4651f;
+  class A,B,C hot;
+      </div>
+      <div class="caption">图 4.2 两个最大团：{A,B,C}（橙色）与 {C,D,E}。因子分解为 P ∝ ψ₁(A,B,C)·ψ₂(C,D,E)。注意 {A,B} 这类小团不需要单独的势函数——它们被最大团覆盖了。</div>
+    </div>
+
+    <h3>读独立性：比 d-分离简单得多的图分离</h3>
+    <p>无向图里没有 V-结构，独立性规则朴素得多：<strong>切断即独立</strong>。</p>
+
+    <div class="box insight">
+      <span class="box-tag">✅ 全局马尔可夫性（Global Markov Property）</span>
+      <p>给定观测集 Z，如果 X 与 Y 之间的<strong>所有路径</strong>都经过 Z（即把 Z 从图中删掉后 X、Y 不连通），则 X ⊥ Y | Z。这条规则叫<span class="term">图分离</span>（Graph Separation）。</p>
+    </div>
+
+    <p>对比例 1 的链 A—B—C：删掉 B 后 A 与 C 不连通，所以 A ⊥ C | B。这正是手算里"依赖隔着 B 传播、但被 B 阻断"的图读法。</p>
+
+    <h3>三种马尔可夫性质与马尔可夫毯</h3>
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>性质</th><th>陈述</th></tr>
+        <tr><td><strong>成对马尔可夫性</strong>（Pairwise）</td><td>无边相连的两个节点，给定其余所有节点后独立</td></tr>
+        <tr><td><strong>局部马尔可夫性</strong>（Local）</td><td>给定一个节点的全部邻居后，它与其余所有节点独立</td></tr>
+        <tr><td><strong>全局马尔可夫性</strong>（Global）</td><td>被 Z 图分离的任意两组变量，给定 Z 后独立</td></tr>
+      </table>
+    </div>
+
+    <p>对<strong>严格正分布</strong>（P(x) &gt; 0 对所有赋值成立），三者互相等价。记住局部性质给出的实用结论：</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 马尔可夫毯</span>
+      <p>节点的<span class="term">马尔可夫毯</span>（Markov Blanket）是"遮住它后使它与世界其余部分独立"的最小集合。BN 里它是"父节点 + 子节点 + 子的其他父节点"；<strong>MN 里它就是全部邻居</strong>——推理时（Ch11 信念传播、Gibbs 采样）每次只需要看邻居，这就是全部算法局部性的来源。</p>
+    </div>
+
+    <!-- 回忆卡片 4.3 -->
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 4.3-1</div>
+              <div class="q-text">图 4.2 的最大团有哪些？写出它的因子分解形式。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              最大团：{A,B,C} 与 {C,D,E}。P(A,B,C,D,E) = (1/Z)·ψ₁(A,B,C)·ψ₂(C,D,E)。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 4.3-2</div>
+              <div class="q-text">无向图中判断 X ⊥ Y | Z 的规则是什么？比 d-分离简单在哪里？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              图分离：删掉 Z 后 X、Y 不连通则独立。不需要区分链/分岔/V-结构，不存在"方向改变通断"的微妙情况——切断就是切断。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 4.4 ============ -->
+    <h2><span class="sec-no">4.4</span>Hammersley-Clifford 定理：图与分布的正式联姻</h2>
+
+    <p>到目前我们默认了两件事：吉布斯分布（能因子分解的分布）服从图分离；反过来，服从图分离的正分布都能因子分解。前者好证，后者深刻。把它们钉在一起的是<span class="term">Hammersley-Clifford 定理</span>：</p>
+
+    <div class="box insight">
+      <span class="box-tag">✅ 定理（Hammersley-Clifford）</span>
+      <p>设 P 是严格正分布（所有赋值概率 &gt; 0）。则 P 满足无向图 ℋ 的全局马尔可夫性，<strong>当且仅当</strong> P 可以写成 ℋ 的最大团上正势函数的乘积（除以一个配分函数）。</p>
+    </div>
+
+    <p>它对应第 3 章里"d-分离可靠且（几乎）完备"的地位：<strong>图上的分离 ⟺ 分布里的因子分解</strong>。这条双向桥让我们可以放心地在"看图"和"算分布"两个世界之间来回切换——第 9、10 章的推理算法（变量消去、团树）正是建立在这座桥上。</p>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 严格正的条件不能省</span>
+      <p>如果分布允许某些赋值概率为 0，"图分离 ⇒ 因子分解"可能失效。实践中吉布斯分布的势函数取正值（如对数线性模型 e<sup>w·f</sup>），天然满足严格正。</p>
+    </div>
+
+    <!-- 回忆卡片 4.4 -->
+    <div class="recall-zone">
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 4.4-1</div>
+              <div class="q-text">Hammersley-Clifford 定理说什么？前提条件是什么？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              严格正分布：满足图的全局马尔可夫性 ⟺ 可按最大团因子分解。前提：P(x) &gt; 0 处处成立。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 4.5 ============ -->
+    <h2><span class="sec-no">4.5</span>与贝叶斯网络互转：道德化，以及两种图的表达力边界</h2>
+
+    <p>第 9、10 章的推理算法大多跑在无向图上，所以"把 BN 转成无向图"是标准操作。转换分两步，合称<span class="term">道德化</span>（Moralization）：</p>
+    <ol>
+      <li><strong>"结婚"</strong>：把每个节点的所有父节点两两相连（同一孩子的多个父母必须"结为道德夫妻"）；</li>
+      <li><strong>去方向</strong>：所有有向边变无向边。</li>
+    </ol>
+
+    <h3>例 2：学生例子的道德化</h3>
+    <div class="figure">
+      <div class="mermaid">
+flowchart LR
+  subgraph BN["原贝叶斯网络"]
+    D1["D"] --> G1["G"]
+    I1["I"] --> G1
+    I1 --> S1["S"]
+    G1 --> L1["L"]
+  end
+  subgraph MN["道德化后的马尔可夫网络"]
+    D2["D"] --- G2["G"]
+    I2["I"] --- G2
+    I2 --- S2["S"]
+    G2 --- L2["L"]
+    D2 -.- I2
+  end
+  classDef danger fill:#fae9e7,stroke:#b03a2e,stroke-width:2.5px,color:#b03a2e;
+  classDef hot fill:#fbeedd,stroke:#c4651f,stroke-width:2.5px,color:#c4651f;
+  class G1 hot;
+  linkStyle 8 stroke:#b03a2e,stroke-width:2.5px;
+      </div>
+      <div class="caption">图 4.3 左：第 3 章学生例子（D→G←I 是 V-结构）。右：道德化。红色虚线 D—I 是新加的"道德边"——没有它，最大团 {D,G,I} 就不成其为团，因子 P(G|D,I) 将无处安放。</div>
+    </div>
+
+    <p>道德化后的最大团是 <strong>{D,G,I}</strong>、{I,S}、{G,L}。把原 BN 的每个 CPD 直接当作势函数，恰好各就各位：</p>
+
+    <div class="formula">P(D,I,G,S,L) = <span class="frac"><span class="num-part">1</span><span class="den-part">Z</span></span> · ψ₁(D,G,I) · ψ₂(I,S) · ψ₃(G,L)</div>
+
+    <p>其中 ψ₁(D,G,I) = P(D)·P(I)·P(G|D,I)，ψ₂(I,S) = P(S|I)，ψ₃(G,L) = P(L|G)。乘起来正好是原来的联合分布，所以 <strong>Z = 1</strong>（BN 转来的分布已经归一化好了）。<strong>任何 BN 都能这样无损地变成一个分布相同的 MN。</strong></p>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 分布保住了，独立性信息却丢了</span>
+      <p>原 BN 里 V-结构 D→G←I 声明 <strong>D ⊥ I</strong>（不观测 G 时独立）。但道德化图里 D—I 直接有边，图分离再也读不出这条独立性。定理保证的是"分布不变"，不是"图的可读独立性不变"——道德化图只给出了原 BN 独立性的一个<strong>子集</strong>。反过来，从 MN 定向回 BN 一般不可能（4.1 节的四元环就是反例）。</p>
+    </div>
+
+    <h3>表达力对比：两种图各自守住一块领土</h3>
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>结构</th><th>谁能干净表达</th><th>原因</th></tr>
+        <tr><td>V-结构 X→Z←Y（X ⊥ Y，但 X ⊥̸ Y | Z）</td><td>只有 BN</td><td>无向图无法表达"无条件独立、条件后相关"</td></tr>
+        <tr><td>四元环对称依赖（4.1 节）</td><td>只有 MN</td><td>无弦环的无环定向必产生 V-结构，多报独立</td></tr>
+      </table>
+    </div>
+
+    <div class="box idea">
+      <span class="box-tag">💡 怎么选</span>
+      <p>有自然因果方向 → BN；关系对称、无方向 → MN（图像、网络、物理系统）。两者的推理算法（Ch9–13）几乎通用，所以"选谁"主要是表示问题，不是计算问题。MN 的真正代价在别处：配分函数让<strong>学习</strong>（Ch20）比 BN 难得多。</p>
+    </div>
+
+    <!-- 回忆卡片 4.5 -->
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 4.5-1</div>
+              <div class="q-text">道德化的两步操作是什么？为什么必须"娶父母"？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              ①同一节点的所有父节点两两连边；②全部边去方向。不"娶父母"，P(G|D,I) 这样的多父 CPD 就无法落在任何一个团上，因子分解失效。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 4.5-2</div>
+              <div class="q-text">BN 道德化成 MN 后，什么东西不变、什么东西丢失了？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              联合分布不变（Z=1）。丢失：V-结构带来的"无条件独立"类独立性（如 D ⊥ I），因为道德边让父母在图上直接相连。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 4.6 ============ -->
+    <h2><span class="sec-no">4.6</span>对数线性视角：通往现代模型的门</h2>
+
+    <p>实践中很少有人直接填势函数表，更常见的写法是把势函数取对数，展开成<strong>特征的加权和</strong>——<span class="term">对数线性模型</span>（Log-Linear Model）：</p>
+
+    <div class="formula">P(X) = <span class="frac"><span class="num-part">1</span><span class="den-part">Z</span></span> exp( ∑<sub>i</sub> w<sub>i</sub> · f<sub>i</sub>(X<sub>C<sub>i</sub></sub>) )</div>
+
+    <p>其中 f<sub>i</sub> 是定义在某个团上的<span class="term">特征函数</span>（Feature，常取 0/1 示性函数），w<sub>i</sub> 是它的权重。等价地，把势函数写成 ψ<sub>C</sub> = exp(−E<sub>C</sub>)，就得到统计物理里的<span class="term">能量函数</span>（Energy Function）形式：能量越低的赋值概率越高。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 为什么这扇门重要</span>
+      <p>对数线性形式把"建模型"变成"设计特征 + 学权重"：CRF（条件随机场，标注任务的标配）就是给定观测后的对数线性 MRF；最大熵模型是它的特例；深度学习里的能量模型（EBM）名字也来自这里。特征与权重的数学性质由第 8 章指数族统一处理，参数怎么学见第 20 章。</p>
+    </div>
+
+    <!-- 回忆卡片 4.6 -->
+    <div class="recall-zone">
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 4.6-1</div>
+              <div class="q-text">对数线性模型里，一个"特征"是什么？它和势函数什么关系？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              特征是定义在某个团上的函数（常为 0/1 示性函数）；势函数 = exp(Σ wᵢfᵢ)，即对数空间里的线性组合取指数。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 概念卡 ============ -->
+    <h2><span class="sec-no">🃏</span>概念卡：本章概念的一分钟画像</h2>
+    <p>翻面前先自问：这个概念我能用一句话讲清楚吗？</p>
+    <div class="flip-grid">
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 1</div>
+            <div class="q-text">势函数（Potential Function）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">定义在一组变量上的非负打分函数，不要求归一化。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">无向图没有方向，CPD 无处安放；势函数提供"局部相容性"的参数单元。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">评委打分：每组相邻选手的配合程度一个分数，总分是乘积。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为它是概率——它不是，和不为 1，也没有条件方向。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">Ch9-11 推理的乘法单元；Ch20 学习的就是它（或其权重）。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 2</div>
+            <div class="q-text">配分函数（Partition Function）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">Z = Σ<sub>x</sub> ∏<sub>C</sub> ψ<sub>C</sub>(x<sub>C</sub>)，全体赋值下势函数乘积的总和。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">把不归一化的打分变成合法概率分布。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">全部选手得分的总和——没有它就不知道每个分数占多大比例。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为它只是个常数、不用算——它随参数变化，是推理和学习的计算瓶颈。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">Ch9/10 精确推理、Ch11 近似推理、Ch20 似然梯度，处处绕不开它。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 3</div>
+            <div class="q-text">团与最大团（Clique / Maximal Clique）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">团：两两相连的节点组；最大团：无法再扩大的团。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">划定每个势函数的作用范围：因子分解按最大团组织。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">饭局：团是"每两个人都互相认识"的一桌人。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">把"团"当成"连通子图"——连通不够，必须两两有边。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">Ch10 团树算法直接把最大团作为计算节点。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 4</div>
+            <div class="q-text">图分离（Graph Separation）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">删掉观测集 Z 后，X 与 Y 在图上不连通 ⟹ X ⊥ Y | Z。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">无向图上读条件独立性的唯一规则（全局马尔可夫性）。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">切断电话线：中间节点一拔，两端的消息就传不过去。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">与 d-分离混用——无向图没有 V-结构，不存在"观测反而打通"的情况。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">一切 MN 结构分析；Ch9 变量消去的顺序选择也看连通性。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 5</div>
+            <div class="q-text">马尔可夫毯（Markov Blanket）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">使节点与世界其余部分条件独立的最小观测集；MN 中 = 全部邻居。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">回答"要算这个节点的条件分布，最少需要知道谁"。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">隔音毯：裹住你之后，屋外发生什么与你无关。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">与 BN 的马尔可夫毯（父+子+共父）混淆——MN 里只有邻居。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">Ch11 信念传播与 Gibbs 采样的局部更新规则。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 6</div>
+            <div class="q-text">道德化（Moralization）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">BN→MN 的转换：父节点两两连边（"结婚"）+ 全部边去方向。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">推理算法多跑在无向图上，BN 须先转无向。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">为了孩子（CPD）有处安放，父母必须同桌吃饭。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为转换无损——分布不变，但 V-结构的无条件独立性从图上读不出来了。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">Ch9/10 推理前的预处理；理解 BN/MN 表达力差异的钥匙。</span></div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- ============ 分层习题 ============ -->
+    <h2><span class="sec-no">📝</span>分层习题</h2>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>判断对错：<strong>势函数必须和条件概率表一样，每行加起来等于 1。</strong>说明理由。</div>
+      <details>
+        <summary>提示</summary>
+        <p>回到势函数的定义：它的取值范围是什么？归一化由谁负责？</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">错。势函数只要求非负，是相容性的相对打分，不是概率；归一化由全局配分函数 Z 统一完成。这正是它与 CPD 的本质区别——CPD 每行归一化，所以 BN 不需要 Z，而 MN 需要。若强制势函数归一化，反而限制了参数化的自由度（很多有用的势，如 exp(w·f)，天然不归一化）。</div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>判断对错：<strong>无向图中没有边直接相连的两个变量无条件独立。</strong>用一个反例说明。</div>
+      <details>
+        <summary>提示</summary>
+        <p>无边只说明"没有直接因子"，但变量间可能存在什么？想想例 1 链上的 A 和 C。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">错。无边只排除<strong>直接</strong>依赖，依赖可经路径传播。反例：链 A—B—C 中 A、C 无边，但 P(a⁰|c⁰) ≈ 0.83 ≠ P(a⁰) = 0.5，二者相关。正确结论是无条件独立只当两节点<strong>不连通</strong>（无任何路径）时成立；给定中间节点 B 后才有 A ⊥ C | B。</div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>二元变量 X—Y 由一条边相连，势函数 φ(0,0)=4，φ(0,1)=1，φ(1,0)=1，φ(1,1)=4。手算：Z、P(0,0)、P(x⁰)、P(x⁰|y⁰)。</div>
+      <details>
+        <summary>提示</summary>
+        <p>Z 是四个值之和；边际 P(x⁰) 把含 x⁰ 的两行相加再除以 Z；条件概率用 P(x⁰,y⁰)/P(y⁰)。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p>Z = 4+1+1+4 = <strong>10</strong>。</p>
+          <p>P(0,0) = 4/10 = <strong>0.4</strong>。</p>
+          <p>P(x⁰) = (4+1)/10 = <strong>0.5</strong>。</p>
+          <p>P(y⁰) = (4+1)/10 = 0.5，故 P(x⁰|y⁰) = 0.4/0.5 = <strong>0.8</strong>。看到邻居取 0 后，X=0 的概率从 0.5 升到 0.8——依赖沿单条边传播。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>对链 X—Y—Z 上的吉布斯分布 P(x,y,z) = (1/Z)·φ₁(x,y)·φ₂(y,z)，从代数上证明 X ⊥ Z | Y。</div>
+      <details>
+        <summary>提示</summary>
+        <p>写出 P(x,z|y) = P(x,y,z)/P(y)，把分子按因子拆开，看能否分离成 g(x,y)·h(y,z) 的形状。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p>P(x,z|y) = P(x,y,z) / P(y)，其中 P(y) = Σ<sub>x',z'</sub> (1/Z)·φ₁(x',y)·φ₂(y,z')。</p>
+          <p>分子 = (1/Z)·φ₁(x,y)·φ₂(y,z)；分母 = (1/Z)·[Σ<sub>x'</sub>φ₁(x',y)]·[Σ<sub>z'</sub>φ₂(y,z')]（求和对 x 与 z 可分离，因为每个因子只含其一）。</p>
+          <p>于是 P(x,z|y) = [φ₁(x,y)/Σ<sub>x'</sub>φ₁(x',y)] · [φ₂(y,z)/Σ<sub>z'</sub>φ₂(y,z')] = f(x,y)·g(y,z)。</p>
+          <p>x 与 z 只出现在各自的因子中 ⟹ P(x,z|y) 可分离 ⟹ <strong>X ⊥ Z | Y</strong>。与图分离结论一致：这正是 Hammersley-Clifford 定理"因子分解 ⇒ 马尔可夫性"方向的手感。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l3">L3 建模应用</span>图像去噪：一张 2×2 的灰度图，每像素一个二值变量 X₁…X₄（干净/噪点翻转后的取值）。相邻像素（上下、左右）倾向取相同值，每个像素还依赖观测到的 noisy 版本。用马尔可夫网络建模：画出图、写出因子分解、列出最大团；并解释为什么这里用 BN 不合适。</div>
+      <details>
+        <summary>提示</summary>
+        <p>4 个像素排成田字格，横竖相邻连边——先想清楚这张无向图里有几条边、最大的两两相连集合是几元组。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p>图：X₁—X₂（上排）、X₃—X₄（下排）、X₁—X₃（左列）、X₂—X₄（右列），共 4 条边，无三角形。</p>
+          <p>最大团：就是 4 条边本身（{X₁,X₂}、{X₃,X₄}、{X₁,X₃}、{X₂,X₄}），因为没有三元组两两相连。</p>
+          <p>因子分解：P ∝ ψ₁₂(X₁,X₂)·ψ₃₄(X₃,X₄)·ψ₁₃(X₁,X₃)·ψ₂₄(X₂,X₄)·∏ᵢ ηᵢ(Xᵢ, Yᵢ)，其中 ηᵢ 是像素 i 与其观测 Yᵢ 之间的证据因子。</p>
+          <p>为何不用 BN：像素间约束天然对称，强加方向会出现 4.1 节的问题——这个四元环的任何无环定向都会产生 V-结构，被迫声明不存在的无条件独立性。对称相互作用是无向图的领土。</p>
+        </div>
+      </details>
+    </div>
+
+    <!-- ============ 本章自测 ============ -->
+    <h2><span class="sec-no">✍️</span>本章自测</h2>
+    <p class="quiz-hint">点击选项判分，答错会给出原因。</p>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 1</div>
+      <div class="q-stem">下列哪类依赖关系，贝叶斯网络原则上无法干净表达，而马尔可夫网络可以？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. X→Z←Y：X 与 Y 无条件独立、给定 Z 后相关</li>
+        <li data-opt="b">B. 四元环上的对称依赖：只有 A⊥C|{B,D} 与 B⊥D|{A,C}</li>
+        <li data-opt="c">C. 链式因果 X→Y→Z</li>
+        <li data-opt="d">D. 朴素贝叶斯式的"一个原因多个特征"</li>
+      </ul>
+      <div class="quiz-explain">选 B。四元环的任何无环定向必产生 V-结构，被迫多声明一条无条件独立。A 说反了——V-结构正是只有 BN 能表达的；C、D 两类有向结构 BN 天然胜任。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="c">
+      <div class="q-no">自测 2</div>
+      <div class="q-stem">链 A—B—C，两个势函数都是"相同 10 / 不同 1"。配分函数 Z 等于多少？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 220</li>
+        <li data-opt="b">B. 101</li>
+        <li data-opt="c">C. 242</li>
+        <li data-opt="d">D. 400</li>
+      </ul>
+      <div class="quiz-explain">选 C。8 种赋值里，全同的 (0,0,0)、(1,1,1) 各贡献 100；只有一端不同的 4 种各贡献 10；交错的 (0,1,0)、(1,0,1) 各贡献 1：2×100+4×10+2×1 = 242。A 漏算了交错项的贡献，D 忘了大多数赋值并不"全同"。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="a">
+      <div class="q-no">自测 3</div>
+      <div class="q-stem">无向图 X—Y—Z—W 是一条链。下列哪个独立性声明成立？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. X ⊥ W | {Y, Z}</li>
+        <li data-opt="b">B. X ⊥ Z（无条件）</li>
+        <li data-opt="c">C. X ⊥ W | Y，且 X ⊥ Z 无条件</li>
+        <li data-opt="d">D. X ⊥ Y | Z</li>
+      </ul>
+      <div class="quiz-explain">选 A。删掉 Y、Z 后 X 与 W 不连通，图分离成立。B 错：X、Z 经 Y 连通，无条件不独立（C 因此也错）。D 错：X 与 Y 直接有边相连，任何条件下都不独立。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="d">
+      <div class="q-no">自测 4</div>
+      <div class="q-stem">把含 V-结构 D→G←I 的贝叶斯网络道德化后，下列说法正确的是：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 联合分布改变了，需要重新估计参数</li>
+        <li data-opt="b">B. 道德化图中 D 与 I 不相连</li>
+        <li data-opt="c">C. 道德化图保留了原 BN 的全部独立性</li>
+        <li data-opt="d">D. 联合分布不变，但 D⊥I 这条独立性从图上读不出来了</li>
+      </ul>
+      <div class="quiz-explain">选 D。CPD 原样充当势函数，分布不变（Z=1），A 错。父节点 D、I 被"道德边"相连，B 错。正因 D—I 有边，图分离无法读出 D⊥I——道德化图的独立性是原图的子集，C 错。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 5</div>
+      <div class="q-stem">关于配分函数 Z，下列说法错误的是：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 它把不归一化的势函数乘积变成合法概率分布</li>
+        <li data-opt="b">B. 从贝叶斯网络道德化而来的马尔可夫网络，Z 通常远大于 1</li>
+        <li data-opt="c">C. 计算它需要对全部变量赋值求和，是指数级复杂度</li>
+        <li data-opt="d">D. 它是马尔可夫网络参数学习（第20章）比 BN 学习困难的重要原因</li>
+      </ul>
+      <div class="quiz-explain">选 B（"错误的是"）。BN 转 MN 时 CPD 原样当势函数，乘积已归一化，Z = 1。A、C、D 都是对 Z 的正确描述：它负责归一化、计算昂贵、并让似然梯度难以计算。</div>
+    </div>
+
+    <!-- ============ 三句话复述 ============ -->
+    <div class="retell">
+      <h3>🗣️ 用自己的话，三句话讲完本章</h3>
+      <p class="retell-sub">对着空气（或室友）说出这三句。说卡壳的那句，回去重读对应小节。</p>
+      <details>
+        <summary>句1：这章解决什么问题？——</summary>
+        <div class="retell-answer">参考答案：贝叶斯网络要求边有方向，遇到对称依赖（像素、朋友、相互作用）时任何定向都会被迫声明假的独立性；本章引入无向图来干净地表示这类关系。</div>
+      </details>
+      <details>
+        <summary>句2：核心机制是什么？——</summary>
+        <div class="retell-answer">参考答案：联合分布写成最大团上势函数（非负打分）的乘积，再除以全局配分函数 Z 归一化；独立性用图分离读取——切断即独立；Hammersley-Clifford 定理保证（正分布下）图与因子分解互为充要。</div>
+      </details>
+      <details>
+        <summary>句3：它和前后章怎么分工？——</summary>
+        <div class="retell-answer">参考答案：第 3 章管有向、本章管无向，两者是"表示"阶段的两块拼图；第 9–11 章的推理算法大多跑在（道德化后的）无向图上；配分函数带来的计算与学习困难，留给第 9、10、20 章去对付。</div>
+      </details>
+    </div>
+
+    <!-- ============ 复习计划 ============ -->
+    <div class="review-plan">
+      <h3>🔁 间隔复习计划</h3>
+      <p>回忆本身比重读有效 10 倍。到点只做一件事：翻卡 + 重做标记题。</p>
+      <table>
+        <tr><th>时间点</th><th>复习内容</th><th>预计用时</th></tr>
+        <tr><td>第 1 天</td><td>概念卡 1–6 全部 + 回忆卡 4.2-1、4.3-1、4.5-2</td><td>10 分钟</td></tr>
+        <tr><td>第 3 天</td><td>概念卡 2、4、6（配分函数/图分离/道德化）+ 重做自测错题 + L2 第 1 题</td><td>8 分钟</td></tr>
+        <tr><td>第 7 天</td><td>三句话复述出声说一遍 + 回忆卡 4.1-2、4.5-1</td><td>10 分钟</td></tr>
+        <tr><td>第 15 天</td><td>只做合上书挑战；六条全过则本章毕业，卡在哪条就重读对应小节</td><td>15 分钟</td></tr>
+      </table>
+    </div>
+
+    <!-- 合上书挑战 -->
+    <div class="final-challenge">
+      <h3>📕 合上书挑战</h3>
+      <p class="fc-sub">现在关掉这个页面（或遮住屏幕），拿一张纸，凭记忆完成以下任务。全部做完再回来核对——这是本章真正的毕业考试。</p>
+      <ol id="challenge-list">
+        <li><span class="fc-check"></span>写出吉布斯分布公式与配分函数定义，并说清势函数与 CPD 的两点区别</li>
+        <li><span class="fc-check"></span>画出误解例子的四元环，解释为什么它的任何有向化都会引入假的独立性</li>
+        <li><span class="fc-check"></span>对链 A—B—C（同 10 / 异 1）手算出 Z = 242 和 P(a⁰|c⁰) ≈ 0.83</li>
+        <li><span class="fc-check"></span>说出三种马尔可夫性质的内容，以及它们在什么条件下等价</li>
+        <li><span class="fc-check"></span>画出学生例子的道德化图，标出道德边，指出丢失了哪条独立性</li>
+        <li><span class="fc-check"></span>回答本章的主线问题：无向图如何紧凑表示对称依赖的联合分布？（一句话）</li>
+      </ol>
+    </div>
+
+    <div class="complete-zone">
+      <button class="btn-complete" id="btn-complete" onclick="markDone()">✓ 我已完成本章（含合上书挑战）</button>
+    </div>
+
+    <div class="chapter-nav">
+      <a href="chapter-03.html"><span class="nav-dir">← 上一章</span>第3章 贝叶斯网络</a>
+      <a href="chapter-05.html" class="next"><span class="nav-dir">下一章 →</span>第5章 局部概率模型</a>
+    </div>
+
+  </div>
+</div>
+
+<footer class="footer">
+  <div class="wrap">第4章 马尔可夫网络 · PGM 互动讲义 · 基于 Koller &amp; Friedman (2009)</div>
+</footer>
+
+<script src="assets/mermaid.min.js"></script>
+<script>
+mermaid.initialize({
+  startOnLoad: true,
+  theme: "base",
+  themeVariables: {
+    primaryColor: "#e3edf7",
+    primaryBorderColor: "#1d5f9e",
+    primaryTextColor: "#1d5f9e",
+    lineColor: "#5c554b",
+    secondaryColor: "#fbeedd",
+    tertiaryColor: "#f5f1e8",
+    fontFamily: "-apple-system, PingFang SC, sans-serif",
+    fontSize: "14px"
+  },
+  flowchart: { curve: "linear", htmlLabels: false }
+});
+</script>
+<script>
+// 自测题逻辑
+document.querySelectorAll(".quiz-block").forEach(block => {
+  const answer = block.dataset.answer;
+  const explain = block.querySelector(".quiz-explain");
+  block.querySelectorAll(".quiz-opts li").forEach(li => {
+    li.addEventListener("click", () => {
+      const opts = block.querySelectorAll(".quiz-opts li");
+      opts.forEach(o => o.classList.add("disabled"));
+      if (li.dataset.opt === answer) {
+        li.classList.add("correct");
+      } else {
+        li.classList.add("wrong");
+        block.querySelector(`[data-opt="${answer}"]`).classList.add("correct");
+      }
+      explain.classList.add("show");
+    });
+  });
+});
+
+// 合上书清单打勾
+document.querySelectorAll("#challenge-list li").forEach(li => {
+  li.addEventListener("click", () => li.classList.toggle("checked"));
+});
+
+// 完成标记 → localStorage（第4章）
+const KEY = "pgm_progress_v1";
+function loadProgress() {
+  try { return JSON.parse(localStorage.getItem(KEY)) || {}; } catch (e) { return {}; }
+}
+const progress = loadProgress();
+const btn = document.getElementById("btn-complete");
+if (progress[4] && progress[4].done) {
+  btn.textContent = "✓ 已完成 · 再次点击重置";
+  btn.classList.add("done");
+}
+function markDone() {
+  const p = loadProgress();
+  if (p[4] && p[4].done) {
+    delete p[4];
+    btn.textContent = "✓ 我已完成本章（含合上书挑战）";
+    btn.classList.remove("done");
+  } else {
+    p[4] = { done: true, completedAt: Date.now(), reviewsDone: 0 };
+    btn.textContent = "✓ 已完成 · 复习提醒已开启";
+    btn.classList.add("done");
+  }
+  localStorage.setItem(KEY, JSON.stringify(p));
+}
+</script>
+
+</body>
+</html>

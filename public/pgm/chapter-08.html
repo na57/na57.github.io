@@ -1,0 +1,886 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第8章 指数族 · PGM 互动讲义</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+<nav class="topbar">
+  <div class="topbar-inner">
+    <span class="brand"><a href="index.html" style="color:inherit">← 学习地图</a></span>
+    <span class="crumb">阶段一 · 表示 / 第8章</span>
+  </div>
+</nav>
+
+<div class="wrap">
+
+  <div class="lecture-head">
+    <span class="ch-label">CHAPTER 08 · 表示</span>
+    <h1>指数族</h1>
+    <p class="lead">表示阶段的收口：前五章五花八门的参数化，原来都是同一个数学家族的不同成员。</p>
+  </div>
+
+  <!-- 本章定位 -->
+  <div class="position-bar">
+    <strong>本章在主线上的位置：</strong>Ch3–7 给出了五种各说各话的参数化 → <u>指数族把它们收进同一个四部件形式，学习与推理由此获得通用接口</u> → 第9–11章推理与第16–20章学习都站在这个接口上。<br>
+    第8章是<strong>表示阶段（Ch3–8）的收口章</strong>，回答主线问题：<strong>表格 CPD、势函数、Logistic、高斯……这些长得毫不相干的模型，能否用同一种数学语言写出来？</strong>
+    <div class="map-inline">
+      <span class="node">Ch7 高斯网络（连续变量的参数化）</span><span class="arrow">→</span>
+      <span class="node here">Ch8 指数族（统一语言）</span><span class="arrow">→</span>
+      <span class="node">Ch9 精确推理：变量消去（计算 A(θ) 的第一种武器）</span><span class="arrow">→</span>
+      <span class="node">Ch16-20 学习（全部归结为对 A(θ) 求梯度）</span>
+    </div>
+  </div>
+
+  <!-- 学习目标 -->
+  <div class="objectives">
+    <h4>🎯 学完本章，合上书你应该能：</h4>
+    <ol>
+      <li>写出指数族标准形式的四个部件（自然参数、充分统计量、基础测度、对数配分函数），并说出各自的职责</li>
+      <li>把伯努利分布、方差已知的高斯分布逐步改写成指数族形式，标出每个部件的表达式</li>
+      <li>解释为什么似然函数只通过 Σφ(x) 依赖数据，并用手算验证 MLE 的矩匹配形式（E<sub>θ</sub>[φ] = 样本均值）</li>
+      <li>手算 Beta-Bernoulli 共轭更新：先验 Beta(2,2) 加 7 正 3 负的数据得到后验 Beta(9,5)</li>
+      <li>用一句话回答"为什么指数族偏偏长这个样子"（最大熵原理）</li>
+      <li>把第3–7章的每一种参数化对号入座到指数族家族树上，说出它们的 φ 与 θ 各是什么</li>
+    </ol>
+  </div>
+
+  <div class="lecture">
+
+    <!-- 推导主线 -->
+    <div class="figure">
+      <div class="mermaid">
+flowchart LR
+  A["前 7 章各说各话<br>五种参数化五套记法"] --> B["统一写成指数族<br>四部件形式"]
+  B --> C["充分统计量加 A(θ)<br>给出学习与推理的通用接口"]
+  C --> D["最大熵解释<br>为什么偏偏是指数这个形状"]
+  D --> E["代价：A(θ) 就是配分函数的对数<br>学习绕不开推理"]
+  classDef hot fill:#fbeedd,stroke:#c4651f,stroke-width:2.5px,color:#c4651f;
+  classDef danger fill:#fae9e7,stroke:#b03a2e,stroke-width:2.5px,color:#b03a2e;
+  class B hot;
+  class E danger;
+      </div>
+      <div class="caption">图 8.1 本章推导主线：统一带来的便利（C、D）与统一暴露的账单（E，红色）——A(θ) 就是第4章配分函数的对数，这正是第9–11章（推理）与第16–20章（学习）要合力解决的问题。</div>
+    </div>
+
+    <!-- ============ 8.1 ============ -->
+    <h2><span class="sec-no">8.1</span>为什么需要一种统一语言：五种记法的一场清点</h2>
+
+    <p>到这里，"表示"阶段已经走了五章，每章都发明了自己的参数化工具。先把它们摆到一张桌子上看看：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>章节</th><th>参数化</th><th>长什么样</th><th>归一化怎么做</th></tr>
+        <tr><td>Ch3 贝叶斯网络</td><td>表格 CPD</td><td>每个节点一张条件概率表</td><td>每行各自和为 1</td></tr>
+        <tr><td>Ch4 马尔可夫网络</td><td>势函数 / 对数线性模型</td><td>ψ<sub>C</sub> 打分，或 exp(Σw<sub>i</sub>f<sub>i</sub>)</td><td>全局配分函数 Z</td></tr>
+        <tr><td>Ch5 局部概率模型</td><td>Logistic CPD、Noisy-Or</td><td>sigmoid(w₀+Σw<sub>i</sub>x<sub>i</sub>)</td><td>sigmoid 自带归一化</td></tr>
+        <tr><td>Ch6 基于模板的表示</td><td>模板复用以上各件</td><td>参数共享的 CPD</td><td>随底层模型</td></tr>
+        <tr><td>Ch7 高斯网络</td><td>均值 μ 与协方差 Σ</td><td>钟形密度函数</td><td>解析公式 √(2π)σ</td></tr>
+      </table>
+    </div>
+
+    <p>现在请站在第16–20章（学习）的立场想一个问题：<strong>如果从数据里学参数，难道要为这五种模型各写一套学习算法？</strong>伯努利参数一套、表格 CPD 一套、势函数权重一套、Logistic 权重一套、高斯均值协方差又一套——算法还没写，记法先打架。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>数学家早就发现：上面这些分布<strong>全部</strong>可以写成同一个形状——把某些"统计量"与参数的线性组合放到指数上。这个家族叫<span class="term">指数族</span>（Exponential Family）。一旦统一，<strong>一个学习定理同时适用于所有成员</strong>：证明一遍，五章受益。这就是本章存在的理由。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>"指数族 = 指数分布的家族"——错。<span class="term">指数分布</span>（Exponential Distribution）只是家族里的一个普通成员（对应等待时间模型）。指数族是整个家族的名字，伯努利、高斯、多项、泊松都在里面。</p>
+    </div>
+
+    <!-- 回忆卡片 8.1 -->
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 8.1-1</div>
+              <div class="q-text">本章要解决的核心问题是什么？（用学习章节的需求来回答）</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              前 7 章五种参数化各说各话，第16–20章的学习算法不想各写一遍。需要一个统一数学框架，让一个学习定理覆盖所有模型——这个框架就是指数族。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 8.1-2</div>
+              <div class="q-text">"指数族"和"指数分布"是一回事吗？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              不是。指数分布只是指数族的一个成员；指数族是包含伯努利、高斯、多项、泊松等绝大多数常用分布的大家族。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 8.2 ============ -->
+    <h2><span class="sec-no">8.2</span>指数族的四个部件：标准形式与两次手算改写</h2>
+
+    <p>一个分布属于指数族，当且仅当它的概率质量/密度函数能写成如下<span class="term">标准形式</span>（Canonical Form）：</p>
+
+    <div class="formula">P(X | θ) = h(X) · exp( θ<sup>⊤</sup>φ(X) − A(θ) )</div>
+
+    <p>四个部件，各管一件事：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>部件</th><th>名称</th><th>职责</th></tr>
+        <tr><td>θ</td><td><span class="term">自然参数</span>（Natural Parameters）</td><td>模型的"旋钮"，学习要调的就是它</td></tr>
+        <tr><td>φ(X)</td><td><span class="term">充分统计量</span>（Sufficient Statistics）</td><td>从数据中提取的、与 θ 有关的全部信息</td></tr>
+        <tr><td>h(X)</td><td><span class="term">基础测度</span>（Base Measure）</td><td>不含参数的剩余部分，常为 1</td></tr>
+        <tr><td>A(θ)</td><td><span class="term">对数配分函数</span>（Log-Partition Function）</td><td>归一化常数的对数，保证 P 加起来为 1</td></tr>
+      </table>
+    </div>
+
+    <p>名字里的"指数"来自核心结构：<strong>θ 与 φ(X) 的内积放在 exp 的肩膀上</strong>。下面用两个完整手算，把"任意分布 → 四部件"的改写流程走两遍。</p>
+
+    <h3>例 1：伯努利分布 → 指数族（逐步改写）</h3>
+    <p>设 X ∈ {0,1}，P(X=1) = p。原始写法：</p>
+    <div class="formula">P(X) = p<sup>X</sup> (1−p)<sup>1−X</sup></div>
+
+    <p><strong>第 1 步：取对数，把乘积变加法。</strong></p>
+    <div class="formula">log P(X) = X·log p + (1−X)·log(1−p)</div>
+
+    <p><strong>第 2 步：按 X 合并同类项。</strong>展开第二项 (1−X)·log(1−p) = log(1−p) − X·log(1−p)，代回：</p>
+    <div class="formula">log P(X) = X·[ log p − log(1−p) ] + log(1−p) = X·log<span class="frac"><span class="num-part">p</span><span class="den-part">1−p</span></span> + log(1−p)</div>
+
+    <p><strong>第 3 步：读出四部件。</strong>对照标准形式 log P = θ·φ(X) − A(θ) + log h(X)：</p>
+    <ul>
+      <li>充分统计量：<strong>φ(X) = X</strong>（数据本身就够了）</li>
+      <li>自然参数：<strong>θ = log[p/(1−p)]</strong>——正好是第 5 章 Logistic 模型里的<span class="term">对数几率</span>（Log-Odds）！这不是巧合</li>
+      <li>基础测度：<strong>h(X) = 1</strong>（没有剩余项）</li>
+      <li>对数配分函数：−A(θ) = log(1−p)。把 p 用 θ 反解：p = e<sup>θ</sup>/(1+e<sup>θ</sup>)，故 1−p = 1/(1+e<sup>θ</sup>)，于是</li>
+    </ul>
+    <div class="formula">A(θ) = −log(1−p) = log(1 + e<sup>θ</sup>)</div>
+
+    <p><strong>第 4 步：验证归一化。</strong>按定义 A(θ) 应等于 log Σ<sub>x</sub> h(x)e<sup>θφ(x)</sup> = log( e⁰ + e<sup>θ</sup> ) = log(1+e<sup>θ</sup>)。✔ 两式吻合。</p>
+
+    <h3>例 2：方差已知的高斯 → 指数族（逐步改写）</h3>
+    <p>设方差 σ² 已知、均值 μ 未知。密度函数：</p>
+    <div class="formula">p(x) = <span class="frac"><span class="num-part">1</span><span class="den-part">√(2π)·σ</span></span> · exp( −<span class="frac"><span class="num-part">(x−μ)²</span><span class="den-part">2σ²</span></span> )</div>
+
+    <p><strong>第 1 步：展开指数上的平方。</strong>(x−μ)² = x² − 2μx + μ²，所以指数为：</p>
+    <div class="formula">−<span class="frac"><span class="num-part">x²</span><span class="den-part">2σ²</span></span> + <span class="frac"><span class="num-part">μ</span><span class="den-part">σ²</span></span>·x − <span class="frac"><span class="num-part">μ²</span><span class="den-part">2σ²</span></span></div>
+
+    <p><strong>第 2 步：按"含不含 x、含不含 μ"分类。</strong>含 x 且含 μ 的只有中间一项 (μ/σ²)·x——它必须对应 θ·φ(x)；只含 x 的项归入 h(x)；只含 μ 的项归入 −A(θ)：</p>
+    <ul>
+      <li>充分统计量：<strong>φ(x) = x</strong></li>
+      <li>自然参数：<strong>θ = μ/σ²</strong>（注意：不是 μ 本身，而是被 σ² 缩放过的 μ）</li>
+      <li>基础测度：<strong>h(x) = (1/(√(2π)σ))·exp(−x²/(2σ²))</strong>（吞掉所有只含 x 的东西）</li>
+      <li>对数配分函数：<strong>A(θ) = μ²/(2σ²)</strong>，代入 μ = σ²θ 得 <strong>A(θ) = σ²θ²/2</strong></li>
+    </ul>
+
+    <p><strong>第 3 步：核对</strong>：h(x)·exp(θx − σ²θ²/2) 展开指数、合并同类项，正好还原 −(x−μ)²/(2σ²)。✔</p>
+
+    <h3>更多成员（查表即可，不必都手算）</h3>
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>分布</th><th>φ(X)</th><th>θ</th><th>A(θ)</th></tr>
+        <tr><td>伯努利</td><td>X</td><td>log[p/(1−p)]</td><td>log(1+e<sup>θ</sup>)</td></tr>
+        <tr><td>多项分布（k 类）</td><td>示性向量 (1[X=1],…,1[X=k])</td><td>(log p₁,…,log p<sub>k</sub>)</td><td>log(Σ<sub>i</sub> e<sup>θ<sub>i</sub></sup>)</td></tr>
+        <tr><td>高斯（σ² 已知）</td><td>X</td><td>μ/σ²</td><td>σ²θ²/2</td></tr>
+        <tr><td>高斯（一般）</td><td>(X, X²)</td><td>(μ/σ², −1/(2σ²))</td><td>μ²/(2σ²) + log(√(2π)σ)</td></tr>
+        <tr><td>泊松</td><td>X</td><td>log λ</td><td>e<sup>θ</sup></td></tr>
+      </table>
+    </div>
+
+    <h3>为什么 BN/MRF 的每个因子都落入指数族</h3>
+    <p>更关键的事实是：<strong>第3–7章的因子级参数化，个个都是指数族</strong>。原因是一个一句话证明——</p>
+    <p>任取一个<strong>严格为正值</strong>的表格因子 ψ(x<sub>C</sub>)（定义在某个变量组 C 上），对它取对数，并把 log ψ 展开成"每种赋值一个示性函数"的加权和：</p>
+    <div class="formula">log ψ(x<sub>C</sub>) = ∑<sub>i</sub> w<sub>i</sub> · f<sub>i</sub>(x<sub>C</sub>)，其中 f<sub>i</sub>(x<sub>C</sub>) = 1[x<sub>C</sub> = 第 i 种赋值]，w<sub>i</sub> = log ψ(第 i 种赋值)</div>
+    <p>于是 ψ = exp(Σ w<sub>i</sub>f<sub>i</sub>) ——这正是指数族形状（w 是 θ，示性函数向量是 φ）。推论：</p>
+    <ul>
+      <li><strong>Ch3 表格 CPD</strong>：正值表格取对数即特征线性组合 ⟹ 指数族；</li>
+      <li><strong>Ch4 对数线性 MRF</strong>：P = (1/Z)·exp(Σw<sub>i</sub>f<sub>i</sub>)，定义就是指数族——θ = w，φ = (f₁, f₂, …)，A(θ) = log Z；</li>
+      <li><strong>Ch5 Logistic CPD</strong>：sigmoid(w₀+Σw<sub>i</sub>x<sub>i</sub>) 正是"φ(X)=X、θ=对数几率"那个伯努利指数族，只是参数换成了特征的线性函数；Noisy-Or 可写成带约束的对数线性形式，同样落进来；</li>
+      <li><strong>Ch7 高斯网络</strong>：例 2 已手算，高斯是指数族元老。</li>
+    </ul>
+
+    <div class="box idea">
+      <span class="box-tag">💡 直觉</span>
+      <p>指数族的"指数"只是表象，本质是<strong>对数空间里的线性</strong>：log P = θ·φ(X) − A(θ) + log h(X)。凡是"取对数后变成特征加权和"的分布，都在这个家族里。8.5 节会把这张对应关系画成家族树。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>"四部件是唯一的"——不唯一。同一个分布可以有多种指数族写法（比如把常数项在 h 与 A 之间挪来挪去）。重要的是<strong>存在</strong>一种写法，以及 φ 的选取决定了"数据压缩成什么"。</p>
+    </div>
+
+    <!-- 回忆卡片 8.2 -->
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 8.2-1</div>
+              <div class="q-text">写出指数族标准形式，并说出四个部件的名称。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              P(X|θ) = h(X)·exp(θᵀφ(X) − A(θ))。θ 自然参数；φ(X) 充分统计量；h(X) 基础测度；A(θ) 对数配分函数。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 8.2-2</div>
+              <div class="q-text">为什么任意正值表格因子都自动是指数族？（一句话证明）</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              取对数后 log ψ 可写成各赋值示性函数的加权和：log ψ = Σ wᵢfᵢ，再 exp 回去就是 θᵀφ 放到指数上的形状。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 8.3 ============ -->
+    <h2><span class="sec-no">8.3</span>充分统计量的力量：学习与估计为什么变简单</h2>
+
+    <p>上一节统一了"写法"，这一节收利息：统一写法带来三条强大的通用性质，它们把第16–20章的学习问题压缩成同一道凸优化题。</p>
+
+    <h3>性质一：似然只通过 Σφ(x) 依赖数据</h3>
+    <p>设数据集 D 有 N 个独立同分布样本。对数似然为：</p>
+    <div class="formula">ℓ(θ; D) = ∑<sub>x∈D</sub> log P(x|θ) = θ<sup>⊤</sup>·[ ∑<sub>x∈D</sub> φ(x) ] − N·A(θ) + 常数</div>
+    <p>注意数据的全部影响被压缩进一个向量 <strong>Σ<sub>x∈D</sub> φ(x)</strong>——这就是"充分"二字的含义：<strong>对于估计 θ，原始数据可以扔掉，只留下充分统计量之和</strong>。例如伯努利模型只需记住"几次正几次负"，高斯（σ² 已知）只需记住样本和。</p>
+
+    <h3>性质二：A(θ) 是凸函数，且它的导数给出 φ 的矩</h3>
+    <div class="box insight">
+      <span class="box-tag">✅ 两个恒等式（指数族的发动机）</span>
+      <p>∇A(θ) = E<sub>θ</sub>[φ(X)]（一阶导 = 充分统计量的期望）；∇²A(θ) = Cov<sub>θ</sub>[φ(X)]（二阶导 = 协方差）。协方差矩阵半正定 ⟹ <strong>A(θ) 是凸函数</strong>。</p>
+    </div>
+
+    <h3>性质三：MLE = 矩匹配</h3>
+    <p>对 ℓ(θ; D) 求导并令其为零：∇ℓ = Σφ(x) − N·∇A(θ) = 0，即：</p>
+    <div class="formula">E<sub>θ̂</sub>[φ(X)] = <span class="frac"><span class="num-part">1</span><span class="den-part">N</span></span> ∑<sub>x∈D</sub> φ(x)</div>
+    <p>读法：<strong>模型期望 = 样本均值</strong>。MLE 就是在调 θ，直到模型预测的充分统计量期望与数据统计出来的均值完全对齐。由于 A 是凸的，这个驻点（在可识别条件下）就是<strong>全局唯一最优</strong>——没有局部最优陷阱。</p>
+
+    <h3>例 3：伯努利数据 7 正 3 负的 MLE 手算（含矩匹配验证）</h3>
+    <p>数据：10 次抛掷，7 次正面（X=1）、3 次反面（X=0）。</p>
+    <p><strong>第 1 步：写出对数似然。</strong>φ(X)=X，Σφ(x) = 7，N = 10：</p>
+    <div class="formula">ℓ(θ) = θ·7 − 10·log(1 + e<sup>θ</sup>)</div>
+    <p><strong>第 2 步：求导。</strong>log(1+e<sup>θ</sup>) 的导数是 e<sup>θ</sup>/(1+e<sup>θ</sup>)（sigmoid 函数！），故：</p>
+    <div class="formula">ℓ′(θ) = 7 − 10 · <span class="frac"><span class="num-part">e<sup>θ</sup></span><span class="den-part">1+e<sup>θ</sup></span></div>
+    <p><strong>第 3 步：令导数为零，解出 θ̂。</strong></p>
+    <div class="formula"><span class="frac"><span class="num-part">e<sup>θ̂</sup></span><span class="den-part">1+e<sup>θ̂</sup></span></span> = 0.7 ⟹ e<sup>θ̂</sup> = 0.7/0.3 = 7/3 ⟹ θ̂ = log(7/3) ≈ 0.847</div>
+    <p>换回 p：p̂ = e<sup>θ̂</sup>/(1+e<sup>θ̂</sup>) = <strong>0.7</strong>——正是频率 7/10。</p>
+    <p><strong>第 4 步：验证矩匹配。</strong>模型期望 E<sub>θ̂</sub>[φ(X)] = E<sub>θ̂</sub>[X] = p̂ = 0.7；样本均值 (1/N)Σφ(x) = 7/10 = 0.7。两者相等 ✔——矩匹配方程的解与"数频率"殊途同归。</p>
+    <p><strong>第 5 步：顺手验证凸性。</strong>ℓ″(θ) = −10·∇²A = −10·Var(X) = −10·p(1−p) &lt; 0，似然是凹函数（A 凸 ⟹ −A 凹），驻点即全局最大。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 直觉</span>
+      <p>指数族把"学参数"变成"对表"：模型一边拨动 θ，一边看 E[φ] 是否对齐了数据里的平均 φ。对齐的那一刻就是 MLE，而且因为地形是凸的（碗状），怎么爬都到同一个碗底。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>"矩匹配意味着 MLE 永远有闭式解"——只对单变量伯努利这类简单族成立。对 MRF，E<sub>θ</sub>[φ] 本身要对全模型求期望，涉及配分函数 Z——算它就是推理问题（第9–11章），这正是第20章马尔可夫网络学习困难的根源。</p>
+    </div>
+
+    <!-- 回忆卡片 8.3 -->
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 8.3-1</div>
+              <div class="q-text">"充分统计量"充分在哪里？用似然函数的式子说明。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              ℓ(θ;D) = θᵀ·Σφ(x) − N·A(θ)：数据只通过 Σφ(x) 这一个向量影响似然。估计 θ 时原始数据可扔，只留充分统计量之和。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 8.3-2</div>
+              <div class="q-text">写出 ∇A 与 ∇²A 各等于什么，并说明为什么 A 是凸函数。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              ∇A(θ) = E_θ[φ(X)]；∇²A(θ) = Cov_θ[φ(X)]。协方差矩阵半正定，所以 A 凸。推论：MLE 是凸优化，驻点即全局最优。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 8.4 ============ -->
+    <h2><span class="sec-no">8.4</span>共轭先验与最大熵：指数族为什么"自然"</h2>
+
+    <p>上一节说明指数族让频率学派（MLE）的日子好过。这一节补两块拼图：贝叶斯学派的日子（共轭先验），以及一个更深层的回答——<strong>这个家族为什么偏偏长"指数"这个样子</strong>。</p>
+
+    <h3>共轭先验：后验 = 先验伪计数 + 充分统计量</h3>
+    <p>如果先验 P(θ) 与后验 P(θ|D) 属于同一分布族，称先验与似然<span class="term">共轭</span>（Conjugate）。指数族的共轭先验形如：</p>
+    <div class="formula">P(θ) ∝ exp( θ<sup>⊤</sup>α − α₀·A(θ) )</div>
+    <p>超参数 (α, α₀) 可以理解为"<strong>假想的旧数据</strong>"：α₀ 个虚拟样本，其充分统计量之和为 α。贝叶斯更新 P(θ|D) ∝ P(D|θ)·P(θ) 只是把指数相加：</p>
+    <div class="formula">后验超参数 = ( α + ∑<sub>x∈D</sub> φ(x)， α₀ + N )</div>
+    <p>一句话：<strong>后验超参数 = 先验伪计数 + 充分统计量</strong>。更新只是加法，不需要重新积分。</p>
+
+    <h3>例 4：Beta-Bernoulli 共轭更新手算</h3>
+    <p>伯努利似然的共轭先验是 <span class="term">Beta 分布</span>（Beta Distribution）：Beta(α,β) 的密度 ∝ p<sup>α−1</sup>(1−p)<sup>β−1</sup>。</p>
+    <p><strong>第 1 步：写先验。</strong>取 Beta(2,2)（相当于"假想见过 1 次正面、1 次反面"）：P(p) ∝ p¹(1−p)¹。</p>
+    <p><strong>第 2 步：写似然。</strong>观测 7 正 3 负：P(D|p) ∝ p⁷(1−p)³。</p>
+    <p><strong>第 3 步：相乘。</strong>同底数幂相加：p<sup>1+7</sup>(1−p)<sup>1+3</sup> = p⁸(1−p)⁴。</p>
+    <p><strong>第 4 步：认出后验。</strong>p⁸(1−p)⁴ 正是 Beta(9,5) 的形状。后验 = <strong>Beta(9,5)</strong>，即 (2+7, 2+3) ✔ 与"伪计数 + 充分统计量"一致。</p>
+    <p><strong>第 5 步：读后验均值。</strong>Beta(α,β) 的均值是 α/(α+β) = 9/14 ≈ 0.643——介于先验均值 0.5 与样本频率 0.7 之间，先验像一根弹簧把估计往中间拉。</p>
+
+    <h3>最大熵视角：为什么偏偏是指数这个形状</h3>
+    <p>还有一个更根本的问题没回答：四个部件里，为什么核心结构是 exp(θ·φ)，而不是 θ·φ² 或 sin(θ·φ)？</p>
+    <p>答案来自信息论。假设我们对真实分布一无所知，<strong>只</strong>知道几件事：E[φ₁]=α₁，…，E[φ<sub>k</sub>]=α<sub>k</sub>（例如只知道均值是 0.7）。在所有满足这些约束的分布里，选哪个？<span class="term">最大熵原理</span>（Maximum Entropy Principle）说：选<span class="term">熵</span>（Entropy）H(P) = −Σ P(x) log P(x) 最大的那个——熵度量"不确定性"，熵最大意味着<strong>除已知约束外不做任何额外假设</strong>。</p>
+    <p>用拉格朗日乘数法求"约束下熵最大"的极值，解恰好是：</p>
+    <div class="formula">P*(x) ∝ h(x)·exp( ∑<sub>k</sub> λ<sub>k</sub>·φ<sub>k</sub>(x) )</div>
+    <p>——<strong>正是指数族</strong>。拉格朗日乘子 λ 就是自然参数 θ。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>指数形状不是数学家拍脑袋的发明，而是"最少假设"的必然结果：凡是你只掌握若干期望统计量、其余一概不知的场合，最诚实的分布就是指数族。这解释了为什么它在自然界与工程界到处冒出来（高斯 = 只知道均值方差时的最大熵分布）。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>"共轭先验是数学技巧，没有含义"——不对。伪计数有明确含义：Beta(2,2) 就是"预先见过一正一反"。数据量小时先验主导（9/14 偏离 0.7 很明显），数据量无穷大时伪计数被淹没——这正是贝叶斯平滑的直觉。</p>
+    </div>
+
+    <!-- 回忆卡片 8.4 -->
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 8.4-1</div>
+              <div class="q-text">共轭先验下，后验超参数怎么算？用 Beta(2,2)+7正3负 举例。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              后验超参数 = 先验伪计数 + 数据中充分统计量。Beta(2,2) + 7正3负 → Beta(2+7, 2+3) = Beta(9,5)，后验均值 9/14 ≈ 0.643。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 8.4-2</div>
+              <div class="q-text">最大熵原理如何解释"为什么分布长指数的形状"？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              在"E[φₖ]=αₖ"这组约束下求熵最大的分布，拉格朗日解恰好是 P ∝ h·exp(Σλₖφₖ)——指数族。即指数形状 = 对已知信息假设最少的分布。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 8.5 ============ -->
+    <h2><span class="sec-no">8.5</span>收束：回看第3–7章，同一个东西的不同坐标</h2>
+
+    <p>这是表示阶段的最后一章。回头看，Ch3–7 的五套参数化并非五个物种，而是<strong>同一个指数族在五种坐标系下的投影</strong>。对号入座：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>章节</th><th>模型</th><th>φ（充分统计量）</th><th>θ（自然参数）</th><th>A(θ)</th></tr>
+        <tr><td>Ch3</td><td>表格 CPD</td><td>每种赋值的示性函数</td><td>log 表格值</td><td>0（每行已局部归一化）</td></tr>
+        <tr><td>Ch4</td><td>对数线性 MRF</td><td>特征 f₁, f₂, …</td><td>权重 w₁, w₂, …</td><td>log Z（配分函数的对数）</td></tr>
+        <tr><td>Ch5</td><td>Logistic CPD</td><td>输入特征 x 的分量</td><td>权重 w（θ 是 x 的线性函数）</td><td>log(1+e<sup>wᵀx</sup>)</td></tr>
+        <tr><td>Ch5</td><td>Noisy-Or（<strong>带约束的</strong>对数线性模型）</td><td>一阶特征 fᵢ(y) = yᵢ；所有高阶交互特征系数被钉为 0</td><td>θᵢ = log λᵢ（2ᵏ 维表空间被约束到 k 维子空间）</td><td>0（P(x¹) 取补自动归一化）</td></tr>
+        <tr><td>Ch7</td><td>高斯网络</td><td>(X, X²)（多元时为 x 与 xxᵀ）</td><td>(μ/σ², −1/(2σ²))</td><td>σ²θ²/2 + 常数</td></tr>
+      </table>
+    </div>
+
+    <h3>Noisy-Or 那一行展开：约束到底钉在哪</h3>
+    <p>表中 Noisy-Or 是唯一带"约束"字样的成员，值得把映射推导走完。对失效面取对数（P(x⁰|y) = ∏<sub>i:yᵢ=1</sub> λᵢ）：</p>
+
+    <div class="formula">log P(x⁰ | y) = ∑<sub>i</sub> yᵢ · log λᵢ</div>
+
+    <p>这已经是指数族形状：特征 fᵢ(y) = yᵢ，自然参数 θᵢ = log λᵢ，h = 1，A = 0（成功面 P(x¹) = 1 − P(x⁰) 取补即归一化）。<strong>但约束藏在特征集合里</strong>。完整表格 CPD 的失效行有 2ᵏ 个自由值，对数空间里它最一般的展开要对<strong>所有子集</strong> S ⊆ {1,…,k} 求和：</p>
+
+    <div class="formula">log P(x⁰ | y) = ∑<sub>S ⊆ {1,…,k}</sub> θ<sub>S</sub> · ∏<sub>i ∈ S</sub> yᵢ&nbsp;&nbsp;（2ᵏ 个自由参数，每个子集一个）</div>
+
+    <p>Noisy-Or 把其中绝大多数钉死：</p>
+    <ul>
+      <li><strong>θ<sub>∅</sub> = 0</strong>（无渗漏：无活跃病因时 P(x⁰) = 1，log 1 = 0；带渗漏版本则 θ<sub>∅</sub> = log λ₀）；</li>
+      <li><strong>θ<sub>S</sub> = 0，对所有 |S| ≥ 2</strong>（无交互：两病因齐发的对数失效概率 = 各自之和，不允许冒出"协同加成"项）。</li>
+    </ul>
+    <p>剩下的恰好是 k 个一阶参数 θ<sub>{i}</sub> = log λᵢ。所以精确说法是：<strong>Noisy-Or = 对数线性模型 + "高阶项全为零"的线性约束</strong>，参数空间从 2ᵏ 维被压到 k 维子空间。约束的语义正是第 5 章的 ICI 假设：失效概率相乘 ⟺ 对数失效概率相加 ⟺ 只留一阶特征。</p>
+    <p>用第 5 章例 3 的数字复核：λ = (0.2, 0.4, 0.6)，y = (1,1,0)：log P(f⁰) = log 0.2 + log 0.4 = log(0.08) ✓（即该表第 5 行的 0.08）。若允许二阶项 θ₁₂ ≠ 0，这一行就变成 log(0.08) + θ₁₂——这正是 Noisy-Or 禁掉的自由度，也是它比完整表省下的参数所在。</p>
+
+    <div class="figure">
+      <div class="mermaid">
+flowchart TB
+  R["指数族：P = h · exp( θᵀφ − A(θ) )"]
+  R --> C3["Ch3 表格 CPD<br>φ = 示性函数"]
+  R --> C4["Ch4 对数线性 MRF<br>φ = 特征 f"]
+  R --> C5["Ch5 Logistic 与 Noisy-Or<br>φ = 输入特征"]
+  R --> C7["Ch7 高斯<br>φ = (X, X²)"]
+  R --> L["通用接口：Σφ(x) 与 A(θ)"]
+  L --> INF["第9到11章 推理<br>负责算 A(θ) 与期望"]
+  L --> LEARN["第16到20章 学习<br>负责矩匹配解 θ"]
+  classDef hot fill:#fbeedd,stroke:#c4651f,stroke-width:2.5px,color:#c4651f;
+  classDef danger fill:#fae9e7,stroke:#b03a2e,stroke-width:2.5px,color:#b03a2e;
+  class R hot;
+  class INF danger;
+      </div>
+      <div class="caption">图 8.2 指数族家族树：五种参数化共享同一形式，只是 φ 与 θ 的选择不同。注意两个下游——学习的全部困难归结为"算 A(θ) 及其梯度"（红色），而算 A(θ) 正是推理的任务。</div>
+    </div>
+
+    <p>这张表最右边一列值得盯紧：<strong>A(θ) 就是第4章配分函数 Z 的对数</strong>。第4章我们说过 Z 是"马尔可夫网络埋下的账"；现在这笔账露出了全貌——</p>
+    <ul>
+      <li><strong>学习侧</strong>（Ch16–20）：矩匹配要求算 E<sub>θ</sub>[φ] = ∇A(θ)，而 A(θ) = log Z，对 MRF 这是指数级求和；</li>
+      <li><strong>推理侧</strong>（Ch9–11）：变量消去、团树、置信传播，本质都是在高效计算配分函数与边际期望——也就是在为学习算法供应 ∇A。</li>
+    </ul>
+
+    <div class="box insight">
+      <span class="box-tag">✅ 本章定理级结论</span>
+      <p>第3–7章的每一种参数化都是指数族成员；因此充分统计量、矩匹配 MLE、凸性、共轭更新、最大熵解释这五件武器，<strong>对它们全体同时有效</strong>。表示阶段的收口，就是推理与学习两大阶段的开工许可证。</p>
+    </div>
+
+    <div class="box idea">
+      <span class="box-tag">💡 一句话收束</span>
+      <p>换个坐标系，万物皆指数族；代价是那枚对数配分函数 A(θ)——它是统一买来的便利，也是后续十二章要合力偿还的债务。</p>
+    </div>
+
+    <!-- 回忆卡片 8.5 -->
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 8.5-1</div>
+              <div class="q-text">把 Ch4 的对数线性 MRF 对号到指数族四部件。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              φ = 特征函数向量 (f₁,f₂,…)；θ = 权重向量 w；h = 1；A(θ) = log Z。所以对数线性 MRF 就是指数族 MRF。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 8.5-2</div>
+              <div class="q-text">为什么说"学习的困难统一归结为算 A(θ)"？它与第9–11章什么关系？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              MLE 矩匹配需要 E_θ[φ] = ∇A，而 A = log Z 是全局求和。计算 Z 与边际期望正是推理（变量消去/团树/置信传播）的任务——学习站在推理的肩膀上。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 概念卡 ============ -->
+    <h2><span class="sec-no">🃏</span>概念卡：本章概念的一分钟画像</h2>
+    <p>翻面前先自问：这个概念我能用一句话讲清楚吗？</p>
+    <div class="flip-grid">
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 1</div>
+            <div class="q-text">自然参数（Natural Parameters）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">指数族标准形式中与充分统计量做内积的参数 θ。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">给所有分布一套统一的"旋钮坐标"，学习算法只需调 θ。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">恒温器的刻度：外表千奇百怪，拧的都是同一根轴。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为 θ 就是熟悉的老参数——伯努利的 θ 是 log 几率而非 p，高斯的 θ 是 μ/σ² 而非 μ。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">Ch16–20 参数学习优化的直接对象；变分推理里的变分参数。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 2</div>
+            <div class="q-text">充分统计量（Sufficient Statistics）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">使似然只通过 Σφ(x) 依赖数据的统计量 φ(X)。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">数据压缩：估计参数时原始样本可扔，只留 φ 之和。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">会议纪要：会上说了千言万语，决议只有那几行。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为 φ 由数据决定——φ 由分布族决定（伯努利 φ=X，一般高斯 φ=(X,X²)）。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">Ch17 完全数据参数学习：数充分统计量即得 MLE；在线学习的增量更新。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 3</div>
+            <div class="q-text">对数配分函数（Log-Partition Function）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">A(θ) = log Σ h(x)e^{θᵀφ(x)}，归一化常数的对数；即第4章 log Z。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">保证分布归一化；同时它的导数供应 φ 的全部矩。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">瑞士军刀的刀柄：∇A 给均值，∇²A 给协方差，还顺手保证凸性。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为它是免费常数——对 MRF 它是指数级求和，是全书最贵的对象。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">Ch9–11 推理的主计算目标；Ch20 MRF 学习梯度的来源。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 4</div>
+            <div class="q-text">共轭先验（Conjugate Prior）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">使后验与先验同属一族的先验；对指数族似然，共轭先验形如 exp(θᵀα − α₀A(θ))。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">让贝叶斯更新退化为超参数加法，免积分。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">记账：先验是期初余额（伪计数），数据是本期流水，后验是期末余额。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为共轭是近似——它是精确更新，只是恰好闭合在同一族内。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">Ch17 贝叶斯参数估计、Ch19 不完全数据下的 EM/贝叶斯方法。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 5</div>
+            <div class="q-text">最大熵原理（Maximum Entropy Principle）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">在满足已知期望约束的所有分布中，选熵最大者。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">回答"为什么分布长指数形状"：它是对已知信息假设最少的分布。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">法官断案：只凭呈堂证供（E[φ] 约束），其余一律不脑补。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为最大熵="什么都不假设"——它严格使用给定的统计量约束，只是不多加。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">最大熵模型、CRF 的理论根基；Ch20 特征选择的对偶视角。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 6</div>
+            <div class="q-text">对数线性模型（Log-Linear Model）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">P ∝ exp(Σwᵢfᵢ)，势函数取对数后写成特征加权和的模型。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">把 MRF 参数化从"填表"变成"设计特征 + 学权重"。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">指数族的 MRF 化身：θ=w、φ=f、A=log Z，四部件全部对号。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为它只是 Ch4 的一种记号——它其实是指数族视角进入 PGM 的正门。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">CRF、最大熵模型、能量模型；Ch20 马尔可夫网络学习的主角。</span></div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- ============ 分层习题 ============ -->
+    <h2><span class="sec-no">📝</span>分层习题</h2>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>判断对错：<strong>指数族分布的基础测度 h(X) 必须恒等于 1。</strong>说明理由。</div>
+      <details>
+        <summary>提示</summary>
+        <p>回看 8.2 例 2：高斯改写时，含 x 但不含 μ 的项去了哪里？</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">错。h(X) 收容"只含 X 不含参数"的所有残余项。伯努利恰好 h=1，但方差已知的高斯里 h(x) = (1/(√(2π)σ))·exp(−x²/(2σ²)) ≠ 1。h 不参与 θ 与 φ 的内积，这正是它与 A(θ) 的分工：h 管"数据的底色"，A 管"参数的归一化"。</div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>判断对错：<strong>既然 MLE 满足矩匹配 E_θ[φ] = 样本均值，那么任何分布的 MLE 都有闭式解。</strong>说明理由。</div>
+      <details>
+        <summary>提示</summary>
+        <p>矩匹配方程左边的 E_θ[φ] 好算吗？想想 MRF 的 A(θ) = log Z。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">错。矩匹配只保证 MLE 是某个凸方程的驻点；方程是否解得出，取决于 E_θ[φ] = ∇A(θ) 是否算得出来、解是否封闭。伯努利、高斯能解出闭式；但对马尔可夫网络，A(θ) = log Z 本身要指数级求和，只能迭代数值求解——这是第20章的核心困难，也是第9–11章推理算法存在的理由之一。</div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>把泊松分布 P(X=k) = λ<sup>k</sup>e<sup>−λ</sup>/k!（k = 0,1,2,…）改写成指数族标准形式，写出 φ(k)、θ、h(k)、A(θ) 四个部件，并验证 A(θ) 使分布归一化。</div>
+      <details>
+        <summary>提示</summary>
+        <p>先取对数：log P = k·log λ − λ − log k!。然后按"含 k 且含 λ / 只含 k / 只含 λ"三类归堆。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p><strong>第 1 步：取对数。</strong>log P(X=k) = k·log λ − λ − log(k!)。</p>
+          <p><strong>第 2 步：分类归堆。</strong>交叉项 k·log λ → θ·φ(k)；只含 k 的 −log(k!) → log h(k)；只含参数的 −λ → −A(θ)。</p>
+          <p><strong>第 3 步：读出四部件。</strong></p>
+          <p>φ(k) = k；θ = log λ（故 λ = e<sup>θ</sup>）；h(k) = 1/k!；A(θ) = λ = <strong>e<sup>θ</sup></strong>。</p>
+          <p><strong>第 4 步：验证归一化。</strong>A(θ) 应等于 log Σ<sub>k=0</sub><sup>∞</sup> h(k)e<sup>θk</sup> = log Σ<sub>k</sub> e<sup>θk</sup>/k!。而 Σ<sub>k</sub> (e<sup>θ</sup>)<sup>k</sup>/k! 正是 e<sup>x</sup> 在 x = e<sup>θ</sup> 处的泰勒展开 = exp(e<sup>θ</sup>)。取对数得 e<sup>θ</sup> ✔，与第 3 步一致。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>对伯努利指数族，用矩匹配方程重做 8.3 例 3：数据 7 正 3 负。(1) 写出 ∇A(θ) 的表达式；(2) 写出样本均值并列出矩匹配方程；(3) 解出 p̂；(4) 用 ∇²A 验证这是似然的最大值点。</div>
+      <details>
+        <summary>提示</summary>
+        <p>A(θ) = log(1+e<sup>θ</sup>)，它的一阶导是 sigmoid；矩匹配方程左边是模型期望、右边是 7/10。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p><strong>(1)</strong> ∇A(θ) = d/dθ log(1+e<sup>θ</sup>) = e<sup>θ</sup>/(1+e<sup>θ</sup>)（sigmoid 函数）。</p>
+          <p><strong>(2)</strong> 样本均值 = (1/N)Σφ(x) = 7/10 = 0.7。矩匹配方程：e<sup>θ</sup>/(1+e<sup>θ</sup>) = 0.7。</p>
+          <p><strong>(3)</strong> 两边同乘 (1+e<sup>θ</sup>)：e<sup>θ</sup> = 0.7 + 0.7e<sup>θ</sup> ⟹ 0.3·e<sup>θ</sup> = 0.7 ⟹ e<sup>θ</sup> = 7/3 ⟹ θ̂ = log(7/3) ≈ 0.847；p̂ = e<sup>θ̂</sup>/(1+e<sup>θ̂</sup>) = (7/3)/(10/3) = <strong>0.7</strong>。</p>
+          <p><strong>(4)</strong> ∇²A(θ) = d/dθ [e<sup>θ</sup>/(1+e<sup>θ</sup>)] = e<sup>θ</sup>/(1+e<sup>θ</sup>)² = p(1−p) = Var(X) ≥ 0，故 A 凸、ℓ = θ·7 − 10A(θ) 凹，驻点 θ̂ 是全局最大点 ✔。顺带确认了 ∇²A = Cov[φ] 这个恒等式在伯努利上的样子：Var(X) = p(1−p)。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l3">L3 建模应用</span>垃圾邮件分类：每封邮件提取 3 个二值特征（含"免费"字样 x₁、含感叹号 x₂、来自通讯录外发件人 x₃），要建一个 Logistic 模型 P(Spam | x₁,x₂,x₃)。(1) 写出模型并指出它的指数族四部件；(2) 训练了 1000 封邮件后，为了继续做参数更新，最少需要保留数据中的哪些量？(3) 若改用 Beta 先验做贝叶斯估计，后验更新在操作上是什么？</div>
+      <details>
+        <summary>提示</summary>
+        <p>Logistic 是"伯努利指数族 + 自然参数换成特征线性组合"。第 (2) 问想"充分统计量"这四个字；(3) 想"伪计数相加"。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p><strong>(1)</strong> P(Spam=1|x) = sigmoid(w₀ + w₁x₁ + w₂x₂ + w₃x₃)。四部件（对每个给定的 x）：h = 1；φ(Spam) = Spam；自然参数 θ(x) = w₀ + Σwᵢxᵢ（对数几率）；A(θ) = log(1+e<sup>θ(x)</sup>)。待学的权重 w 是全局参数，θ 随样本 x 变化。</p>
+          <p><strong>(2)</strong> 只需保留各样本的 x 向量与标签，聚合为梯度的充分量：Σ<sub>样本</sub> xᵢ·(y − sigmoid(θ(x)))——对数似然关于 w 的梯度只通过"特征 × 残差"之和依赖数据；若 w 已知只需存这个和向量（4 维），原始千封邮件可扔。</p>
+          <p><strong>(3)</strong> 操作上是"伪计数相加"：每个权重方向上的先验相当于假想样本，后验超参数 = 先验伪计数 + 数据中的充分统计量之和，免积分（逻辑斯蒂模型无严格共轭先验，实践中用拉普拉斯近似或变分法凑出同样的"加法"形态——但指数族结构保证了充分统计量仍然是数据进入后验的唯一通道）。</p>
+        </div>
+      </details>
+    </div>
+
+    <!-- ============ 本章自测 ============ -->
+    <h2><span class="sec-no">✍️</span>本章自测</h2>
+    <p class="quiz-hint">点击选项判分，答错会给出原因。</p>
+
+    <div class="quiz-block" data-answer="c">
+      <div class="q-no">自测 1</div>
+      <div class="q-stem">伯努利分布（P(X=1)=p）的自然参数 θ 是：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. p</li>
+        <li data-opt="b">B. log p</li>
+        <li data-opt="c">C. log[p/(1−p)]</li>
+        <li data-opt="d">D. p/(1−p)</li>
+      </ul>
+      <div class="quiz-explain">选 C。log P = X·log[p/(1−p)] + log(1−p)，与 X 相乘的那一项才是自然参数。A 是均值参数（E[X]），不是自然参数；B 漏掉了 −log(1−p) 中属于 X 的部分；D 是几率本身，没有取对数——取对数这一步正是"放到指数上"的要求。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 2</div>
+      <div class="q-stem">关于对数配分函数 A(θ)，下列说法正确的是：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. ∇A(θ) = 样本中充分统计量的均值</li>
+        <li data-opt="b">B. ∇A(θ) = E_θ[φ(X)]，且 A 是凸函数</li>
+        <li data-opt="c">C. ∇²A(θ) = E[φ]²，可正可负</li>
+        <li data-opt="d">D. A(θ) 与第4章的配分函数 Z 无关</li>
+      </ul>
+      <div class="quiz-explain">选 B。∇A = E_θ[φ] 是模型期望；∇²A = Cov[φ] 半正定故 A 凸。A 错在把"模型期望"偷换成"样本均值"——两者只在 MLE 处才相等（这正是矩匹配）。C 错：二阶导是协方差（矩阵），恒半正定，不是期望的平方。D 错：A(θ) = log Z，正是第4章配分函数的对数。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="a">
+      <div class="q-no">自测 3</div>
+      <div class="q-stem">先验 Beta(2,2)，观测 7 次正面 3 次反面，后验是：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. Beta(9, 5)</li>
+        <li data-opt="b">B. Beta(7, 3)</li>
+        <li data-opt="c">C. Beta(8, 4)</li>
+        <li data-opt="d">D. Beta(9, 5) 的均值等于样本频率 0.7</li>
+      </ul>
+      <div class="quiz-explain">选 A。后验超参数 = 先验伪计数 + 充分统计量：(2+7, 2+3) = (9,5)。B 忘了加先验；C 错在把 Beta(α,β) 的密度指数 α−1 当成计数本身——伪计数是 α−1=1，但更新公式直接对超参数做 (2+7)。D 的后验对但结论错：Beta(9,5) 均值 = 9/14 ≈ 0.643 ≠ 0.7，先验把估计往 0.5 拉。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="d">
+      <div class="q-no">自测 4</div>
+      <div class="q-stem">下列哪个模型<strong>不</strong>能直接落入指数族框架？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 第3章的正值表格 CPD</li>
+        <li data-opt="b">B. 第4章的对数线性 MRF</li>
+        <li data-opt="c">C. 第7章的高斯网络</li>
+        <li data-opt="d">D. 以上全部都能落入指数族</li>
+      </ul>
+      <div class="quiz-explain">选 D。A：正值表格取对数即示性函数的线性组合（log ψ = Σwᵢfᵢ）；B：定义就是 exp(Σwᵢfᵢ)/Z，即指数族 MRF；C：8.2 例 2 已手算改写。这正是本章的收束结论：Ch3–7 是同一个东西的不同坐标。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="c">
+      <div class="q-no">自测 5</div>
+      <div class="q-stem">最大熵原理对"为什么分布是指数形状"的回答是：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 因为指数函数计算快、导数好求</li>
+        <li data-opt="b">B. 因为自然界偏爱指数衰减</li>
+        <li data-opt="c">C. 因为在给定期望约束下，熵最大的分布恰好是指数族——它对已知信息之外不做任何假设</li>
+        <li data-opt="d">D. 因为只有指数族能归一化</li>
+      </ul>
+      <div class="quiz-explain">选 C。拉格朗日求解"E[φₖ]=αₖ 约束下熵最大"的分布，解恰为 P ∝ h·exp(Σλₖφₖ)。A 把结果当成了动机（计算便利是红利不是原因）；B 是循环解释；D 错——任何非负函数都能归一化，归一化由 A(θ) 负责，与形状无关。</div>
+    </div>
+
+    <!-- ============ 三句话复述 ============ -->
+    <div class="retell">
+      <h3>🗣️ 用自己的话，三句话讲完本章</h3>
+      <p class="retell-sub">对着空气（或室友）说出这三句。说卡壳的那句，回去重读对应小节。</p>
+      <details>
+        <summary>句1：这章解决什么问题？——</summary>
+        <div class="retell-answer">参考答案：前 7 章的表格 CPD、势函数、Logistic、Noisy-Or、高斯各说各话，学习算法（Ch16–20）没法各写一遍。本章给出统一语言：指数族标准形式 h(X)·exp(θᵀφ(X) − A(θ))。</div>
+      </details>
+      <details>
+        <summary>句2：核心机制是什么？——</summary>
+        <div class="retell-answer">参考答案：四部件（自然参数 θ、充分统计量 φ、基础测度 h、对数配分函数 A）把分布写成"特征与参数的线性组合放到指数上"；于是似然只经 Σφ(x) 依赖数据，MLE 是矩匹配 E[φ]=样本均值 的凸优化，共轭先验更新退化为伪计数相加；最大熵原理解释了指数形状的必然性。</div>
+      </details>
+      <details>
+        <summary>句3：它和前后章怎么分工？——</summary>
+        <div class="retell-answer">参考答案：本章是表示阶段（Ch3–8）的收口——Ch3–7 的模型全部是指数族成员，只是 φ 与 θ 的坐标不同。统一暴露的账单是 A(θ) = log Z：算它及其梯度是推理（Ch9–11）的任务，供学习（Ch16–20）消费。</div>
+      </details>
+    </div>
+
+    <!-- ============ 复习计划 ============ -->
+    <div class="review-plan">
+      <h3>🔁 间隔复习计划</h3>
+      <p>回忆本身比重读有效 10 倍。到点只做一件事：翻卡 + 重做标记题。</p>
+      <table>
+        <tr><th>时间点</th><th>复习内容</th><th>预计用时</th></tr>
+        <tr><td>第 1 天</td><td>概念卡 1–6 全部 + 回忆卡 8.2-1、8.3-2、8.4-1</td><td>10 分钟</td></tr>
+        <tr><td>第 3 天</td><td>概念卡 2、3、6（充分统计量/对数配分函数/对数线性）+ 重做 L2 两题 + 自测错题</td><td>12 分钟</td></tr>
+        <tr><td>第 7 天</td><td>三句话复述出声说一遍 + 回忆卡 8.1-1、8.5-1、8.5-2</td><td>10 分钟</td></tr>
+        <tr><td>第 15 天</td><td>只做合上书挑战；六条全过则本章毕业，卡在哪条就重读对应小节</td><td>15 分钟</td></tr>
+      </table>
+    </div>
+
+    <!-- 合上书挑战 -->
+    <div class="final-challenge">
+      <h3>📕 合上书挑战</h3>
+      <p class="fc-sub">现在关掉这个页面（或遮住屏幕），拿一张纸，凭记忆完成以下任务。全部做完再回来核对——这是本章真正的毕业考试。</p>
+      <ol id="ch08-challenge-list">
+        <li><span class="fc-check"></span>写出指数族标准形式，标出四个部件名称，并各用一句话说其职责</li>
+        <li><span class="fc-check"></span>把伯努利分布从 P(X)=p^X(1−p)^{1−X} 逐步改写到指数族，写出 θ、φ、h、A</li>
+        <li><span class="fc-check"></span>把方差已知的高斯逐步改写到指数族（展开 (x−μ)²，归类四个部件）</li>
+        <li><span class="fc-check"></span>对 7 正 3 负的伯努利数据，用矩匹配方程手算 MLE，并用 ∇²A 验证凸性</li>
+        <li><span class="fc-check"></span>手算 Beta(2,2) 先验加 7 正 3 负数据的后验，并说"伪计数相加"的含义</li>
+        <li><span class="fc-check"></span>画一张表把 Ch3/4/5/7 的模型各对号到 φ 与 θ，并指出 A(θ) 与第4章配分函数的关系</li>
+        <li><span class="fc-check"></span>回答本章的主线问题：为什么前 7 章五花八门的参数化可以用同一种语言写出来，代价是什么？（一句话）</li>
+      </ol>
+    </div>
+
+    <div class="complete-zone">
+      <button class="btn-complete" id="ch08-btn-complete" onclick="markDone()">✓ 我已完成本章（含合上书挑战）</button>
+    </div>
+
+    <div class="chapter-nav">
+      <a href="chapter-07.html"><span class="nav-dir">← 上一章</span>第7章 高斯网络</a>
+      <a href="chapter-09.html" class="next"><span class="nav-dir">下一章 →</span>第9章 精确推理：变量消去</a>
+    </div>
+
+  </div>
+</div>
+
+<footer class="footer">
+  <div class="wrap">第8章 指数族 · PGM 互动讲义 · 基于 Koller &amp; Friedman (2009)</div>
+</footer>
+
+<script src="assets/mermaid.min.js"></script>
+<script>
+mermaid.initialize({
+  startOnLoad: true,
+  theme: "base",
+  themeVariables: {
+    primaryColor: "#e3edf7",
+    primaryBorderColor: "#1d5f9e",
+    primaryTextColor: "#1d5f9e",
+    lineColor: "#5c554b",
+    secondaryColor: "#fbeedd",
+    tertiaryColor: "#f5f1e8",
+    fontFamily: "-apple-system, PingFang SC, sans-serif",
+    fontSize: "14px"
+  },
+  flowchart: { curve: "linear", htmlLabels: false }
+});
+</script>
+<script>
+// 自测题逻辑
+document.querySelectorAll(".quiz-block").forEach(block => {
+  const answer = block.dataset.answer;
+  const explain = block.querySelector(".quiz-explain");
+  block.querySelectorAll(".quiz-opts li").forEach(li => {
+    li.addEventListener("click", () => {
+      const opts = block.querySelectorAll(".quiz-opts li");
+      opts.forEach(o => o.classList.add("disabled"));
+      if (li.dataset.opt === answer) {
+        li.classList.add("correct");
+      } else {
+        li.classList.add("wrong");
+        block.querySelector(`[data-opt="${answer}"]`).classList.add("correct");
+      }
+      explain.classList.add("show");
+    });
+  });
+});
+
+// 合上书清单打勾
+document.querySelectorAll("#ch08-challenge-list li").forEach(li => {
+  li.addEventListener("click", () => li.classList.toggle("checked"));
+});
+
+// 完成标记 → localStorage（第8章）
+const KEY = "pgm_progress_v1";
+function loadProgress() {
+  try { return JSON.parse(localStorage.getItem(KEY)) || {}; } catch (e) { return {}; }
+}
+const progress = loadProgress();
+const btn = document.getElementById("ch08-btn-complete");
+if (progress[8] && progress[8].done) {
+  btn.textContent = "✓ 已完成 · 再次点击重置";
+  btn.classList.add("done");
+}
+function markDone() {
+  const p = loadProgress();
+  if (p[8] && p[8].done) {
+    delete p[8];
+    btn.textContent = "✓ 我已完成本章（含合上书挑战）";
+    btn.classList.remove("done");
+  } else {
+    p[8] = { done: true, completedAt: Date.now(), reviewsDone: 0 };
+    btn.textContent = "✓ 已完成 · 复习提醒已开启";
+    btn.classList.add("done");
+  }
+  localStorage.setItem(KEY, JSON.stringify(p));
+}
+</script>
+
+</body>
+</html>
