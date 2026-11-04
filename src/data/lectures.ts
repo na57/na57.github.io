@@ -1,5 +1,12 @@
 // 互动讲义课程数据。新增课程时在数组末尾追加一条即可。
-export interface Chapter { no: number; file: string; title: string; slide?: string }
+export interface Chapter {
+  no: number;
+  file: string;
+  title: string;
+  slide?: string;
+  // 已上传 B 站的讲解视频；后续每上传一集，只需在对应章节补这个字段
+  video?: { bvid: string; url: string };
+}
 export interface Course { slug: string; slidesDir?: string; name: string; book: string; color: string; desc: string; chapters: Chapter[] }
 export const courses: Course[] = [
   {
@@ -10,7 +17,7 @@ export const courses: Course[] = [
     color: "#7c6ff0",
     desc: "用图结构表达高维联合分布：表示、推理、学习三条主线",
     chapters: [
-      { no: 1, file: "chapter-01.html", title: "引言", slide: "01-引言-课件.html" },
+      { no: 1, file: "chapter-01.html", title: "引言", slide: "01-引言-课件.html", video: { bvid: "BV1w2xS6LELD", url: "https://www.bilibili.com/video/BV1w2xS6LELD" } },
       { no: 2, file: "chapter-02.html", title: "背景知识", slide: "02-背景知识-课件.html" },
       { no: 3, file: "chapter-03.html", title: "贝叶斯网络", slide: "03-贝叶斯网络-课件.html" },
       { no: 4, file: "chapter-04.html", title: "马尔可夫网络", slide: "04-马尔可夫网络-课件.html" },
