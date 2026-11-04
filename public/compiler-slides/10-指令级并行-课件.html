@@ -1,0 +1,590 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第10章 指令级并行 · 编译原理课件</title>
+<script>
+window.MathJax = {
+  tex: {
+    inlineMath: [['$', '$'], ['\\(', '\\)']],
+    displayMath: [['$$', '$$'], ['\\[', '\\]']],
+    processEscapes: true,
+    tags: 'none'
+  },
+  svg: { fontCache: 'global', scale: 1.05 },
+  options: { skipHtmlTags: ['script','noscript','style','textarea','pre','code'] }
+};
+</script>
+<!-- MathJax 本地引用（tex-svg 单文件全量组件，约2MB，自带字体数据），file:// 与断网均可用 -->
+<script src="/lectures-assets/tex-svg.js" async></script>
+<style>
+  :root{
+    --primary:#1a365d; --accent:#2b6cb0; --accent-light:#ebf8ff; --accent-border:#bee3f8;
+    --text:#2d3748; --muted:#718096; --border:#e2e8f0; --bg-light:#f7fafc;
+    --success:#38a169; --danger:#e53e3e; --warning:#dd6b20; --warn-bg:#fffaf0;
+  }
+  *{margin:0;padding:0;box-sizing:border-box;}
+  html,body{width:100%;height:100%;overflow:hidden;background:#0f172a;}
+  body{
+    font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Hiragino Sans GB","Microsoft YaHei","WenQuanYi Micro Hei",sans-serif;
+    color:var(--text);
+  }
+  #stage{
+    position:absolute; left:50%; top:50%;
+    width:1280px; height:720px;
+    transform:translate(-50%,-50%) scale(1);
+    transform-origin:center center;
+    background:#ffffff;
+    box-shadow:0 0 40px rgba(0,0,0,.4);
+    overflow:hidden;
+  }
+  .slide{
+    position:absolute; inset:0;
+    padding:36px 60px 52px;
+    display:none;
+    flex-direction:column;
+    background:#ffffff;
+    opacity:0;
+    transition:opacity .35s ease;
+  }
+  .slide.active{ display:flex; opacity:1; }
+
+  #progress{ position:absolute; top:0; left:0; height:6px; background:var(--accent); width:0; z-index:50; transition:width .35s; }
+
+  /* 封面 / 结束页 */
+  .slide-cover{ justify-content:center; align-items:center; text-align:center; }
+  .slide-cover{ background:linear-gradient(135deg,#1a365d 0%,#2b6cb0 100%); color:#fff; }
+  .slide-cover .kicker{ font-size:22px; letter-spacing:6px; opacity:.85; margin-bottom:18px;}
+  .slide-cover h1{ font-size:64px; font-weight:800; line-height:1.2; margin-bottom:22px; letter-spacing:2px;}
+  .slide-cover .sub{ font-size:26px; opacity:.92; margin-bottom:36px;}
+  .slide-cover .meta{ font-size:19px; opacity:.85; line-height:2;}
+  .slide-cover .divider{ width:160px;height:5px;background:#fff;opacity:.6;margin:0 auto 30px;border-radius:3px;}
+  .slide-cover .question{ font-size:24px; background:rgba(255,255,255,.12); border:1px solid rgba(255,255,255,.35); border-radius:12px; padding:12px 28px; margin-bottom:30px;}
+
+  /* 页头：结论式标题 */
+  .slide-head{ display:flex; align-items:baseline; gap:16px; border-bottom:3px solid var(--accent); padding-bottom:9px; margin-bottom:12px;}
+  .slide-head .sec{ font-size:17px; color:var(--accent); font-weight:700; background:var(--accent-light); padding:3px 11px; border-radius:6px; white-space:nowrap;}
+  .slide-head h3{ font-size:29px; color:var(--primary); font-weight:700;}
+  .slide-body{ flex:1; display:flex; flex-direction:column; justify-content:center; min-height:0; }
+
+  p{ font-size:21px; line-height:1.65; margin-bottom:8px;}
+  .lead{ font-size:23px; color:#374151; line-height:1.75;}
+  ul,ol{ margin:0 0 8px 26px; font-size:21px; line-height:1.7;}
+  li{ margin-bottom:5px;}
+  strong{ color:var(--primary); }
+
+  /* 公式块 */
+  .formula{ background:var(--accent-light); border-left:5px solid var(--accent); border-radius:0 10px 10px 0; padding:9px 22px; margin:9px 0; text-align:center; font-size:23px;}
+  .formula-concl{ background:#fffaf0; border-left:5px solid var(--warning);}
+  .MathJax{ font-size:1.05em !important; }
+  mjx-container[display="true"]{ margin:6px 0 !important; }
+
+  /* 表格 */
+  table{ width:100%; border-collapse:collapse; margin:10px 0; font-size:20px;}
+  th{ background:var(--accent); color:#fff; padding:8px 12px; text-align:center; font-weight:600;}
+  td{ padding:7px 12px; border:1px solid var(--border); text-align:center; vertical-align:middle;}
+  tr:nth-child(even) td{ background:var(--bg-light);}
+  td.l{ text-align:left; }
+  table.small{ font-size:18px; }
+  table.small td, table.small th{ padding:6px 10px; }
+
+  /* 组件 */
+  .card{ background:var(--accent-light); border:1px solid var(--accent-border); border-radius:12px; padding:12px 20px; margin:10px 0;}
+  .tip{ background:#ebf8ff; border-left:5px solid var(--accent); border-radius:0 10px 10px 0; padding:10px 20px; margin:10px 0; font-size:20px; color:#2c5282;}
+  .deep{ background:#f0fff4; border-left:5px solid var(--success); border-radius:0 10px 10px 0; padding:10px 20px; margin:10px 0; font-size:20px; color:#22543d;}
+  .warn{ background:var(--warn-bg); border-left:5px solid var(--warning); border-radius:0 10px 10px 0; padding:10px 20px; margin:10px 0; font-size:20px; color:#744210;}
+  .trap{ background:#fef2f2; border-left:5px solid var(--danger); border-radius:0 10px 10px 0; padding:10px 20px; margin:10px 0; font-size:20px; color:#7f1d1d;}
+
+  .pause{
+    background:var(--warn-bg); border:2px dashed var(--warning); border-radius:14px;
+    padding:10px 22px; margin:10px 0; display:flex; align-items:center; gap:16px;
+  }
+  .pause .icon{ font-size:36px; line-height:1; }
+  .pause .txt b{ color:var(--warning); font-size:21px; }
+  .pause .txt p{ font-size:18px; color:#744210; margin:3px 0 0; }
+
+  .cols{ display:flex; gap:28px; align-items:stretch; }
+  .col{ flex:1; min-width:0; }
+
+  /* 推导分步：仅互动模式隐藏，截图(autohide)模式全部可见——此规则不可删 */
+  .step{ opacity:0; transform:translateY(8px); transition:opacity .3s ease, transform .3s ease; }
+  .step.on{ opacity:1; transform:none; }
+  body.autohide .step{ opacity:1 !important; transform:none !important; }
+  .step-hint{ font-size:14px; color:var(--muted); margin-top:4px;}
+  body.autohide .step-hint{ display:none; }
+
+  /* 因果链 */
+  .chain{ margin:6px 0; }
+  .chain .link{ display:flex; align-items:center; gap:14px; margin:6px 0;}
+  .chain .no{ width:34px; height:34px; border-radius:50%; background:var(--accent); color:#fff; font-size:18px; font-weight:700; display:flex; align-items:center; justify-content:center; flex-shrink:0;}
+  .chain .txt{ font-size:21px; line-height:1.5;}
+  .chain .txt strong{ color:var(--primary); }
+
+  /* mermaid 容器：高度封顶，防止溢出 720px 舞台 */
+  .mmd{ background:var(--bg-light); border:1px solid var(--border); border-radius:12px; padding:10px 14px; display:flex; justify-content:center; align-items:center; margin:8px 0;}
+  .mmd .mermaid{ display:flex; justify-content:center; width:100%; visibility:hidden; }
+  .mmd .mermaid[data-done]{ visibility:visible; }
+  .mmd .mermaid svg{ max-width:100%; height:auto; max-height:230px; }
+  .mmd.mmd-tall .mermaid svg{ max-height:330px; }
+  .mmd.mmd-sm svg{ max-height:150px; }
+  .mmd-row{ display:flex; gap:18px; }
+  .mmd-row .mmd{ flex:1; flex-direction:column; }
+  .mmd .cap{ font-size:17px; color:var(--muted); margin-top:6px; text-align:center;}
+  .mmd .cap b{ color:var(--text); }
+
+  #footer{ position:absolute; bottom:0; left:0; right:0; height:40px; display:flex; align-items:center; justify-content:space-between; padding:0 30px; font-size:15px; color:#94a3b8; background:rgba(247,250,252,.85); border-top:1px solid var(--border); z-index:40;}
+  #footer .brand{ font-weight:600; color:var(--accent); }
+
+  .nav{ position:absolute; bottom:48px; right:40px; display:flex; gap:12px; z-index:45;}
+  .nav button{ width:54px; height:54px; border-radius:50%; border:none; background:var(--accent); color:#fff; font-size:24px; cursor:pointer; box-shadow:0 3px 10px rgba(43,108,176,.4); display:flex; align-items:center; justify-content:center;}
+  .nav button:hover{ background:var(--primary); }
+  .nav button:disabled{ background:#cbd5d0; cursor:default; box-shadow:none;}
+
+  #hint{ position:absolute; bottom:48px; left:40px; font-size:14px; color:#94a3b8; z-index:45;}
+
+  body.autohide #progress, body.autohide #footer, body.autohide .nav, body.autohide #hint{ display:none !important; }
+</style>
+</head>
+<body>
+<div id="stage">
+
+  <div id="progress"></div>
+
+  <!-- ★ 1 封面 -->
+  <section class="slide slide-cover active" data-narration="同学们好，欢迎来到编译原理第十章。上一章我们把中间代码收拾得干干净净：循环体十二条压到七条，乘法从两次减到一次。但故事还没完——代码再干净，要是还按源程序的顺序一条一条发给处理器，流水线里照样全是气泡：一条 load 没命中缓存，五十多个周期就白白空转。本章要回答的问题是：硬件每个周期能同时发射多条指令，编译器怎样重排代码，把这些发射槽全部填满？学完你要能画依赖图、算关键路径、亲手做一遍列表调度，还要会给循环算启动间距。我们开始。">
+    <div class="kicker">编译原理 · 第 10 章 · 后端与优化</div>
+    <h1>指令级并行</h1>
+    <div class="sub">Instruction-Level Parallelism —— 代码干净了，轮到硬件登场</div>
+    <div class="question">本章要回答：硬件每周期能发多条指令，编译器怎么重排代码把流水线填满？</div>
+    <div class="meta">
+      配套讲义：《编译原理互动讲义》第10章 · 基于 Aho, Lam, Sethi &amp; Ullman《编译原理》(第2版)<br>
+      ← → 或空格翻页 · 推导页逐步显示
+    </div>
+  </section>
+
+  <!-- ★ 2 全书位置 -->
+  <section class="slide" data-narration="先定位。全书分四段：前四章是前端，做词法和语法分析；五到七章管语义和中间代码；八到十一章是后端与优化，我们正站在这一段里；最后一章做全书收束。回头看，第八章把中间代码翻成目标码，第九章在翻译之前给中间代码瘦身；本章接着往下走一格：代码已经干净了，轮到硬件登场——处理器每个周期能发好几条指令，怎么排顺序才能让它们不打架、把流水线喂饱。本章之后，第十一章会把并行粒度从一个核抬到多个核。所以本章是单核优化的最后一站：把指令级并行榨干，再把接力棒交出去。">
+    <div class="slide-head"><span class="sec">定位</span><h3>单核优化的最后一站：指令怎么排，交给本章</h3></div>
+    <div class="slide-body">
+      <div class="mmd">
+        <div class="mermaid">
+flowchart TB
+  A["① 前端：词法与语法 Ch1–4"] --> B["② 语义与中间代码 Ch5–7"]
+  B --> C["③ 后端与优化 Ch8–11 · 本章 Ch10"]:::here
+  C --> D["④ 全书收束 Ch12"]
+  classDef here fill:#2b6cb0,color:#ffffff,stroke:#1a365d,stroke-width:3px
+        </div>
+      </div>
+      <p style="text-align:center; margin-top:10px;">第9章省的是<strong>指令条数</strong> → 本章省的是<strong>周期</strong> → 第11章抬的是<strong>并行粒度</strong></p>
+    </div>
+  </section>
+
+  <!-- ★ 3 本章主线 -->
+  <section class="slide" data-narration="本章只有一条主线，六环走完。第一环是问题：硬件每周期能发多条指令，但按源程序顺序发射，常常因为等操作数而空转。第二环，重排之前先搞清谁先谁后：写后读、读后写、写后写三类依赖，只有第一种动不得。第三环，把依赖画成图，关键路径给出这个块最快能跑多快的硬下界。第四环，列表调度：逐周期从就绪指令里挑最急的发射，把发射槽填满。第五环，块内不够就向循环借：软件流水让相邻迭代错相位重叠；再不够就跨基本块借，踪迹调度沿热点重排。最后一环是终点：单核撞上功耗墙，并行走向线程级。">
+    <div class="slide-head"><span class="sec">主线</span><h3>依赖给自由，DAG 给地图，调度填槽，流水与踪迹向外借兵</h3></div>
+    <div class="slide-body">
+      <div class="chain">
+        <div class="link"><span class="no">1</span><span class="txt"><strong>问题</strong>：按源序发射，等待操作数 → 流水线空转</span></div>
+        <div class="link"><span class="no">2</span><span class="txt"><strong>划红线</strong>：RAW / WAR / WAW 三类依赖，只有真依赖动不得</span></div>
+        <div class="link"><span class="no">3</span><span class="txt"><strong>画地图</strong>：依赖 DAG，关键路径给出周期硬下界</span></div>
+        <div class="link"><span class="no">4</span><span class="txt"><strong>块内调度</strong>：列表调度逐周期填发射槽</span></div>
+        <div class="link"><span class="no">5</span><span class="txt"><strong>向外借兵</strong>：软件流水跨迭代，踪迹调度跨基本块</span></div>
+        <div class="link"><span class="no">6</span><span class="txt"><strong>终点</strong>：单核撞功耗墙 → 移交第11章</span></div>
+      </div>
+      <div class="tip">一条贯穿例打全场：6 条指令的基本块，从 6 周期压到 5 周期，恰好打平关键路径下界。</div>
+    </div>
+  </section>
+
+  <!-- 4 动机页：停顿的代价 -->
+  <section class="slide" data-narration="先看停顿有多贵。现代处理器把一条指令拆成取指、译码、执行、访存、写回五级流水线，理想情况每个周期完工一条。但理想常被打破：下一条指令要用的结果还没算出来，流水线只能空转，这叫停顿，空转的周期叫气泡。给你一组数字感受量级：加法的结果下一周期就能用，至多等一拍；乘法要等两三拍；一次命中一级缓存的 load 等两到四拍；而一次 load 未命中、要去主存取数，停顿可达五十个周期以上。也就是说，一条没安排好的 load，能吃掉五十条指令的发射机会。编译器排指令的头号目标，就是把等的时间填上别的活。">
+    <div class="slide-head"><span class="sec">动机</span><h3>一条没安排好的 load，能吃掉 50 条指令的发射机会</h3></div>
+    <div class="slide-body">
+      <table>
+        <thead><tr><th>操作</th><th>结果可用所需周期</th><th>量级感受</th></tr></thead>
+        <tbody>
+          <tr><td class="l">加法</td><td>0–1</td><td class="l">下一拍就能用</td></tr>
+          <tr><td class="l">乘法</td><td>2–3</td><td class="l">插一两条别的指令正好</td></tr>
+          <tr><td class="l">load 命中 L1</td><td>2–4</td><td class="l">还能掩盖</td></tr>
+          <tr><td class="l"><strong>load 未命中</strong></td><td><strong>50+</strong></td><td class="l">烧掉几十条指令的发射机会</td></tr>
+        </tbody>
+      </table>
+      <div class="tip">💡 编译器的头号目标：在依赖允许的范围内，把「等结果」的指令和「不相干」的指令交换位置。</div>
+    </div>
+  </section>
+
+  <!-- ★ 5 定义页：三种机器，谁找并行 -->
+  <section class="slide" data-narration="谁来填空槽，分出三种机器。第一种，单发射流水线：每周期至多发一条，无需找并行，编译器把顺序排好、减少停顿就行。第二种，超标量：每周期能发多条，比如四条，由硬件在运行时动态检查依赖、乱序发射；编译器的任务是把互相独立的指令放得近一点，方便硬件在窗口里找到它们。第三种，超长指令字，简称 VLIW：多条指令被编译器静态打包成一条长指令，硬件照单执行，一个拍子都不能错——正确性责任全在编译器身上。看清分工：越是 VLIW 越依赖编译器，越是长延迟操作越依赖编译器；就算超标量有乱序硬件，它的观察窗口也只有几十条指令，跨块跨迭代的并行它看不见。">
+    <div class="slide-head"><span class="sec">定义</span><h3>三种机器的分水岭：谁负责找并行</h3></div>
+    <div class="slide-body">
+      <table>
+        <thead><tr><th>架构</th><th>每周期发射</th><th>谁找并行</th><th>编译器的角色</th></tr></thead>
+        <tbody>
+          <tr><td class="l">单发射流水线</td><td>至多 1 条</td><td>无需找</td><td class="l">排好顺序、减少停顿即可</td></tr>
+          <tr><td class="l"><strong>超标量</strong>（Superscalar）</td><td>多条（如 4 条）</td><td><strong>硬件</strong>动态乱序</td><td class="l">把独立指令放近一点，方便硬件发现</td></tr>
+          <tr><td class="l"><strong>超长指令字</strong>（VLIW）</td><td>多条打包成长指令</td><td><strong>编译器</strong>静态打包</td><td class="l">全部责任：排错一拍就是错程序</td></tr>
+        </tbody>
+      </table>
+      <div class="deep">读法：硬件窗口只有几十条指令；越是 VLIW、越是长延迟操作，越依赖编译器静态调度。</div>
+    </div>
+  </section>
+
+  <!-- ★ 6 定义页：三类依赖 -->
+  <section class="slide" data-narration="要重排，先得知道哪些顺序动不得。两条指令之间的顺序约束统称依赖，按读写先后分三类。写后读，简称 RAW，也叫真依赖：前一条写出 R 一，后一条要读 R 一，数据真的从一条流向另一条，违反就读到旧值，结果直接错——这种只能等。读后写，WAR：前一条读 R 二，后一条写 R 二。写后写，WAW：两条都写同一个寄存器。后两种只是撞了同一个名字，数据并没有真的流动，所以叫名依赖：把其中一条改写到一个空闲寄存器，也就是寄存器重命名，顺序就能解开。记住一句话：真依赖只能等，名依赖可以消。乱序硬件里的重命名寄存器堆，干的就是消名依赖这件事。">
+    <div class="slide-head"><span class="sec">定义</span><h3>三条锁链只有一条是真的：RAW 只能等，WAR / WAW 可重命名</h3></div>
+    <div class="slide-body">
+      <table>
+        <thead><tr><th>依赖</th><th>别名</th><th>最小例子</th><th>违反后果 / 解法</th></tr></thead>
+        <tbody>
+          <tr><td class="l"><strong>RAW</strong> 写后读</td><td>真依赖</td><td class="l">I1: R1=R2+R3 → I2: R4=R1×2</td><td class="l">读到旧值，结果错——<strong>只能等</strong></td></tr>
+          <tr><td class="l"><strong>WAR</strong> 读后写</td><td>名依赖</td><td class="l">I1: R4=R2+R3 → I2: R2=R5×2</td><td class="l">I1 读到新值——<strong>重命名可消</strong></td></tr>
+          <tr><td class="l"><strong>WAW</strong> 写后写</td><td>名依赖</td><td class="l">I1: R1=R2+R3 → I2: R1=R4×2</td><td class="l">终值写错——<strong>重命名可消</strong></td></tr>
+        </tbody>
+      </table>
+      <div class="formula formula-concl">$$\text{真依赖（RAW）只能等；名依赖（WAR / WAW）}\ \boldsymbol{\text{重命名即消}}$$</div>
+    </div>
+  </section>
+
+  <!-- 7 例子页：贯穿例 6 条指令 -->
+  <section class="slide" data-narration="本章的调度贯穿例登场：一个基本块六条指令，延迟标在表里。I 一和 I 二是两条 load，各要两个周期；I 三用 I 一的结果做加法；I 四要等 I 二和 I 三；I 五是乘法，等 I 一和 I 二，要两个周期；I 六把 I 五的结果存回内存，要等 I 五。请你先盯十秒钟，凭直觉回答两个问题：第一，这六条里哪些可以并排跑？第二，这个块最快几个周期能跑完？先不急着答，下一页我们把依赖画成图，答案自己会浮出来。这张表待会儿做列表调度时还要原样搬回来，先记住每条指令在等谁。顺带一提，这个例子会陪我们走完依赖图、列表调度和周期对比三页，是整个第十章的主战场，值得多看两眼。">
+    <div class="slide-head"><span class="sec">例子</span><h3>贯穿例：6 条指令，每条都在等谁？</h3></div>
+    <div class="slide-body">
+      <table>
+        <thead><tr><th>指令</th><th>操作</th><th>延迟（周期）</th><th>它身上的依赖</th></tr></thead>
+        <tbody>
+          <tr><td>I1</td><td class="l">LD R1, a</td><td>2</td><td class="l">—</td></tr>
+          <tr><td>I2</td><td class="l">LD R2, b</td><td>2</td><td class="l">—（与 I1 无依赖）</td></tr>
+          <tr><td>I3</td><td class="l">ADD R4, R1, 1</td><td>1</td><td class="l">RAW：等 I1 的 R1</td></tr>
+          <tr><td>I4</td><td class="l">ADD R5, R2, R4</td><td>1</td><td class="l">RAW：等 I2 的 R2、I3 的 R4</td></tr>
+          <tr><td>I5</td><td class="l">MUL R3, R1, R2</td><td>2</td><td class="l">RAW：等 I1 的 R1、I2 的 R2</td></tr>
+          <tr><td>I6</td><td class="l">ST c, R3</td><td>1</td><td class="l">RAW：等 I5 的 R3</td></tr>
+        </tbody>
+      </table>
+      <div class="tip">先想两个问题：哪些指令可以并排跑？这个块最快几周期跑完？</div>
+    </div>
+  </section>
+
+  <!-- 8 依赖 DAG + 关键路径 -->
+  <section class="slide" data-narration="把每条指令画成节点、每条依赖画成从先到后的边，就得到依赖 DAG。看这张图的形状：I 一和 I 二两条 load 站在最顶上，互不依赖；I 五的乘法等它们俩；I 六存数等 I 五；中间 I 三 I 四那条链是支线。红色标出的是关键路径——延迟之和最长的那条路：I 一到 I 五到 I 六，二加二加一等于五个周期。关键路径的意义是硬下界：无论你怎么调度，这个基本块都不可能比五周期更快；反过来，哪个调度达到了五周期，它就是最优。调度问题从此变成一道图论题：在发射槽有限的前提下，给每个节点分配最早的合法周期。">
+    <div class="slide-head"><span class="sec">地图</span><h3>依赖 DAG 一出，下界自明：关键路径 I1→I5→I6 = 5 周期</h3></div>
+    <div class="slide-body">
+      <div class="mmd mmd-tall">
+        <div class="mermaid">
+flowchart TB
+  I1["I1 LD R1←a · 延迟2"] --> I3["I3 ADD R4←R1+1 · 延迟1"]
+  I1 --> I5["I5 MUL R3←R1×R2 · 延迟2"]
+  I2["I2 LD R2←b · 延迟2"] --> I4["I4 ADD R5←R2+R4 · 延迟1"]
+  I2 --> I5
+  I3 --> I4
+  I5 --> I6["I6 ST c←R3 · 延迟1"]
+  classDef danger fill:#fae9e7,stroke:#b03a2e,stroke-width:2.5px,color:#b03a2e;
+  class I1,I5,I6 danger;
+        </div>
+      </div>
+      <p style="text-align:center; font-size:18px; color:var(--muted);">红色为关键路径：2＋2＋1＝<strong>5 周期</strong>——任何调度都突破不了的硬下界</p>
+    </div>
+  </section>
+
+  <!-- 9 列表调度定义 -->
+  <section class="slide" data-narration="有了地图，开始排班。列表调度是最常用的基本块调度算法，思路一句话：逐周期走，每周期从就绪的指令里按优先级挑，直到填满发射槽。三个动作循环往复：一，更新就绪集合——指令就绪的意思是它所有前驱都已发射、且延迟已满足、结果可用了；二，按优先级挑，发射槽有几个就挑几条；三，发射，推进时钟。优先级用什么？最常用的答案是：这个节点到图的出口的最长路径。直觉很直白：最长路大的节点就在关键路径上，它晚一拍整个块就晚一拍，让它先走等于优先保住下界；不急的节点有松弛时间，正好拿去填缝。">
+    <div class="slide-head"><span class="sec">定义</span><h3>列表调度：每周期先看谁能发，再挑最急的发</h3></div>
+    <div class="slide-body">
+      <div class="chain">
+        <div class="link"><span class="no">1</span><span class="txt"><strong>更新就绪集合</strong>：就绪 ＝ 所有前驱已发射 <strong>且</strong>延迟已满足（结果可用）</span></div>
+        <div class="link"><span class="no">2</span><span class="txt"><strong>按优先级挑</strong>：优先级 ＝ 节点到 DAG 出口的最长路径，发射槽有几个挑几条</span></div>
+        <div class="link"><span class="no">3</span><span class="txt"><strong>发射并推进时钟</strong>：进入下一周期，回到第一步</span></div>
+      </div>
+      <div class="deep">直觉：让「再等就来不及」的指令（关键路径上的）先走，让「反正不急」的指令去填缝。调度本身是 NP 难，贪心＋好优先级在实践中几乎总能逼近下界。</div>
+    </div>
+  </section>
+
+  <!-- ★ 10 演练页（.pause 唯一所在）：列表调度逐周期 -->
+  <section class="slide" data-narration="完整演练开始，机器双发射，每周期至多两条。约定：周期 t 发射、延迟 L，结果在 t 加 L 可用。各节点优先级算好了：I 一和 I 二都是五，I 五是三，I 三是二，I 四 I 六是一。周期一：I 一 I 二无前驱，两槽填满。周期二：没办法，load 的结果周期三才可用，气泡。周期三：I 三和 I 五都就绪，先挑谁？接下来两个周期又各发什么？先暂停视频自己推一遍。推出来了吗？好，对答案：I 五优先级三高于 I 三的二，先发 I 五再发 I 三，两槽填满；周期四只有 I 四就绪，单独发射；周期五 I 六的 R 三可用了，收尾。全程五周期，恰好打平关键路径下界。">
+    <div class="slide-head"><span class="sec">演练</span><h3>双发射列表调度：周期 3 先挑 I5 是全场胜负手</h3></div>
+    <div class="slide-body">
+      <div class="step"><p><strong>周期 1</strong>：就绪 {I1, I2}（无前驱）→ 发 <strong>I1、I2</strong>，两槽填满</p></div>
+      <div class="step"><p><strong>周期 2</strong>：load 结果周期 3 才可用 → 就绪为空，<strong>气泡</strong></p></div>
+      <div class="step"><p><strong>周期 3</strong>：就绪 {I3, I5}，优先级 I5=3 ＞ I3=2 → 发 <strong>I5、I3</strong></p></div>
+      <div class="step"><p><strong>周期 4</strong>：仅 I4 就绪（R4 已可用；I6 要等 R3 到周期 5）→ 发 <strong>I4</strong>；<strong>周期 5</strong>：发 <strong>I6</strong> 收尾，共 5 周期</p></div>
+      <div class="pause"><div class="icon">✍️</div><div class="txt"><b>暂停推导</b><p>在纸上逐周期写出就绪集合与发射集合，并回答：总周期数是否达到关键路径下界？</p></div></div>
+      <p class="step-hint">按空格 / → 逐步揭示答案</p>
+    </div>
+  </section>
+
+  <!-- 11 与原序对比 -->
+  <section class="slide" data-narration="跟不调度对比一下，差别只在一次选择。如果硬件按源序发射、不许越过没就绪的指令：周期一发 I 一 I 二；周期二等 load，气泡；周期三发 I 三——注意此时 I 五也就绪了，但它排在没就绪的 I 四后面，被堵住；周期四发 I 四和 I 五；周期五 I 六要等 R 三，再气泡；周期六才发 I 六。一共六个周期。列表调度五周期，省下一拍，百分之十七，而且打平下界、已达最优。差别就在周期三那次选择：原序先发了不重要的 I 三，把关键的 I 五推到周期四，一路连累 I 六。列表调度的全部智慧就在优先级：让再等就来不及的先走，让不急的去填缝。">
+    <div class="slide-head"><span class="sec">对比</span><h3>原序 6 周期 → 调度 5 周期：省 17%，且已达最优</h3></div>
+    <div class="slide-body">
+      <table>
+        <thead><tr><th>周期</th><th>按源序发射（不调度）</th><th>列表调度</th></tr></thead>
+        <tbody>
+          <tr><td>1</td><td>I1、I2</td><td>I1、I2</td></tr>
+          <tr><td>2</td><td>气泡（等 load）</td><td>气泡（等 load）</td></tr>
+          <tr><td>3</td><td>I3（I5 被堵在 I4 后面）</td><td><strong>I5、I3</strong></td></tr>
+          <tr><td>4</td><td>I4、I5</td><td>I4</td></tr>
+          <tr><td>5</td><td>气泡（等 R3）</td><td>I6</td></tr>
+          <tr><td>6</td><td>I6</td><td>—</td></tr>
+        </tbody>
+      </table>
+      <div class="formula formula-concl">$$\text{原序 } 6 \text{ 周期} \;\longrightarrow\; \text{调度 } \boldsymbol{5} \text{ 周期} \;=\; \text{关键路径下界（最优）}$$</div>
+    </div>
+  </section>
+
+  <!-- 12 软件流水：动机与概念 -->
+  <section class="slide" data-narration="基本块通常只有几条到几十条指令，并行空间就这么大，块内榨干了怎么办？真正的肥羊是循环：迭代之间往往互不依赖，可以把第 k 加一次迭代的指令提前，和第 k 次的尾巴叠在一起执行。这就是软件流水：像硬件流水线那样，把循环体分成几级，稳态时每一级同时在跑不同的迭代。看例子：a 下标 i 等于 a 下标 i 乘二加 b 下标 i，展开成每次迭代五条指令——取 a、取 b、乘二、相加、存回，三条访存、两条 ALU。假设机器有一个访存端口、两个 ALU。问题是：每隔几个周期能启动一次新迭代？这个数有专门的名字，下一页给出算法。">
+    <div class="slide-head"><span class="sec">软件流水</span><h3>块内榨干了，向相邻迭代借：不同迭代错相位重叠</h3></div>
+    <div class="slide-body">
+      <p>示例循环：<code>for (i=0; i&lt;n; i++) a[i] = a[i]*2 + b[i];</code>　每次迭代 5 条指令：</p>
+      <table class="small">
+        <thead><tr><th>指令</th><th>操作</th><th>延迟</th><th>用到的部件</th></tr></thead>
+        <tbody>
+          <tr><td>M1</td><td class="l">LD R1, a[i]</td><td>1</td><td>访存</td></tr>
+          <tr><td>M2</td><td class="l">LD R2, b[i]</td><td>1</td><td>访存</td></tr>
+          <tr><td>M3</td><td class="l">MUL R1, R1, 2</td><td>1</td><td>ALU</td></tr>
+          <tr><td>M4</td><td class="l">ADD R1, R1, R2</td><td>1</td><td>ALU</td></tr>
+          <tr><td>M5</td><td class="l">ST a[i], R1</td><td>1</td><td>访存</td></tr>
+        </tbody>
+      </table>
+      <div class="tip">机器设定：1 个访存端口、2 个 ALU。问题：每隔几周期能启动一次新迭代？</div>
+    </div>
+  </section>
+
+  <!-- ★ 13 定义页：启动间距 II -->
+  <section class="slide" data-narration="这个数叫启动间距，简称 II：软件流水稳态下，相邻两次迭代启动之间隔的周期数。II 有两个下界，各算一遍取大者。第一个，资源约束下界：数数每次迭代对每个部件要几次，除以部件个数，取最大——机器每个周期能干多少活，谁也多要不出来。第二个，依赖约束下界：找跨迭代的依赖回路，回路上延迟之和除以回路跨越的迭代距离——上一次迭代最快多久能交货，下一次才能开工。两个约束谁也绕不开，所以取 max。这个公式是本章必背：II 等于资源下界与依赖下界取大。思想跟关键路径一脉相承，只是战场从一个基本块放大到了整个循环。">
+    <div class="slide-head"><span class="sec">定义</span><h3>启动间距 II ＝ 两个下界取大：机器干多快 与 迭代多久交货</h3></div>
+    <div class="slide-body">
+      <div class="cols">
+        <div class="col"><div class="card">⚙️ <strong>资源约束下界</strong><br>每迭代对各部件的需求量 ÷ 部件个数，取最大</div></div>
+        <div class="col"><div class="card">🔗 <strong>依赖约束下界</strong><br>跨迭代依赖回路的延迟和 ÷ 回路跨越的迭代距离，取最大</div></div>
+      </div>
+      <div class="formula formula-concl">$$\boldsymbol{\mathrm{II} = \max(\,\text{资源约束下界},\ \text{依赖约束下界}\,)}$$</div>
+      <div class="deep">读法：资源下界来自「机器每周期能干多少活」，依赖下界来自「一次迭代最快多久交货」——谁也绕不开，故取 max。</div>
+    </div>
+  </section>
+
+  <!-- 14 II 手算 -->
+  <section class="slide" data-narration="套进例子里算。资源下界：每次迭代三次访存，机器只有一个访存端口，端口每周期只能服务一次，所以每迭代至少三周期；ALU 每次迭代两次，有两个，至少一周期。取大，资源下界等于三。依赖下界：看跨迭代有没有真依赖——a 下标 i 各写各的，迭代之间谁也不等谁；唯一的回路是 i 自身的递增，延迟一、跨距一，依赖下界等于一。两个一下来，II 等于 max 三和一，等于三。也就是说，理想情况下每三个周期完工一次迭代。注意一个常见错觉：光看五条指令一条链，好像每迭代五周期跑不掉——但 II 看的是节拍，不是单次延迟。">
+    <div class="slide-head"><span class="sec">手算</span><h3>资源下界 3、依赖下界 1：II ＝ max(3, 1) ＝ 3</h3></div>
+    <div class="slide-body">
+      <div class="cols">
+        <div class="col"><div class="card">⚙️ <strong>资源下界</strong><br>访存 3 次/迭代 ÷ 1 端口 ＝ <strong>3</strong><br>ALU 2 次/迭代 ÷ 2 个 ＝ 1<br>取 max → <strong>3</strong></div></div>
+        <div class="col"><div class="card">🔗 <strong>依赖下界</strong><br>a[i] 各写各的，迭代间无真依赖；唯一回路是 i 自增（延迟 1、跨距 1）<br>→ <strong>1</strong></div></div>
+      </div>
+      <div class="formula formula-concl">$$\mathrm{II} = \max(3,\,1) = \boldsymbol{3} \quad\text{——每 3 周期完工一次迭代}$$</div>
+      <div class="warn">错觉纠正：5 条指令一条链看似每迭代 5 周期——II 看的是<strong>节拍</strong>，不是单次延迟。</div>
+    </div>
+  </section>
+
+  <!-- 15 稳态 -->
+  <section class="slide" data-narration="流水化之后的稳态长这样：三个周期一个节拍。周期 3k：发射 M 一，第 k 次迭代开工取 a，访存端口被占。周期 3k 加一：发射 M 二取 b，同时 M 三做乘法——R 一已经就绪，一访存加一 ALU，第 k 次迭代推进两级。周期 3k 加二：M 四做加法，同时发射 M 五——注意，这是上一次迭代的存数，第 k 减一次迭代在这里收工。看资源利用率：访存端口每个周期都在干活，正好填满，达到了资源下界，这就是最优。循环开始前要有一段预热代码把流水线灌满，结束后一段排空代码收尾。稳态的精髓一句话：同一周期发射的指令来自不同迭代的不同级，互不依赖、正好填满资源。">
+    <div class="slide-head"><span class="sec">稳态</span><h3>稳态一节拍 3 周期：同一周期的指令来自不同迭代</h3></div>
+    <div class="slide-body">
+      <table>
+        <thead><tr><th>周期</th><th>发射的指令</th><th>解读</th></tr></thead>
+        <tbody>
+          <tr><td>3k</td><td class="l">M1⁽ᵏ⁾：LD a[i]</td><td class="l">第 k 次迭代开工，访存端口被占</td></tr>
+          <tr><td>3k+1</td><td class="l">M2⁽ᵏ⁾：LD b[i] ＋ M3⁽ᵏ⁾：MUL</td><td class="l">1 访存＋1 ALU，第 k 次迭代推进两级</td></tr>
+          <tr><td>3k+2</td><td class="l">M4⁽ᵏ⁾：ADD ＋ M5⁽ᵏ⁻¹⁾：ST</td><td class="l">第 k−1 次迭代在此收工</td></tr>
+        </tbody>
+      </table>
+      <div class="tip">访存端口每周期都在干活 → 达到资源下界，即最优。循环前有一段<strong>预热</strong>（灌满流水线），循环后有一段<strong>排空</strong>（收尾）。</div>
+    </div>
+  </section>
+
+  <!-- 16 踪迹调度 -->
+  <section class="slide" data-narration="块内调度受块长所限，软件流水只管循环内层，那分支之间呢？踪迹调度的思路是：先用剖面信息找出最常走的执行路径——这叫踪迹，它可以横跨多个基本块——然后把整条踪迹当成一个超大块来调度。被挪进踪迹、挪出踪迹的指令，要在非踪迹路径上补一段补偿代码，保证走冷门路径时结果也对。效果是热点路径大幅缩短；代价是冷路径变长、代码体积膨胀，而且一切依赖剖面信息准不准。它回答的还是本章那句老话：还能从哪里再借一条独立的指令。块内借完借迭代，迭代借完借分支——借不到的那天，就是换维度的那天。">
+    <div class="slide-head"><span class="sec">跨块</span><h3>踪迹调度：把最常走的路径当成一个超大块来排</h3></div>
+    <div class="slide-body">
+      <div class="cols">
+        <div class="col"><div class="card">🔥 <strong>做法</strong><br>剖面信息找出热点路径（踪迹，可横跨多个基本块）→ 整条踪迹当超大块调度</div></div>
+        <div class="col"><div class="card">🧾 <strong>代价</strong><br>越界的指令要在冷路径上补<strong>补偿代码</strong>；代码膨胀，且依赖剖面信息准确</div></div>
+      </div>
+      <div class="deep">本章招式一条链：依赖分析给自由 → DAG 给地图 → 列表调度填块内 → 软件流水跨迭代 → 踪迹调度跨分支。每一步都在回答「还能从哪里再借一条独立的指令」。</div>
+    </div>
+  </section>
+
+  <!-- 17 单核见顶 -->
+  <section class="slide" data-narration="然而所有招式都用上，单核指令级并行还是在世纪之交撞了墙。两道墙。第一道是电路：发射宽度做到四到六条就顶天了，因为依赖检查电路的复杂度随宽度平方增长。第二道更硬，叫功耗墙：频率每提一档，功耗近似按立方上涨，两千零五年前后单核频率基本停摆。典型程序持续的 IPC 也就二左右——发射槽再宽，程序里没有那么多独立指令可填。要继续快，只能换维度：多个核跑多线程，这是线程级并行；一条指令处理一批数据，这是数据级并行。这两个正是下一章的战场，而本章的依赖分析和调度思想，会原封不动地搬过去。">
+    <div class="slide-head"><span class="sec">终点</span><h3>单核 ILP 见顶：电路复杂度与功耗墙封死天花板</h3></div>
+    <div class="slide-body">
+      <div class="cols">
+        <div class="col"><div class="card">🧱 <strong>电路墙</strong><br>依赖检查复杂度随发射宽度<strong>平方增长</strong>，宽度 4–6 到顶</div></div>
+        <div class="col"><div class="card">🔥 <strong>功耗墙</strong><br>频率提一档，功耗近似按<strong>立方</strong>上涨；典型程序持续 IPC ≈ 2</div></div>
+      </div>
+      <div class="warn">宽度只是上限：程序没有足够并行性，翻倍的发射槽只会翻倍地空转、翻倍地耗电。之后靠<strong>线程级并行</strong>（多核）与<strong>数据级并行</strong>（SIMD/向量）——第11章的主题。</div>
+    </div>
+  </section>
+
+  <!-- ★ 18 误区页 -->
+  <section class="slide" data-narration="扫三个雷。雷一：以为超标量有乱序硬件，编译器调度就不重要了。错：硬件的观察窗口只有几十条指令，跨基本块、跨迭代的并行它根本看不见；五十周期级的访存延迟也远超硬件能掩盖的范围。雷二：以为发射槽填得越满越好。错：还要盯寄存器压力——把更多 load 提前，意味着更多值同时活着，寄存器不够就要溢出到内存，反而引入新的长延迟操作；调度与寄存器分配互相牵扯，这是第八章与本章的接缝。雷三：以为迭代展开就是软件流水。错：展开只是把多次迭代复制进一个大块再调度，流水是让不同迭代错相位重叠；展开常作流水的前置手段，但两者不是一回事。三个雷都扫完了，记牢。">
+    <div class="slide-head"><span class="sec">避坑</span><h3>三个真实误解：硬件全能、槽越满越好、展开即流水</h3></div>
+    <div class="slide-body">
+      <div class="trap">❌ <strong>超标量有乱序硬件，编译器调度就不重要了</strong><br>✅ 硬件窗口只有几十条指令，跨块跨迭代看不见；50 周期级访存延迟远超硬件能掩盖的范围。</div>
+      <div class="trap">❌ <strong>发射槽填得越满越好</strong><br>✅ 还要盯寄存器压力：更多值同时活着，寄存器不够就溢出到内存，反而引入新的长延迟。</div>
+      <div class="trap">❌ <strong>迭代展开 ＝ 软件流水</strong><br>✅ 展开是把多次迭代复制进大块再调度；流水是不同迭代错相位重叠。展开常作流水的前置，但两者不是一回事。</div>
+    </div>
+  </section>
+
+  <!-- 19 接口页 -->
+  <section class="slide" data-narration="说说本章和前后章怎么分工。第九章管翻译之前给中间代码瘦身，省的是指令条数；本章管单条指令什么时候发射，省的是周期；第十一章管把循环拆给多个核，抬的是并行粒度。三章站在同一条优化链上，粒度一个比一个大：语句级、指令级、线程级。本章给下一章留下两样东西：一是依赖分析这套工具，到了循环身上就换一副面孔，叫距离向量，重新登场；二是一个坏消息——单核榨干了。下一章开头我们就会发现，矩阵乘这样的大循环才是并行真正的金矿，但那里有个新敌人等着：cache。">
+    <div class="slide-head"><span class="sec">接口</span><h3>第9章省条数、本章省周期、第11章抬粒度</h3></div>
+    <div class="slide-body">
+      <table>
+        <thead><tr><th></th><th>第9章 机器无关优化</th><th>本章 指令级并行</th><th>第11章 并行与局部性</th></tr></thead>
+        <tbody>
+          <tr><td class="l"><strong>省什么</strong></td><td class="l">指令条数</td><td class="l">周期</td><td class="l">墙钟时间（多核＋cache）</td></tr>
+          <tr><td class="l"><strong>粒度</strong></td><td class="l">语句级（基本块/流图）</td><td class="l">指令级（单核内）</td><td class="l">线程级（核间）</td></tr>
+          <tr><td class="l"><strong>核心工具</strong></td><td class="l">数据流分析</td><td class="l">依赖 DAG、列表调度、II</td><td class="l">距离向量、分块、仿射变换</td></tr>
+        </tbody>
+      </table>
+      <div class="tip">钩子：单核榨干了，大循环怎么拆给多个核？cache 又为什么不答应？第11章见。</div>
+    </div>
+  </section>
+
+  <!-- ★ 20 小结页 -->
+  <section class="slide" data-narration="三句话讲完第十章。第一句，解决什么：硬件每周期能发多条指令，但按源序发射常因等待而空转，编译器要在不违反依赖的前提下重排指令，把流水线和发射槽填满。第二句，核心机制：依赖分析分清 RAW、WAR、WAW，画依赖图求关键路径；块内用列表调度逐周期填槽，循环用软件流水按启动间距错相位重叠，跨块用踪迹调度沿热点重排。第三句，承上启下：第九章优化算什么，本章优化何时发；单核撞上功耗墙之后，线程级和数据级并行交给第十一章。必背公式就是这条：II 等于资源下界与依赖下界取大——合上书也要能默写。">
+    <div class="slide-head"><span class="sec">小结</span><h3>三句话讲完第10章</h3></div>
+    <div class="slide-body">
+      <div class="chain">
+        <div class="link"><span class="no">1</span><span class="txt"><strong>解决什么</strong>：硬件每周期能发多条，编译器在不违反依赖的前提下重排指令填满流水线</span></div>
+        <div class="link"><span class="no">2</span><span class="txt"><strong>核心机制</strong>：依赖分析 → DAG 关键路径 → 列表调度填块内 → 软件流水跨迭代 → 踪迹调度跨块</span></div>
+        <div class="link"><span class="no">3</span><span class="txt"><strong>承上启下</strong>：第9章优化「算什么」，本章优化「何时发」，线程级并行交第11章</span></div>
+      </div>
+      <div class="formula formula-concl">$$\boldsymbol{\mathrm{II} = \max(\,\text{资源约束下界},\ \text{依赖约束下界}\,)} \;\text{——合上书也要能默写}$$</div>
+    </div>
+  </section>
+
+  <!-- ★ 21 结束页 -->
+  <section class="slide slide-cover" data-narration="本章到此结束。毕业挑战，合上书拿一张纸，六道题：一，画出单发射、超标量、VLIW 的三行对比表；二，各写一个最小例子说明三类依赖，指出哪两种能重命名消除；三，默画六指令的依赖图，标出关键路径五；四，逐周期重演列表调度，并与原序六周期对比；五，默写 II 公式，对示例循环算出 II 等于三并写出稳态三个节拍；六，一句话回答本章主线问题。全过即毕业。下一章预告：第十一章并行性与局部性优化——单核榨干了，大循环怎么拆给多个核，cache 又为什么不答应？我们下章见。">
+    <div class="kicker">本 章 结 束</div>
+    <h1>真依赖只能等，其余皆可调</h1>
+    <div class="sub">毕业挑战：合上书，拿一张纸</div>
+    <div class="divider"></div>
+    <div class="meta">
+      ☑ 画三种机器对比表　　☑ 三类依赖各写最小例子并指出可消的两种<br>
+      ☑ 默画 6 指令 DAG 并标关键路径 5　　☑ 重演列表调度并与原序 6 周期对比<br>
+      ☑ 默写 II 公式并算示例 II=3、写稳态三节拍　　☑ 一句话回答本章主线问题<br><br>
+      下一章 · 第11章 并行性与局部性优化：大循环怎么拆给多个核，cache 又为什么不答应？
+    </div>
+  </section>
+
+  <!-- 页脚 -->
+  <div id="footer">
+    <span class="brand">第10章 指令级并行 · 编译原理课件</span>
+    <span id="pagenum">1 / 21</span>
+  </div>
+
+  <!-- 导航 -->
+  <div class="nav">
+    <button id="prev" title="上一页 (←)">‹</button>
+    <button id="next" title="下一页 (→ / 空格)">›</button>
+  </div>
+  <div id="hint">← → 翻页 · 空格下一页 · 推导页逐步显示 · 点击左右半屏翻页</div>
+
+</div>
+
+<!-- mermaid 本地引用，保证离线可用；初始化参数全套课件统一，勿改 -->
+<script src="/lectures-assets/mermaid.min.js"></script>
+<script>
+mermaid.initialize({
+  startOnLoad: false,   // 必须为 false：display:none 的隐藏页渲染会得到 0 宽高的退化 SVG，
+                        // 改为页面激活时懒渲染（见 renderMermaid）
+  theme: "base",
+  themeVariables: {
+    primaryColor: "#ebf8ff",
+    primaryBorderColor: "#2b6cb0",
+    primaryTextColor: "#1a365d",
+    lineColor: "#718096",
+    fontFamily: "-apple-system, PingFang SC, sans-serif",
+    fontSize: "15px"
+  },
+  flowchart: { curve: "linear", htmlLabels: false }
+});
+</script>
+<script>
+(function(){
+  const slides = Array.from(document.querySelectorAll('.slide'));
+  const total = slides.length;
+  let idx = 0;
+
+  const params = new URLSearchParams(location.search);
+  const startSlide = parseInt(params.get('slide'), 10);
+  if (params.get('autohide') === '1') document.body.classList.add('autohide');
+  if (!isNaN(startSlide) && startSlide >= 1 && startSlide <= total) idx = startSlide - 1;
+
+  const progress = document.getElementById('progress');
+  const pagenum = document.getElementById('pagenum');
+  const prevBtn = document.getElementById('prev');
+  const nextBtn = document.getElementById('next');
+
+  // 推导分步：每页记住已展开的步数；autohide（截图）模式下 CSS 强制全显
+  const stepState = new Map();
+  function stepsOf(i){ return Array.from(slides[i].querySelectorAll('.step')); }
+  function applySteps(){
+    stepsOf(idx).forEach((el, k)=> el.classList.toggle('on', k < (stepState.get(idx) || 0)));
+  }
+  // 前进一步：先展开本页下一步，全部展开后才翻页
+  function forward(){
+    const steps = stepsOf(idx);
+    const shown = stepState.get(idx) || 0;
+    if (shown < steps.length){ stepState.set(idx, shown + 1); applySteps(); return; }
+    go(idx + 1);
+  }
+  // 后退一步：先收起本页最后一步，收完才回上一页
+  function backward(){
+    const steps = stepsOf(idx);
+    const shown = stepState.get(idx) || 0;
+    if (shown > 0){ stepState.set(idx, shown - 1); applySteps(); return; }
+    go(idx - 1);
+  }
+
+  // mermaid 懒渲染：只在页面激活（有真实宽高）时渲染该页的图，渲染后打 data-done 防重复
+  function renderMermaid(slide){
+    if (typeof mermaid === 'undefined') return;
+    const nodes = Array.from(slide.querySelectorAll('.mermaid:not([data-done])'));
+    if (!nodes.length) return;
+    nodes.forEach(n => n.setAttribute('data-done', ''));
+    mermaid.run({ nodes }).catch(err => {
+      nodes.forEach(n => n.removeAttribute('data-done'));
+      console.error('mermaid 渲染失败：', err);
+    });
+  }
+
+  function render(){
+    slides.forEach((s,i)=> s.classList.toggle('active', i===idx));
+    progress.style.width = ((idx+1)/total*100) + '%';
+    pagenum.textContent = (idx+1) + ' / ' + total;
+    prevBtn.disabled = (idx===0);
+    nextBtn.disabled = (idx===total-1);
+    applySteps();
+    renderMermaid(slides[idx]);
+  }
+  function go(n){ idx = Math.max(0, Math.min(total-1, n)); render(); }
+
+  prevBtn.addEventListener('click', e=>{ e.stopPropagation(); backward(); });
+  nextBtn.addEventListener('click', e=>{ e.stopPropagation(); forward(); });
+
+  document.addEventListener('keydown', e=>{
+    if(e.key==='ArrowRight'||e.key===' '||e.key==='PageDown'){ e.preventDefault(); forward(); }
+    else if(e.key==='ArrowLeft'||e.key==='PageUp'){ e.preventDefault(); backward(); }
+    else if(e.key==='Home'){ stepState.set(idx, 0); go(0); }
+    else if(e.key==='End'){ go(total-1); }
+  });
+
+  document.getElementById('stage').addEventListener('click', e=>{
+    if(e.target.closest('.nav')) return;
+    const x = e.clientX;
+    if(x < window.innerWidth*0.5) backward(); else forward();
+  });
+
+  function fit(){
+    const s = Math.min(window.innerWidth/1280, window.innerHeight/720);
+    document.getElementById('stage').style.transform = 'translate(-50%,-50%) scale(' + s + ')';
+  }
+  window.addEventListener('resize', fit);
+  fit();
+  render();
+})();
+</script>
+</body>
+</html>

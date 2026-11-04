@@ -1,0 +1,727 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第8章 集成学习 · 机器学习互动讲义</title>
+<link rel="stylesheet" href="/lectures-assets/style.css">
+</head>
+<body>
+<nav class="topbar">
+  <div class="topbar-inner">
+    <span class="brand"><a href="index.html" style="color:inherit">← 学习地图</a></span>
+    <span class="crumb">阶段② · 经典模型 / 第8章</span>
+  </div>
+</nav>
+<div class="wrap">
+  <div class="lecture-head">
+    <span class="ch-label">CHAPTER 08 · 经典模型</span>
+    <h1>集成学习</h1>
+    <p class="lead">单个学习器不够强时，怎样把多个「好而不同」的学习器组合成一个更强的学习器——误差究竟是被谁消掉的？</p>
+  </div>
+  <div class="position-bar">
+    <strong>本章在主线上的位置：</strong>阶段②前几章各给出一类「单兵作战」的模型——线性模型、决策树、神经网络、SVM、贝叶斯；本章不再发明新的单兵，而是回答「怎样把已有的学习器组织成一支军队」→ 阶段③的聚类与降维中，集成思想（如随机森林给出的特征重要性）还会反复登场。<br>
+    第8章回答主线上的第8个问题：<strong>单个学习器不够强时，怎样把多个「好而不同」的学习器组合成更强的学习器——误差究竟是被谁消掉的？</strong>
+    <div class="map-inline">
+      <span class="node">① 基础与评估<br>Ch1 绪论 · Ch2 模型评估与选择</span><span class="arrow">→</span>
+      <span class="node here">② 经典模型<br>Ch3 线性模型 · Ch4 决策树 · Ch5 神经网络 · Ch6 支持向量机 · Ch7 贝叶斯分类器 · <strong>Ch8 集成学习</strong></span><span class="arrow">→</span>
+      <span class="node">③ 无监督与理论<br>Ch9 聚类 · Ch10 降维与度量学习 · Ch11 特征选择 · Ch12 计算学习理论</span><span class="arrow">→</span>
+      <span class="node">④ 进阶专题<br>Ch13–16</span>
+    </div>
+  </div>
+  <div class="objectives">
+    <h4>🎯 学完本章，合上书你应该能：</h4>
+    <ol>
+      <li>说出「好而不同」的两个条件，并对 5 个独立学习器（单错误率 0.3）手算多数投票的错误率；</li>
+      <li>写出自助采样的 63.2% 结论与 T 个学习器平均的方差公式 ρσ²+(1−ρ)σ²/T，代入 ρ=0.5、T=25 算出结果，并解释随机森林为什么用特征随机采样降 ρ；</li>
+      <li>手算 AdaBoost 完整一轮：ε₁、α₁、Z₁ 与归一化后的样本权重（1/14 与 1/6）；</li>
+      <li>手算 GBDT 平方损失下的一轮迭代：F₀=均值、负梯度残差、stump 分裂点选择与 F₁，说出误差下降了多少；</li>
+      <li>说出平均法、投票法、Stacking 三种结合策略的适用场景，并解释 Stacking 为什么必须用交叉验证产出次级训练集；</li>
+      <li>面对一个新任务，能在 Bagging 与 Boosting 之间做出选择并画出并行/串行结构图。</li>
+    </ol>
+  </div>
+  <div class="lecture">
+    <div class="figure">
+      <div class="mermaid">
+flowchart LR
+  A["单个学习器误差大"] --> B["集成的赌注：好而不同"]
+  B --> C["并行路线：Bagging 到随机森林 降方差"]
+  B --> D["串行路线：AdaBoost 到 GBDT 降偏差"]
+  C --> E["结合策略：平均 投票 Stacking"]
+  D --> E
+  E --> F["代价：训练成本乘 T 可解释性丢失"]
+  classDef hot fill:#fbeedd,stroke:#c4651f,stroke-width:2.5px,color:#c4651f;
+  classDef danger fill:#fae9e7,stroke:#b03a2e,stroke-width:2.5px,color:#b03a2e;
+  class F danger;
+      </div>
+      <div class="caption">本章推导主线：单个学习器不够强 → 靠「好而不同」的集成分两路消误差（降方差/降偏差）→ 最后要用结合策略把成员合起来，代价是训练成本与可解释性。</div>
+    </div>
+
+    <h2><span class="sec-no">8.1</span>为什么三个臭皮匠能顶诸葛亮：集成的赌注</h2>
+    <p>第7章的贝叶斯分类器给出了理论上的最优决策（贝叶斯最优），但现实里我们拿不到真实的后验概率，手头的学习器离最优总有距离。前几章的应对是「换一个更强的单模型」；本章换一个思路：<span class="term">集成学习</span>（Ensemble Learning）——训练一组<span class="term">个体学习器</span>（Base Learner，也叫基学习器），用某种策略把它们结合起来。俗语「三个臭皮匠，顶个诸葛亮」说的就是它，但这句话只对了一半：皮匠必须「好而不同」。</p>
+    <p><strong>好而不同</strong>是两个缺一不可的条件：每个学习器要<strong>足够好</strong>（准确率高过瞎猜），彼此又要<strong>足够不同</strong>（错误不抱团）。为什么？先看一笔用概率算得清的账。</p>
+    <h3>手算例子 1：5 个独立学习器的多数投票</h3>
+    <p>设二分类任务上有 T=5 个学习器，各自独立，错误率都是 ε=0.3（比瞎猜的 0.5 好，但不算强）。集成用<span class="term">多数投票</span>（Majority Voting）：5 票里至少 3 票错，集成才错。枚举「恰好 k 个学习器出错」的三种情形：</p>
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>出错学习器数 k</th><th>组合数 C(5,k)</th><th>概率计算</th><th>数值</th></tr>
+        <tr><td>3</td><td>10</td><td>10 × 0.3³ × 0.7² = 10 × 0.027 × 0.49</td><td>0.1323</td></tr>
+        <tr><td>4</td><td>5</td><td>5 × 0.3⁴ × 0.7 = 5 × 0.0081 × 0.7</td><td>0.0284</td></tr>
+        <tr><td>5</td><td>1</td><td>0.3⁵</td><td>0.0024</td></tr>
+        <tr><td><strong>合计（集成错误率）</strong></td><td></td><td>0.1323 + 0.0284 + 0.0024</td><td><strong>≈ 0.163</strong></td></tr>
+      </table>
+    </div>
+    <div class="formula">P(集成出错) = ∑<sub>k=3</sub><sup>5</sup> C(5,k) · 0.3<sup>k</sup> · 0.7<sup>5−k</sup> ≈ 0.163</div>
+    <p>单个学习器错误率 0.3，投票后降到 0.163——几乎腰斩，而这 5 个学习器没有一个变强。若加到 T=7，同样算法得 0.126。<span class="term">霍夫丁不等式</span>（Hoeffding's Inequality）给出背后的规律：只要单个错误率 ε 小于 0.5 且错误相互独立，随着 T 增大，多数投票的错误率按指数速度压向 0。</p>
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>投票能把误差「投掉」，靠的不是人多，而是<strong>错误不抱团</strong>。5 个学习器若总在同一批样本上栽跟头（完全相关），多数投票的错误率仍是 0.3，集成等于白做；只有错误错开，「你错的我刚好对」才会在计票时互相抵消。这就是「不同」为什么和「好」同样重要。</p>
+    </div>
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>「学习器越多越好」——错。上面 0.163 的前提是<strong>独立</strong>且 ε&lt;0.5。真实集成的学习器都学同一份数据，错误天然相关，T 增大后收益迅速饱和；若混入一个比瞎猜还差（ε&gt;0.5）的学习器，多数投票反而被它拖垮。</p>
+    </div>
+    <p>这笔账还有两个理论化的写法。其一，<span class="term">误差-分歧分解</span>（Error-Ambiguity Decomposition，Krogh &amp; Vedelsby）：回归任务上，集成平方误差 = 各学习器误差均值 − 各学习器与集成预测的分歧度，即「集成误差 = 平均误差 − 多样性」，分歧越大集成越赚。其二，<span class="term">偏差-方差分解</span>（Bias-Variance Decomposition）：单学习器的误差 = 偏差² + 方差 + 噪声；集成两派路线正对着这两块——Bagging 主攻降<strong>方差</strong>（8.2），Boosting 主攻降<strong>偏差</strong>（8.3、8.4）。全章就是这两条路线的展开。</p>
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 8.1-1</div><div class="q-text">5 个独立学习器、单个错误率 0.3，多数投票的错误率怎么算？结果是多少？</div><span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back"><div class="a-tag">参考答案</div>集成错 ⟺ 至少 3 个错：C(5,3)·0.3³·0.7² + C(5,4)·0.3⁴·0.7 + 0.3⁵ = 0.1323+0.0284+0.0024 ≈ 0.163，比单个的 0.3 几乎减半。</div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 8.1-2</div><div class="q-text">「好而不同」是哪两个条件？如果学习器两两错误完全相关，会发生什么？</div><span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back"><div class="a-tag">参考答案</div>每个学习器准确率高过瞎猜（ε&lt;0.5），且彼此错误不抱团（多样性）。若错误完全相关，多数投票与单学习器同错，集成错误率仍是 0.3，集成失效。</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <h2><span class="sec-no">8.2</span>Bagging 与随机森林：方差的账</h2>
+    <p>上一节说集成要「不同」，第一个问题马上来了：只有一份训练集，怎么造出 T 个不同的学习器？<span class="term">Bagging</span>（Bootstrap Aggregating）的回答是：在<strong>数据</strong>上做文章——对训练集做 T 次<span class="term">自助采样</span>（Bootstrap Sampling），每次有放回地抽 m 个样本（m 为原训练集大小），得到 T 份略有差异的训练集，各训一个学习器，最后投票（分类）或平均（回归）。整个过程完全并行。</p>
+    <div class="figure">
+      <div class="mermaid">
+flowchart LR
+  D["训练集 D 共 m 个样本"] --> S1["自助采样得 D1"]
+  D --> S2["自助采样 D2"]
+  D --> S3["自助采样 DT"]
+  S1 --> H1["学习器 h1"]
+  S2 --> H2["学习器 h2"]
+  S3 --> HT["学习器 hT"]
+  H1 --> V["投票或平均"]
+  H2 --> V
+  HT --> V
+      </div>
+      <div class="caption">图 8.1 Bagging 的并行结构：T 个采样集互不依赖，T 个学习器可同时训练，最后由结合策略汇总。</div>
+    </div>
+    <h3>手算例子 2：自助采样为什么只用上 63.2% 的样本</h3>
+    <p>有放回抽 m 次，某个特定样本一次都抽不中的概率是：</p>
+    <div class="formula">P(某样本始终没被抽中) = (1 − <span class="frac"><span class="num-part">1</span><span class="den-part">m</span></span>)<sup>m</sup> → <span class="frac"><span class="num-part">1</span><span class="den-part">e</span></span> ≈ 0.368（当 m 大时）</div>
+    <p>数值感受一下极限过程：m=10 时 (0.9)¹⁰ ≈ 0.3487；m=100 时 ≈ 0.3660；m=10⁶ 时 ≈ 0.36788，已和 1/e 分不出差别。也就是说每份自助采样集约含原训练集中 <strong>63.2%</strong> 的不同样本，剩下约 36.8% 从头到尾没露过面——它们叫<span class="term">袋外样本</span>（Out-of-Bag, OOB），白送一个「包外验证集」：用那些没采到它的学习器对它投票，即可估计泛化误差（<span class="term">袋外估计</span>，OOB Estimate），不必再单独留验证集。</p>
+    <h3>手算例子 3：平均法的方差公式，代入 ρ=0.5、T=25</h3>
+    <p>Bagging 为什么能降误差？把 T 个学习器的预测看成 T 个随机变量，各方法差都是 σ²，两两相关系数是 ρ（都来自同一总体数据，做不到独立）。平均值的方差是标准结果：</p>
+    <div class="formula">Var(平均) = ρσ² + <span class="frac"><span class="num-part">(1−ρ)σ²</span><span class="den-part">T</span></span></div>
+    <p>两个极端先校准直觉：<strong>完全独立</strong>（ρ=0）时 Var = σ²/T，T=25 就把方差压到原来的 4%；<strong>完全相关</strong>（ρ=1）时 Var = σ²，平均毫无用处。现在代入一个现实情形 ρ=0.5、T=25：</p>
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>情形</th><th>计算</th><th>方差（σ²=1）</th></tr>
+        <tr><td>单个学习器</td><td>σ²</td><td>1.00</td></tr>
+        <tr><td>独立集成 T=25（假想）</td><td>σ²/T = 1/25</td><td>0.04</td></tr>
+        <tr><td><strong>相关集成 ρ=0.5、T=25</strong></td><td>0.5×1 + 0.5×1/25 = 0.5 + 0.02</td><td><strong>0.52</strong></td></tr>
+        <tr><td>相关集成 ρ=0.5、T→∞</td><td>ρσ²</td><td>0.50（再也降不动）</td></tr>
+      </table>
+    </div>
+    <p>这张表是 8.2 的全部精华：方差从 1.00 降到 0.52，听着不错，但离「独立时的 0.04」差得远；而且把 T 从 25 加到无穷，也只能从 0.52 挪到 0.50。<strong>瓶颈不是 T，是 ρ。</strong></p>
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>既然 ρσ² 是 T 再大也消不掉的部分，想再降方差只有一条路：把 ρ 本身压低。<span class="term">随机森林</span>（Random Forest）做的正是这件事——它是 Bagging 的一个变体：基学习器用决策树，采样照旧，但<strong>每个节点分裂时，先从全部 d 个特征中随机抽 k 个（分类常取 k=log₂d），只在这 k 个里选最优分裂</strong>。数据扰动之外再加一层「输入属性扰动」，树与树结构错开得更彻底，ρ 明显变小，ρσ² 那部分随之缩水。</p>
+    </div>
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>「Bagging 什么模型都能往上套」——要谨慎。平均降的是<strong>方差</strong>，所以对「不稳定」的学习器（决策树、神经网络：训练集抖一抖，模型就大变）收益最大；对「稳定」的学习器（k 近邻、线性回归：方差本来就小）几乎没收益，白付 T 倍训练成本。先想清楚你的误差主要在偏差还是方差。</p>
+    </div>
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 8.2-1</div><div class="q-text">自助采样 m 次后，约多少比例的不同样本进入采样集？剩下的叫什么、能干什么用？</div><span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back"><div class="a-tag">参考答案</div>约 63.2%（因为 (1−1/m)^m → 1/e ≈ 0.368）。剩下约 36.8% 是袋外样本（OOB），可做袋外估计，充当免费验证集。</div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 8.2-2</div><div class="q-text">默写平均法的方差公式。ρ=0.5、T=25 时方差是多少？随机森林靠什么把 ρ 压低？</div><span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back"><div class="a-tag">参考答案</div>Var = ρσ² + (1−ρ)σ²/T；代入得 0.5+0.02=0.52（独立时是 0.04）。RF 在每个节点随机限选 k 个特征再分裂，树结构错开，相关性 ρ 下降。</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <h2><span class="sec-no">8.3</span>AdaBoost：串行纠错</h2>
+    <p>Bagging 让学习器们「各自随机场独立作战」，主攻方差。另一条路线完全相反：让学习器们<strong>排成一队、一个接一个上场，每个新人专门收拾前任留下的烂摊子</strong>——这是 Boosting 家族，主攻偏差。代表是 <span class="term">AdaBoost</span>（Adaptive Boosting）。机制三个词：样本权重、学习器权重、串行更新。</p>
+    <ul>
+      <li>每个训练样本带权重，初始均分；每轮训出一个基学习器 h<sub>t</sub>，算它在<strong>加权分布</strong>下的错误率 ε<sub>t</sub>；</li>
+      <li>h<sub>t</sub> 自己在最终投票里的权重 α<sub>t</sub>：错误率越低权重越大，α<sub>t</sub> = ½ ln((1−ε<sub>t</sub>)/ε<sub>t</sub>)；</li>
+      <li>更新样本权重：<strong>分错的样本变重、分对的样本变轻</strong>，归一化后进入下一轮。最终输出 H(x) = sign(∑ α<sub>t</sub>h<sub>t</sub>(x))。</li>
+    </ul>
+    <div class="figure">
+      <div class="mermaid">
+flowchart LR
+  D1["权重分布 D1"] --> H1["训练 h1"]
+  H1 --> E1["算 ε1 与 α1"]
+  E1 --> U1["更新得 D2：分错样本变重"]
+  U1 --> H2["训练 h2"]
+  H2 --> E2["算 ε2 与 α2"]
+  E2 --> U2["继续更新"]
+  U2 --> HT["训练 hT"]
+  H1 -.-> F["加权投票 输出 Σ αt ht"]
+  H2 -.-> F
+  HT -.-> F
+      </div>
+      <div class="caption">图 8.2 AdaBoost 的串行结构：h2 依赖 h1 的纠错结果，必须一个接一个训练（对比图 8.1 的并行）。</div>
+    </div>
+    <h3>手算例子 4：10 个样本的完整一轮</h3>
+    <p>训练集 10 个样本，初始分布 D₁ 每个权重 0.1。第一个基学习器 h₁ 分错了其中 3 个。一轮更新分四步走完：</p>
+    <p><strong>第 1 步：算 ε₁。</strong>错误率是加权分布下分错样本权重之和：ε₁ = 3 × 0.1 = <strong>0.3</strong>（&lt;0.5，有资格留下）。</p>
+    <p><strong>第 2 步：算 α₁。</strong></p>
+    <div class="formula">α₁ = ½ · ln<span class="frac"><span class="num-part">1−ε₁</span><span class="den-part">ε₁</span></span> = ½ · ln<span class="frac"><span class="num-part">0.7</span><span class="den-part">0.3</span></span> = ½ · ln(7/3) ≈ ½ × 0.8473 ≈ <strong>0.4236</strong></div>
+    <p>顺手把后面要用的两个乘数算出来：e<sup>α₁</sup> = √(7/3) ≈ <strong>1.5275</strong>（分错样本的放大倍数），e<sup>−α₁</sup> = √(3/7) ≈ <strong>0.6547</strong>（分对样本的缩小倍数）。</p>
+    <p><strong>第 3 步：更新权重（未归一化）。</strong>规则是「分对乘 e<sup>−α₁</sup>，分错乘 e<sup>α₁</sup>」：</p>
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>样本</th><th>旧权重</th><th>乘数</th><th>未归一化新权重</th><th>小计</th></tr>
+        <tr><td>7 个分对样本（每个）</td><td>0.1</td><td>e<sup>−α₁</sup> ≈ 0.6547</td><td>0.1 × 0.6547 ≈ 0.06547</td><td>7 × 0.06547 ≈ 0.4583</td></tr>
+        <tr><td>3 个分错样本（每个）</td><td>0.1</td><td>e<sup>α₁</sup> ≈ 1.5275</td><td>0.1 × 1.5275 ≈ 0.15275</td><td>3 × 0.15275 ≈ 0.4583</td></tr>
+      </table>
+    </div>
+    <p><strong>第 4 步：归一化。</strong>归一化因子 Z₁ = 0.4583 + 0.4583 ≈ <strong>0.9165</strong>（恰好等于 2√(ε₁(1−ε₁)) = 2√0.21 ≈ 0.9165，这是指数损失推导留下的恒等式）。于是：</p>
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>样本</th><th>归一化计算</th><th>D₂ 中的权重</th><th>精确值</th></tr>
+        <tr><td>分对样本（每个）</td><td>0.06547 / 0.9165</td><td>≈ 0.0714</td><td>1/14</td></tr>
+        <tr><td>分错样本（每个）</td><td>0.15275 / 0.9165</td><td>≈ 0.1667</td><td>1/6</td></tr>
+      </table>
+    </div>
+    <p><strong>第二轮会发生什么？</strong>看总量：3 个分错样本合计 3 × 1/6 = <strong>0.5</strong>，7 个分对样本合计 7 × 1/14 = 0.5。上一轮栽过的样本如今占了半壁江山——基学习器若在 D₂ 下想拿到 ε₂&lt;0.5，几乎必须先把这 3 个样本分对（它们一个就值 1/6 ≈ 0.167）。这就是「串行纠错」的全部含义：不需要任何外部指令，权重分布本身逼着下一个学习器去补前任的窟窿。若 h₂ 把 3 个旧错样本全救回，只在旧对样本里错 3 个，则 ε₂ = 3 × 1/14 ≈ 0.214，仍小于 0.5，循环继续（习题 L2-1 就从这里接着算）。</p>
+    <div class="box insight">
+      <span class="box-tag">✅ 判定规则</span>
+      <p>AdaBoost 是「前向分步 + 指数损失」的产物：可以证明，训练误差按 ∏ Z<sub>t</sub> = ∏ 2√(ε<sub>t</sub>(1−ε<sub>t</sub>)) 的速度下降，只要每轮 ε<sub>t</sub> 严格小于 0.5，训练误差就被指数级压下去。它主攻的是<strong>偏差</strong>——每一轮都在拟合「当前集成还没学好的部分」。</p>
+    </div>
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>「AdaBoost 和 Bagging 一样稳、一样抗噪」——恰恰相反。串行纠错意味着它对<strong>异常样本</strong>（标错的脏数据）格外敏感：一个永远学不对的离群点会被一轮轮加重，抢走全部注意力。噪声多的数据上，Bagging/随机森林往往比 Boosting 稳。</p>
+    </div>
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 8.3-1</div><div class="q-text">10 样本、D₁ 各 0.1、h₁ 分错 3 个：ε₁、α₁、Z₁ 各是多少？分对与分错样本在 D₂ 里各占多少？</div><span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back"><div class="a-tag">参考答案</div>ε₁=0.3；α₁=½ln(7/3)≈0.4236；Z₁=2√0.21≈0.9165；分对样本每个 1/14≈0.0714，分错样本每个 1/6≈0.1667。</div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 8.3-2</div><div class="q-text">为什么 h₂ 会被「逼着」优先解决 h₁ 分错的样本？</div><span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back"><div class="a-tag">参考答案</div>更新后 3 个分错样本合计权重 0.5，h₂ 想在 D₂ 下让 ε₂&lt;0.5，几乎必须先把它们分对——权重分布自动把压力传到上一轮的失误上。</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <h2><span class="sec-no">8.4</span>GBDT：把「纠错」推广到任意损失</h2>
+    <p>AdaBoost 的纠错是为指数损失量身定做的；换一个损失函数（回归的平方损失、排序的损失……），「分错样本加重」这套话就说不动了。<span class="term">梯度提升</span>（Gradient Boosting）把纠错思想一般化：每一轮不再调样本权重，而是<strong>直接拟合当前模型损失函数的负梯度</strong>——负梯度就是「往哪个方向改预测，损失降得最快」，它就是广义的「残差」。基学习器用回归树，合称 <span class="term">GBDT</span>（Gradient Boosting Decision Tree）。</p>
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>平方损失 L = ½(y−F)² 时，负梯度 −∂L/∂F = y−F，<strong>恰好就是残差</strong>。所以「平方损失下的 GBDT」就是我们熟悉的「一轮轮拟合残差」；换成别的损失，只要把「残差」换成「负梯度」，整套流程原样照搬。AdaBoost（指数损失）正是这个框架在分类上的特例——两者的差别不在思想，只在损失函数。</p>
+    </div>
+    <h3>手算例子 5：4 个样本的回归，完整一轮</h3>
+    <p>训练集（x 是一维特征，y 是回归目标）：</p>
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>x</th><td>1</td><td>2</td><td>3</td><td>4</td></tr>
+        <tr><th>y</th><td>2</td><td>4</td><td>10</td><td>12</td></tr>
+      </table>
+    </div>
+    <p><strong>第 1 步：初始化 F₀。</strong>平方损失下最优常数模型就是均值：F₀ = (2+4+10+12)/4 = <strong>7</strong>。</p>
+    <p><strong>第 2 步：算负梯度（=残差）。</strong>r = y − F₀ = (−5, −3, +3, +5)。当前平方误差和 SSE₀ = 25+9+9+25 = <strong>68</strong>。</p>
+    <p><strong>第 3 步：用一棵深度 1 的回归树（stump）拟合 r。</strong>一维特征只需枚举三个候选分裂点，对每个分裂把两侧残差各用其均值作为叶值，算 SSE：</p>
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>候选分裂</th><th>左叶（样本/均值）</th><th>右叶（样本/均值）</th><th>SSE 计算</th><th>SSE</th></tr>
+        <tr><td>x &lt; 1.5</td><td>{−5} / −5</td><td>{−3,3,5} / 5/3≈1.667</td><td>0 + (−4.667)²+(1.333)²+(3.333)²</td><td>≈ 34.67</td></tr>
+        <tr><td><strong>x &lt; 2.5</strong></td><td>{−5,−3} / −4</td><td>{3,5} / 4</td><td>(−1)²+(1)²+(−1)²+(1)²</td><td><strong>4 ✓最优</strong></td></tr>
+        <tr><td>x &lt; 3.5</td><td>{−5,−3,3} / −8/3≈−2.667</td><td>{5} / 5</td><td>(−2.333)²+(−0.333)²+(5.667)² + 0</td><td>≈ 37.67</td></tr>
+      </table>
+    </div>
+    <p><strong>第 4 步：更新。</strong>最优分裂 x&lt;2.5， stump 输出：左侧 −4、右侧 +4。F₁(x) = F₀ + stump(x)，即 x∈{1,2} 时 F₁ = 7−4 = <strong>3</strong>；x∈{3,4} 时 F₁ = 7+4 = <strong>11</strong>。</p>
+    <p><strong>第 5 步：验收。</strong>新残差 = y − F₁ = (2−3, 4−3, 10−11, 12−11) = (−1, +1, −1, +1)，SSE₁ = 1+1+1+1 = <strong>4</strong>。一轮迭代，误差从 68 砍到 4，下降约 94%。下一轮再对 (−1,1,−1,1) 拟合新树，继续蚕食剩余误差。</p>
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>「GBDT 每棵树都在学原始标签 y」——错。从第二轮起，树学的是<strong>负梯度/残差</strong>，不是 y。还有一个工程上必用的细节：更新通常写成 F₁ = F₀ + η·stump(x)，η∈(0,1] 叫学习率（Shrinkage）——每步只走一小段，用更多的树换更稳的泛化；本例取 η=1 是为了手算干净。</p>
+    </div>
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 8.4-1</div><div class="q-text">平方损失下，GBDT 每轮拟合的「负梯度」具体等于什么？本例 F₀、残差、最优分裂点各是多少？</div><span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back"><div class="a-tag">参考答案</div>负梯度 = y−F，即残差。F₀=7，残差 (−5,−3,3,5)，最优分裂 x&lt;2.5（左叶 −4 右叶 +4），F₁ 为 3 或 11，SSE 从 68 降到 4。</div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 8.4-2</div><div class="q-text">一句话说清 GBDT 与 AdaBoost 的关系。</div><span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back"><div class="a-tag">参考答案</div>同一个「前向分步纠错」思想在不同损失函数下的化身：AdaBoost 对应指数损失（调样本权重），GBDT 把它推广到任意可微损失（每轮拟合负梯度）。</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <h2><span class="sec-no">8.5</span>怎么把成员合起来：结合策略</h2>
+    <p>8.2 和 8.3 解决了「怎么造出一队好而不同的成员」，最后一步是把它们的输出合成一个预测：<span class="term">结合策略</span>（Combination Strategy）。三大类：</p>
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>策略</th><th>具体做法</th><th>适用与要点</th></tr>
+        <tr><td><span class="term">平均法</span>（Averaging）</td><td>简单平均：每人权重 1/T；加权平均：权重 w<sub>t</sub> 可不同，∑w<sub>t</sub>=1</td><td>回归任务默认。加权平均理论上不差于简单平均，但权重多时容易在训练集上调参过拟合，数据少时宁用简单平均</td></tr>
+        <tr><td><span class="term">投票法</span>（Voting）</td><td>绝对多数：某类得票过半才判，否则拒判；相对多数：谁票多算谁；加权投票：票乘权重</td><td>分类任务默认。绝对多数适合「宁可不判不可错判」的场景（如医疗）；8.1 的手算用的就是绝对多数</td></tr>
+        <tr><td><span class="term">学习法</span>（Stacking）</td><td>把各初级学习器的输出当作新特征，再训一个次级学习器（元学习器）做最终预测</td><td>成员本身很强时收益最大；关键工艺见下面</td></tr>
+      </table>
+    </div>
+    <p><span class="term">Stacking</span>（Stacked Generalization）值得多一句。它的结构是两层：初级学习器 h₁…h<sub>T</sub> 各学各的，次级学习器 g 学习「该信谁」。最危险的工艺错误是：<strong>直接用初级学习器在训练集上的预测去训次级学习器</strong>——初级学习器对训练集早已滚瓜烂熟，这些预测漂亮得失真，次级学习器学到的将是「谁最会背题」而不是「谁泛化好」，必然过拟合。正确做法是用 <strong>K 折交叉验证</strong>产出次级训练集：每个样本的次级特征，都来自那些<strong>没见过它</strong>的初级学习器（在它所属的留出折上训练的那批）的预测。</p>
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>平均/投票是「死规则结合」，Stacking 是「学出来的结合」——当成员能力不均、各擅一隅（有的擅长某类样本）时，学一个会看菜下碟的元学习器，比一刀切的人均一票强。</p>
+    </div>
+    <p>最后交代「不同」从哪来的完整清单——<span class="term">多样性增强</span>（Diversity Enhancement）四路扰动，本章各方法对号入座：<strong>数据样本扰动</strong>（Bagging 的自助采样、AdaBoost 的权重更新）、<strong>输入属性扰动</strong>（随机森林的随机子空间）、<strong>输出表示扰动</strong>（如 ECOC 把多类拆成不同二分类组合）、<strong>算法参数扰动</strong>（同一算法换随机种子/超参）。多样性怎么度量（成对的分歧度、Q 统计量等）知道名字即可，主线始终是 8.1 那句：误差-分歧，此消彼长。</p>
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 8.5-1</div><div class="q-text">绝对多数投票与相对多数投票的区别是什么？各适合什么场景？</div><span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back"><div class="a-tag">参考答案</div>绝对多数要求某类得票过半，否则拒判（适合错判代价高的场景，如医疗）；相对多数取票数最多者，总能给出答案（一般分类默认）。</div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 8.5-2</div><div class="q-text">Stacking 的次级训练集为什么必须用交叉验证产生？直接用训练集预测会怎样？</div><span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back"><div class="a-tag">参考答案</div>直接用训练集预测，初级学习器的「记忆痕迹」会被次级学习器学走，导致过拟合。交叉验证让每个样本的次级特征都来自没见过它的初级学习器，预测才是泛化能力的真实写照。</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <h2><span class="sec-no">🃏</span>概念卡：本章概念的一分钟画像</h2>
+    <p>翻面前先自问：这个概念我能用一句话讲清楚吗？</p>
+    <div class="flip-grid">
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 1</div>
+            <div class="q-text">Bagging（Bootstrap Aggregating）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">对训练集做 T 次有放回自助采样，并行训 T 个学习器，投票（分类）或平均（回归）结合的集成方法。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">只有一份训练集，造不出「不同」的学习器；且高方差模型单用不稳。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">让同一批考生做同一套题的不同影印件（每份随机缺 36.8% 的题），再取平均答卷。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为它什么模型都能提升——它只降方差，对稳定学习器（kNN、线性回归）几乎无效。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">基学习器不稳定（决策树、神经网络）、数据噪声多、需要并行训练时；Ch9 聚类集成也借它的采样思想。</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 2</div>
+            <div class="q-text">随机森林（Random Forest）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">Bagging + 决策树 + 每节点随机限选 k 个特征再分裂的集成（分类常取 k=log₂d）。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">纯 Bagging 的树仍被强特征主导，相关性 ρ 高，方差卡在 ρσ² 降不动。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">不仅给考生发不同的题，还随机没收每个人的部分参考书——被迫各想各的招。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为随机性只是锦上添花——特征随机才是它降 ρ、超越普通 Bagging 的核心。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">表格数据的默认强基线；还能用袋外估计顺手评估特征重要性（Ch11 特征选择会用到）。</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 3</div>
+            <div class="q-text">AdaBoost（Adaptive Boosting）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">串行训练基学习器：分错样本权重上调、分对下调，各学习器按 αₜ=½ln((1−εₜ)/εₜ) 加权投票。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">弱学习器偏差大，单个不够用；需要一种机制把注意力自动引向学不会的样本。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">学生刷题：每轮把错题本加厚一轮，下一轮主攻错题；每本错题本按正确率定发言权。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为它抗噪——它对标错的异常样本极敏感，权重会被永远学不对的脏数据吸干。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">基学习器是弱模型（如树桩）、数据干净、追求把偏差一路压到底的分类任务。</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 4</div>
+            <div class="q-text">GBDT（Gradient Boosting Decision Tree）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">每轮用一棵回归树拟合当前模型损失函数的负梯度，逐步累加进模型的串行集成。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">AdaBoost 的「加重分错样本」只适配指数损失；任意损失需要一个通用的纠错信号。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">雕刻：第一刀出大形（均值），之后每一刀只修当前轮廓与目标的差（负梯度）。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为每棵树都在学标签 y——从第二轮起学的是负梯度/残差；学习率 η 常被初学者漏掉。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">结构化表格数据的回归/分类/排序主力（XGBoost、LightGBM 是它的工程后代）。</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 5</div>
+            <div class="q-text">Stacking（Stacked Generalization）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">把各初级学习器的输出当特征，再训一个次级学习器（元学习器）做最终预测的结合方法。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">平均/投票是死规则，无法表达「这类样本该信谁」；成员各擅一隅时需要一个会取舍的裁判。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">会诊：各科大夫先分别出意见，主任大夫按「谁的意见在什么病情下靠谱」来拍板。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">直接拿训练集上的预测训次级学习器——必然过拟合；必须用交叉验证产出次级训练集。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">比赛与工业 pipeline 的最后一步：多个已调优的强模型（异构更佳）做最后融合。</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 6</div>
+            <div class="q-text">好而不同（Good and Different）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">集成有效的两个充要直觉：成员准确率高过瞎猜（好），且错误不抱团（不同/多样性）。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">回答「集成为什么有效」这个根本问题；是评判一切集成方法的统一标尺。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">误差-分歧分解：集成误差 = 成员平均误差 − 分歧度——误差被「分歧」吃掉。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为堆数量就行——若成员错误完全相关，一万个学习器也等于一个（8.1 的 0.3 纹丝不动）。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">设计任何集成时的检查清单：先问成员够不够强，再问扰动（数据/输入/输出/参数）够不够。</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <h2><span class="sec-no">📝</span>分层习题</h2>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>判断对错，并说理由：「Bagging 主要降低偏差，Boosting 主要降低方差。」</div>
+      <details>
+        <summary>提示</summary>
+        <p>回想两个公式/机制：平均法的方差公式 ρσ²+(1−ρ)σ²/T 降的是误差里的哪一块？AdaBoost「每轮拟合还没学好的部分」消的又是哪一块？</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p><strong>错，恰好说反了。</strong>Bagging 通过平均 T 个学习器降低<strong>方差</strong>（Var = ρσ²+(1−ρ)σ²/T），对决策树这类「数据抖一抖模型就大变」的高方差模型最有效；Boosting 每轮专攻当前集成学不好的部分（调权重或拟合负梯度），把训练误差指数级压下去，降的是<strong>偏差</strong>。</p>
+          <p>易错点在于把「Boosting 训练误差低」误读成「方差小」——训练误差低恰恰说明偏差被压掉了，而 Boosting 对噪声敏感、可能过拟合，方差反而是它的弱项。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>随机森林与「决策树 + Bagging」相比，树之间的相关性为什么更低？这对集成方差有什么好处？</div>
+      <details>
+        <summary>提示</summary>
+        <p>想想数据里存在一个「超强特征」时，纯 Bagging 的每棵树会怎么分裂；再对照方差公式里哪一项被 ρ 控制。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p>纯 Bagging 只在样本层面扰动：若数据里有一两个特别强的特征，每棵树的最优分裂几乎都会抢它，T 棵树的结构高度雷同，相关性 ρ 居高不下。</p>
+          <p>随机森林在每个节点分裂前随机限选 k 个特征，强特征在多数节点被排除在外，树被迫用不同的特征组合分裂，结构错开，ρ 明显下降。</p>
+          <p>好处直接写进方差公式 Var = ρσ² + (1−ρ)σ²/T：T→∞ 时方差只剩 ρσ² 这一项，ρ 变小意味着这个「T 再大也消不掉的地板」被整体压低——这正是 RF 优于普通 Bagging 的数学原因。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>接着 8.3 的例子：D₂ 中 7 个样本各 1/14、3 个样本各 1/6。第二个基学习器 h₂ 在 D₂ 下的加权错误率 ε₂ = 0.21。① 求 α₂；② 按「上轮分对/分错 × 本轮分对/分错」四类，写出每个样本更新后的权重（归一化，保留 4 位小数）。</div>
+      <details>
+        <summary>提示</summary>
+        <p>α₂ 公式与 8.3 相同；归一化因子有恒等式 Z₂ = 2√(ε₂(1−ε₂)) 可直接用。先算 e<sup>α₂</sup> 与 e<sup>−α₂</sup> 两个乘数，再按「分对乘小、分错乘大」填四类格子。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p>① α₂ = ½·ln((1−0.21)/0.21) = ½·ln(0.79/0.21) = ½·ln(3.7619) ≈ ½ × 1.3250 ≈ <strong>0.6625</strong>。</p>
+          <p>乘数：e<sup>α₂</sup> ≈ e<sup>0.6625</sup> ≈ <strong>1.9396</strong>；e<sup>−α₂</sup> ≈ <strong>0.5156</strong>。</p>
+          <p>归一化因子：Z₂ = 2√(0.21×0.79) = 2√0.1659 ≈ 2 × 0.4073 ≈ <strong>0.8146</strong>。</p>
+          <p>② 四类样本新权重 = 旧权重 × 乘数 / Z₂：</p>
+          <div class="tbl-wrap">
+            <table>
+              <tr><th>类别</th><th>旧权重</th><th>乘数</th><th>计算</th><th>新权重</th></tr>
+              <tr><td>上轮分对 ∧ 本轮分对</td><td>1/14 ≈ 0.0714</td><td>0.5156</td><td>0.0714×0.5156/0.8146</td><td>≈ <strong>0.0452</strong></td></tr>
+              <tr><td>上轮分对 ∧ 本轮分错</td><td>1/14 ≈ 0.0714</td><td>1.9396</td><td>0.0714×1.9396/0.8146</td><td>≈ <strong>0.1701</strong></td></tr>
+              <tr><td>上轮分错 ∧ 本轮分对</td><td>1/6 ≈ 0.1667</td><td>0.5156</td><td>0.1667×0.5156/0.8146</td><td>≈ <strong>0.1055</strong></td></tr>
+              <tr><td>上轮分错 ∧ 本轮分错</td><td>1/6 ≈ 0.1667</td><td>1.9396</td><td>0.1667×1.9396/0.8146</td><td>≈ <strong>0.3968</strong></td></tr>
+            </table>
+          </div>
+          <p>检验直觉：上轮分错且本轮又错的样本权重飙到 0.40，第三轮它将被重点围攻；纠错压力一轮比一轮集中——这正是 Boosting 的行为特征。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>某回归集成，单学习器方差 σ²=1，两两相关系数 ρ=0.3，T=50。① 算集成方差；② 与「T=50 且完全独立」的假想情形对比，差多少倍？③ 若把 T 加到无穷大，方差还能降多少？由此说明什么？</div>
+      <details>
+        <summary>提示</summary>
+        <p>全程只用 Var = ρσ² + (1−ρ)σ²/T 一个公式；独立情形是 ρ=0 的特例。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p>① Var = 0.3×1 + (1−0.3)×1/50 = 0.3 + 0.7/50 = 0.3 + 0.014 = <strong>0.314</strong>。</p>
+          <p>② 独立情形：Var = 1/50 = <strong>0.02</strong>。比值 0.314/0.02 = <strong>15.7 倍</strong>——同样的 50 个学习器，相关性让方差比理想情形差了 15.7 倍。</p>
+          <p>③ T→∞ 时 (1−ρ)σ²/T→0，方差 = ρσ² = <strong>0.30</strong>。即从 0.314 最多再降 0.014，收益几乎为零。</p>
+          <p>结论：相关存在时，加 T 的边际收益迅速枯竭；真正值钱的是降 ρ——这就是随机森林宁肯牺牲单树精度也要做特征随机采样的原因。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l3">L3 建模应用</span>某银行信用卡中心要做「交易欺诈初筛」：历史交易 200 万条，欺诈样本占 0.3%，特征约 60 维且含噪声；业务要求模型稳定、能每周自动重训、并输出特征重要性供风控策略参考。① 你会选 Bagging 路线（随机森林）还是 Boosting 路线（GBDT）？说出至少三条理由。② 画出你所选路线的训练结构图（并行或串行）。③ 说出结合策略。</div>
+      <details>
+        <summary>提示</summary>
+        <p>对照清单：数据噪声多寡 → 哪条路线更稳？要不要并行/快速重训 → 哪种结构天然支持？要特征重要性 → 谁自带袋外估计？类别不平衡 → 两条路线分别怎么处理？</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p>① 选 <strong>Bagging 路线（随机森林）</strong>。理由：</p>
+          <p>· <strong>噪声稳健</strong>：业务明言特征含噪声，Boosting 的串行纠错会被标错/异常样本吸走注意力，RF 的平均机制对脏数据天然钝化；</p>
+          <p>② <strong>并行结构适合每周重训</strong>：T 棵树互不依赖，可分布式同时训练，200 万条样本的重训成本可控；Boosting 必须串行，慢且依赖上一轮结果；</p>
+          <p>③ <strong>自带特征重要性与袋外估计</strong>：袋外样本（约 36.8%）既能免验证集评估泛化，又能度量每个特征对分裂的贡献，直接服务风控策略；</p>
+          <p>④ 类别极不平衡（0.3%）：RF 可对自助采样做分层/加权处理，配合「绝对多数投票 + 阈值下调」控制误报；若后续发现漏报严重（偏差主导），再考虑换 GBDT 或加代价敏感学习。</p>
+          <p>② 结构图与图 8.1 相同——并行：训练集 D 经 T 次自助采样得 D₁…D<sub>T</sub>，各训一棵「每节点随机限选特征」的决策树 h₁…h<sub>T</sub>，互不依赖，最后汇总。（对照：若选 GBDT，结构是图 8.2 的串行链——h₂ 依赖 h₁ 的残差。）</p>
+          <p>③ 结合策略：分类用<strong>加权/相对多数投票</strong>；又因欺诈初筛「宁可多报、不可漏报」，可把判定阈值从 0.5 下调（例如欺诈类得票率超过 30% 即转人工复核），用投票比例当风险分。</p>
+        </div>
+      </details>
+    </div>
+
+    <h2><span class="sec-no">✍️</span>本章自测</h2>
+    <p class="quiz-hint">点击选项判分，答错会给出原因。</p>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 1</div>
+      <div class="q-stem">5 个相互独立的学习器，单个错误率 0.3，用多数投票集成。集成的错误率约是多少？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 0.3</li>
+        <li data-opt="b">B. 0.163</li>
+        <li data-opt="c">C. 0.09</li>
+        <li data-opt="d">D. 0.027</li>
+      </ul>
+      <div class="quiz-explain">解析：B 对——集成错 ⟺ 至少 3 个错：C(5,3)·0.3³·0.7² + C(5,4)·0.3⁴·0.7 + 0.3⁵ = 0.1323+0.0284+0.0024 ≈ 0.163。A 错：0.3 是单个学习器的错误率，恰恰是被投票消掉之前的值，说明没算。C 错：0.09 ≈ 0.3²，那是「恰好 2 个学习器错」的概率，而 2 个错在 5 票多数投票下并不导致集成出错。D 错：0.027 = 0.3³，是「指定的 3 个学习器全错」的概率，漏乘了组合数 C(5,3)=10，还漏了 k=4、5 两项。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 2</div>
+      <div class="q-stem">对含 m 个样本的训练集做一次自助采样（有放回抽 m 次），采样集中出现过（至少一次）的不同样本约占多少？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 约 100%，因为抽了 m 次</li>
+        <li data-opt="b">B. 约 63.2%</li>
+        <li data-opt="c">C. 约 36.8%</li>
+        <li data-opt="d">D. 约 50%</li>
+      </ul>
+      <div class="quiz-explain">解析：B 对——某样本 m 次都没被抽中的概率是 (1−1/m)^m → 1/e ≈ 0.368，所以出现过的占 1−0.368 ≈ 63.2%。A 错：有放回意味着大量重复抽取，抽 m 次远不等于覆盖 m 个不同样本。C 错：36.8% 答反了，那是从未出现的袋外样本（OOB）比例。D 错：50% 没有任何依据，纯属凑数；记住极限 1/e 这个具体数。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="c">
+      <div class="q-no">自测 3</div>
+      <div class="q-stem">Bagging 平均法的方差是 ρσ²+(1−ρ)σ²/T。当学习器两两相关（ρ&gt;0）且 T→∞ 时，集成方差趋向？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 0</li>
+        <li data-opt="b">B. σ²/T</li>
+        <li data-opt="c">C. ρσ²</li>
+        <li data-opt="d">D. σ²</li>
+      </ul>
+      <div class="quiz-explain">解析：C 对——T→∞ 时第二项 (1−ρ)σ²/T 归零，剩下 ρσ² 这块「相关性地基」，加再多学习器也降不动；这就是随机森林要专门降 ρ 的原因。A 错：只有 ρ=0（完全独立）时方差才趋向 0，与题设 ρ&gt;0 矛盾。B 错：σ²/T 本身是随 T→∞ 归零的那一项，且它描述的是独立情形的总方差，不是本题答案。D 错：σ² 是单个学习器的方差，也是 ρ=1（完全相关）时的退化情形，不是一般的 ρ&gt;0。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 4</div>
+      <div class="q-stem">AdaBoost 中，若基学习器 h₁ 的加权错误率 ε₁=0.3，则它在最终投票中的权重 α₁=½ln((1−ε₁)/ε₁) 约为？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 0.212</li>
+        <li data-opt="b">B. 0.424</li>
+        <li data-opt="c">C. 0.847</li>
+        <li data-opt="d">D. 1.528</li>
+      </ul>
+      <div class="quiz-explain">解析：B 对——α₁ = ½·ln(0.7/0.3) = ½·ln(7/3) ≈ ½×0.8473 ≈ 0.4236 ≈ 0.424。A 错：0.212 ≈ α₁/2，是把公式里的 ½ 又除了一次。C 错：0.847 = ln(7/3)，忘了乘前面的 ½——最常见的计算失误。D 错：1.528 = √(7/3) = e^α₁，那是更新样本权重时的放大倍数（分错样本乘它），不是 α₁ 本身；把「学习器权重」和「样本权重乘数」两个量张冠李戴了。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 5</div>
+      <div class="q-stem">Stacking 为什么必须用交叉验证来产生次级学习器的训练集？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 为了让初级学习器训得更快</li>
+        <li data-opt="b">B. 防止次级学习器学到初级学习器在训练集上的「记忆」，造成过拟合</li>
+        <li data-opt="c">C. 为了增加初级学习器之间的多样性</li>
+        <li data-opt="d">D. 因为次级学习器的参数太多，需要更多数据</li>
+      </ul>
+      <div class="quiz-explain">解析：B 对——直接用初级学习器在训练集上的预测训次级学习器，这些预测带着训练集的记忆（好得失真），次级学到的是「谁最会背题」而非「谁泛化好」；交叉验证让每个样本的次级特征都来自没见过它的初级学习器，预测才真实。A 错：交叉验证要训 K 倍次数的初级学习器，只会更慢，与速度无关。C 错：多样性由数据/输入/输出/参数扰动产生，交叉验证不为多样性服务。D 错：次级训练集的样本量并没有变多（每个样本仍只贡献一行），变的是预测值的「成色」。</div>
+    </div>
+
+    <div class="retell">
+      <h3>🗣️ 用自己的话，三句话讲完本章</h3>
+      <p>对着空气（或室友）说出这三句。说卡壳的那句，回去重读对应小节。</p>
+      <details>
+        <summary>句1：这章解决什么问题？——</summary>
+        <div class="retell-answer">参考答案：单个学习器不够强时，怎样把多个「好而不同」的学习器组合成一个更强的学习器——集成误差 = 成员平均误差 − 分歧度，误差是靠成员间的「分歧」互相抵消掉的。</div>
+      </details>
+      <details>
+        <summary>句2：核心机制是什么？——</summary>
+        <div class="retell-answer">参考答案：两条路线。并行降方差：Bagging 用自助采样（63.2%）造差异，平均后方差 = ρσ²+(1−ρ)σ²/T，随机森林再加特征随机采样压低 ρ；串行降偏差：AdaBoost 调样本权重专攻错题（α=½ln((1−ε)/ε)），GBDT 把它推广为拟合任意损失的负梯度。最后用平均/投票/Stacking 把成员合起来。</div>
+      </details>
+      <details>
+        <summary>句3：它和前后章怎么分工？——</summary>
+        <div class="retell-answer">参考答案：第3–7章造「单兵」（线性模型、树、网络、SVM、贝叶斯），本章把单兵组织成军队，是有监督经典模型的收官；阶段③的无监督任务（Ch9 聚类集成、Ch11 用随机森林做特征重要性）会继续借用本章的采样与集成思想。</div>
+      </details>
+    </div>
+
+    <div class="review-plan">
+      <h3>🔁 间隔复习计划</h3>
+      <p>回忆本身比重读有效 10 倍。到点只做一件事：翻卡 + 重做标记题。</p>
+      <table>
+        <tr><th>时间点</th><th>复习内容</th><th>预计用时</th></tr>
+        <tr><td>第 1 天</td><td>概念卡 1–6 全翻一遍 + 回忆卡 8.1-1 至 8.5-2</td><td>10 分钟</td></tr>
+        <tr><td>第 3 天</td><td>概念卡 1、3、4、6（Bagging/AdaBoost/GBDT/好而不同）+ 重做 L2 两题</td><td>10 分钟</td></tr>
+        <tr><td>第 7 天</td><td>三句话复述 + 自测错题 + 纸上默算 AdaBoost 一轮（ε₁=0.3 的完整四步）</td><td>10 分钟</td></tr>
+        <tr><td>第 15 天</td><td>只做合上书挑战；能全过就毕业</td><td>15 分钟</td></tr>
+      </table>
+    </div>
+
+    <div class="final-challenge">
+      <h3>📕 合上书挑战</h3>
+      <p class="fc-sub">现在关掉这个页面，拿一张纸，凭记忆完成以下任务。全部做完再回来核对——这是本章真正的毕业考试。</p>
+      <ol id="challenge-list">
+        <li><span class="fc-check"></span>手算：5 个独立学习器、单错误率 0.3，多数投票的错误率（三项枚举写全），并说出 Hoeffding 直觉</li>
+        <li><span class="fc-check"></span>默写 (1−1/m)^m→1/e 的推导与「63.2% / 袋外样本」的含义</li>
+        <li><span class="fc-check"></span>默写方差公式 ρσ²+(1−ρ)σ²/T，代入 ρ=0.5、T=25 算出 0.52σ²，并解释随机森林为什么靠特征随机采样降 ρ</li>
+        <li><span class="fc-check"></span>手算 AdaBoost 一轮：10 样本、分错 3 个，写出 ε₁、α₁、两个乘数、Z₁，以及分对/分错样本的精确权重 1/14 与 1/6</li>
+        <li><span class="fc-check"></span>手算 GBDT 一轮：4 样本回归，写出 F₀=7、残差、三个候选分裂的 SSE、最优分裂与 F₁，以及 SSE 从 68 降到 4</li>
+        <li><span class="fc-check"></span>说出平均法、投票法（绝对多数/相对多数）、Stacking 三种结合策略，并解释 Stacking 为什么必须用交叉验证产出次级训练集</li>
+        <li><span class="fc-check"></span>一句话回答本章的主线问题：单个学习器不够强时，怎样把多个「好而不同」的学习器组合成更强的学习器——误差究竟是被谁消掉的？</li>
+      </ol>
+    </div>
+
+    <div class="complete-zone">
+      <button class="btn-complete" id="btn-complete" onclick="markDone()">✓ 我已完成本章（含合上书挑战）</button>
+    </div>
+
+    <div class="chapter-nav">
+      <a href="chapter-07.html"><span class="nav-dir">← 上一章</span>第7章 贝叶斯分类器</a>
+      <a href="chapter-09.html" class="next"><span class="nav-dir">下一章 →</span>第9章 聚类</a>
+    </div>
+
+  </div>
+</div>
+
+<footer class="footer">
+  <div class="wrap">第8章 集成学习 · 机器学习互动讲义 · 基于周志华《机器学习》</div>
+</footer>
+
+<script src="/lectures-assets/mermaid.min.js"></script>
+<script>
+mermaid.initialize({
+  startOnLoad: true,
+  theme: "base",
+  themeVariables: {
+    primaryColor: "#e3edf7",
+    primaryBorderColor: "#1d5f9e",
+    primaryTextColor: "#1d5f9e",
+    lineColor: "#5c554b",
+    secondaryColor: "#fbeedd",
+    tertiaryColor: "#f5f1e8",
+    fontFamily: "-apple-system, PingFang SC, sans-serif",
+    fontSize: "14px"
+  },
+  flowchart: { curve: "linear", htmlLabels: false }
+});
+</script>
+<script>
+// 自测题判分（原样复用，勿改）
+document.querySelectorAll(".quiz-block").forEach(block => {
+  const answer = block.dataset.answer;
+  const explain = block.querySelector(".quiz-explain");
+  block.querySelectorAll(".quiz-opts li").forEach(li => {
+    li.addEventListener("click", () => {
+      const opts = block.querySelectorAll(".quiz-opts li");
+      opts.forEach(o => o.classList.add("disabled"));
+      if (li.dataset.opt === answer) {
+        li.classList.add("correct");
+      } else {
+        li.classList.add("wrong");
+        block.querySelector(`[data-opt="${answer}"]`).classList.add("correct");
+      }
+      explain.classList.add("show");
+    });
+  });
+});
+// 合上书清单打勾（原样复用，勿改）
+document.querySelectorAll("#challenge-list li").forEach(li => {
+  li.addEventListener("click", () => li.classList.toggle("checked"));
+});
+// 完成标记 → localStorage（章号 "8"）
+const KEY = "ml_progress_v1";
+function loadProgress() {
+  try { return JSON.parse(localStorage.getItem(KEY)) || {}; } catch (e) { return {}; }
+}
+const progress = loadProgress();
+const btn = document.getElementById("btn-complete");
+if (progress["8"] && progress["8"].done) {
+  btn.textContent = "✓ 已完成 · 再次点击重置";
+  btn.classList.add("done");
+}
+function markDone() {
+  const p = loadProgress();
+  if (p["8"] && p["8"].done) {
+    delete p["8"];
+    btn.textContent = "✓ 我已完成本章（含合上书挑战）";
+    btn.classList.remove("done");
+  } else {
+    p["8"] = { done: true, completedAt: Date.now(), reviewsDone: 0 };
+    btn.textContent = "✓ 已完成 · 复习提醒已开启";
+    btn.classList.add("done");
+  }
+  localStorage.setItem(KEY, JSON.stringify(p));
+}
+</script>
+
+</body>
+</html>

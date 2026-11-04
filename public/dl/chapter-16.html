@@ -1,0 +1,768 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第16章 结构化概率模型 · 深度学习互动讲义</title>
+<link rel="stylesheet" href="/lectures-assets/style.css">
+</head>
+<body>
+
+<nav class="topbar">
+  <div class="topbar-inner">
+    <span class="brand"><a href="index.html" style="color:inherit">← 学习地图</a></span>
+    <span class="crumb">阶段③ · 表示与推断 / 第16章</span>
+  </div>
+</nav>
+
+<div class="wrap">
+
+  <div class="lecture-head">
+    <span class="ch-label">CHAPTER 16 · 表示与推断</span>
+    <h1>结构化概率模型</h1>
+    <p class="lead">一句话副标题：前几章学会了用隐藏变量表示数据，但变量成百上千时联合分布有 2ⁿ 个条目，存不下也算不动——本章用图结构把大联合分布拆成小因子的乘积，并指出这笔交易留下的账：配分函数。</p>
+  </div>
+
+  <!-- ===== 章首四件套之 1：全书定位 ===== -->
+  <div class="position-bar">
+    <strong>本章在主线上的位置：</strong>第13–15章给出了"用隐藏变量表示数据"的思路，本章回答"成百上千个变量的联合分布怎么写、怎么算"——<u>用图结构把联合分布分解为小因子的乘积</u>；分解引入的配分函数算不动，正是第17–19章要轮番对付的敌人。<br>
+    第16章回答主线上的第16个问题：<strong>变量多得数不清时，联合概率分布凭什么能写得下、算得动？代价是什么？</strong>
+    <div class="map-inline">
+      <span class="node">① 数学与机器学习基础<br>Ch1–5 数学工具与机器学习基础</span><span class="arrow">→</span>
+      <span class="node">② 现代深度网络<br>Ch6–11 前馈 · 卷积 · 序列 · 实践</span><span class="arrow">→</span>
+      <span class="node here">③ 表示与推断<br>Ch13 线性因子 · Ch14 自编码器 · Ch15 表示学习 · <strong>Ch16 结构化概率模型</strong></span><span class="arrow">→</span>
+      <span class="node">④ 生成模型与前沿<br>Ch17–20 用采样与近似推断对付配分函数</span>
+    </div>
+  </div>
+
+  <!-- ===== 章首四件套之 2：学习目标 ===== -->
+  <div class="objectives">
+    <h4>🎯 学完本章，合上书你应该能：</h4>
+    <ol>
+      <li>说出为什么 n 个二值变量的全联合表存不下（2ⁿ 个条目），并给出图模型省空间的来源：条件独立</li>
+      <li>写出有向图模型的联合分解公式 p(x) = ∏ p(xᵢ|Pa(xᵢ))，并解释它为什么自带归一化</li>
+      <li>写出无向图模型的联合分解公式 p(x) = (1/Z)∏φ(Cᵢ)，对手算的 2×2 势函数表求出 Z 与边缘概率</li>
+      <li>画出一条 4 节点有向链与一个 2 节点无向图，数出两者参数量并与全表对比</li>
+      <li>写出对数似然梯度两项分解 ∇log p = ∇log p̃ − ∇log Z，解释 ∇log Z 为什么等于模型分布下的期望</li>
+      <li>用一句话说清配分函数为什么是本书后半段（第17–20章）共同的敌人</li>
+    </ol>
+  </div>
+
+  <div class="lecture">
+
+    <!-- ===== 章首四件套之 3：推导主线图 ===== -->
+    <div class="figure">
+      <div class="mermaid">
+flowchart TB
+  A["第13到15章：学会了用隐藏变量表示数据"] -->|"但变量一多 联合分布指数爆炸"| B["核心困难：n 个二值变量的联合表有 2 的 n 次方个条目"]
+  B -->|"变量之间存在大量条件独立"| C["有向图模型：局部条件概率相乘 自带归一化"]
+  C -->|"有些依赖没有天然方向"| D["无向图模型：团上势能函数相乘 再除以 Z"]
+  D -->|"Z 要对全部状态求和"| E["配分函数：看得见 算不动"]
+  E -.->|"交给第17章采样 第18章绕开Z训练 第19章近似推断"| F["本书后半段的共同敌人"]
+  classDef hot fill:#fbeedd,stroke:#c4651f,stroke-width:2.5px,color:#c4651f;
+  classDef danger fill:#fae9e7,stroke:#b03a2e,stroke-width:2.5px,color:#b03a2e;
+  class C hot;
+  class D hot;
+  class E danger;
+      </div>
+      <div class="caption">本章推导主线：每一步都回答"为什么需要下一步"。注意末端红框：图模型拆开了指数大表，却造出配分函数这只新拦路虎——后面四章都围着它转。</div>
+    </div>
+
+    <!-- ================= 16.1 ================= -->
+    <h2><span class="sec-no">16.1</span>为什么需要图模型：指数表困境</h2>
+
+    <p>第15章告诉我们：好的表示应该把数据背后的因果因子解耦出来。但要把这些因子当作随机变量放进一个概率模型里，第一个问题就来了——<strong>联合分布本身写不下</strong>。</p>
+
+    <p>考虑 n 个二值随机变量 x₁, …, xₙ。它们的联合分布是一张表：每个可能的取值组合一行，共 2ⁿ 行，每行存一个概率。这张表的增长速度有多可怕：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>变量数 n</th><th>联合表条目数 2ⁿ</th><th>直观感受</th></tr>
+        <tr><td>4</td><td>16</td><td>一张纸写得下</td></tr>
+        <tr><td>10</td><td>1 024</td><td>一页表格</td></tr>
+        <tr><td>20</td><td>约 100 万</td><td>一本厚书</td></tr>
+        <tr><td>100</td><td>约 1.27 × 10³⁰</td><td>全球硬盘总容量也存不下</td></tr>
+        <tr><td>784（一张 MNIST 图的像素数）</td><td>2⁷⁸⁴</td><td>远超可观测宇宙原子总数</td></tr>
+      </table>
+    </div>
+
+    <p>深度学习面对的变量动辄成百上千，直接存表、直接求和都绝无可能。出路只有一个：<strong>大多数变量组合的概率，其实不需要独立存储</strong>——因为变量之间存在大量<span class="term">条件独立</span>（Conditional Independence）关系。X 与 Y 给定 Z 条件独立，记作 X ⊥ Y | Z，意思是：</p>
+
+    <div class="formula">P(X, Y | Z) = P(X | Z) · P(Y | Z)</div>
+
+    <p>每发现一条条件独立，大表就可以拆成几张小表的乘积，参数量从指数掉到多项式。<span class="term">结构化概率模型</span>（Structured Probabilistic Model），也叫<span class="term">图模型</span>（Graphical Model），就是干这件事的：<strong>用一张图把条件独立关系画出来，节点是随机变量，边的有无编码"谁直接影响谁"，再由图读出联合分布的因子分解</strong>。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>联合分布不是非存 2ⁿ 个数不可——它更像一篇有结构的论文：整体虽长，却是由一节节局部内容拼成的。图模型就是找到"目录结构"：每个变量只和少数邻居直接相关，于是联合分布可以写成<strong>局部因子的乘积</strong>。拆得越碎，存得越省、算得越快。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>以为"图上没有边 = 两个变量独立"。错。图上没有直接的边，只表示<strong>给定某些变量后</strong>它们条件独立；不观测任何变量时，它们完全可能通过中间变量相关。比如"感冒→发烧→咳嗽"这条链上，发烧和咳嗽之间没有边，但观测到发烧显然会改变你对咳嗽的判断——除非你已知发烧的取值（把中间节点堵住）。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 16.1-1</div>
+              <div class="q-text">n 个二值变量的联合分布全表有多少个条目？n = 100 时为什么存不下？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              2ⁿ 个条目。n = 100 时约 1.27 × 10³⁰ 行，超过全球硬盘总容量，存不下更算不动。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 16.1-2</div>
+              <div class="q-text">图模型靠什么把指数级大表拆成小因子？写出条件独立的定义式。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              靠条件独立关系。X ⊥ Y | Z 指 P(X,Y|Z) = P(X|Z)·P(Y|Z)。图用节点与边编码这些关系，联合分布随之分解为局部因子乘积。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ================= 16.2 ================= -->
+    <h2><span class="sec-no">16.2</span>有向模型：顺着因果链拆联合分布</h2>
+
+    <p>上一节说了"拆"，这一节给第一种拆法。当变量之间的影响有天然方向（原因→结果、上游→下游），用<span class="term">有向图模型</span>（Directed Graphical Model），又称<span class="term">贝叶斯网络</span>（Bayesian Network）：每条边从父节点指向子节点，联合分布分解为"每个节点给定其父节点的条件概率"的乘积：</p>
+
+    <div class="formula">p(x) = ∏<sub>i</sub> p(x<sub>i</sub> | Pa(x<sub>i</sub>))</div>
+
+    <p>其中 Pa(xᵢ) 表示节点 xᵢ 的父节点集合。看一条最小的链——四个二值变量依次影响：</p>
+
+    <div class="figure">
+      <div class="mermaid">
+flowchart LR
+  X1["x₁ 季节"] --> X2["x₂ 是否流感"]
+  X2 --> X3["x₃ 是否发烧"]
+  X3 --> X4["x₄ 是否请假"]
+      </div>
+      <div class="caption">图 16.1 一条 4 节点有向链：每个变量只被前一个变量直接影响。</div>
+    </div>
+
+    <p>按分解公式，联合分布写成：</p>
+
+    <div class="formula">p(x₁, x₂, x₃, x₄) = p(x₁) · p(x₂|x₁) · p(x₃|x₂) · p(x₄|x₃)</div>
+
+    <p>数一下参数量这笔账（变量都是二值）：p(x₁) 需要 1 个自由参数（p(x₁=1) 定了，p(x₁=0) 就是 1 减它）；每个条件概率表 p(xᵢ|xᵢ₋₁) 有两行（父节点取 0 或 1），每行 1 个自由参数，共 2 个；三张条件表共 6 个。合计 <strong>1 + 2×3 = 7 个自由参数</strong>。而全联合表有 2⁴ = 16 行、15 个自由参数。推广到 n 个节点的链：链式分解只要 1 + 2(n−1) = 2n−1 个参数，全表要 2ⁿ−1 个——n=100 时是 <strong>199 对 10³⁰</strong> 的差距。</p>
+
+    <p>再做一个完整的概率手算。设 p(x₁=1) = 0.5，p(x₂=1|x₁=1) = 0.8，p(x₂=1|x₁=0) = 0.3，只算前两个变量：</p>
+
+    <ol>
+      <li>p(x₁=1, x₂=1) = p(x₁=1) · p(x₂=1|x₁=1) = 0.5 × 0.8 = <strong>0.40</strong>；</li>
+      <li>p(x₁=0, x₂=1) = p(x₁=0) · p(x₂=1|x₁=0) = 0.5 × 0.3 = <strong>0.15</strong>；</li>
+      <li>边缘概率 p(x₂=1) = 0.40 + 0.15 = <strong>0.55</strong>——这就是"求和消元"，只在前两个变量的小表上做，完全不碰 x₃、x₄。</li>
+    </ol>
+
+    <div class="box insight">
+      <span class="box-tag">✅ 判定规则</span>
+      <p>有向图模型的联合分布<strong>自带归一化</strong>：每个因子 p(xᵢ|Pa(xᵢ)) 本身对 xᵢ 求和为 1，逐项相乘后对整个联合状态求和仍为 1。不需要任何全局归一化常数——这是有向模型相对无向模型的最大便利，请记住这个对比，16.3 马上反转。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>把有向边直接等同于"因果关系"。图模型只承诺编码条件独立结构，边的方向很多时候是建模便利的选择（比如从隐藏变量指向观测变量），不等于证明了因果。同样的联合分布常常可以有多个等价的有向分解。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 16.2-1</div>
+              <div class="q-text">写出有向图模型的联合分解公式，并说明它为什么自带归一化。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              p(x) = ∏ p(xᵢ|Pa(xᵢ))。每个因子都是合法条件概率（对 xᵢ 求和为 1），乘积对全部状态求和仍为 1，无需全局归一化常数。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 16.2-2</div>
+              <div class="q-text">n 个二值变量排成一条链，链式有向分解要多少自由参数？全表要多少？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              链式：1 + 2(n−1) = 2n−1 个；全表：2ⁿ−1 个。n=100 时 199 对约 10³⁰。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ================= 16.3 ================= -->
+    <h2><span class="sec-no">16.3</span>无向模型：势能函数与它的"账单" Z</h2>
+
+    <p>上一节的有向分解要求影响有方向。但很多依赖没有天然方向：相邻像素"倾向同亮同暗"，谁是因谁是果？说不清，也不该说。这时用<span class="term">无向图模型</span>（Undirected Graphical Model），又称<span class="term">马尔可夫随机场</span>（Markov Random Field, MRF）：边不画箭头，只表示"这两个变量直接相关"。</p>
+
+    <div class="figure">
+      <div class="mermaid">
+flowchart LR
+  A["a"] --- B["b"]
+      </div>
+      <div class="caption">图 16.2 最小的无向模型：两个二值变量 a、b 直接相关，无方向。</div>
+    </div>
+
+    <p>无向模型不再给每个节点配条件概率，而是给图中每个<span class="term">团</span>（Clique，两两全连的节点子集）配一个<span class="term">势能函数</span>（Potential Function）φ，对团的每种取值组合给出一个非负的"相容度打分"。联合分布定义为打分乘积再归一化：</p>
+
+    <div class="formula">p(x) = <span class="frac"><span class="num-part">1</span><span class="den-part">Z</span></span> ∏<sub>i</sub> φ<sub>i</sub>(C<sub>i</sub>)，其中 Z = ∑<sub>x</sub> ∏<sub>i</sub> φ<sub>i</sub>(C<sub>i</sub>)</div>
+
+    <p>分子 ∏φ 只是打分，不保证求和为 1；分母 Z 叫<span class="term">配分函数</span>（Partition Function），是全部 2ⁿ 种状态的打分总和——正是它保证概率归一。<strong>注意：有向模型免费得到的归一化，无向模型要付出"枚举所有状态"的代价来换。</strong></p>
+
+    <p>完整手算一个例子。给图 16.2 的边配势能表：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>a</th><th>b</th><th>φ(a, b)</th></tr>
+        <tr><td>0</td><td>0</td><td>1</td></tr>
+        <tr><td>0</td><td>1</td><td>2</td></tr>
+        <tr><td>1</td><td>0</td><td>3</td></tr>
+        <tr><td>1</td><td>1</td><td>4</td></tr>
+      </table>
+    </div>
+
+    <ol>
+      <li>先算配分函数：Z = 1 + 2 + 3 + 4 = <strong>10</strong>；</li>
+      <li>联合概率：p(1,1) = 4/10 = 0.4，p(0,0) = 1/10 = 0.1，依此类推；</li>
+      <li>边缘概率：p(a=1) = p(1,0) + p(1,1) = 3/10 + 4/10 = <strong>0.7</strong>；</li>
+      <li>条件概率：p(b=1|a=1) = p(1,1)/p(a=1) = 0.4/0.7 ≈ <strong>0.571</strong>——注意条件概率里 Z 被约掉了，只含两个局部打分，这一点第18章伪似然会反复利用。</li>
+    </ol>
+
+    <p>深度学习里更常用等价写法<span class="term">能量模型</span>（Energy-Based Model, EBM）：定义能量 E(x) = −log p̃(x)，其中 p̃ = ∏φ 是未归一化打分，于是</p>
+
+    <div class="formula">p(x) = <span class="frac"><span class="num-part">e<sup>−E(x)</sup></span><span class="den-part">Z</span></span>，Z = ∑<sub>x</sub> e<sup>−E(x)</sup></div>
+
+    <p>能量越低概率越高，"好状态是山谷、坏状态是山峰"。RBM（第20章）就是这个形式：能量是可微的解析式，直接对参数求导方便；而 φ 只是查表。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>有向模型像"记账"：每笔局部概率都平，合起来自然平。无向模型像"众筹打分"：每个团只管给自己的组合打分，全局像不像概率分布没人管，最后由 Z 统一买单——<strong>把局部的表达自由，换成了一笔全局的归一化账单</strong>。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>把势能函数 φ 当成概率。φ 可以大于 1（上表里的 3、4），可以是任何非负数，它不归一、也不是条件概率。只有除以 Z 之后才是概率；两个 φ 表的比值关系才承载建模含义。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 16.3-1</div>
+              <div class="q-text">写出无向图模型的联合分布公式，指出哪一项是配分函数、它怎么算。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              p(x) = (1/Z)∏φᵢ(Cᵢ)。Z = Σₓ ∏φᵢ(Cᵢ)，要对全部状态枚举求和，状态数 2ⁿ 时算不动。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 16.3-2</div>
+              <div class="q-text">能量模型中 E(x) 与概率什么关系？为什么深度学习偏爱能量写法？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              p(x) = e^(−E(x))/Z，能量越低概率越高。E(x) 是解析可微式（如 −bᵀv−cᵀh−vᵀWh），对参数求导方便，而 φ 只是查表。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ================= 16.4 ================= -->
+    <h2><span class="sec-no">16.4</span>配分函数为什么成为后半段的敌人</h2>
+
+    <p>上一节看到：无向模型/能量模型的归一化常数 Z 要枚举全部状态。这一节把问题钉死：<strong>Z 不只是算一次概率时碍事，它渗进训练的每一步梯度里</strong>。</p>
+
+    <p>设模型参数为 θ，未归一化模型为 p̃(x;θ)，p(x;θ) = p̃(x;θ)/Z(θ)。对一个训练样本 x 做对数似然并求梯度：</p>
+
+    <div class="formula">∇<sub>θ</sub> log p(x;θ) = ∇<sub>θ</sub> log p̃(x;θ) − ∇<sub>θ</sub> log Z(θ)</div>
+
+    <p>第一项好算：能量函数的解析梯度。麻烦在第二项。把 Z 的定义展开求导：</p>
+
+    <div class="formula">∇<sub>θ</sub> log Z = <span class="frac"><span class="num-part">∇<sub>θ</sub> Z</span><span class="den-part">Z</span></span> = <span class="frac"><span class="num-part">∑<sub>x</sub> ∇<sub>θ</sub> p̃(x;θ)</span><span class="den-part">Z</span></span> = ∑<sub>x</sub> p(x;θ) ∇<sub>θ</sub> log p̃(x;θ) = E<sub>x∼p<sub>θ</sub></sub>[∇<sub>θ</sub> log p̃(x;θ)]</div>
+
+    <p>第三行的等号最关键：<strong>∇log Z 恰好等于"在模型自己的分布下，未归一化对数概率梯度的期望"</strong>。也就是说，每做一次梯度上升，都要：① 从当前模型 p_θ 采样一批 x（这叫负相）；② 用数据样本算正相；③ 两相相减。两步都绕不开模型分布本身。</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>梯度成分</th><th>名字</th><th>含义</th><th>难点</th></tr>
+        <tr><td>∇log p̃(x<sub>data</sub>;θ)</td><td>正相</td><td>把数据出现的能量压低</td><td>好算，解析梯度</td></tr>
+        <tr><td>∇log Z = E<sub>p_θ</sub>[∇log p̃]</td><td>负相</td><td>把模型虚报的概率压回去</td><td>要从模型分布采样，而采样先要面对 Z 或等价的枚举</td></tr>
+      </table>
+    </div>
+
+    <p>一个能装进口袋的数字例子：二态模型 x ∈ {0, 1}，p̃(x;θ) = e^(θx)。此时 Z = 1 + e^θ，对数似然梯度为：</p>
+
+    <ol>
+      <li>正相：∇log p̃(1;θ) = x = 1；</li>
+      <li>负相：∇log Z = e^θ/(1+e^θ) = σ(θ)；</li>
+      <li>θ = 0 时总梯度 = 1 − σ(0) = 1 − 0.5 = <strong>0.5</strong> &gt; 0，于是 θ 增大，p(x=1) 上升——符合直觉（数据是 1，模型就该调高 1 的概率）。</li>
+    </ol>
+
+    <p>这个例子只有两个状态，Z 随手就算出来了。把 x 换成 100 个二值变量，Z 要枚举 2¹⁰⁰ 个状态——<strong>精确训练从这一步起就死了</strong>。本书后半段的全部战线由此拉开：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>后续章</th><th>对付 Z 的策略</th></tr>
+        <tr><td>第17章 蒙特卡洛方法</td><td>枚举不行就抽样：用样本平均近似求和与期望</td></tr>
+        <tr><td>第18章 直面配分函数</td><td>训练时绕开 Z：伪似然、对比散度、得分匹配</td></tr>
+        <tr><td>第19章 近似推断</td><td>后验 p(h|v) 里的求和也算不动：用简单分布 q 逼近</td></tr>
+        <tr><td>第20章 深度生成模型</td><td>总清算：RBM/VAE/GAN/自回归各自怎么处置 Z</td></tr>
+      </table>
+    </div>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>配分函数之恶不在"有一个常数要算"，而在它<strong>定义在全部状态之上</strong>：每动一次参数，Z 就变了，就要重新对 2ⁿ 个状态求和。它是指数爆炸这间牢房的门锁。后面四章的武器——采样、绕行、近似——本质上都是开锁或翻墙的不同姿势。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>以为"训练时用梯度下降就不需要管 Z"。错。似然梯度的第二项 ∇log Z 正是 Z 的化身，它不因为你只写梯度就消失。只有三类出路：能精确算（小模型/自回归）、用采样近似（第17、18章）、换个不含 Z 的目标函数（第18、19章）。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 16.4-1</div>
+              <div class="q-text">写出对数似然梯度的两项分解，并说明 ∇log Z 等于什么期望。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              ∇log p(x;θ) = ∇log p̃(x;θ) − ∇log Z；而 ∇log Z = E_{x∼p_θ}[∇log p̃(x;θ)]，即模型分布下的期望（负相），需要从模型采样。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 16.4-2</div>
+              <div class="q-text">为什么"每动一次参数 Z 就要重算"是训练无向模型的根本障碍？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              Z 依赖 θ 且定义在全部 2ⁿ 个状态上；参数每更新一次，旧 Z 作废，梯度里的负相就要重新对模型分布求期望——每步训练都背着一次指数级求和。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===== 章末五件套之 1：概念卡 ===== -->
+    <h2><span class="sec-no">🃏</span>概念卡：本章概念的一分钟画像</h2>
+    <p>翻面前先自问：这个概念我能用一句话讲清楚吗？</p>
+    <div class="flip-grid">
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 1</div>
+            <div class="q-text">条件独立（Conditional Independence）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">X ⊥ Y | Z：给定 Z 后 X 与 Y 无关，P(X,Y|Z)=P(X|Z)P(Y|Z)。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">联合分布指数爆炸的救命稻草：每条条件独立都能把大表拆小。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">知道了中间人，两端就断了联系。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">把条件独立当成无条件独立——不观测 Z 时 X 与 Y 照样可以相关。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">16.2/16.3 的因子分解、第19章近似推断的全部根基。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 2</div>
+            <div class="q-text">有向图模型 / 贝叶斯网络（Directed Model / Bayesian Network）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">有向无环图，联合分布 p(x) = ∏ p(xᵢ|Pa(xᵢ))。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">影响有方向时的紧凑表示，且自带归一化、可直接顺图采样。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">像族谱：每个节点只听父母的。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">把边的方向当成已证明的因果——多数时候只是建模便利。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">第20章 DBN 的下层、自回归模型；需要显式生成过程时。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 3</div>
+            <div class="q-text">无向图模型 / 马尔可夫随机场（Markov Random Field）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">无向图，联合分布 p(x) = (1/Z)∏φᵢ(Cᵢ)，φ 是团上的非负势能。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">依赖没有方向时（相邻像素、对称关系）的紧凑表示。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">像邻里公约：相邻住户互相约束，没人是上级。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">把 φ 当概率——它只是打分，可以大于 1，除 Z 后才归一。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">第18章的训练对象、第20章 RBM 与 DBM。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 4</div>
+            <div class="q-text">团与势能函数（Clique &amp; Potential Function）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">团：两两全连的节点子集；势能 φ：给团的每种组合一个非负相容度打分。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">把"哪些变量直接相关"翻译成可乘的局部因子。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">打分卡：组合越协调分越高，不像概率，像好评度。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为每个节点一个 φ——φ 属于团，一条边、一个三元组都可以是团。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">写无向模型联合分布、推条件独立（图的分离性）时。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 5</div>
+            <div class="q-text">配分函数（Partition Function）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">Z(θ) = Σₓ p̃(x;θ)，未归一化打分在全部状态上的总和。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">保证无向/能量模型的输出是合法概率分布。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">全局账单：局部打的分，最后统一除以一个天价总额。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为只是个常数、训练时不用管——它依赖 θ，藏在每步梯度里。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">第17–20章全部主线：采样、CD、变分、生成模型都围着它转。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 6</div>
+            <div class="q-text">能量模型（Energy-Based Model）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">p(x) = e^(−E(x))/Z，用能量函数 E(x) 定义分布。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">让"势函数"变成可微解析式，可以直接接梯度方法。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">地形图：好状态是低谷，坏状态是高峰。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为能量有概率的 0–1 范围——能量可取任意实数，越负越可能。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">第18章得分匹配的对象、第20章 RBM/DBM 的骨架。</span></div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- ===== 章末五件套之 2：分层习题 ===== -->
+    <h2><span class="sec-no">📝</span>分层习题</h2>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>判断对错：有向图模型的联合分布必须额外除以一个配分函数，才是合法概率分布。</div>
+      <details>
+        <summary>提示</summary>
+        <p>检查每个因子 p(xᵢ|Pa(xᵢ)) 本身是什么：它对 xᵢ 求和等于几？乘积再对全部变量求和呢？</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer"><strong>错。</strong>每个因子 p(xᵢ|Pa(xᵢ)) 都是合法条件概率，对 xᵢ 求和为 1；按拓扑序逐变量求和，每步消去一个变量仍保持归一，最终总和为 1。有向模型自带归一化，不需要 Z。需要配分函数的是无向模型——它的因子只是打分。这正是两种图模型的核心差别。</div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>判断对错：无向图中两个节点没有边直接相连，则这两个变量相互独立。</div>
+      <details>
+        <summary>提示</summary>
+        <p>回想"感冒→发烧→咳嗽"的例子：没有边时，观测一个变量会不会改变对另一个的信念？加上"给定某些变量"这个条件呢？</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer"><strong>错。</strong>没有直接的边只承诺<strong>条件</strong>独立：给定能把两者分隔开的邻居集合后，它们才独立。不加任何观测条件时，相关性可以沿路径传播（a—c—b 中 a 与 b 无边但通过 c 相关）。把"无边"读成"独立"是无向图模型最常见的误读。</div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>5 个二值变量排成链 x₁→x₂→x₃→x₄→x₅。分别数出全联合表与链式有向分解的自由参数量。</div>
+      <details>
+        <summary>提示</summary>
+        <p>全表：2⁵ 行，概率和为 1 扣掉一个自由度。链式：首节点一张无条件表，后面每个节点一张条件表，注意每张二值条件表有几行、每行几个自由参数。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          全表：2⁵ = 32 个条目，和为 1，自由参数 = 32 − 1 = <strong>31</strong>。<br>
+          链式分解 p(x₁)∏p(xᵢ|xᵢ₋₁)：<br>
+          ① p(x₁)：1 个自由参数；<br>
+          ② 每张条件表 p(xᵢ|xᵢ₋₁)：父节点 2 种取值 × 每行 1 个自由参数 = 2 个；共 4 张表 = 8 个；<br>
+          合计 1 + 8 = <strong>9</strong> 个自由参数。<br>
+          对照通式 2n−1 = 2×5−1 = 9 ✓。参数压缩比 31:9；n 再大时是全表指数、链式线性的天壤之别。
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>无向模型两个二值变量 a—b，势能表 φ(0,0)=2，φ(0,1)=1，φ(1,0)=1，φ(1,1)=4。求 Z、联合分布四值、p(b=1|a=1)。</div>
+      <details>
+        <summary>提示</summary>
+        <p>Z 是四个打分之和；联合 = 打分/Z；条件概率 = 联合/边缘，注意 Z 会约掉。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          ① Z = 2 + 1 + 1 + 4 = <strong>8</strong>；<br>
+          ② p(0,0) = 2/8 = 0.25，p(0,1) = 1/8 = 0.125，p(1,0) = 1/8 = 0.125，p(1,1) = 4/8 = <strong>0.5</strong>；<br>
+          ③ p(a=1) = p(1,0)+p(1,1) = 0.125+0.5 = 0.625；<br>
+          ④ p(b=1|a=1) = 0.5/0.625 = <strong>0.8</strong>（也可直接在 a=1 行内归一：4/(1+4) = 0.8，Z 根本不用算——记住这个技巧，第18章伪似然全靠它）。
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l3">L3 建模应用</span>医院要建一个辅助诊断模型：变量有"季节（二值）""流感（二值）""发烧（二值）""咳嗽（二值）"，医学知识表明：季节影响流感，流感影响发烧与咳嗽，发烧与咳嗽之间没有直接生理机制。请选模型类型、画图、写联合分解，并数参数量。</div>
+      <details>
+        <summary>提示</summary>
+        <p>这些影响有明确方向吗？发烧和咳嗽这条"没有直接机制"的关系，在有向图里怎么体现（它们共享什么）？</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          选<strong>有向图模型</strong>：影响方向清楚（季节→流感→症状），且自带归一化、便于顺图生成病例。<br>
+          图：季节 → 流感；流感 → 发烧；流感 → 咳嗽（发烧与咳嗽是"共同原因"结构，互不连边）。<br>
+          联合分解：p(季,流,烧,咳) = p(季) · p(流|季) · p(烧|流) · p(咳|流)。<br>
+          参数量：p(季) 1 个；p(流|季) 2 个；p(烧|流) 2 个；p(咳|流) 2 个；合计 <strong>7</strong> 个（全表 15 个）。<br>
+          关键语义：发烧 ⊥ 咳嗽 | 流感——已知是否流感后，发烧不再提供关于咳嗽的新信息；但边缘上两者通过流感相关。若强行给发烧—咳嗽加边，参数变多且编码了并不存在的直接机制。
+        </div>
+      </details>
+    </div>
+
+    <!-- ===== 章末五件套之 3：自测 ===== -->
+    <h2><span class="sec-no">✍️</span>本章自测</h2>
+    <p class="quiz-hint">点击选项判分，答错会给出原因。</p>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 1</div>
+      <div class="q-stem">n 个二值随机变量的全联合分布表有多少个条目？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. n²</li>
+        <li data-opt="b">B. 2ⁿ</li>
+        <li data-opt="c">C. 2n</li>
+        <li data-opt="d">D. n!</li>
+      </ul>
+      <div class="quiz-explain">解析：每个变量 2 种取值，n 个变量独立组合共 2ⁿ 种状态，每行一个概率，B 对。A（n²）是把"成对关系数"误当状态数；C（2n）只够存边缘分布；D（n!）是排列数，和取值组合无关。n=100 时 2ⁿ≈10³⁰，这就是指数表困境。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="c">
+      <div class="q-no">自测 2</div>
+      <div class="q-stem">有向图模型的联合分布分解公式是？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. p(x) = (1/Z) ∏ φᵢ(Cᵢ)</li>
+        <li data-opt="b">B. p(x) = ∏ p(xᵢ)</li>
+        <li data-opt="c">C. p(x) = ∏ p(xᵢ | Pa(xᵢ))</li>
+        <li data-opt="d">D. p(x) = ∑ p(xᵢ | Pa(xᵢ))</li>
+      </ul>
+      <div class="quiz-explain">解析：C 对——每个节点给定父节点的条件概率相乘，自带归一化。A 是无向模型的公式（含 Z），张冠李戴；B 假设所有变量无条件独立，丢掉了全部结构；D 把乘积写成求和，连量纲都不对（概率相乘表"同时发生"）。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="a">
+      <div class="q-no">自测 3</div>
+      <div class="q-stem">无向图模型中配分函数 Z 难以计算的根本原因是？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. Z 要对全部 2ⁿ 个状态求和，状态数随变量数指数增长</li>
+        <li data-opt="b">B. Z 的定义中含有无法解析计算的积分</li>
+        <li data-opt="c">C. 势能函数 φ 可能取负值导致求和发散</li>
+        <li data-opt="d">D. Z 不依赖参数，但每次采样都要重新归一化</li>
+      </ul>
+      <div class="quiz-explain">解析：A 对——Z = Σₓ ∏φ 是指数级求和，n=100 就是 10³⁰ 项。B 错在离散模型里每一项都只是乘法加法，没有解析困难，纯粹是项数太多；C 错，φ 定义就是非负的；D 恰好说反：Z 依赖参数 θ，这正是它渗入每步梯度的原因。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="d">
+      <div class="q-no">自测 4</div>
+      <div class="q-stem">对数似然梯度 ∇θ log p(x;θ) = ∇θ log p̃(x;θ) − ∇θ log Z 中，第二项 ∇θ log Z 等于？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 0，因为 Z 是常数</li>
+        <li data-opt="b">B. 数据分布下 ∇θ log p̃ 的期望</li>
+        <li data-opt="c">C. 均匀分布下 ∇θ log p̃ 的期望</li>
+        <li data-opt="d">D. 模型分布 p_θ 下 ∇θ log p̃ 的期望</li>
+      </ul>
+      <div class="quiz-explain">解析：D 对——推导 ∇logZ = (1/Z)Σ∇p̃ = Σ p(x;θ)∇log p̃，权重 p̃/Z 正是模型自己的分布，这就是"负相要从模型采样"的由来。A 错：Z 依赖 θ，不是常数；B 错：那是正相；C 错：均匀分布与归一化权重 p̃/Z 毫无关系。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 5</div>
+      <div class="q-stem">能量模型 p(x) = e^(−E(x))/Z 中，能量与概率的关系是？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 能量越大，概率越大</li>
+        <li data-opt="b">B. 能量越小，概率越大</li>
+        <li data-opt="c">C. 能量必须在 [0, 1] 区间内才是合法模型</li>
+        <li data-opt="d">D. 能量与概率无关，Z 单独决定概率</li>
+      </ul>
+      <div class="quiz-explain">解析：B 对——概率随 e^(−E) 单调变化，E 越小 e^(−E) 越大，"好状态是山谷"。A 把指数前的负号弄反了；C 错：能量是任意实数，不是概率，不受 [0,1] 限制；D 错：Z 只是归一化常数，状态之间的相对概率完全由能量差决定。</div>
+    </div>
+
+    <!-- ===== 章末五件套之 4：三句话复述 ===== -->
+    <div class="retell">
+      <h3>🗣️ 用自己的话，三句话讲完本章</h3>
+      <p>对着空气（或室友）说出这三句。说卡壳的那句，回去重读对应小节。</p>
+      <details>
+        <summary>句1：这章解决什么问题？——</summary>
+        <div class="retell-answer">参考答案：变量一多（成百上千），联合概率分布的表格有 2ⁿ 行，存不下也算不动；本章用图结构编码条件独立，把大联合分布拆成小因子乘积。</div>
+      </details>
+      <details>
+        <summary>句2：核心机制是什么？——</summary>
+        <div class="retell-answer">参考答案：两种拆法——有向模型按"给定父节点的条件概率"连乘，自带归一化；无向模型按"团上势能函数"连乘，再除以配分函数 Z 归一，等价写法是能量模型 p = e^(−E)/Z。</div>
+      </details>
+      <details>
+        <summary>句3：它和前后章怎么分工？——</summary>
+        <div class="retell-answer">参考答案：第13–15章解决"用什么表示数据"，本章解决"表示出来之后联合分布怎么写"；而拆出来的副产品——算不动的 Z——交给第17章（采样近似）、第18章（绕开 Z 训练）、第19章（近似推断）轮番对付。</div>
+      </details>
+    </div>
+
+    <!-- ===== 章末五件套之 5：间隔复习计划 ===== -->
+    <div class="review-plan">
+      <h3>🔁 间隔复习计划</h3>
+      <p>回忆本身比重读有效 10 倍。到点只做一件事：翻卡 + 重做标记题。</p>
+      <table>
+        <tr><th>时间点</th><th>复习内容</th><th>预计用时</th></tr>
+        <tr><td>第 1 天</td><td>全部概念卡 + 回忆卡 16.1 至 16.4</td><td>10 分钟</td></tr>
+        <tr><td>第 3 天</td><td>概念卡 2、3、5（有向/无向/配分函数）+ 重做 L2 两题</td><td>10 分钟</td></tr>
+        <tr><td>第 7 天</td><td>三句话复述 + 自测错题 + 默写 ∇log p 两项分解</td><td>10 分钟</td></tr>
+        <tr><td>第 15 天</td><td>只重做合上书挑战；能全过就毕业</td><td>15 分钟</td></tr>
+      </table>
+    </div>
+
+    <!-- 合上书挑战 -->
+    <div class="final-challenge">
+      <h3>📕 合上书挑战</h3>
+      <p class="fc-sub">现在关掉这个页面，拿一张纸，凭记忆完成以下任务。全部做完再回来核对——这是本章真正的毕业考试。</p>
+      <ol id="challenge-list">
+        <li><span class="fc-check"></span>写出条件独立的定义式，并用一句话说清它为什么能把指数大表拆小</li>
+        <li><span class="fc-check"></span>写出有向与无向图模型的两个联合分解公式，指出哪个自带归一化、哪个需要 Z</li>
+        <li><span class="fc-check"></span>画出 4 节点有向链与 2 节点无向图，各数一遍参数量</li>
+        <li><span class="fc-check"></span>给定 2×2 势能表（如 2,1,1,4），手算 Z、联合分布和一个条件概率</li>
+        <li><span class="fc-check"></span>推导 ∇log Z = E_{p_θ}[∇log p̃]（从 Z 的定义出发，四步以内）</li>
+        <li><span class="fc-check"></span>回答本章的主线问题：图模型凭什么把指数级大表拆开，又为什么亲手造出配分函数这只拦路虎？（一句话）</li>
+      </ol>
+    </div>
+
+    <div class="complete-zone">
+      <button class="btn-complete" id="btn-complete" onclick="markDone()">✓ 我已完成本章（含合上书挑战）</button>
+    </div>
+
+    <div class="chapter-nav">
+      <a href="chapter-15.html"><span class="nav-dir">← 上一章</span>第15章 表示学习</a>
+      <a href="chapter-17.html" class="next"><span class="nav-dir">下一章 →</span>第17章 蒙特卡洛方法</a>
+    </div>
+
+  </div>
+</div>
+
+<footer class="footer">
+  <div class="wrap">第16章 结构化概率模型 · 深度学习互动讲义 · 基于 Goodfellow et al.《深度学习》(2016)</div>
+</footer>
+
+<script src="/lectures-assets/mermaid.min.js"></script>
+<script>
+mermaid.initialize({
+  startOnLoad: true,
+  theme: "base",
+  themeVariables: {
+    primaryColor: "#e3edf7",
+    primaryBorderColor: "#1d5f9e",
+    primaryTextColor: "#1d5f9e",
+    lineColor: "#5c554b",
+    secondaryColor: "#fbeedd",
+    tertiaryColor: "#f5f1e8",
+    fontFamily: "-apple-system, PingFang SC, sans-serif",
+    fontSize: "14px"
+  },
+  flowchart: { curve: "linear", htmlLabels: false }
+});
+</script>
+<script>
+// 自测题判分
+document.querySelectorAll(".quiz-block").forEach(block => {
+  const answer = block.dataset.answer;
+  const explain = block.querySelector(".quiz-explain");
+  block.querySelectorAll(".quiz-opts li").forEach(li => {
+    li.addEventListener("click", () => {
+      const opts = block.querySelectorAll(".quiz-opts li");
+      opts.forEach(o => o.classList.add("disabled"));
+      if (li.dataset.opt === answer) {
+        li.classList.add("correct");
+      } else {
+        li.classList.add("wrong");
+        block.querySelector(`[data-opt="${answer}"]`).classList.add("correct");
+      }
+      explain.classList.add("show");
+    });
+  });
+});
+
+// 合上书清单打勾
+document.querySelectorAll("#challenge-list li").forEach(li => {
+  li.addEventListener("click", () => li.classList.toggle("checked"));
+});
+
+// 完成标记 → localStorage（本系列键 dl_progress_v1，章号为字符串 "16"）
+const KEY = "dl_progress_v1";
+function loadProgress() {
+  try { return JSON.parse(localStorage.getItem(KEY)) || {}; } catch (e) { return {}; }
+}
+const progress = loadProgress();
+const btn = document.getElementById("btn-complete");
+if (progress["16"] && progress["16"].done) {
+  btn.textContent = "✓ 已完成 · 再次点击重置";
+  btn.classList.add("done");
+}
+function markDone() {
+  const p = loadProgress();
+  if (p["16"] && p["16"].done) {
+    delete p["16"];
+    btn.textContent = "✓ 我已完成本章（含合上书挑战）";
+    btn.classList.remove("done");
+  } else {
+    p["16"] = { done: true, completedAt: Date.now(), reviewsDone: 0 };
+    btn.textContent = "✓ 已完成 · 复习提醒已开启";
+    btn.classList.add("done");
+  }
+  localStorage.setItem(KEY, JSON.stringify(p));
+}
+</script>
+
+</body>
+</html>

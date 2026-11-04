@@ -1,0 +1,947 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第8章 代码生成 · 编译原理互动讲义</title>
+<link rel="stylesheet" href="/lectures-assets/style.css">
+</head>
+<body>
+
+<nav class="topbar">
+  <div class="topbar-inner">
+    <span class="brand"><a href="index.html" style="color:inherit">← 学习地图</a></span>
+    <span class="crumb">阶段③ · 后端与优化 / 第8章</span>
+  </div>
+</nav>
+
+<div class="wrap">
+
+  <div class="lecture-head">
+    <span class="ch-label">CHAPTER 08 · 后端与优化</span>
+    <h1>代码生成</h1>
+    <p class="lead">三地址码已经是「几乎的汇编」，但最后一步处处是选择：一条语句选哪几条指令、值放哪个寄存器、先算哪棵子树。本章回答：怎么选，才能又快又省寄存器。</p>
+  </div>
+
+  <!-- ===== 章首四件套之 1：全书定位 ===== -->
+  <div class="position-bar">
+    <strong>本章在主线上的位置：</strong>第6章产出三地址码、第7章给名字安了家（帧与偏移）→ <u>本章把三地址码逐条落成目标指令，并在寄存器预算内做分配与排序</u> → 第9章因此能站在数据流分析上做跨基本块的优化。<br>
+    第8章回答主线上的第5个问题：<strong>三地址码如何变成又快又省寄存器的机器指令？</strong>
+    <div class="map-inline">
+      <span class="node">Ch1–4 前端：词法与语法</span><span class="arrow">→</span>
+      <span class="node">Ch5–7 语义与中间代码（Ch7 给了帧布局与寻址）</span><span class="arrow">→</span>
+      <span class="node here">Ch8–11 后端与优化 · 本章 Ch8 代码生成</span><span class="arrow">→</span>
+      <span class="node">Ch12 全书收束</span>
+    </div>
+  </div>
+
+  <!-- ===== 章首四件套之 2：学习目标 ===== -->
+  <div class="objectives">
+    <h4>🎯 学完本章，合上书你应该能：</h4>
+    <ol>
+      <li>说出代码生成的三大设计难题，并为每个难题举一个「选不好会怎样」的反例。</li>
+      <li>默写本章寄存器机的指令集与六种寻址模式，并用代价公式算出任意一条指令的代价。</li>
+      <li>用树覆盖（最大口啃法）为一条三地址语句选出指令序列，并说明贪心何时不最优。</li>
+      <li>给定一个基本块的三地址码与两个寄存器，用 getReg 走完全程：逐条生成指令、维护寄存器描述符与地址描述符、指出每次溢出的位置与理由。</li>
+      <li>为一段三地址码画出冲突图，判断 K 个寄存器是否够用，不够时说出该溢出谁。</li>
+      <li>用 Ershov 数给一个表达式标注求值顺序，并对同一表达式写出两种顺序的寄存器用量对比。</li>
+    </ol>
+  </div>
+
+  <div class="lecture">
+
+    <!-- ===== 章首四件套之 3：推导主线图 ===== -->
+    <div class="figure">
+      <div class="mermaid">
+flowchart TB
+  A["输入：第6章的三地址码 + 第7章的帧布局"] --> B["问题1：一条语句选哪几条指令 → 指令选择"]
+  B --> C["树覆盖：瓦片铺表达式树，最大口先啃"]
+  A --> D["问题2：值放哪个寄存器 → 寄存器分配"]
+  D --> E["getReg：描述符记账，无处可放就溢出"]
+  D --> F["图着色：冲突图可 K 着色 ⟺ K 个寄存器够分"]
+  A --> G["问题3：先算哪棵子树 → 求值顺序"]
+  G --> H["Ershov 数：先算费寄存器的子树"]
+  C --> I["代价：块内联合最优是 NP 难；跨块的活跃性分析留给第9章"]
+  E --> I
+  F --> I
+  H --> I
+  classDef hot fill:#fbeedd,stroke:#c4651f,stroke-width:2.5px,color:#c4651f;
+  classDef danger fill:#fae9e7,stroke:#b03a2e,stroke-width:2.5px,color:#b03a2e;
+  class I danger;
+      </div>
+      <div class="caption">本章推导主线：三大难题各自有启发式武器，但联合最优是 NP 难——代价落在末节点，也指向第9章。</div>
+    </div>
+
+    <!-- ============================================================
+      8.1 三大难题
+    ============================================================ -->
+    <h2><span class="sec-no">8.1</span>为什么代码生成是三大难题：指令选择、寄存器分配、求值顺序</h2>
+
+    <p>第7章解决了「名字住在哪」，第6章给了三地址码。剩下的工作看上去是逐条「查表替换」：把 <code>t1 := a + b</code> 换成几条机器指令。真动手才发现每一步都有选择，而每个选择都在花同一笔预算——<strong>寄存器</strong>与<strong>访存次数</strong>。</p>
+
+    <p>三个互相纠缠的难题，各配一个「选不好会怎样」的反例：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>难题</th><th>问的是什么</th><th>选不好的反例</th></tr>
+        <tr><td><span class="term">指令选择</span>（Instruction Selection）</td><td>一条三地址语句用目标机的哪几条指令实现</td><td><code>x := x + 1</code>：一条 <code>INC x</code> 就能干完；选成 LD/ADD/ST 三条，代码体积膨胀 3 倍，还白占一个寄存器</td></tr>
+        <tr><td><span class="term">寄存器分配</span>（Register Allocation）</td><td>众多名字挤几个寄存器，谁住、谁被赶到内存</td><td>只有两个寄存器却要算 (a+b)×(c−d)：值放不开就得 ST/LD 来回倒腾（溢出），一次溢出多花 2 条访存指令，在内层循环里被放大百万倍</td></tr>
+        <tr><td><span class="term">求值顺序</span>（Evaluation Order）</td><td>子表达式先算谁、后算谁</td><td>8.5 将看到 (a+b)×c：一种顺序峰值占 2 个寄存器，另一种要 3 个——寄存器不够时直接逼出一次溢出</td></tr>
+      </table>
+    </div>
+
+    <p>更麻烦的是三者互相牵制：选哪条指令决定了要用几个寄存器；寄存器余量反过来限制指令选择；求值顺序同时改变两者。理论结果也很冷酷——<strong>基本块内的最优代码生成是 NP 难问题</strong>。所以工程上全部用启发式：8.3 的最大口啃法、8.4 的 getReg 与图着色、8.5 的 Ershov 序，都是「够好且快」的近似。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>代码生成是<strong>带预算的翻译</strong>：预算就是寄存器个数与访存代价，三种选择——选哪条指令、谁住寄存器、先算谁——花的是同一笔钱。本章每个启发式，本质上都是一套「省钱纪律」。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>以为指令选择是机械查表：一条三地址码对应一条「标准」指令。错——同一条语句在不同上下文（寄存器还剩几个、操作数是否已在寄存器、下一条语句还用不用这个值）下，最优选择不同。代码生成没有脱离上下文的答案。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 8.1-1</div>
+              <div class="q-text">三大难题各是什么？各自的「选不好」代价？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              指令选择（选错→指令膨胀）、寄存器分配（选错→溢出带来额外访存）、求值顺序（选错→峰值寄存器需求变大）。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 8.1-2</div>
+              <div class="q-text">为什么说三个难题在「花同一笔预算」？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              预算是寄存器与访存：指令选择决定寄存器用量，分配受余量约束，顺序同时改变两者——三者互相牵制，无法独立优化。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============================================================
+      8.2 目标语言
+    ============================================================ -->
+    <h2><span class="sec-no">8.2</span>目标语言：一台简化的寄存器机</h2>
+
+    <p>三大难题要在具体的靶子上讨论。本章的目标机是一台简化的寄存器机：若干通用寄存器 R0、R1……，四类指令，六种寻址模式。后续所有例子都用它。</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>指令</th><th>含义</th><th>例子</th></tr>
+        <tr><td><code>LD R, x</code></td><td>把位置 x 的值装入寄存器 R</td><td><code>LD R0, a</code></td></tr>
+        <tr><td><code>ST x, R</code></td><td>把寄存器 R 的值存入位置 x</td><td><code>ST t1, R0</code></td></tr>
+        <tr><td><code>OP Rd, Rs, Rt</code></td><td>Rd := Rs op Rt（OP ∈ ADD/SUB/MUL/DIV…）</td><td><code>ADD R0, R0, R1</code></td></tr>
+        <tr><td><code>OP Rd, Rs, #c</code></td><td>立即数版本：Rd := Rs op c</td><td><code>MUL R1, R1, #4</code></td></tr>
+      </table>
+    </div>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>寻址模式</th><th>形式</th><th>取到的值 / 有效地址</th><th>附加代价</th></tr>
+        <tr><td>绝对地址</td><td><code>x</code></td><td>内存 x 的内容</td><td>1</td></tr>
+        <tr><td>寄存器</td><td><code>R</code></td><td>R 的内容</td><td>0</td></tr>
+        <tr><td>立即数</td><td><code>#c</code></td><td>常量 c 本身</td><td>1</td></tr>
+        <tr><td>下标</td><td><code>c(R)</code></td><td>地址 (c + R 的内容) 的内容</td><td>1</td></tr>
+        <tr><td>间接寄存器</td><td><code>*R</code></td><td>地址 = R 的内容 处的内容</td><td>0</td></tr>
+        <tr><td>间接下标</td><td><code>*c(R)</code></td><td>地址 = (c + R 的内容) 的内容 处的内容</td><td>1</td></tr>
+      </table>
+    </div>
+
+    <p><span class="term">指令代价</span>定义为：1（指令本身）+ 各操作数寻址模式的附加代价之和。寄存器操作免费，沾内存或常量就加钱。</p>
+
+    <div class="formula">cost = 1 + ∑（每个源/目的操作数的寻址模式附加代价）</div>
+
+    <p><strong>例 8.2-A（代价计算，完整步骤）：</strong>算三条指令各自与合计的代价。</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>指令</th><th>逐项拆解</th><th>代价</th></tr>
+        <tr><td><code>LD R0, a</code></td><td>1 + 0（R0 寄存器）+ 1（a 绝对地址）</td><td>2</td></tr>
+        <tr><td><code>ADD R0, R0, R1</code></td><td>1 + 0 + 0 + 0（全寄存器）</td><td>1</td></tr>
+        <tr><td><code>LD R1, 8(R0)</code></td><td>1 + 0（R1）+ 1（下标模式）</td><td>2</td></tr>
+        <tr><td colspan="2">合计</td><td><strong>5</strong></td></tr>
+      </table>
+    </div>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>代价模型就是指令的<strong>价目表</strong>：寄存器之间倒手免费，一沾内存就收税。代码生成的全部优化，归根到底是在少交这笔内存税。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>用「指令条数」比较两段代码。<code>LD R1, *40(R0)</code> 是 1 条指令但代价 2（一次额外访存）；<code>ADD R0, R1, R2</code> 也是 1 条但代价 1。条数相同、访存次数不同，速度就不同——比较代码必须用代价模型，不能数行数。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 8.2-1</div>
+              <div class="q-text">六种寻址模式及附加代价？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              绝对地址 x（1）、寄存器 R（0）、立即数 #c（1）、下标 c(R)（1）、间接寄存器 *R（0）、间接下标 *c(R)（1）。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 8.2-2</div>
+              <div class="q-text">代价公式是什么？LD R2, *8(R1) 的代价是多少？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              cost = 1 + 各操作数附加代价之和。LD R2, *8(R1)：1 + 0（R2）+ 1（间接下标）= 2。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============================================================
+      8.3 指令选择：树覆盖
+    ============================================================ -->
+    <h2><span class="sec-no">8.3</span>指令选择：用树覆盖「啃」掉表达式树</h2>
+
+    <p>有了指令集，第一个难题登场：一条三地址语句对应哪几条指令？系统化的做法分两步——把语句画成<span class="term">表达式树</span>（Expression Tree）；把每条目标指令画成一块「树型瓦片」（tile）；用瓦片把整棵树不重不漏地铺满。选指令的问题，就变成了铺地砖的问题。</p>
+
+    <p>本章瓦片盒（部分）：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>瓦片</th><th>匹配的子树</th><th>对应指令</th></tr>
+        <tr><td>T1</td><td>叶子：内存名字 x</td><td><code>LD R, x</code></td></tr>
+        <tr><td>T2</td><td>内部结点 + ，两个操作数已在寄存器</td><td><code>ADD Rd, Rs, Rt</code></td></tr>
+        <tr><td>T3</td><td>内部结点「下标取值」：基址常量 c + 寄存器下标</td><td><code>LD R, c(Ri)</code></td></tr>
+        <tr><td>T4</td><td>根：赋值到内存名字 a</td><td><code>ST a, R</code></td></tr>
+      </table>
+    </div>
+
+    <p>铺法用<span class="term">最大口啃法</span>（Maximal Munch）：从根开始，在当前结点处选择<strong>能覆盖最多结点</strong>的瓦片，啃掉这一块，再对剩余的每棵子树递归重复。</p>
+
+    <p><strong>例 8.3-A（a := b + c[i] 的完整树覆盖）：</strong>设数组 c 在静态区、元素 4 字节，且下标已换算成字节偏移（换算本身见 8.4 的第 (4) 句）。表达式树与覆盖结果：</p>
+
+    <div class="figure">
+      <div class="mermaid">
+flowchart TB
+  R["根：赋值到 a → 瓦片 T4"] --> P["加 → 瓦片 T2"]
+  P --> B["b → 瓦片 T1"]
+  P --> X["下标取值 → 瓦片 T3"]
+  X --> CB["基址 c"]
+  X --> I["i → 瓦片 T1"]
+  classDef hot fill:#fbeedd,stroke:#c4651f,stroke-width:2.5px,color:#c4651f;
+  class R,P,X hot;
+      </div>
+      <div class="caption">图 8.1 表达式树与瓦片覆盖：T4 啃根、T2 啃「加」、T3 一口啃掉整个下标取值，两个叶子各由 T1 收尾。</div>
+    </div>
+
+    <p>逐块归约、自底向上放出指令：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>步</th><th>啃掉的子树</th><th>瓦片</th><th>生成指令</th></tr>
+        <tr><td>1</td><td>叶子 i</td><td>T1</td><td><code>LD R0, i</code></td></tr>
+        <tr><td>2</td><td>下标取值（基址 c，下标在 R0）</td><td>T3</td><td><code>LD R1, c(R0)</code>　← 一条指令吃掉 c[i] 的地址计算 + 取数</td></tr>
+        <tr><td>3</td><td>叶子 b</td><td>T1</td><td><code>LD R2, b</code></td></tr>
+        <tr><td>4</td><td>加（R2 与 R1）</td><td>T2</td><td><code>ADD R1, R2, R1</code></td></tr>
+        <tr><td>5</td><td>根：赋值到 a</td><td>T4</td><td><code>ST a, R1</code></td></tr>
+      </table>
+    </div>
+
+    <p>合计代价：2 + 2 + 2 + 1 + 2 = <strong>9</strong>。关键在第 2 步：T3 这口「大瓦片」把「算地址、取内容」压进了一条 <code>LD R1, c(R0)</code>——若瓦片盒里没有它，就得拆成「算偏移、加基址、间接取数」三条，多付两次访存税。<strong>瓦片越大，砖缝（多余访存）越少。</strong></p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>指令选择 = 铺地砖：指令库是瓦片盒，表达式树是地面，最大口啃法从根往下贪心铺。目标机的指令越「强」（一条指令能干的事越多，即瓦片越大），铺出来的砖缝越少，代码越省。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>以为最大口啃法给出最优覆盖。它是<strong>贪心</strong>：瓦片重叠时，当前啃最大口可能逼得剩余子树只能用贵瓦片。真正保证代价最小的是动态规划式的最优覆盖；工程上贪心 + 一套好瓦片已足够好，这正是 8.1「NP 难 → 启发式」的又一例。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 8.3-1</div>
+              <div class="q-text">什么是瓦片？最大口啃法每一步做什么？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              瓦片 = 一条目标指令对应的树型模板。Maximal Munch：在当前结点选覆盖结点最多的瓦片，啃掉后对各子树递归。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 8.3-2</div>
+              <div class="q-text">为什么说「瓦片越大越好」？贪心何时失灵？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              大瓦片把多次访存压进一条指令，砖缝少。瓦片重叠时贪心啃大口可能逼剩余子树用贵瓦片，此时最优覆盖优于最大口。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============================================================
+      8.4 寄存器分配（核心例题）
+    ============================================================ -->
+    <h2><span class="sec-no">8.4</span>寄存器分配：两个寄存器怎么周转</h2>
+
+    <p>8.3 的例子随手用了 R0、R1、R2 三个寄存器。真实机器寄存器有限——把条件推到极端：<strong>只有 R0、R1 两个</strong>。这一节做本章的核心例题：先逐条做指令选择，再演示 getReg 式的分配全程，最后用图着色给出全局视角。</p>
+
+    <p>记账工具是两本账：<span class="term">寄存器描述符</span>（Register Descriptor）记录每个寄存器当前持有哪些名字的值；<span class="term">地址描述符</span>（Address Descriptor）记录每个名字的值当前在哪些位置（某寄存器、内存、或两者）。分配器 <code>getReg</code> 为操作数找寄存器的纪律：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>情形</th><th>动作</th></tr>
+        <tr><td>① 名字已在某寄存器</td><td>直接用，零代价</td></tr>
+        <tr><td>② 有空寄存器</td><td>LD 进来</td></tr>
+        <tr><td>③ 无空寄存器</td><td>优先挑「值已有内存副本或此后不再活跃」的寄存器，直接腾（免 ST）；都不行就选「下次使用最远」的，先生成 ST 溢出再腾</td></tr>
+      </table>
+    </div>
+
+    <p><strong>例 8.4-A（核心例题）：</strong>基本块计算 <code>x := (a + b) * (c - d) + e[i]</code>，三地址码与活跃区间如下（a、b、c、d、e、i、x 在内存，字长 4 字节，e 为静态数组）：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>编号</th><th>三地址码</th><th>临时量的活跃区间（定义点 → 最后使用点）</th></tr>
+        <tr><td>(1)</td><td><code>t1 := a + b</code></td><td>t1：(1) → (3)</td></tr>
+        <tr><td>(2)</td><td><code>t2 := c - d</code></td><td>t2：(2) → (3)</td></tr>
+        <tr><td>(3)</td><td><code>t3 := t1 * t2</code></td><td>t3：(3) → (5)</td></tr>
+        <tr><td>(4)</td><td><code>t4 := e[i]</code></td><td>t4：(4) → (5)</td></tr>
+        <tr><td>(5)</td><td><code>t5 := t3 + t4</code></td><td>t5：(5) → (6)</td></tr>
+        <tr><td>(6)</td><td><code>x := t5</code></td><td>x：块出口仍活跃</td></tr>
+      </table>
+    </div>
+
+    <p>全程推演，一步不跳。每行给出生成的指令与两本账的即时状态：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>步</th><th>语句</th><th>生成指令</th><th>寄存器描述符 R0 / R1</th><th>关键地址描述符变化</th><th>决策理由</th></tr>
+        <tr><td>1</td><td>(1) t1 := a + b</td><td><code>LD R0, a</code><br><code>LD R1, b</code><br><code>ADD R0, R0, R1</code></td><td>R0: t1<br>R1: ∅</td><td>t1: {R0}；a、b: {内存}</td><td>情形②两次；运算后 a、b 已死且有内存副本，寄存器直接弃用</td></tr>
+        <tr><td>2</td><td>(2) t2 := c - d</td><td><code>LD R1, c</code><br><code>ST t1, R0</code>　★溢出<br><code>LD R0, d</code><br><code>SUB R1, R1, R0</code></td><td>R0: ∅<br>R1: t2</td><td>t1: {内存}；t2: {R1}；c、d: {内存}</td><td>装 c 用情形②；装 d 时无空寄存器：R0 的 t1 之后 (3) 还要用且只住 R0 → 情形③，溢出 t1（ST），再 LD d</td></tr>
+        <tr><td>3</td><td>(3) t3 := t1 * t2</td><td><code>LD R0, t1</code><br><code>MUL R0, R0, R1</code></td><td>R0: t3<br>R1: ∅</td><td>t3: {R0}；t1: {内存}；t2 死亡</td><td>t1 只在内存 → 情形②重载；运算后 t1、t2 均死</td></tr>
+        <tr><td>4</td><td>(4) t4 := e[i]</td><td><code>LD R1, i</code><br><code>MUL R1, R1, #4</code><br><code>LD R1, e(R1)</code></td><td>R0: t3<br>R1: t4</td><td>t4: {R1}；i: {内存}</td><td>下标换算：i × 4 得字节偏移；下标寻址 <code>e(R1)</code> 一口吃掉「加基址 + 取数」</td></tr>
+        <tr><td>5</td><td>(5) t5 := t3 + t4</td><td><code>ADD R0, R0, R1</code></td><td>R0: t5<br>R1: ∅</td><td>t5: {R0}；t3、t4 死亡</td><td>两操作数都在寄存器 → 情形①×2</td></tr>
+        <tr><td>6</td><td>(6) x := t5</td><td><code>ST x, R0</code></td><td>R0: x<br>R1: ∅</td><td>x: {R0, 内存}</td><td>x 出块仍活跃 → 必须写回内存</td></tr>
+      </table>
+    </div>
+
+    <p>最终目标代码（14 条）：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>#</th><th>指令</th><th>代价</th><th>#</th><th>指令</th><th>代价</th></tr>
+        <tr><td>1</td><td><code>LD R0, a</code></td><td>2</td><td>8</td><td><code>LD R0, t1</code></td><td>2</td></tr>
+        <tr><td>2</td><td><code>LD R1, b</code></td><td>2</td><td>9</td><td><code>MUL R0, R0, R1</code></td><td>1</td></tr>
+        <tr><td>3</td><td><code>ADD R0, R0, R1</code></td><td>1</td><td>10</td><td><code>LD R1, i</code></td><td>2</td></tr>
+        <tr><td>4</td><td><code>ST t1, R0</code>　★</td><td>2</td><td>11</td><td><code>MUL R1, R1, #4</code></td><td>2</td></tr>
+        <tr><td>5</td><td><code>LD R1, c</code></td><td>2</td><td>12</td><td><code>LD R1, e(R1)</code></td><td>2</td></tr>
+        <tr><td>6</td><td><code>LD R0, d</code></td><td>2</td><td>13</td><td><code>ADD R0, R0, R1</code></td><td>1</td></tr>
+        <tr><td>7</td><td><code>SUB R1, R1, R0</code></td><td>1</td><td>14</td><td><code>ST x, R0</code></td><td>2</td></tr>
+        <tr><td colspan="5">合计代价</td><td><strong>24</strong></td></tr>
+      </table>
+    </div>
+
+    <p>整个基本块只溢出一次（第 4 条 ST t1），外加一次重载（第 8 条 LD R0, t1）。为什么溢出的偏偏是 t1？纪律③说得很清楚：当时 R0 持 t1（之后还要用，但此刻只能给它配内存副本），R1 的 b 已死——先腾「死了的」，再腾「有副本的」，万不得已才腾「活着且没副本的」，并优先选下次使用最远的。</p>
+
+    <p><strong>全局视角：图着色。</strong>把「谁和谁不能同住一个寄存器」画成<span class="term">冲突图</span>（Interference Graph）：结点 = 每个临时量/变量；两个名字在<strong>某个程序点同时活跃</strong>就在其间连边。K 个寄存器够用 ⟺ 图可 K 着色（同色结点共用一个寄存器，因为它们永不同时活着）。</p>
+
+    <p><strong>例 8.4-B（冲突图与溢出决策）：</strong>换一段三地址码来制造张力：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>编号</th><th>三地址码</th><th>该点之后仍活跃的名字</th></tr>
+        <tr><td>(1)</td><td><code>t1 := a + b</code></td><td>t1</td></tr>
+        <tr><td>(2)</td><td><code>t2 := c - d</code></td><td>t1, t2　→ 连边 t1—t2</td></tr>
+        <tr><td>(3)</td><td><code>t3 := t1 + t2</code></td><td>t1, t2（供 (4)），t3（供 (5)）→ 连边 t1—t3、t2—t3</td></tr>
+        <tr><td>(4)</td><td><code>t4 := t1 * t2</code></td><td>t3, t4　→ 连边 t3—t4</td></tr>
+        <tr><td>(5)</td><td><code>x := t3 + t4</code></td><td>x</td></tr>
+      </table>
+    </div>
+
+    <div class="figure">
+      <div class="mermaid">
+flowchart LR
+  T1["t1"] --- T2["t2"]
+  T1 --- T3["t3"]
+  T2 --- T3
+  T3 --- T4["t4"]
+  classDef hot fill:#fbeedd,stroke:#c4651f,stroke-width:2.5px,color:#c4651f;
+  class T1,T2,T3 hot;
+      </div>
+      <div class="caption">图 8.2 冲突图：t1、t2、t3 两两相连构成三角形；t4 挂在 t3 上。</div>
+    </div>
+
+    <p>三角形需要 3 种颜色——<strong>2 个寄存器不可着色，必须溢出</strong>。溢出谁？选代价最小的：t1、t2 各被使用 2 次，t3 只被使用 1 次（在 (5)），溢出 t3 只需在 (3) 后加一条 ST、(5) 前加一条 LD，重载次数最少。溢出后 t1、t2 分住 R0、R1，剩余冲突图退化为一条链，2 色足够。这就是<span class="term">溢出</span>（Spill）的决策逻辑：不是「随便扔一个」，而是扔「使用最少、重载最便宜」的。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>寄存器分配的两副面孔：基本块内的 getReg 是<strong>边走边扔</strong>的在线贪心（两本账 + 三条纪律）；图着色是<strong>先看完全局再排座次</strong>的离线方法（同时活跃 ⟺ 不能同色）。两者都在逼近同一个 NP 难问题。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>以为溢出「随便扔一个」就行。溢出谁直接决定访存次数：扔了马上要用的，等于白溢出还多付两条指令（ST + LD）；纪律是——优先扔「已死」「有内存副本」的，其次「下次使用最远 / 使用次数最少」的。例 8.4-B 里溢出 t1 而非 t3，会多一次重载。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 8.4-1</div>
+              <div class="q-text">两本账各记什么？getReg 无空寄存器时按什么顺序挑牺牲品？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              寄存器描述符记「寄存器里有谁」；地址描述符记「名字的值在哪」。挑牺牲品：先挑值已死或有内存副本的（免 ST），再挑下次使用最远的（先 ST 再腾）。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 8.4-2</div>
+              <div class="q-text">冲突图的建边规则？出现三角形对 2 个寄存器意味着什么、怎么办？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              两个名字在某程序点同时活跃就连边。三角形需 3 色 → 2 寄存器不够 → 溢出「使用最少、重载最便宜」的结点，再重新着色。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============================================================
+      8.5 求值顺序
+    ============================================================ -->
+    <h2><span class="sec-no">8.5</span>求值顺序：先算哪棵子树，差一个寄存器</h2>
+
+    <p>8.4 的第 (2) 步是被迫溢出的：算到一半发现寄存器不够。可如果<strong>换个子表达式计算顺序</strong>，有些溢出根本不会发生。这一节把「先算谁」量化成一个可手算的标号。</p>
+
+    <p><span class="term">Ershov 数</span>（Ershov Number，Sethi–Ullman 标号）给表达式树每个结点标一个数：</p>
+
+    <div class="formula">label(叶子) = 1；label(<span class="var">n</span>) = max(<span class="var">l</span>, <span class="var">r</span>)，若 <span class="var">l</span> ≠ <span class="var">r</span>；= <span class="var">l</span> + 1，若 <span class="var">l</span> = <span class="var">r</span></div>
+
+    <p>它的含义：<strong>不溢出时计算该子树所需的最少寄存器数</strong>。配套求值规则只有一句：<strong>先算标号大的子树</strong>。</p>
+
+    <p><strong>例 8.5-A（同一表达式，两种顺序，完整对比）：</strong>计算 <code>(a + b) * c</code>。标号：a = 1，b = 1 → (a+b) 为 2；c = 1；根结点 max(2, 1) = <strong>2</strong>。</p>
+
+    <p><strong>顺序 A（先算标号大的 (a+b)）：</strong></p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>指令</th><th>峰值寄存器占用</th></tr>
+        <tr><td><code>LD R0, a</code></td><td>R0</td></tr>
+        <tr><td><code>LD R1, b</code></td><td>R0, R1</td></tr>
+        <tr><td><code>ADD R0, R0, R1</code></td><td>R0（R1 释放）</td></tr>
+        <tr><td><code>LD R1, c</code></td><td>R0, R1</td></tr>
+        <tr><td><code>MUL R0, R0, R1</code></td><td>R0</td></tr>
+        <tr><td colspan="2"><strong>峰值：2 个寄存器，5 条指令，无溢出</strong></td></tr>
+      </table>
+    </div>
+
+    <p><strong>顺序 B（先算标号小的 c）：</strong>c 先占住 R0 不动，算 (a+b) 时手头只剩 R1，必须再借 R2：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>指令</th><th>峰值寄存器占用</th></tr>
+        <tr><td><code>LD R0, c</code></td><td>R0</td></tr>
+        <tr><td><code>LD R1, a</code></td><td>R0, R1</td></tr>
+        <tr><td><code>LD R2, b</code></td><td>R0, R1, R2　★ 第三个寄存器登场</td></tr>
+        <tr><td><code>ADD R1, R1, R2</code></td><td>R0, R1</td></tr>
+        <tr><td><code>MUL R0, R1, R0</code></td><td>R0</td></tr>
+        <tr><td colspan="2"><strong>峰值：3 个寄存器</strong></td></tr>
+      </table>
+    </div>
+
+    <p>若机器只有 2 个寄存器，顺序 B 被迫溢出：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>指令</th><th>说明</th></tr>
+        <tr><td><code>LD R0, c</code></td><td>c 先算出来</td></tr>
+        <tr><td><code>ST t, R0</code></td><td>★ 腾出 R0，c 暂存内存</td></tr>
+        <tr><td><code>LD R0, a</code> / <code>LD R1, b</code> / <code>ADD R0, R0, R1</code></td><td>算 (a+b)</td></tr>
+        <tr><td><code>LD R1, t</code></td><td>★ 重载 c</td></tr>
+        <tr><td><code>MUL R0, R0, R1</code></td><td>收尾</td></tr>
+        <tr><td colspan="2"><strong>7 条指令 vs 顺序 A 的 5 条，多付一次溢出（ST + LD）</strong></td></tr>
+      </table>
+    </div>
+
+    <p>同一表达式，仅仅因为先算了「便宜的」子树，峰值寄存器从 2 涨到 3，两寄存器机器上多付 2 条访存指令。原因一句话：<strong>先算出来的值要一直占着寄存器等另一个操作数</strong>；先啃硬骨头（标号大的子树），算完只剩一个值占位，再腾出手算简单的，占压时间最短。</p>
+
+    <p>代价收束：基本块内「选指令 + 排顺序 + 分寄存器」的联合最优是 NP 难；而一旦跨出基本块，「谁还活着」不再是局部信息，需要全程序的数据流分析（活跃变量分析）——那是第9章的开场。本章的 getReg、图着色、Ershov 序，都是基本块这个「安全区」里的启发式纪律。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>求值顺序的口诀：<strong>先啃硬骨头</strong>。需要更多寄存器的子树先算，算完只剩一个值占位；Ershov 数就是每块骨头的「硬度表」。它和图着色共享同一个世界观：寄存器压力来自「值要等另一个值」的占压时间。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>以为背了 Ershov 规则就能生成最优代码。Ershov 数只保证「寄存器够用时（标号 ≤ 可用寄存器数）无溢出且最优」；标号超过可用寄存器数时仍需溢出，且带溢出的最优排序同样是 NP 难。它是纪律，不是万能钥匙。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 8.5-1</div>
+              <div class="q-text">Ershov 标号规则？标号的含义是什么？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              叶子 = 1；内部结点两子不等取大、相等加 1。含义：不溢出时算这棵子树所需的最少寄存器数。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 8.5-2</div>
+              <div class="q-text">为什么先算标号大的子树省寄存器？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              先算的值要占着寄存器等另一个操作数；先算费寄存器的子树，算完只剩一个值占位，再算简单子树时手头宽松，占压时间最短。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===== 章末五件套之 1：概念卡 ===== -->
+    <h2><span class="sec-no">🃏</span>概念卡：本章概念的一分钟画像</h2>
+    <p>翻面前先自问：这个概念我能用一句话讲清楚吗？</p>
+    <div class="flip-grid">
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 1</div>
+            <div class="q-text">指令选择（Instruction Selection）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">为每条三地址语句挑选目标指令序列的过程；系统化做法是表达式树的瓦片覆盖。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">同一语句常有多种实现（INC vs LD/ADD/ST），选错代码膨胀、白占寄存器。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">铺地砖：指令是瓦片，表达式树是地面，大瓦片砖缝少。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为是机械查表——最优选择依赖上下文；最大口啃法是贪心非最优。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">本章 8.3；实际编译器的指令选择器（如树模式匹配 + 动态规划）。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 2</div>
+            <div class="q-text">寄存器描述符与地址描述符（Register / Address Descriptor）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">两本账：寄存器描述符记「每个寄存器持有哪些名字」；地址描述符记「每个名字的值在哪些位置」。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">没有账本就不知道谁可直接用、谁要 LD、腾寄存器时要不要先 ST。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">仓库的进出库台账：货架（寄存器）上有什么，每件货（名字）还有几个副本在哪。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">只记一本账——漏记「内存副本仍在」会导致多余的 ST。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">8.4 getReg 全程；一切基本块内寄存器分配器的基础数据结构。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 3</div>
+            <div class="q-text">图着色分配（Graph Coloring Allocation）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">建冲突图（同时活跃即连边），K 个寄存器可分配 ⟺ 图可 K 着色；不可着色则溢出后重来。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">把寄存器分配从「边走边扔」升级为「全局排座次」，减少盲目溢出。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">排会议室：时间冲突的会不能订同一间；一间房就是一种颜色。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为不可 K 着色就编译失败——还可以溢出，把图改稀再着色。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">8.4；GCC/LLVM 的全局寄存器分配即以它为骨架（需第9章的活跃分析供料）。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 4</div>
+            <div class="q-text">溢出（Spill）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">寄存器不够时，把某名字的值 ST 到内存（之后用时再 LD 重载）的腾出动作。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">寄存器是稀缺资源，溢出是「花两条访存指令买一个寄存器」的赎买机制。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">桌面太小，把暂时不用的资料先收进抽屉，要用再取。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">随便溢出一个——纪律是先溢出「已死/有副本」的，再溢出「下次使用最远、使用最少」的。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">8.4 两个例子；循环内变量溢出代价会被迭代次数放大，是优化重点。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 5</div>
+            <div class="q-text">求值顺序（Evaluation Order）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">子表达式计算的先后安排；Ershov 数标出每棵子树的寄存器需求，规则是先算标号大的。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">同一表达式不同顺序峰值寄存器可差 1 个甚至更多，直接决定是否溢出。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">先啃硬骨头：难的算完只剩一个值占位，再算简单的手头宽松。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为它只影响寄存器不影响结果——对含副作用/浮点的表达式，顺序还影响语义与精度。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">8.5；第9章的指令调度会把它推广到基本块之外。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 6</div>
+            <div class="q-text">寻址模式（Addressing Mode）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">指令说明「操作数在哪」的方式：绝对地址、寄存器、立即数、下标 c(R)、间接 *R、间接下标 *c(R)。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">第7章的名字住处（绝对地址、帧指针+偏移、下标）靠它落成指令操作数。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">取快递的方式：报门牌号（绝对）、报「前台往左第 c 格」（下标）、报「柜号写在纸条上」（间接）。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">忽略附加代价——c(R) 与 *c(R) 都加 1，数指令条数而非代价会误判快慢。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">8.2 代价模型、8.3 瓦片 T3；数组访问 c[i] 落地的标准方式。</span></div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- ===== 章末五件套之 2：分层习题 ===== -->
+    <h2><span class="sec-no">📝</span>分层习题</h2>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>指令选择与寄存器分配，哪个先做？它们的目标分别是什么？为什么说「谁也离不开谁」？</div>
+      <details>
+        <summary>提示</summary>
+        <p>想想：选一条指令时是否需要知道还有几个寄存器可用？分配寄存器时是否已经有了指令？</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p>表面顺序是先指令选择、再寄存器分配（本章的讲法）；但两者互相依赖：指令选择决定用几个寄存器（选 <code>ADD R0, R0, R1</code> 要两个操作数都在寄存器），寄存器余量反过来限制指令选择（只剩一个寄存器时，某些瓦片根本铺不上）。指令选择的目标是<strong>指令少、代价低</strong>；寄存器分配的目标是<strong>溢出少</strong>。因为互相牵制，实际编译器常交替或联合考虑二者——这正是块内联合最优 NP 难的直观原因。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span><code>LD R1, 8(R0)</code> 与 <code>LD R1, *8(R0)</code> 各取到什么？哪一个对应「数组元素 c[i]」，哪一个对应「指针解引用」？</div>
+      <details>
+        <summary>提示</summary>
+        <p>下标模式的有效地址是 c + R 的内容；间接下标在此基础上再多取一次。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p><code>LD R1, 8(R0)</code>：取地址 (8 + R0 的内容) 处的<strong>内容</strong>——一次访存，正是「基址 + 偏移」的数组元素 c[i]（c=8，i 在 R0）。<code>LD R1, *8(R0)</code>：先取地址 (8 + R0) 处的内容，把它<strong>当作新地址再取一次</strong>——两次访存，对应「指针解引用」（如 *(p + 8)，结构体里存的是指针）。两者代价同为 2，但访存语义差一层。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>基本块：(1) <code>t1 := a - b</code>　(2) <code>t2 := a + b</code>　(3) <code>t3 := t1 * t2</code>　(4) <code>x := t3</code>。只有 R0、R1 两个寄存器，a、b 在内存，x 出口活跃。用 getReg 走完全程：逐条写出生成的指令、每步的寄存器描述符与地址描述符，并指出是否发生溢出。</div>
+      <details>
+        <summary>提示</summary>
+        <p>先列活跃区间：t1 活到 (3)，t2 活到 (3)，a、b 在 (2) 之后全死。关键决策点在第 (2) 条：算 t2 时 t1 还活着且只占一个寄存器，另一个操作数还缺一个寄存器——够不够？</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p>(1) <code>LD R0, a</code>（R0: a）；<code>LD R1, b</code>（R1: b）；<code>SUB R0, R0, R1</code> → R0: t1，R1: ∅。注意 a、b 此后还要用于 (2)，但它们都有内存副本，寄存器可直接弃用（地址描述符 a、b: {内存}）；地址描述符 t1: {R0}。</p>
+          <p>(2) 需要 a、b 同时在寄存器：<code>LD R1, a</code>（R1: a）；装 b 时无空寄存器——R0 的 t1 活跃且无内存副本，只能先 <code>ST t1, R0</code> 溢出（★），再 <code>LD R0, b</code>；<code>ADD R1, R1, R0</code> → R1: t2，R0: ∅。地址描述符 t1: {内存}，t2: {R1}；a、b 用完即死。</p>
+          <p>(3) <code>LD R0, t1</code>（重载）；<code>MUL R0, R0, R1</code> → R0: t3，R1: ∅（t1、t2 死）。</p>
+          <p>(4) <code>ST x, R0</code> → x: {R0, 内存}。</p>
+          <p>结论：发生 <strong>1 次溢出</strong>（ST t1）+ 1 次重载。目标代码共 <strong>10 条</strong>：<code>LD R0,a / LD R1,b / SUB R0,R0,R1 / LD R1,a / ST t1,R0 / LD R0,b / ADD R1,R1,R0 / LD R0,t1 / MUL R0,R0,R1 / ST x,R0</code>，合计代价 2+2+1+2+2+2+1+2+1+2 = <strong>17</strong>。溢出不可避免的原因：执行 (2) 的瞬间 t1、a、b 三个值需要同时在场，超过 2 个寄存器。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>给表达式 (a + b) * (c + d)：（1）标注每个结点的 Ershov 数；（2）写出 3 寄存器无溢出的指令序列；（3）说明只有 2 个寄存器时在哪里被迫溢出。</div>
+      <details>
+        <summary>提示</summary>
+        <p>叶子全为 1；(a+b) 与 (c+d) 的两子标号相等，各 +1；根结点两子相等再 +1。3 寄存器时先算任一边（对称），注意「先算出的结果要占一个寄存器等另一边」。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p>（1）a=b=c=d=1；(a+b)：两子相等 → 1+1 = 2；(c+d) 同理 = 2；根：两子均为 2、相等 → 2+1 = <strong>3</strong>。即不溢出至少需 3 个寄存器。</p>
+          <p>（2）3 寄存器序列：<code>LD R0, a</code>；<code>LD R1, b</code>；<code>ADD R0, R0, R1</code>（左边算完占 R0）；<code>LD R1, c</code>；<code>LD R2, d</code>；<code>ADD R1, R1, R2</code>（右边算完占 R1）；<code>MUL R0, R0, R1</code>。峰值 3，无溢出。</p>
+          <p>（3）只有 2 个寄存器：左边算完占 R0 后，算右边 (c+d) 需要两个寄存器，手头只剩 R1 → 被迫 <code>ST t1, R0</code> 溢出左边结果；算完右边后 <code>LD R1, t1</code> 重载，<code>MUL R0, R0, R1</code>。溢出点在「左子树算完、右子树开算」之间——根标号 3 与可用寄存器 2 的差额早已预言了这一点。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l3">L3 建模应用</span>为二次方程判别式 <code>d := b * b - 4 * a * c</code>（a、b、c 在内存，d 写回内存，d 出口活跃）在 8.2 的两寄存器机器上生成目标代码。要求：写出三地址码、目标指令序列、每条代价与合计，并说明你做的每个分配决策。允许把 <code>4 * a</code> 用立即数运算合并。</div>
+      <details>
+        <summary>提示</summary>
+        <p>三地址码：t1 := b * b；t2 := 4 * a（可用 <code>MUL R, R, #4</code> 合进指令选择）；t3 := t2 * c；t4 := t1 - t3；d := t4。注意 b 用两次、不必 LD 两次；t1 与 t2/t3 的生命期错开吗？</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p>三地址码：(1) t1 := b * b；(2) t2 := 4 * a；(3) t3 := t2 * c；(4) t4 := t1 - t3；(5) d := t4。活跃区间：t1 活到 (4)，t2 活到 (3)，t3 活到 (4)。</p>
+          <p>指令序列与决策：</p>
+          <p>(1) <code>LD R0, b</code>（2）；<code>MUL R0, R0, R0</code>（1）——b 用两次，一次 LD 即可，R0 自乘；R0: t1。</p>
+          <p>(2) <code>LD R1, a</code>（2）；<code>MUL R1, R1, #4</code>（2）——立即数瓦片把「4×」并进一条；R1: t2。</p>
+          <p>(3) MUL 需要 t2 与 c 同时在寄存器：R1 住着 t2，c 只能装入 R0——但 R0 的 t1 活到 (4) 且无内存副本，只能先溢出：<code>ST t1, R0</code>（2，★溢出）；<code>LD R0, c</code>（2）；<code>MUL R1, R1, R0</code>（1）→ R1: t3，R0: ∅。</p>
+          <p>(4) <code>LD R0, t1</code>（2，重载）；<code>SUB R0, R0, R1</code>（1）→ R0: t4。(5) <code>ST d, R0</code>（2）。</p>
+          <p>合计：2+1+2+2+2+2+1+2+1+2 = <strong>17</strong>，含 1 次溢出。关于求值顺序：左子树 b*b 与右子树 4*a*c 的 Ershov 标号均为 2，根标号 = 3 &gt; 可用寄存器 2——标号早已预言至少溢出一次；我们的序列恰好只溢出一次（ST t1 + LD 重载），已达 2 寄存器约束下的最优。</p>
+        </div>
+      </details>
+    </div>
+
+    <!-- ===== 章末五件套之 3：自测 ===== -->
+    <h2><span class="sec-no">✍️</span>本章自测</h2>
+    <p class="quiz-hint">点击选项判分，答错会给出原因。</p>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 1</div>
+      <div class="q-stem">在 8.2 的代价模型下，LD R1, 40(R2) 的代价是多少？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 1</li>
+        <li data-opt="b">B. 2</li>
+        <li data-opt="c">C. 3</li>
+        <li data-opt="d">D. 40</li>
+      </ul>
+      <div class="quiz-explain">解析：B 对——1（指令本身）+ 0（R1 寄存器）+ 1（下标模式 40(R2)）= 2。A 错：忘了下标寻址的附加代价，1 是全寄存器指令（如 ADD R0,R1,R2）的代价；C 错：该指令只有两个操作数位置，加不出第三份；D 错：40 是地址偏移量，不是代价单位。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 2</div>
+      <div class="q-stem">getReg 需要腾出一个寄存器时，优先选择哪一种？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 随便挑一个，反正都要 ST</li>
+        <li data-opt="b">B. 持有「值已有内存副本或此后不再活跃」的名字的寄存器</li>
+        <li data-opt="c">C. 持有「下次使用最近」的名字的寄存器</li>
+        <li data-opt="d">D. 编号最小的寄存器</li>
+      </ul>
+      <div class="quiz-explain">解析：B 对——这种寄存器腾出时连 ST 都不用生成（值已有副本）或永远不再用（死了），零代价。A 错：乱腾可能把「活着且没副本」的值扔掉，白付 ST+LD；C 错：方向反了，应选下次使用<strong>最远</strong>的（最近要用的腾出去马上又得重载）；D 错：寄存器编号与值的生命期毫无关系。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="c">
+      <div class="q-no">自测 3</div>
+      <div class="q-stem">冲突图里出现一个三角形（三个名字两两同时活跃），而机器只有 2 个寄存器。这意味着什么？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 程序无法编译</li>
+        <li data-opt="b">B. 调整求值顺序必然能消除冲突</li>
+        <li data-opt="c">C. 2 色不可着色，必须至少溢出一个结点，优先溢出使用最少、重载最便宜的</li>
+        <li data-opt="d">D. 说明活跃性分析算错了</li>
+      </ul>
+      <div class="quiz-explain">解析：C 对——三角形是 3 色团，2 色必败；出路是溢出（如例 8.4-B 溢出只用 1 次的 t3）。A 错：溢出机制正是为此存在；B 错：冲突由活跃区间决定，对给定三地址码它是固定事实，换顺序改的是另一段代码；D 错：三角形恰恰说明三个名字确实同时活跃，分析没错。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 4</div>
+      <div class="q-stem">用 Ershov 最优顺序计算 (a + b) * c，至少需要几个寄存器？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 1</li>
+        <li data-opt="b">B. 2</li>
+        <li data-opt="c">C. 3</li>
+        <li data-opt="d">D. 4</li>
+      </ul>
+      <div class="quiz-explain">解析：B 对——(a+b) 标号 2、c 标号 1，根 = max(2,1) = 2，先算 (a+b) 即可峰值 2。A 错：OP 指令要求两个操作数都在寄存器，a+b 本身就需 2 个；C 错：3 是先算 c（坏顺序）的峰值，Ershov 顺序的意义正是避开它；D 错：无依据。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 5</div>
+      <div class="q-stem">关于「基本块内的最优代码生成」，下列哪句是对的？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 有多项式算法，所以按算法做即可</li>
+        <li data-opt="b">B. 它是 NP 难问题，因此实际编译器用 getReg、图着色、Ershov 序这类启发式</li>
+        <li data-opt="c">C. 它与寄存器个数无关</li>
+        <li data-opt="d">D. 跨基本块后问题反而变简单</li>
+      </ul>
+      <div class="quiz-explain">解析：B 对——NP 难是本章全部启发式存在的理由。A 错：恰恰没有已知多项式算法；C 错：可用寄存器数直接决定是否要溢出、溢多少；D 错：跨块需要全局活跃变量分析（第9章），只会更复杂。</div>
+    </div>
+
+    <!-- ===== 章末五件套之 4：三句话复述 ===== -->
+    <div class="retell">
+      <h3>🗣️ 用自己的话，三句话讲完本章</h3>
+      <p>对着空气（或室友）说出这三句。说卡壳的那句，回去重读对应小节。</p>
+      <details>
+        <summary>句1：这章解决什么问题？——</summary>
+        <div class="retell-answer">参考答案：把三地址码翻译成又快又省寄存器的机器指令——要同时回答选哪条指令、值放哪个寄存器、先算哪棵子树。</div>
+      </details>
+      <details>
+        <summary>句2：核心机制是什么？——</summary>
+        <div class="retell-answer">参考答案：代价模型给指令定价；指令选择用瓦片做表达式树覆盖（最大口啃法）；寄存器分配用两本描述符记账的 getReg（无处可放就按纪律溢出），全局版是冲突图的图着色；求值顺序用 Ershov 数——先算费寄存器的子树。</div>
+      </details>
+      <details>
+        <summary>句3：它和前后章怎么分工？——</summary>
+        <div class="retell-answer">参考答案：第6章产三地址码、第7章给名字定址，本章把它们落成目标代码；块内最优是 NP 难，跨块的活跃性分析与优化交给第9章。</div>
+      </details>
+    </div>
+
+    <!-- ===== 章末五件套之 5：间隔复习计划 ===== -->
+    <div class="review-plan">
+      <h3>🔁 间隔复习计划</h3>
+      <p>回忆本身比重读有效 10 倍。到点只做一件事：翻卡 + 重做标记题。</p>
+      <table>
+        <tr><th>时间点</th><th>复习内容</th><th>预计用时</th></tr>
+        <tr><td>第 1 天</td><td>全部概念卡 + 回忆卡 8.1-1 至 8.5-2；重算例 8.4-A 的 14 条指令</td><td>15 分钟</td></tr>
+        <tr><td>第 3 天</td><td>概念卡 2、4、5（描述符/溢出/顺序）+ 自测错题 + 重做 L2 两题</td><td>12 分钟</td></tr>
+        <tr><td>第 7 天</td><td>三句话复述 + 重画图 8.2 冲突图并重做 L3 判别式</td><td>15 分钟</td></tr>
+        <tr><td>第 15 天</td><td>只重做合上书挑战；能全过就毕业</td><td>15 分钟</td></tr>
+      </table>
+    </div>
+
+    <!-- 合上书挑战 -->
+    <div class="final-challenge">
+      <h3>📕 合上书挑战</h3>
+      <p class="fc-sub">现在关掉这个页面，拿一张纸，凭记忆完成以下任务。全部做完再回来核对——这是本章真正的毕业考试。</p>
+      <ol id="challenge-list">
+        <li><span class="fc-check"></span>写出代码生成三大难题，并为每个难题补一个「选不好会怎样」的反例。</li>
+        <li><span class="fc-check"></span>默写四类指令、六种寻址模式与代价公式，算出 LD R1, *8(R0) 的代价。</li>
+        <li><span class="fc-check"></span>重做 a := b + c[i] 的瓦片覆盖五步，标出每步用的瓦片与合计代价。</li>
+        <li><span class="fc-check"></span>重做例 8.4-A：从六条三地址码到 14 条目标指令，指出唯一的溢出点与理由。</li>
+        <li><span class="fc-check"></span>画出例 8.4-B 的冲突图，解释 2 个寄存器为什么不够、该溢出谁。</li>
+        <li><span class="fc-check"></span>用 (a + b) * c 的两种求值顺序，说明 Ershov 规则为何省寄存器（峰值 2 vs 3）。</li>
+        <li><span class="fc-check"></span>一句话回答本章主线问题：三地址码如何变成又快又省寄存器的机器指令？</li>
+      </ol>
+    </div>
+
+    <div class="complete-zone">
+      <button class="btn-complete" id="btn-complete" onclick="markDone()">✓ 我已完成本章（含合上书挑战）</button>
+    </div>
+
+    <div class="chapter-nav">
+      <a href="chapter-07.html"><span class="nav-dir">← 上一章</span>第7章 运行环境</a>
+      <a href="chapter-09.html" class="next"><span class="nav-dir">下一章 →</span>第9章 机器无关优化</a>
+    </div>
+
+  </div>
+</div>
+
+<footer class="footer">
+  <div class="wrap">第8章 代码生成 · 编译原理互动讲义 · 基于 Aho, Lam, Sethi &amp; Ullman《编译原理》(第2版)</div>
+</footer>
+
+<script src="/lectures-assets/mermaid.min.js"></script>
+<script>
+mermaid.initialize({
+  startOnLoad: true,
+  theme: "base",
+  themeVariables: {
+    primaryColor: "#e3edf7",
+    primaryBorderColor: "#1d5f9e",
+    primaryTextColor: "#1d5f9e",
+    lineColor: "#5c554b",
+    secondaryColor: "#fbeedd",
+    tertiaryColor: "#f5f1e8",
+    fontFamily: "-apple-system, PingFang SC, sans-serif",
+    fontSize: "14px"
+  },
+  flowchart: { curve: "linear", htmlLabels: false }
+});
+</script>
+<script>
+// 自测题判分（原样复用，勿改）
+document.querySelectorAll(".quiz-block").forEach(block => {
+  const answer = block.dataset.answer;
+  const explain = block.querySelector(".quiz-explain");
+  block.querySelectorAll(".quiz-opts li").forEach(li => {
+    li.addEventListener("click", () => {
+      const opts = block.querySelectorAll(".quiz-opts li");
+      opts.forEach(o => o.classList.add("disabled"));
+      if (li.dataset.opt === answer) {
+        li.classList.add("correct");
+      } else {
+        li.classList.add("wrong");
+        block.querySelector(`[data-opt="${answer}"]`).classList.add("correct");
+      }
+      explain.classList.add("show");
+    });
+  });
+});
+
+// 合上书清单打勾（原样复用，勿改）
+document.querySelectorAll("#challenge-list li").forEach(li => {
+  li.addEventListener("click", () => li.classList.toggle("checked"));
+});
+
+// 完成标记 → localStorage（章号：8）
+const KEY = "comp_progress_v1";
+function loadProgress() {
+  try { return JSON.parse(localStorage.getItem(KEY)) || {}; } catch (e) { return {}; }
+}
+const progress = loadProgress();
+const btn = document.getElementById("btn-complete");
+if (progress[8] && progress[8].done) {
+  btn.textContent = "✓ 已完成 · 再次点击重置";
+  btn.classList.add("done");
+}
+function markDone() {
+  const p = loadProgress();
+  if (p[8] && p[8].done) {
+    delete p[8];
+    btn.textContent = "✓ 我已完成本章（含合上书挑战）";
+    btn.classList.remove("done");
+  } else {
+    p[8] = { done: true, completedAt: Date.now(), reviewsDone: 0 };
+    btn.textContent = "✓ 已完成 · 复习提醒已开启";
+    btn.classList.add("done");
+  }
+  localStorage.setItem(KEY, JSON.stringify(p));
+}
+</script>
+
+</body>
+</html>

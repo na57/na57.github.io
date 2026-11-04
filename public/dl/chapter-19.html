@@ -1,0 +1,722 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第19章 近似推断 · 深度学习互动讲义</title>
+<link rel="stylesheet" href="/lectures-assets/style.css">
+</head>
+<body>
+
+<nav class="topbar">
+  <div class="topbar-inner">
+    <span class="brand"><a href="index.html" style="color:inherit">← 学习地图</a></span>
+    <span class="crumb">阶段④ · 生成模型与前沿 / 第19章</span>
+  </div>
+</nav>
+
+<div class="wrap">
+
+  <div class="lecture-head">
+    <span class="ch-label">CHAPTER 19 · 生成模型与前沿</span>
+    <h1>近似推断</h1>
+    <p class="lead">一句话副标题：前两章对付的是配分函数——分母里对全部状态的求和；本章对付同一头怪兽的另一张脸：后验推断 p(h|v) 里的求和。核心策略是把推断从"算一个分布"改造成"优化一个下界"，EM 与变分推断都是这条思路的产物。</p>
+  </div>
+
+  <!-- ===== 章首四件套之 1：全书定位 ===== -->
+  <div class="position-bar">
+    <strong>本章在主线上的位置：</strong>第17章用抽样近似求和，第18章绕开配分函数改目标函数；本章处理剩下的硬骨头——<u>训练时反复要用到的后验 p(h|v)，其分母 p(v) 同样是指数级求和</u>；解法是引入一个可调的近似分布 q，把推断变成最大化证据下界的优化问题，这套机器正是第20章 VAE 的发动机。<br>
+    第19章回答主线上的第19个问题：<strong>后验分布算不出来时，怎样把"推断"改造成"优化"，用一个好算的分布逼近它？</strong>
+    <div class="map-inline">
+      <span class="node">① 数学与机器学习基础<br>Ch1–5 数学工具与机器学习基础</span><span class="arrow">→</span>
+      <span class="node">② 现代深度网络<br>Ch6–11 前馈 · 卷积 · 序列 · 实践</span><span class="arrow">→</span>
+      <span class="node">③ 表示与推断<br>Ch13 线性因子 · Ch14 自编码器 · Ch15 表示学习 · Ch16 结构化概率模型</span><span class="arrow">→</span>
+      <span class="node here">④ 生成模型与前沿<br>Ch17 蒙特卡洛方法 · Ch18 直面配分函数 · <strong>Ch19 近似推断</strong> · Ch20 深度生成模型</span>
+    </div>
+  </div>
+
+  <!-- ===== 章首四件套之 2：学习目标 ===== -->
+  <div class="objectives">
+    <h4>🎯 学完本章，合上书你应该能：</h4>
+    <ol>
+      <li>写出贝叶斯后验公式 p(h|v) = p(h,v)/p(v)，并指出难点在分母的指数级求和</li>
+      <li>写出 ELBO 分解 log p(v) = ℒ(q) + KL(q‖p)，并说明 KL ≥ 0 如何给出下界</li>
+      <li>对小例子手算一次 ELBO 与 KL，验证 q = 真后验时 ℒ = log p(v)</li>
+      <li>写出 EM 算法的 E 步与 M 步各做什么，并说明 log p(v) 为何单调不降</li>
+      <li>写出均值场假设 q(h) = ∏ᵢqᵢ(hᵢ) 与坐标更新式 log qᵢ = E_{q₋ᵢ}[log p̃] + const，并手算一步更新</li>
+      <li>写出重参数化技巧 z = μ + σ·ε 与高斯 KL 闭式解，并说明它解决了什么梯度问题</li>
+    </ol>
+  </div>
+
+  <div class="lecture">
+
+    <!-- ===== 章首四件套之 3：推导主线图 ===== -->
+    <div class="figure">
+      <div class="mermaid">
+flowchart TB
+  A["第18章绕开了配分函数 但训练还要算后验 p h|v"] -->|"分母 p v 仍是对 2 的 n 次方个隐藏状态求和"| B["核心想法：算不出后验 就引入可调分布 q 去逼近它"]
+  B -->|"把推断变成优化"| C["ELBO 分解 log p v 等于 ELBO 加 KL 最大化下界即逼近后验"]
+  C -->|"交替固定 q 与参数"| D["EM 算法：E 步把 q 顶到真后验 M 步更新参数"]
+  D -->|"精确 E 步高维仍算不动"| E["均值场变分推断：假设各隐藏变量独立 坐标上升轮流更新"]
+  E -.->|"独立性假设低估方差 梯度仍难穿过采样"| F["遗留：重参数化让梯度回传 第20章 VAE 集大成"]
+  classDef hot fill:#fbeedd,stroke:#c4651f,stroke-width:2.5px,color:#c4651f;
+  classDef danger fill:#fae9e7,stroke:#b03a2e,stroke-width:2.5px,color:#b03a2e;
+  class C hot;
+  class E hot;
+  class F danger;
+      </div>
+      <div class="caption">本章推导主线：从"后验算不动"出发，ELBO 把推断改造成优化，EM 与均值场是同一台机器的精确版与可行版；末端红框是均值场的代价与梯度难题，直接引出第20章的 VAE。</div>
+    </div>
+
+    <!-- ================= 19.1 ================= -->
+    <h2><span class="sec-no">19.1</span>推断为什么难：后验里的求和</h2>
+
+    <p>第16章到第18章反复对付的是配分函数 Z——对全部状态求和。但带隐藏变量的模型（RBM、稀疏编码、第20章的深 Belief 网）还有第二笔账：<strong>训练每一步都要回答"给定可见变量 v，隐藏变量 h 最可能是什么"</strong>，也就是后验分布 <span class="term">p(h|v)</span>（Posterior）。由贝叶斯公式：</p>
+
+    <div class="formula">p(h|v) = <span class="frac"><span class="num-part">p(h, v)</span><span class="den-part">p(v)</span></span>，其中 p(v) = ∑<sub>h</sub> p(h, v)</div>
+
+    <p>分子好算——模型定义直接给出联合概率；分母又是那个熟悉的怪兽：<strong>对全部隐藏状态求和</strong>。h 是 100 个二值变量时，这个求和有 2¹⁰⁰ ≈ 10³⁰ 项。这与配分函数是同一头怪兽的另一张脸：Z 是对全部 (h, v) 求和，p(v) 是固定 v 对全部 h 求和，都是指数级。</p>
+
+    <p>完整手算一个小例子，看清"能算"与"算不动"的边界。两个二值隐藏变量 h = (h₁, h₂) ∈ {0,1}²，一个二值观测 v。只看 v = 0 那一行的联合概率（未归一化的联合表）：</p>
+
+    <div class="formula">p(h,v=0)：h=(0,0) ↦ 0.05，(0,1) ↦ 0.10，(1,0) ↦ 0.15，(1,1) ↦ 0.20</div>
+
+    <p>第一步，算分母——把 4 个状态加起来：</p>
+
+    <div class="formula">p(v=0) = 0.05 + 0.10 + 0.15 + 0.20 = 0.5</div>
+
+    <p>第二步，逐个除以分母，得到后验：</p>
+
+    <div class="formula">p(h|v=0) = (<span class="frac"><span class="num-part">0.05</span><span class="den-part">0.5</span></span>, <span class="frac"><span class="num-part">0.10</span><span class="den-part">0.5</span></span>, <span class="frac"><span class="num-part">0.15</span><span class="den-part">0.5</span></span>, <span class="frac"><span class="num-part">0.20</span><span class="den-part">0.5</span></span>) = (0.1, 0.2, 0.3, 0.4)</div>
+
+    <p>最可能的隐藏配置是 h = (1,1)，占后验质量 40%。<strong>为什么这里算得动？因为只有 4 个状态。</strong>把 h 换成 100 维（比如一层 RBM 隐藏单元），同样这两步就要对 2¹⁰⁰ 个状态求和再逐个相除——第17章的抽样是一类出路，本章给出另一类：<strong>不精确求和，引入一个好算的分布 q(h) 去逼近真后验</strong>。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>推断难，难在"列出所有可能性再加起来"。本章的核心思路是把这个"列表问题"换成"搜索问题"：在一族可调分布 q 里找一个最像真后验的——<strong>推断从此变成优化</strong>。这正是"变分推断"一词中"变分"的含义：在函数空间里做优化。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>把 p(h|v) 的难处与 Z 的难处当成两回事。其实两者同根同源：都是指数级状态空间上的求和。不同只在用途——Z 是归一化常数，训练里出现在梯度负相；p(v) 是边缘似然，推断里出现在后验分母。认清"同一头怪兽"才能理解为什么第17–19章的武器可以互相借用。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 19.1-1</div>
+              <div class="q-text">写出后验 p(h|v) 的贝叶斯公式，并指出哪一步算不动、为什么。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              p(h|v) = p(h,v)/p(v)，分母 p(v) = Σ_h p(h,v) 要对全部隐藏状态求和，n 个二值隐藏单元就是 2ⁿ 项，n=100 即 10³⁰。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 19.1-2</div>
+              <div class="q-text">联合表 (0.05, 0.10, 0.15, 0.20)，手算 p(v=0) 与后验 p(h|v=0)。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              p(v=0) = 0.05+0.10+0.15+0.20 = 0.5；后验 = 四项各除以 0.5 = (0.1, 0.2, 0.3, 0.4)，最可能配置 h=(1,1)。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ================= 19.2 ================= -->
+    <h2><span class="sec-no">19.2</span>把推断变成优化：ELBO 分解</h2>
+
+    <p>上一节说了解法方向：引入近似分布 q(h)。但"逼近"要有一个可优化的目标——怎么衡量 q 离真后验有多近，又怎么把"训练模型"（最大化 log p(v)）与"逼近后验"统一起来？答案是一个只用到 Jensen 不等式一步的恒等式。定义 <span class="term">证据下界</span>（ELBO, Evidence Lower Bound）：</p>
+
+    <div class="formula">ℒ(q) = E<sub>h∼q</sub>[log p(h, v)] − E<sub>h∼q</sub>[log q(h)]</div>
+
+    <p>它与真正的目标 log p(v) 之间只差一个 KL 散度：</p>
+
+    <div class="formula">log p(v) = ℒ(q) + KL( q(h) ‖ p(h|v) )</div>
+
+    <p>其中 KL(q‖p) = Σ_h q(h) log[q(h)/p(h|v)] ≥ 0，等号当且仅当 q = p 处处相等。<strong>于是 ℒ(q) ≤ log p(v)</strong>：ℒ 是 log 证据的下界。最大化 ℒ 同时做两件事——让 q 更接近真后验（缩小 KL），让 log p(v) 本身变大（抬高似然）。q 取到真后验时 KL = 0，下界收紧为等式。</p>
+
+    <p>完整手算验证这个分解。一维二值 h，固定 v，联合表 p(h=0, v) = 0.1、p(h=1, v) = 0.2。则 p(v) = 0.3，真后验 q* = (0.1/0.3, 0.2/0.3) = (1/3, 2/3)。</p>
+
+    <p><strong>第一组：q = q*。</strong>ℒ = Σ_h q(h) log[p(h,v)/q(h)]：</p>
+
+    <div class="formula">ℒ = <span class="frac"><span class="num-part">1</span><span class="den-part">3</span></span> log<span class="frac"><span class="num-part">0.1</span><span class="den-part">1/3</span></span> + <span class="frac"><span class="num-part">2</span><span class="den-part">3</span></span> log<span class="frac"><span class="num-part">0.2</span><span class="den-part">2/3</span></span> = <span class="frac"><span class="num-part">1</span><span class="den-part">3</span></span> log 0.3 + <span class="frac"><span class="num-part">2</span><span class="den-part">3</span></span> log 0.3 = log 0.3 ≈ −1.204 ✓</div>
+
+    <p>下界顶满，恰好等于 log p(v)，此时 KL(q*‖p) = 0——恒等式两边严丝合缝。</p>
+
+    <p><strong>第二组：q = (0.5, 0.5)</strong>（乱猜的均匀后验）。同样套定义：</p>
+
+    <div class="formula">ℒ = 0.5 log<span class="frac"><span class="num-part">0.1</span><span class="den-part">0.5</span></span> + 0.5 log<span class="frac"><span class="num-part">0.2</span><span class="den-part">0.5</span></span> = 0.5 log 0.2 + 0.5 log 0.4 = 0.5 log 0.08 ≈ −1.263</div>
+
+    <p>与 log p(v) ≈ −1.204 之间差了约 0.059——这个差不是误差，正是 KL(q‖真后验)：0.5log(0.5/(1/3)) + 0.5log(0.5/(2/3)) = 0.5log(3/4) + 0.5log(3/4)... 逐项算即得 0.059。q 越偏，下界越松；这就是"最大化 ℒ"会把 q 推向真后验的几何原因。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>整个变分推断的地基只有一句话：<strong>KL 散度非负，所以减去它的东西是个下界</strong>。ELBO 的另一张面孔是 ℒ = E_q[log p(v|h)] − KL(q(h)‖p(h))——"重建质量减去与先验的距离"，第20章 VAE 的损失函数就是这一形式的直接化身。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>以为最大化 ℒ 只是在逼近后验。它同时在做两件事：逼近后验（降 KL）与抬高似然（升 log p(v)）——两者共用同一个 ℒ，分不清时容易误读训练曲线。另一个误区：以为 ℒ 顶到 log p(v) 就算完了。只有 q 恰好是真后验时才顶到；q 受限于某个分布族时，ℒ 与 log p(v) 之间永远隔着一段不可消除的 KL。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 19.2-1</div>
+              <div class="q-text">写出 ELBO 分解恒等式，并说明下界何时收紧为等式。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              log p(v) = ℒ(q) + KL(q‖p(h|v))。KL ≥ 0 故 ℒ ≤ log p(v)；q = 真后验时 KL = 0，ℒ = log p(v)。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 19.2-2</div>
+              <div class="q-text">p(h=0,v)=0.1、p(h=1,v)=0.2，q=(0.5,0.5) 时 ℒ 是多少？与 log p(v) 的差是什么？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              ℒ = 0.5log0.2 + 0.5log0.4 = 0.5log0.08 ≈ −1.263；log p(v) = log 0.3 ≈ −1.204；差 ≈ 0.059，恰为 KL(q‖真后验)。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ================= 19.3 ================= -->
+    <h2><span class="sec-no">19.3</span>EM 算法：ELBO 的交替最大化</h2>
+
+    <p>ℒ(q) 里其实住着两组可调的东西：近似分布 q 与模型参数 θ（藏在 p(h,v;θ) 里）。<span class="term">EM 算法</span>（Expectation-Maximization Algorithm）是最经典的调法——<strong>坐标上升：固定一个，最大化另一个，交替进行</strong>：</p>
+
+    <ol>
+      <li><strong>E 步</strong>（Expectation）：固定 θ = θ_old，对 q 最大化 ℒ。由分解式，此时 log p(v;θ_old) 不变，最大化 ℒ 等价于最小化 KL——最优解直接写出：q*(h) = p(h|v; θ_old)，即<strong>把 q 设成当前参数下的真后验</strong>，KL 归零，ℒ 顶到 log p(v;θ_old)。</li>
+      <li><strong>M 步</strong>（Maximization）：固定 q 不动，对 θ 最大化 ℒ。注意 ℒ 的第二项 E_q[log q] 与 θ 无关，只需最大化 E_q[log p(h, v; θ)]——即<strong>在当前后验下，最大化"补全数据"的完全对数似然</strong>。</li>
+    </ol>
+
+    <p>为什么这套交替一定有效？看 log p(v) 的轨迹：E 步后 ℒ = log p(v;θ_old)（下界贴住当前值）；M 步增大 ℒ（θ_new 不比旧的差）——而 log p(v;θ_new) ≥ ℒ(θ_new) ≥ ℒ(θ_old) = log p(v;θ_old)。<strong>log 证据单调不降</strong>，所以 EM 必收敛（到局部最优）。</p>
+
+    <p>用 19.2 的小例子走一遍 E 步：设当前参数给出联合表 p(h=0,v)=0.1、p(h=1,v)=0.2。E 步令 q = (1/3, 2/3)——19.2 已算过，此时 ℒ = log 0.3，KL = 0，下界顶满。接下来 M 步拿这个 q 去重新估计 θ（比如调整联合表里的参数使 E_q[log p(h,v;θ)] 最大），完成后回到 E 步再算新后验……如此往复，log p(v) 像台阶一样一步步爬升，每一步都不允许下降。</p>
+
+    <div class="box insight">
+      <span class="box-tag">✅ 判定规则</span>
+      <p>EM 的两个硬限制：①<strong>只保证局部最优</strong>——坐标上升爬到的是离出发点最近的山头，初值不同答案不同，实践中要多次随机初始化取最好；②<strong>精确 E 步本身可能就算不动</strong>——q* = p(h|v) 正是 19.1 那个要枚举 2ⁿ 个状态的后验！EM 把推断困难原封不动地留在了 E 步里。高维模型要用 EM，必须把 E 步也近似化——这就是 19.4 均值场登场的理由。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>把 E 步的"Expectation"理解成"采样平均"。E 步的名字来自 M 步里要算的期望 E_q[log p(h,v)]，而不是第17章那种蒙特卡洛采样——经典 EM 的 E 步是<strong>精确解析</strong>地写出后验。另一个误区：以为 EM 单调不降就收敛到全局最优——单调只保证不回头，不保证爬到最高的山。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 19.3-1</div>
+              <div class="q-text">EM 的 E 步与 M 步各自固定什么、最大化什么？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              E 步：固定 θ，令 q = p(h|v;θ_old)，KL 归零，ℒ 顶到 log p(v)。M 步：固定 q，最大化 E_q[log p(h,v;θ)] 更新 θ。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 19.3-2</div>
+              <div class="q-text">为什么 EM 保证 log p(v) 单调不降？它有两个什么硬限制？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              E 步把下界贴住当前 log p(v)，M 步抬高下界，链式不等式给出单调不降。限制：只达局部最优（初值敏感）；精确 E 步高维算不动。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ================= 19.4 ================= -->
+    <h2><span class="sec-no">19.4</span>均值场变分推断与重参数化</h2>
+
+    <p>19.3 的结尾留下死结：E 步要算真后验，高维算不动。<span class="term">均值场变分推断</span>（Mean Field Variational Inference）的解法是<strong>限制 q 的分布族</strong>：假设各隐藏变量相互独立，</p>
+
+    <div class="formula">q(h) = ∏<sub>i</sub> q<sub>i</sub>(h<sub>i</sub>)</div>
+
+    <p>真后验几乎从不独立，所以 KL 无法归零，ℒ 顶不到 log p(v)——但换来的是可算性：在受限族内最大化 ℒ，对每个 qᵢ 轮流做坐标上升，最优更新式为：</p>
+
+    <div class="formula">log q<sub>i</sub>(h<sub>i</sub>) = E<sub>q₋ᵢ</sub>[log p̃(h, v)] + const</div>
+
+    <p>即：固定其他所有变量的当前近似，对联合对数概率取期望，归一化后即得 qᵢ 的新值。轮流更新直到收敛——每一步 ℒ 都不降。</p>
+
+    <p>完整手算一步坐标更新。两个二值隐藏变量，未归一化联合（v 已观测、并入常数）：log p̃(h) = h₁h₂ ln2 + h₁ ln3。更新 q₁：</p>
+
+    <div class="formula">log q₁(h₁) = E<sub>q₂</sub>[h₁h₂ ln2 + h₁ ln3] + const = h₁( ln2 · E[h₂] + ln3 ) + const</div>
+
+    <p>设当前 E[h₂] = 0.5。逐个取值算分值：h₁ = 1 时，分值 = 0.5·ln2 + ln3 = ln√2 + ln3 = <strong>ln(3√2)</strong>；h₁ = 0 时，分值 = 0。取指数还原成未归一化概率：q̃₁(1) = 3√2 ≈ 4.243，q̃₁(0) = 1。归一化：</p>
+
+    <div class="formula">q₁(1) = <span class="frac"><span class="num-part">3√2</span><span class="den-part">1 + 3√2</span></span> ≈ <span class="frac"><span class="num-part">4.243</span><span class="den-part">5.243</span></span> ≈ 0.809，q₁(0) ≈ 0.191</div>
+
+    <p>一步完成。接着用新的 E[h₁] ≈ 0.809 去更新 q₂，如此轮流，直到 ℒ 不再上升。</p>
+
+    <p>均值场把推断变成了确定性的迭代优化，但还差最后一块拼图才能成为深度学习的主力：<strong>梯度怎么穿过采样传回 q 的参数</strong>。答案是<span class="term">重参数化技巧</span>（Reparameterization Trick）：不直接从 N(μ, σ²) 采 z，而是先采 ε ∼ N(0,1)，再令</p>
+
+    <div class="formula">z = μ + σ · ε</div>
+
+    <p>采样结果不变（仍是 N(μ,σ²) 的样本），但 z 变成了 μ 与 σ 的<strong>确定性函数</strong>——梯度可以沿这条代数通路回传。对高斯近似后验与标准高斯先验，KL 还有闭式解，不必采样估计：</p>
+
+    <div class="formula">KL( N(μ,σ²) ‖ N(0,1) ) = <span class="frac"><span class="num-part">1</span><span class="den-part">2</span></span>( μ² + σ² − 1 − ln σ² )</div>
+
+    <p>手算一个数：μ = 0.5、σ = 1 时，KL = ½(0.25 + 1 − 1 − 0) = <strong>0.125</strong>。这两项——重参数化与闭式 KL——正是第20章 VAE 损失函数里"重建项 + KL 项"的全部机关。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>均值场的本质是<strong>用独立性换可算性</strong>：把联合后验这团乱麻切成一条条独立的单变量分布，每条都能解析更新。重参数化的本质是<strong>把随机性挪到参数之外</strong>：随机节点变确定节点，反向传播畅通无阻。两个技巧一合流，就是 VAE。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>均值场最隐蔽的代价：<strong>独立性假设系统性低估后验方差</strong>。真后验若是"h₁h₂ 要么同 0 要么同 1"的强相关分布，均值场不敢把质量同时摊在两个峰上（独立分布做不到），只好收缩到一个峰附近——估计出的不确定性比真实的小。用均值场的后验方差做决策，会过度自信。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 19.4-1</div>
+              <div class="q-text">写出均值场假设与坐标更新式，并说明它用什么换了什么。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              q(h) = ∏ᵢqᵢ(hᵢ)；log qᵢ(hᵢ) = E_{q₋ᵢ}[log p̃(h,v)] + const。用"各隐藏变量独立"的假设换来解析可算的坐标上升。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 19.4-2</div>
+              <div class="q-text">写出重参数化 z = μ + σ·ε 与高斯 KL 闭式解，算 μ=0.5、σ=1 时的 KL。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              ε∼N(0,1)，z = μ+σ·ε 让梯度穿过采样回传。KL = ½(μ²+σ²−1−lnσ²)；μ=0.5、σ=1 时 = ½(0.25) = 0.125。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===== 章末五件套之 1：概念卡 ===== -->
+    <h2><span class="sec-no">🃏</span>概念卡：本章概念的一分钟画像</h2>
+    <p>翻面前先自问：这个概念我能用一句话讲清楚吗？</p>
+    <div class="flip-grid">
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 1</div>
+            <div class="q-text">后验推断（Posterior Inference）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">给定观测 v 求隐藏变量的分布 p(h|v) = p(h,v)/Σ_h p(h,v)。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">带隐藏变量模型训练与使用的核心步骤。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">"看到现象，反推原因"的概率化。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为分子难算——难的是分母对全部隐藏状态的求和。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">RBM 隐藏层激活、VAE 编码器、一切潜变量模型。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 2</div>
+            <div class="q-text">证据下界（ELBO, Evidence Lower Bound）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">ℒ(q) = E_q[log p(h,v)] − E_q[log q(h)]，满足 log p(v) = ℒ + KL。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">把不可算的边缘似然变成可优化的下界目标。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">KL 非负，砍掉它剩下的就是下界。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为最大化 ℒ 只在逼近后验——它同时还在抬高似然。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">EM、变分推断、VAE 损失函数的统一地基。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 3</div>
+            <div class="q-text">KL 散度（Kullback-Leibler Divergence）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">KL(q‖p) = Σ q log(q/p) ≥ 0，等号当且仅当 q = p。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">度量近似分布与目标分布的"距离"，撑起 ELBO 的分解。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">用 q 的编码描述 p 的事件，平均多花的比特数。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为对称——KL(q‖p) ≠ KL(p‖q)，方向决定行为。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">ELBO 的缝隙、VAE 的正则项、模型比较。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 4</div>
+            <div class="q-text">EM 算法（Expectation-Maximization）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">E 步令 q = p(h|v;θ_old)，M 步最大化 E_q[log p(h,v;θ)]，交替进行。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">含隐藏变量模型的经典最大似然训练框架。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">先猜答案（E），再按猜的答案调参数（M），反复。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为单调不降 = 全局最优——只保证局部最优，初值敏感。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">高斯混合模型、HMM；理解变分 EM 的起点。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 5</div>
+            <div class="q-text">均值场（Mean Field Approximation）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">限制 q(h) = ∏ᵢqᵢ(hᵢ)，坐标更新 log qᵢ = E_{q₋ᵢ}[log p̃] + const。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">真后验算不动时，在独立分布族内逼近后验。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">轮流问每个变量："给定其他人的平均看法，你该信什么？"</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">低估后验方差——独立假设不敢摊开质量，过度自信。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">大隐藏空间的解析推断；结构化模型的实用推断引擎。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 6</div>
+            <div class="q-text">重参数化技巧（Reparameterization Trick）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">z = μ + σ·ε，ε∼N(0,1)，把采样写成参数的确定性函数。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">让梯度穿过随机采样节点回传到分布参数 μ、σ。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">把骰子挪到网络外面：随机性固定，参数只做变换。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为只适用高斯——任何可写成 g(ε;θ) 的分布都能用。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">第20章 VAE 编码器的标准配置，随机深度网络的梯度通路。</span></div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- ===== 章末五件套之 2：分层习题 ===== -->
+    <h2><span class="sec-no">📝</span>分层习题</h2>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>判断对错：最大化 ELBO 时，只要 q 的分布族足够灵活，ℒ 最终能等于 log p(v)。</div>
+      <details>
+        <summary>提示</summary>
+        <p>回忆分解式 log p(v) = ℒ + KL。ℒ = log p(v) 需要什么条件？足够灵活的 q 族能满足这个条件吗？</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer"><strong>对。</strong>ℒ = log p(v) 当且仅当 KL(q‖p(h|v)) = 0，即 q 恰好是真后验。q 族足够灵活（包含真后验）时，最大化 ℒ 的最优解就是真后验，下界收紧为等式。反过来，均值场这类受限族（强制独立）一般不含真后验，KL 有不可消除的剩余，ℒ 永远低于 log p(v)——灵活度决定下界的松紧。</div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>判断对错：EM 算法保证收敛到全局最优，因为 log p(v) 每一步都不降。</div>
+      <details>
+        <summary>提示</summary>
+        <p>"单调不降"与"全局最优"是同一回事吗？坐标上升在多峰地形上会爬到哪？</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer"><strong>错。</strong>单调不降只保证 log p(v) 不回头、必收敛到某个驻点，但不保证那是全局最高的峰——多峰地形里，坐标上升爬到的是离初始值最近的山头。两次不同初始化可能给出不同的最终参数与不同的 log p(v)。实践中标准做法是多次随机初始化，取 log p(v) 最大的一轮结果。</div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>一维二值 h，p(h=0,v) = 0.1、p(h=1,v) = 0.2，近似后验 q = (0.4, 0.6)。(a) 计算 ℒ(q)；(b) 计算 KL(q‖真后验)；(c) 验证 log p(v) = ℒ + KL。（保留 3 位小数）</div>
+      <details>
+        <summary>提示</summary>
+        <p>真后验 = 联合/边缘 = (1/3, 2/3)。ℒ = Σ q log(p(h,v)/q(h))；KL = Σ q log(q/q*)。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          (a) ℒ = 0.4·log(0.1/0.4) + 0.6·log(0.2/0.6) = 0.4·log(0.25) + 0.6·log(1/3)<br>
+          = 0.4×(−1.386) + 0.6×(−1.099) = −0.554 − 0.659 = <strong>−1.213</strong>；<br>
+          (b) KL = 0.4·log(0.4/(1/3)) + 0.6·log(0.6/(2/3)) = 0.4·log(1.2) + 0.6·log(0.9)<br>
+          = 0.4×0.182 + 0.6×(−0.105) = 0.073 − 0.063 = <strong>0.010</strong>；<br>
+          (c) ℒ + KL = −1.213 + 0.010 = −1.204 = log 0.3 ✓ 分解恒等式逐项吻合。
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>log p̃(h) = h₁h₂ ln2 + h₁ ln3（二值 h₁、h₂）。当前 E[h₁] = 0.8。用均值场坐标更新式求新的 q₂(1)。（步骤写全）</div>
+      <details>
+        <summary>提示</summary>
+        <p>套 log q₂(h₂) = E_{q₁}[log p̃(h)] + const，对 h₂ = 1 与 h₂ = 0 分别算分值，再归一化。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          第一步，写出更新式：log q₂(h₂) = E_{q₁}[h₁h₂ ln2 + h₁ ln3] + const = h₂ ln2 · E[h₁] + E[h₁] ln3 + const。<br>
+          注意第二项 E[h₁]ln3 不含 h₂，归入 const。<br>
+          第二步，代入 E[h₁] = 0.8：h₂ = 1 的分值 = 0.8·ln2 = ln(2^0.8)；h₂ = 0 的分值 = 0。<br>
+          第三步，取指数：q̃₂(1) = 2^0.8 ≈ 1.741，q̃₂(0) = 1。<br>
+          第四步，归一化：q₂(1) = 1.741/(1 + 1.741) = 1.741/2.741 ≈ <strong>0.635</strong>，q₂(0) ≈ 0.365。<br>
+          对照直觉：h₁ 多半是 1，而 h₁=1 且 h₂=1 时有 ln2 的加成——所以 q₂ 被推向 1，合情合理。
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l3">L3 建模应用</span>你要训练一个 100 个二值隐藏单元的潜变量模型。同学提议："直接用经典 EM，E 步精确算 p(h|v)。"请指出这条路为什么走不通，给出本章的可行替代方案（两套），并说明各自付出了什么代价。</div>
+      <details>
+        <summary>提示</summary>
+        <p>精确 E 步要对多少个隐藏状态求和？均值场牺牲了什么性质？重参数化 + 神经网络（摊销推断）牺牲了什么换来什么？</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          走不通的原因：精确 E 步 q*(h) = p(h|v;θ_old) 的分母要对 2¹⁰⁰ ≈ 10³⁰ 个隐藏状态求和，每个训练样本、每一轮迭代都要做一次——计算上完全不可行。<br>
+          替代一：<strong>均值场变分推断</strong>。限制 q(h) = ∏ᵢqᵢ(hᵢ)，坐标上升轮流更新（log qᵢ = E_{q₋ᵢ}[log p̃] + const），每步解析可算。代价：独立性假设与真后验有不可消除的 KL 缝隙，且系统性低估后验方差。<br>
+          替代二：<strong>摊销推断 + 重参数化</strong>（即第20章 VAE 路线）。用一个神经网络（编码器）从 v 直接输出 q 的参数 (μ, σ)，z = μ + σ·ε 让梯度穿过采样，端到端最大化 ELBO。代价：q 受限于编码器能表达的分布族（摊销缝隙），且引入采样噪声；换来的是所有样本共享一次前向的推断成本，训练可用 SGD。<br>
+          两案共同的哲学：精确推断不可行，就接受一个有界的近似缝隙，换可扩展性。
+        </div>
+      </details>
+    </div>
+
+    <!-- ===== 章末五件套之 3：自测 ===== -->
+    <h2><span class="sec-no">✍️</span>本章自测</h2>
+    <p class="quiz-hint">点击选项判分，答错会给出原因。</p>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 1</div>
+      <div class="q-stem">后验 p(h|v) 难以精确计算的根本原因是？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 联合概率 p(h,v) 没有解析表达式</li>
+        <li data-opt="b">B. 分母 p(v) = Σ_h p(h,v) 要对指数多个隐藏状态求和</li>
+        <li data-opt="c">C. 贝叶斯公式在高维不成立</li>
+        <li data-opt="d">D. 隐藏变量之间必然存在连续取值</li>
+      </ul>
+      <div class="quiz-explain">解析：B 对——难点全在分母的边缘化求和，n 个二值隐藏单元就是 2ⁿ 项。A 错：联合概率由模型定义直接给出，恰恰是好算的那部分；C 错：贝叶斯公式在任何维度都成立，失效的是计算能力不是公式；D 错：离散隐藏变量同样算不动，困难来自状态数而非取值类型。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="a">
+      <div class="q-no">自测 2</div>
+      <div class="q-stem">关于 ELBO 与 log p(v) 的关系，正确的是？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. ℒ(q) ≤ log p(v)，等号当且仅当 q 等于真后验</li>
+        <li data-opt="b">B. ℒ(q) ≥ log p(v)，因为 KL 散度非负</li>
+        <li data-opt="c">C. ℒ(q) = log p(v) 恒成立，与 q 无关</li>
+        <li data-opt="d">D. ℒ(q) ≤ log p(v)，等号当且仅当 q 是均匀分布</li>
+      </ul>
+      <div class="quiz-explain">解析：A 对——log p(v) = ℒ + KL，KL ≥ 0 给出下界，KL = 0（q = 真后验）时收紧。B 把不等式方向说反了：KL 非负恰恰是"砍掉非负项剩下的是下界"，不是上界；C 错：等式只在 q 恰好为真后验时成立，一般 q 留有一段 KL 缝隙；D 错：均匀分布与真后验毫无必然关系，等号条件只看 q 是否等于真后验。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="c">
+      <div class="q-no">自测 3</div>
+      <div class="q-stem">KL(q‖p) = 0 的充要条件是？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. q 与 p 的均值相等</li>
+        <li data-opt="b">B. q 与 p 的方差相等</li>
+        <li data-opt="c">C. q 与 p 处处相等（同一分布）</li>
+        <li data-opt="d">D. q 是 p 的均值场近似</li>
+      </ul>
+      <div class="quiz-explain">解析：C 对——KL 是分布间的度量，为零当且仅当两个分布完全相同。A 和 B 错：均值、方差相等只是矩匹配，分布形状仍可以天差地别，KL 照样很大；D 错：均值场近似受独立性约束，一般无法等于真后验，KL 恰好不为零——这正是受限族的近似缝隙。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="d">
+      <div class="q-no">自测 4</div>
+      <div class="q-stem">EM 算法中，E 步与 M 步分别做什么？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. E 步更新模型参数，M 步计算后验分布</li>
+        <li data-opt="b">B. E 步从后验采样 n 个样本，M 步用样本平均更新参数</li>
+        <li data-opt="c">C. E 步与 M 步都最大化 ℒ，但 E 步用梯度下降、M 步用坐标上升</li>
+        <li data-opt="d">D. E 步固定 θ 令 q = p(h|v;θ_old)，M 步固定 q 最大化 E_q[log p(h,v;θ)]</li>
+      </ul>
+      <div class="quiz-explain">解析：D 对——E 步把 q 顶到当前参数下的真后验（KL 归零），M 步在固定 q 下更新 θ，两步都是对 ℒ 的坐标上升。A 恰好把两步说反了；B 错：经典 EM 的 E 步是解析写出后验，不是采样——那是蒙特卡洛 EM 的变体；C 错：两步都不用梯度下降，E 步有闭式解 q* = p(h|v;θ_old)，M 步通常也是解析或凸优化。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 5</div>
+      <div class="q-stem">均值场的坐标更新式 log qᵢ(hᵢ) = E_{q₋ᵢ}[log p̃(h,v)] + const 来自？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 对 p(h|v) 做重要性采样</li>
+        <li data-opt="b">B. 在独立分布族 q = ∏ᵢqᵢ 内最大化 ℒ，对 qᵢ 求变分置零</li>
+        <li data-opt="c">C. 对 log p(v) 做泰勒展开保留一阶项</li>
+        <li data-opt="d">D. Gibbs 采样一步的接受率推导</li>
+      </ul>
+      <div class="quiz-explain">解析：B 对——把 ℒ 视为各 qᵢ 的泛函，固定其余 q₋ᵢ 对 qᵢ 求变分（加归一化约束）置零，即得该更新式。A 错：更新式是解析的坐标上升，与采样无关；C 错：这里没有泰勒展开，推导用的是变分法；D 错：Gibbs 是第17章的采样方法，更新的是"状态"而非"分布参数"，公式长得像（都用条件信息）但来源完全不同。</div>
+    </div>
+
+    <!-- ===== 章末五件套之 4：三句话复述 ===== -->
+    <div class="retell">
+      <h3>🗣️ 用自己的话，三句话讲完本章</h3>
+      <p>对着空气（或室友）说出这三句。说卡壳的那句，回去重读对应小节。</p>
+      <details>
+        <summary>句1：这章解决什么问题？——</summary>
+        <div class="retell-answer">参考答案：训练带隐藏变量的模型时，每步都要算后验 p(h|v)，但其分母 p(v) 要对指数多个隐藏状态求和，精确推断不可行；本章把推断改造成优化问题，用可调分布 q 逼近真后验。</div>
+      </details>
+      <details>
+        <summary>句2：核心机制是什么？——</summary>
+        <div class="retell-answer">参考答案：ELBO 分解 log p(v) = ℒ(q) + KL(q‖p)，KL 非负所以 ℒ 是下界，最大化 ℒ 同时逼近后验与抬高似然；EM 是精确版（E 步令 q = 真后验、M 步更新参数，单调不降但局部最优），均值场是可行版（假设独立、坐标上升 log qᵢ = E_{q₋ᵢ}[log p̃] + const），重参数化 z = μ + σ·ε 让梯度穿过采样，直通 VAE。</div>
+      </details>
+      <details>
+        <summary>句3：它和前后章怎么分工？——</summary>
+        <div class="retell-answer">参考答案：第17/18章对付配分函数 Z（抽样近似、绕开改目标），本章对付后验分母 p(v)（变分近似）；ELBO、均值场与重参数化三件武器合流，就是第20章 VAE 与深生成模型的发动机。</div>
+      </details>
+    </div>
+
+    <!-- ===== 章末五件套之 5：间隔复习计划 ===== -->
+    <div class="review-plan">
+      <h3>🔁 间隔复习计划</h3>
+      <p>回忆本身比重读有效 10 倍。到点只做一件事：翻卡 + 重做标记题。</p>
+      <table>
+        <tr><th>时间点</th><th>复习内容</th><th>预计用时</th></tr>
+        <tr><td>第 1 天</td><td>全部概念卡 + 回忆卡 19.1 至 19.4</td><td>10 分钟</td></tr>
+        <tr><td>第 3 天</td><td>概念卡 2、4、5（ELBO/EM/均值场）+ 重做 L2 两题</td><td>10 分钟</td></tr>
+        <tr><td>第 7 天</td><td>三句话复述 + 自测错题 + 默写 ELBO 分解与均值场更新式</td><td>10 分钟</td></tr>
+        <tr><td>第 15 天</td><td>只重做合上书挑战；能全过就毕业</td><td>15 分钟</td></tr>
+      </table>
+    </div>
+
+    <!-- 合上书挑战 -->
+    <div class="final-challenge">
+      <h3>📕 合上书挑战</h3>
+      <p class="fc-sub">现在关掉这个页面，拿一张纸，凭记忆完成以下任务。全部做完再回来核对——这是本章真正的毕业考试。</p>
+      <ol id="challenge-list">
+        <li><span class="fc-check"></span>写出后验公式 p(h|v) = p(h,v)/p(v)，用联合表 (0.05,0.10,0.15,0.20) 手算后验，并说明高维为何算不动</li>
+        <li><span class="fc-check"></span>写出 ELBO 分解 log p(v) = ℒ + KL，并说明不等式方向与收紧条件</li>
+        <li><span class="fc-check"></span>用 p(h=0,v)=0.1、p(h=1,v)=0.2 手算 q=(0.5,0.5) 时的 ℒ，并指出与 log p(v) 的差是什么</li>
+        <li><span class="fc-check"></span>写出 EM 两步各做什么，证明 log p(v) 单调不降，说出两个硬限制</li>
+        <li><span class="fc-check"></span>写出均值场假设与坐标更新式，用 log p̃ = h₁h₂ln2 + h₁ln3、E[h₂]=0.5 手算 q₁(1)</li>
+        <li><span class="fc-check"></span>写出重参数化 z = μ + σ·ε 与高斯 KL 闭式，算 μ=0.5、σ=1 的 KL，并说明它解决了什么梯度问题</li>
+        <li><span class="fc-check"></span>回答本章的主线问题：后验算不出来时，怎样把推断变成优化，代价是什么？（一句话）</li>
+      </ol>
+    </div>
+
+    <div class="complete-zone">
+      <button class="btn-complete" id="btn-complete" onclick="markDone()">✓ 我已完成本章（含合上书挑战）</button>
+    </div>
+
+    <div class="chapter-nav">
+      <a href="chapter-18.html"><span class="nav-dir">← 上一章</span>第18章 直面配分函数</a>
+      <a href="chapter-20.html" class="next"><span class="nav-dir">下一章 →</span>第20章 深度生成模型</a>
+    </div>
+
+  </div>
+</div>
+
+<footer class="footer">
+  <div class="wrap">第19章 近似推断 · 深度学习互动讲义 · 基于 Goodfellow et al.《深度学习》(2016)</div>
+</footer>
+
+<script src="/lectures-assets/mermaid.min.js"></script>
+<script>
+mermaid.initialize({
+  startOnLoad: true,
+  theme: "base",
+  themeVariables: {
+    primaryColor: "#e3edf7",
+    primaryBorderColor: "#1d5f9e",
+    primaryTextColor: "#1d5f9e",
+    lineColor: "#5c554b",
+    secondaryColor: "#fbeedd",
+    tertiaryColor: "#f5f1e8",
+    fontFamily: "-apple-system, PingFang SC, sans-serif",
+    fontSize: "14px"
+  },
+  flowchart: { curve: "linear", htmlLabels: false }
+});
+</script>
+<script>
+// 自测题判分
+document.querySelectorAll(".quiz-block").forEach(block => {
+  const answer = block.dataset.answer;
+  const explain = block.querySelector(".quiz-explain");
+  block.querySelectorAll(".quiz-opts li").forEach(li => {
+    li.addEventListener("click", () => {
+      const opts = block.querySelectorAll(".quiz-opts li");
+      opts.forEach(o => o.classList.add("disabled"));
+      if (li.dataset.opt === answer) {
+        li.classList.add("correct");
+      } else {
+        li.classList.add("wrong");
+        block.querySelector(`[data-opt="${answer}"]`).classList.add("correct");
+      }
+      explain.classList.add("show");
+    });
+  });
+});
+
+// 合上书清单打勾
+document.querySelectorAll("#challenge-list li").forEach(li => {
+  li.addEventListener("click", () => li.classList.toggle("checked"));
+});
+
+// 完成标记 → localStorage（本系列键 dl_progress_v1，章号为字符串 "19"）
+const KEY = "dl_progress_v1";
+function loadProgress() {
+  try { return JSON.parse(localStorage.getItem(KEY)) || {}; } catch (e) { return {}; }
+}
+const progress = loadProgress();
+const btn = document.getElementById("btn-complete");
+if (progress["19"] && progress["19"].done) {
+  btn.textContent = "✓ 已完成 · 再次点击重置";
+  btn.classList.add("done");
+}
+function markDone() {
+  const p = loadProgress();
+  if (p["19"] && p["19"].done) {
+    delete p["19"];
+    btn.textContent = "✓ 我已完成本章（含合上书挑战）";
+    btn.classList.remove("done");
+  } else {
+    p["19"] = { done: true, completedAt: Date.now(), reviewsDone: 0 };
+    btn.textContent = "✓ 已完成 · 复习提醒已开启";
+    btn.classList.add("done");
+  }
+  localStorage.setItem(KEY, JSON.stringify(p));
+}
+</script>
+
+</body>
+</html>

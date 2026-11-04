@@ -1,0 +1,904 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第9章 卷积网络 · 深度学习互动讲义</title>
+<link rel="stylesheet" href="/lectures-assets/style.css">
+</head>
+<body>
+
+<nav class="topbar">
+  <div class="topbar-inner">
+    <span class="brand"><a href="index.html" style="color:inherit">← 学习地图</a></span>
+    <span class="crumb">阶段② · 现代深度网络 / 第9章</span>
+  </div>
+</nav>
+
+<div class="wrap">
+
+  <div class="lecture-head">
+    <span class="ch-label">CHAPTER 09 · 现代深度网络</span>
+    <h1>卷积网络</h1>
+    <p class="lead">一句话副标题：第6章的全连接网络搬到图像上，第一层就要上亿参数——本章回答：如何用三条结构假设（局部连接、参数共享、等变表示），把图像上的参数量压下两个数量级还保持表达力？</p>
+  </div>
+
+  <!-- ===== 章首四件套之 1：全书定位 ===== -->
+  <div class="position-bar">
+    <strong>本章在主线上的位置：</strong>第6至8章把"通用网络怎么表达、怎么防过拟合、怎么训练"解决了，但它们对图像一无所知；本章回答"<u>把图像的二维结构作为先验注入网络，能省多少参数、换来什么性质</u>"——卷积、池化与感受野；序列与时间轴上的同类结构先验交给第10章。<br>
+    第9章回答主线上的第9个问题：<strong>如何用三条结构假设（局部连接、参数共享、等变表示），把图像上的参数量压下来还保持表达力？</strong>
+    <div class="map-inline">
+      <span class="node">① 数学与机器学习基础<br>Ch1–5 数学工具与机器学习基础</span><span class="arrow">→</span>
+      <span class="node here">② 现代深度网络<br>Ch6 深度前馈网络 · Ch7 正则化 · Ch8 优化 · <strong>Ch9 卷积网络</strong> · Ch10 序列 · Ch11 实践方法论</span><span class="arrow">→</span>
+      <span class="node">③ 表示与推断<br>Ch12–16 表示学习与结构化模型</span><span class="arrow">→</span>
+      <span class="node">④ 生成模型与前沿<br>Ch17–20 自编码器与生成模型</span>
+    </div>
+  </div>
+
+  <!-- ===== 章首四件套之 2：学习目标 ===== -->
+  <div class="objectives">
+    <h4>🎯 学完本章，合上书你应该能：</h4>
+    <ol>
+      <li>手算参数量账：32×32×3 接 256 单元全连接 786,688 参数 vs 5×5 卷积 64 通道 4,864 参数，说出约 162 倍差距的来源</li>
+      <li>默写输出尺寸公式 ⌊(n+2p−k)/s⌋+1，并对 (n,k,p,s) = (32,5,0,1)、(32,5,2,1)、(32,5,0,2) 分别算出 28、32、14</li>
+      <li>对 3×3 输入与 2×2 核逐格手算互相关输出，指出深度学习"卷积"与数学卷积的差别在于不翻转核</li>
+      <li>用 1D 例子逐格验证等变性：先平移后卷积 = 先卷积后平移；并说明平移不变性来自池化而非卷积</li>
+      <li>对 4×4 特征图手算 2×2 步幅 2 的 max pooling，解释池化无参数、对微小平移不变、扩大感受野</li>
+      <li>用递推 r<sub>l</sub> = r<sub>l−1</sub> + (k−1)·∏s<sub>i</sub> 推出两层 3×3 卷积感受野 5×5，并算出参数从 25C² 降到 18C²</li>
+    </ol>
+  </div>
+
+  <div class="lecture">
+
+    <!-- ===== 章首四件套之 3：推导主线图 ===== -->
+    <div class="figure">
+      <div class="mermaid">
+flowchart TB
+  A["第8章：网络能训练了"] -->|"但全连接不懂图像结构"| B["参数量爆炸：第一层就上亿参数"]
+  B -->|"结构假设一：神经元只看局部"| C["局部连接：小核替代稠密矩阵"]
+  C -->|"结构假设二：同一特征到处检测"| D["参数共享：卷积核滑窗复用"]
+  D -->|"结构假设三带来的性质"| E["等变表示：输入平移 输出跟着平移"]
+  E -->|"任务要的是不变 不是等变"| F["池化：把等变变成近似不变"]
+  F -->|"小核视野够不够大"| G["感受野递推：两层3×3顶一个5×5"]
+  G --> H["遗留问题：序列与时间轴上的结构先验还没解决"]
+  H -.->|"交给第10章"| I["序列建模"]
+  classDef hot fill:#fbeedd,stroke:#c4651f,stroke-width:2.5px,color:#c4651f;
+  classDef danger fill:#fae9e7,stroke:#b03a2e,stroke-width:2.5px,color:#b03a2e;
+  class D hot;
+  class H danger;
+      </div>
+      <div class="caption">本章推导主线：参数量爆炸逼出局部连接与参数共享，参数共享白送等变性，池化把等变折成不变，感受野账证明小核堆叠够用——但序列数据的结构先验留给第 10 章。</div>
+    </div>
+
+    <!-- ================= 9.1 ================= -->
+    <h2><span class="sec-no">9.1</span>为什么全连接在图像上不可行：先算一笔参数量的账</h2>
+
+    <p>第 6 章给了万能逼近器，第 7、8 章让它训得动、不翻车——看上去万事俱备。但把这些全连接网络直接搬到图像上，第一道坎不是精度，是<strong>参数量本身</strong>。本节不动任何新工具，只算账。</p>
+
+    <p>一张小图 32×32×3（宽 32、高 32、RGB 三通道），拉直成向量是 32 × 32 × 3 = 3072 维。用第 6 章的方式接一个仅 256 单元的隐藏层：</p>
+
+    <div class="formula">参数数 = 3072 × 256 + 256 = 786,432 + 256 = <strong>786,688</strong>（权重 + 偏置）</div>
+
+    <p>换用本章的主角：一个 5×5 的<span class="term">卷积核</span>（Convolution Kernel），输出 64 个<span class="term">通道</span>（Channel）。它的参数只有：</p>
+
+    <div class="formula">参数数 = 5 × 5 × 3 × 64 + 64 = 4,800 + 64 = <strong>4,864</strong>（每个核 5×5×3 权重，加每通道 1 个偏置）</div>
+
+    <p>两种接法都能从同一张图抽出 64 组特征，参数量的比值是：</p>
+
+    <div class="formula"><span class="frac"><span class="num-part">786,688</span><span class="den-part">4,864</span></span> ≈ <strong>162 倍</strong></div>
+
+    <p>而这还只是 32×32 的小图。真实任务常见 224×224×3 的输入：拉直后是 150,528 维，若第一层全连接接 1000 个单元，参数为 150,528 × 1000 + 1000 ≈ <strong>1.5 亿</strong>——一层就吃光全部显存预算，而且每个像素与其他所有像素两两连线，完全无视"相邻像素才相关"这一图像最基本的结构。</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>接法</th><th>输入规模</th><th>输出规模</th><th>参数量</th></tr>
+        <tr><td>全连接</td><td>3072（32×32×3）</td><td>256 单元</td><td>786,688</td></tr>
+        <tr><td>卷积 5×5</td><td>3072（32×32×3）</td><td>64 通道</td><td>4,864</td></tr>
+        <tr><td>全连接</td><td>150,528（224×224×3）</td><td>1000 单元</td><td>≈1.5 亿</td></tr>
+      </table>
+    </div>
+
+    <p>差距来自两条对图像成立的<strong>结构假设</strong>：其一，<span class="term">局部连接</span>（Local Connectivity）——一个像素的意义几乎只由它附近的像素决定，神经元不必看全图，只看一个小窗口；其二，<span class="term">参数共享</span>（Parameter Sharing）——"边缘""角点"这类特征出现在图的左上角和右下角是同一种特征，同一组权重可以在所有位置复用。全连接对这两条假设一无所知，所以它要为每个位置、每对像素单独付费。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>卷积不是"更聪明的算法"，而是<strong>把图像的两条先验折现成参数折扣</strong>：局部连接把稠密大矩阵换成小核（指数级瘦身），参数共享让小核在所有位置复用（再除以一个位置数）。162 倍不是优化出来的，是假设换的。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>以为"参数量少 = 表达力差"。恰恰相反：全连接的 786,688 个参数里，绝大多数在学习"左上角像素与右下角像素无关"这类数据里根本不存在的自由度；卷积用先验把这些冗余参数直接删掉，样本效率反而更高。另一个误区是以为卷积只能用于图像——凡是"局部相关 + 平移复用"成立的信号（音频、文本、时间序列）都适用。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 9.1-1</div>
+              <div class="q-text">32×32×3 输入接 256 单元全连接要多少参数？换 5×5 卷积核 64 通道要多少？比值约多少倍？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              3072×256+256 = 786,688；5×5×3×64+64 = 4,864；比值 786,688/4,864 ≈ 162 倍。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 9.1-2</div>
+              <div class="q-text">卷积省下参数靠的是哪两条结构假设？各省在哪？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              局部连接：神经元只看小窗口，稠密矩阵变小核；参数共享：同一组核权重在所有空间位置复用，不为每个位置单独付费。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ================= 9.2 ================= -->
+    <h2><span class="sec-no">9.2</span>卷积运算：深度学习里的"卷积"为什么不翻转核</h2>
+
+    <p>上一节说"小核滑窗复用"，这一节把这个运算定义清楚，并逐格手算一遍。数学里的<span class="term">卷积</span>（Convolution）要求先把核翻转 180° 再滑动相乘；而深度学习框架实际算的是<span class="term">互相关</span>（Cross-correlation）——<strong>核不翻转</strong>，直接对齐窗口逐元素相乘再求和：</p>
+
+    <div class="formula">S(i, j) = ∑<sub>m</sub> ∑<sub>n</sub> I(i+m, j+n) · K(m, n)（互相关；真卷积是 I(i−m, j−n)·K(m, n)）</div>
+
+    <p>为什么敢不翻转？因为核 K 是<strong>学出来的</strong>：翻转与否只是把学到的核镜像一下，学习算法自己会收敛到合适的版本。数学卷积的交换律等好性质在学习场景里用不上，所以整个领域心照不宣地把互相关叫"卷积"。</p>
+
+    <p><strong>完整例子（手算全程）。</strong>输入 I 为 3×3，核 K 为 2×2，步幅 1、无填充，输出为 2×2：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>输入 I</th><th>列1</th><th>列2</th><th>列3</th></tr>
+        <tr><th>行1</th><td>1</td><td>2</td><td>0</td></tr>
+        <tr><th>行2</th><td>3</td><td>1</td><td>2</td></tr>
+        <tr><th>行3</th><td>0</td><td>2</td><td>1</td></tr>
+      </table>
+    </div>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>核 K</th><th>列1</th><th>列2</th></tr>
+        <tr><th>行1</th><td>2</td><td>0</td></tr>
+        <tr><th>行2</th><td>1</td><td>−1</td></tr>
+      </table>
+    </div>
+
+    <p>逐格计算（每格把 2×2 窗口与核对应位置相乘再求和）：</p>
+
+    <ol>
+      <li>S(1,1)：窗口 [[1,2],[3,1]] → 1×2 + 2×0 + 3×1 + 1×(−1) = 2 + 0 + 3 − 1 = <strong>4</strong></li>
+      <li>S(1,2)：窗口 [[2,0],[1,2]] → 2×2 + 0×0 + 1×1 + 2×(−1) = 4 + 0 + 1 − 2 = <strong>3</strong></li>
+      <li>S(2,1)：窗口 [[3,1],[0,2]] → 3×2 + 1×0 + 0×1 + 2×(−1) = 6 + 0 + 0 − 2 = <strong>4</strong></li>
+      <li>S(2,2)：窗口 [[1,2],[2,1]] → 1×2 + 2×0 + 2×1 + 1×(−1) = 2 + 0 + 2 − 1 = <strong>3</strong></li>
+    </ol>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>输出 S</th><th>列1</th><th>列2</th></tr>
+        <tr><th>行1</th><td>4</td><td>3</td></tr>
+        <tr><th>行2</th><td>4</td><td>3</td></tr>
+      </table>
+    </div>
+
+    <p>输出尺寸由三个超参数决定：核大小 k、<span class="term">填充</span>（Padding，边缘补零圈数 p）、<span class="term">步幅</span>（Stride，每次滑动距离 s）。输入边长 n 时：</p>
+
+    <div class="formula">输出边长 = ⌊<span class="frac"><span class="num-part">n + 2p − k</span><span class="den-part">s</span></span>⌋ + 1</div>
+
+    <p><strong>三个例子（逐一验证）。</strong></p>
+    <ol>
+      <li>n=32, k=5, p=0, s=1：⌊(32+0−5)/1⌋+1 = 27+1 = <strong>28</strong>（无填充，输出缩小）</li>
+      <li>n=32, k=5, p=2, s=1：⌊(32+4−5)/1⌋+1 = 31+1 = <strong>32</strong>（p=(k−1)/2 时尺寸不变，俗称 same 填充）</li>
+      <li>n=32, k=5, p=0, s=2：⌊(32−5)/2⌋+1 = ⌊13.5⌋+1 = 13+1 = <strong>14</strong>（步幅 2，尺寸约减半）</li>
+    </ol>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>卷积层 = 一个可学习的小模板在输入上滑动，每到一个位置问一句"这里像不像我"。输出图（<span class="term">特征图</span>，Feature Map）的每个值就是该位置的"相像程度"。填充管边界、步幅管密度、核管"像什么"——三者全部体现在 ⌊(n+2p−k)/s⌋+1 这一个式子里。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>两个高频错误：(1) 在考试或论文里把深度学习的"卷积"当成数学卷积，纠结核要不要翻转——工程上永远是互相关，翻转已被学习吸收；(2) 输出尺寸忘加 1 或忘向下取整：s=2 时 27/2=13.5，必须先取 ⌊13.5⌋=13 再加 1 得 14，直接四舍五入会错。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 9.2-1</div>
+              <div class="q-text">深度学习的"卷积"与数学卷积差在哪一步？为什么工程上可以不管这个差别？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              数学卷积先把核翻转 180° 再滑窗相乘，深度学习算的是不翻转的互相关。核是学出来的，翻转只是换个可学习参数化方式，不影响最终学到的函数。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 9.2-2</div>
+              <div class="q-text">默写输出尺寸公式，并算 n=32, k=5, p=0, s=2 的输出边长。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              ⌊(n+2p−k)/s⌋+1。代入：⌊(32−5)/2⌋+1 = ⌊13.5⌋+1 = 13+1 = 14。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ================= 9.3 ================= -->
+    <h2><span class="sec-no">9.3</span>参数共享与等变表示：输入平移，输出凭什么跟着平移</h2>
+
+    <p>上一节的核在每个位置用的是<strong>同一组权重</strong>——这就是参数共享。它不仅省参数（9.1 的账），还白送一个结构性性质：<span class="term">等变</span>（Equivariance）。函数 f 对变换 g 等变，意思是"先变换再算 f"与"先算 f 再变换"结果相同：f(g(x)) = g(f(x))。对卷积而言，g 就是平移：图像里的猫往右挪一格，特征图里"猫脸响应"也恰好往右挪一格。</p>
+
+    <p><strong>完整例子（手算全程，1D 版）。</strong>输入 x = [1, 2, 3, 0, 0]，核 w = [1, 0, −1]，valid 模式（不填充、步幅 1），输出长度 5−3+1 = 3：</p>
+
+    <ol>
+      <li>s₁ = 1×1 + 2×0 + 3×(−1) = 1 + 0 − 3 = <strong>−2</strong>（窗口 [1,2,3]）</li>
+      <li>s₂ = 2×1 + 3×0 + 0×(−1) = 2 + 0 + 0 = <strong>2</strong>（窗口 [2,3,0]）</li>
+      <li>s₃ = 3×1 + 0×0 + 0×(−1) = 3 + 0 + 0 = <strong>3</strong>（窗口 [3,0,0]）</li>
+    </ol>
+
+    <p>原输入的输出：s = [−2, 2, 3]。现在把输入整体右移一位：x′ = [0, 1, 2, 3, 0]，重算：</p>
+
+    <ol>
+      <li>s′₁ = 0×1 + 1×0 + 2×(−1) = 0 + 0 − 2 = <strong>−2</strong>（窗口 [0,1,2]，新进入视野）</li>
+      <li>s′₂ = 1×1 + 2×0 + 3×(−1) = 1 + 0 − 3 = <strong>−2</strong>（窗口 [1,2,3]）</li>
+      <li>s′₃ = 2×1 + 3×0 + 0×(−1) = 2 + 0 + 0 = <strong>2</strong>（窗口 [2,3,0]）</li>
+    </ol>
+
+    <p>移位后的输出 s′ = [−2, −2, 2]。逐格对照：s′ 的第 2、3 格 [−2, 2] 恰好就是 s 的第 1、2 格——<strong>输出整体跟着输入右移了一格</strong>，左端新冒出来的一格对应新进入视野的窗口。这就是"先平移后卷积 = 先卷积后平移"（边界处除外）。卷积能等变，根源正是参数共享：核在任何位置都是同一个，同一个模式在不同位置必然触发同一个响应。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>参数共享把"检测什么"与"在哪里检测"解耦了：核只管"像不像边缘"，位置信息原封不动地保留在特征图的坐标里。等变性意味着网络不需要为"猫在左边"和"猫在右边"各学一套特征——这正是卷积样本效率高的深层原因。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>以为卷积自带<span class="term">平移不变性</span>（Translation Invariance）——<strong>不是</strong>。卷积给的是等变：猫挪了，响应也跟着挪，位置变化被忠实保留而不是抹掉。真正把位置信息抹掉、让"猫在左上还是右下都输出猫"的是下一节的池化。等变与不变一字之差，归属完全不同：等变 ← 卷积（参数共享）；近似不变 ← 池化。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 9.3-1</div>
+              <div class="q-text">x=[1,2,3,0,0] 与 w=[1,0,−1] 的卷积输出是什么？输入右移一位后输出怎么变？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              s = [−2, 2, 3]；移位后 s′ = [−2, −2, 2]，后两格 = 原输出的前两格——输出跟着输入右移一格（等变）。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 9.3-2</div>
+              <div class="q-text">等变与不变的区别是什么？各自由卷积网络的哪个部件提供？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              等变：输入平移则输出同步平移（位置被保留），由参数共享的卷积提供；不变：输入平移输出不动（位置被抹掉），由池化近似提供。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ================= 9.4 ================= -->
+    <h2><span class="sec-no">9.4</span>池化：如何把等变变成近似不变</h2>
+
+    <p>上一节留下一个矛盾：卷积忠实保留位置（等变），但分类任务要的恰恰是忘掉位置——猫在图的哪个角落都该输出"猫"。<span class="term">池化</span>（Pooling）就是夹在卷积层之间的"位置模糊器"：把特征图划分成不重叠的小窗口，每个窗口压成一个数。最常用的是<span class="term">最大池化</span>（Max Pooling）——取窗口内最大值；也有平均池化（取均值）。</p>
+
+    <p><strong>完整例子（手算全程）。</strong>4×4 特征图做 2×2 最大池化、步幅 2，输出 2×2：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>特征图</th><th>列1</th><th>列2</th><th>列3</th><th>列4</th></tr>
+        <tr><th>行1</th><td>1</td><td>3</td><td>2</td><td>0</td></tr>
+        <tr><th>行2</th><td>0</td><td>5</td><td>1</td><td>2</td></tr>
+        <tr><th>行3</th><td>2</td><td>0</td><td>1</td><td>1</td></tr>
+        <tr><th>行4</th><td>3</td><td>1</td><td>0</td><td>4</td></tr>
+      </table>
+    </div>
+
+    <ol>
+      <li>左上窗口 [[1,3],[0,5]] → max = <strong>5</strong></li>
+      <li>右上窗口 [[2,0],[1,2]] → max = <strong>2</strong></li>
+      <li>左下窗口 [[2,0],[3,1]] → max = <strong>3</strong></li>
+      <li>右下窗口 [[1,1],[0,4]] → max = <strong>4</strong></li>
+    </ol>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>池化输出</th><th>列1</th><th>列2</th></tr>
+        <tr><th>行1</th><td>5</td><td>2</td></tr>
+        <tr><th>行2</th><td>3</td><td>4</td></tr>
+      </table>
+    </div>
+
+    <p>两个关键性质从此例可见。<strong>对微小平移的近似不变性</strong>：窗口 [[1,3],[0,5]] 里的最大值 5 挪到窗口内任何位置，池化输出仍是 5——小范围内的位置抖动被直接抹掉。这就是把卷积的等变"折"成不变的那一步，但只对窗口尺度的微小平移成立，所以叫<em>近似</em>不变。<strong>扩大后续层的感受野</strong>：池化把空间分辨率减半（4×4→2×2），后续卷积核每走一步相当于在原图上跨两步，同样的核看到的世界大了一倍——这是下一节感受野账里 s 项的来源之一。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>最大池化像在窗口里只汇报"有没有"，不汇报"在哪里"：5 出现在窗口里这件事被保留，它在窗口的哪个格子被遗忘。牺牲精确位置，换来对小扰动的鲁棒和分辨率的可控下降。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>两个错误最常见：(1) 以为 max pooling 有可学习参数、要参与反向传播训练——它<strong>没有任何参数</strong>，只是一条固定的取最大值规则（反向传播只把梯度路由给窗口内最大的那个位置），不是可学习层；(2) 以为池化必不可少——现代网络常用步幅 2 的卷积直接替代池化降采样；池化是工具不是铁律。另外，需要精确位置的任务（分割、检测）要慎用池化，位置信息丢了就找不回来。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 9.4-1</div>
+              <div class="q-text">特征图 [[1,3],[0,5]] 所在窗口经 2×2 max pooling 输出什么？窗口内最大值挪位置会影响输出吗？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              输出 5。最大值在窗口内任意挪动输出都不变——这就是池化对微小平移的近似不变性。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 9.4-2</div>
+              <div class="q-text">max pooling 有可学习参数吗？它的两个作用是什么？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              没有参数，是固定的取最大值规则。作用：把卷积的等变折成对微小平移的近似不变；降分辨率、扩大后续层感受野。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ================= 9.5 ================= -->
+    <h2><span class="sec-no">9.5</span>感受野：一个神经元到底"看到"多大区域</h2>
+
+    <p>9.2 的核只有 3×3 或 5×5，可图像里的物体动辄几十上百像素——一个看 3×3 窗口的神经元凭什么认出整只猫？答案藏在层数里：<span class="term">感受野</span>（Receptive Field）指某个输出神经元在<em>原始输入</em>上能影响它的区域大小。单层 3×3 核只看 3×3，但第二层的 3×3 作用在第一层的输出上，每个输出点已经凝缩了 3×3 的信息——两层叠起来，视野就超过 3×3。</p>
+
+    <p><strong>完整推导（手算全程）。</strong>输入层的感受野 r₀ = 1（每个点就是 1 个像素）。第 l 层核大小 k、之前各层步幅连乘为 ∏s<sub>i</sub>，递推式为：</p>
+
+    <div class="formula">r<sub>l</sub> = r<sub>l−1</sub> + (k − 1) · ∏<sub>i</sub> s<sub>i</sub></div>
+
+    <p>直觉：新核每往外扩一格，相当于在"已经放大 ∏s<sub>i</sub> 倍"的旧视野边缘再贴一圈。</p>
+
+    <p><strong>例 1：两层 3×3、全部 s=1。</strong>第一层：r₁ = 1 + (3−1)×1 = 3。第二层：r₂ = 3 + (3−1)×1 = <strong>5</strong>。两层 3×3 的感受野 = 5×5，与单层 5×5 相同。</p>
+
+    <p><strong>例 2：三层 3×3、全部 s=1。</strong>第三层：r₃ = 5 + 2×1 = <strong>7</strong>。三层 3×3 顶一个 7×7。</p>
+
+    <p><strong>例 3：中间夹一步 s=2。</strong>第一层 3×3 s=1：r₁ = 3；第二层 3×3 s=2：r₂ = 3 + 2×2 = <strong>7</strong>——步幅让视野翻倍扩张，这就是 9.4 说的池化/大步幅"扩大感受野"。</p>
+
+    <p>既然两层 3×3 与单层 5×5 视野相同，选哪个？算参数账（设通道数为 C，只算权重）：</p>
+
+    <div class="formula">两层 3×3：2 × (3×3×C×C) = 18C² ；单层 5×5：5×5×C×C = 25C²</div>
+
+    <div class="formula">节省比例 = <span class="frac"><span class="num-part">25C² − 18C²</span><span class="den-part">25C²</span></span> = <span class="frac"><span class="num-part">7</span><span class="den-part">25</span></span> = <strong>28%</strong></div>
+
+    <p>同样的感受野，小核堆叠省 28% 参数，还多赚一次非线性激活（两层之间有一个 ReLU，单层没有）——表达力更强、参数更少。这正是 VGG 网络的核心论证：<strong>一切大核都应拆成 3×3 堆叠</strong>。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>感受野是深度网络"深度"二字的又一层含义：深度不仅堆非线性（第 6 章的视角），还在堆视野——越深的神经元看到的原始输入越大，从边缘、到纹理、到部件、到整个物体，层级特征天然由感受野的生长节奏决定。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>两个常见错误：(1) 以为"感受野 = 本层核大小"——必须逐层递推，且步幅（含池化的 2×2/s2）以连乘方式进入公式，漏掉 s 项会严重低估深层神经元的视野；(2) 以为感受野越大越好——小目标检测里过大的感受野会让目标淹没在背景上下文里，视野要与任务目标的尺度匹配。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 9.5-1</div>
+              <div class="q-text">默写感受野递推式，并推出两层、三层 3×3（s=1）的感受野。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              r<sub>l</sub> = r<sub>l−1</sub> + (k−1)·∏s<sub>i</sub>。r₀=1：两层 → 1+2+2 = 5；三层 → 5+2 = 7。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 9.5-2</div>
+              <div class="q-text">两层 3×3 与单层 5×5 感受野相同，为什么 VGG 选前者？给出参数对比。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              两层 3×3 参数 18C²，单层 5×5 为 25C²，省 28%；且两层之间多一次非线性激活，表达力更强。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ================= 9.6 ================= -->
+    <h2><span class="sec-no">9.6</span>卷积网络的完整形态：从 conv-pool 堆叠到 ResNet</h2>
+
+    <p>前面五节给了全部零件，本节把它们装成整机。一个标准卷积网络（<span class="term">CNN</span>，Convolutional Neural Network）的前半段是同一台三段式机器的反复堆叠：</p>
+
+    <div class="formula">卷积 → 激活（ReLU） → 池化，重复 N 次 → 展平 → 全连接分类头</div>
+
+    <p>堆叠时的总节奏是<strong>空间尺寸递减、通道数递增</strong>：例如 224×224×3 → 112×112×64 → 56×56×128 → … 每降一次分辨率（步幅 2 卷积或池化），通道数翻倍补偿——空间信息在损失，语义信息在浓缩，感受野在膨胀，末端每个神经元都"看"过几乎整张图。</p>
+
+    <p>堆叠之外还有一个常用零件：<span class="term">1×1 卷积</span>（1×1 Convolution）。核只有 1×1，不看任何空间邻域，只做一件事——在每个像素位置上对<strong>通道</strong>做线性组合。例如把 256 通道压到 64 通道：参数为 1×1×256×64 + 64 = 16,448；若用 3×3 做同样的通道变换则要 3×3×256×64 + 64 = 147,520，相差约 9 倍。要调通道数、不要视野时，1×1 是最便宜的选择。</p>
+
+    <p>一句话脉络：LeNet（1998，手写数字，conv-pool 堆叠的鼻祖）→ AlexNet（2012，ReLU + GPU，深度 CNN 复兴）→ VGG（2014，9.5 的论证：全 3×3 小核堆叠）→ ResNet（2015，残差连接让网络深到上百层，正是第 8 章优化问题的结构解法）。这条线解决的是"空间结构"，下一条线——序列与时间——是第 10 章的故事。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>设计 CNN 时只需盯住三条独立旋钮：核大小与层数管<strong>感受野</strong>（9.5），步幅与池化管<strong>分辨率下降节奏</strong>（9.4），通道数与 1×1 卷积管<strong>语义容量</strong>。所有经典架构都是这三条旋钮的不同拧法。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>以为"网络越深越好、通道越多越好"。深度受第 8 章优化难度约束（ResNet 的残差连接正是为此而生）；通道数每翻一倍，该层参数与计算量约翻四倍（通道同时出现在核的输入、输出两侧）。架构设计是感受野、分辨率、参数预算三者的平衡，不是单向堆料。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 9.6-1</div>
+              <div class="q-text">标准 CNN 前半段的三段式重复单元是什么？堆叠时空间尺寸与通道数如何变化？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              卷积 → 激活 → 池化反复堆叠。节奏：空间尺寸递减（池化/大步幅），通道数递增补偿，感受野逐层膨胀。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 9.6-2</div>
+              <div class="q-text">1×1 卷积不看邻域，它有什么用？256→64 通道用 1×1 与 3×3 各要多少参数？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              对每个像素的通道做线性组合：升降维、通道混合。1×1：16,448；3×3：147,520，相差约 9 倍。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===== 章末五件套之 1：概念卡 ===== -->
+    <h2><span class="sec-no">🃏</span>概念卡：本章概念的一分钟画像</h2>
+    <p>翻面前先自问：这个概念我能用一句话讲清楚吗？</p>
+    <div class="flip-grid">
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 1</div>
+            <div class="q-text">卷积 / 互相关（Convolution / Cross-correlation）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">小核在输入上滑动，逐窗口对齐相乘再求和：S(i,j) = ∑ₘ∑ₙ I(i+m, j+n)·K(m,n)。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">全连接在图像上的参数量爆炸（786,688 vs 4,864）：用局部连接+滑窗复用替代稠密矩阵。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">可学习的小模板逐位置问"这里像不像我"，特征图就是一张"相像程度地图"。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">纠结核要翻转 180°——工程上是互相关，翻转已被学习吸收。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">一切"局部相关+平移复用"的信号：图像、音频、文本；第 10 章序列建模的 1D 版本。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 2</div>
+            <div class="q-text">参数共享（Parameter Sharing）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">同一组核权重在所有空间位置复用，而不是每个位置一套独立权重。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">把参数量从"像素对之间两两相连"压成"一个核的大小"；同时白送平移等变性。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">边缘出现在左上角和右下角是同一种边缘，没必要请两个侦探。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为参数共享只是省内存的技巧——它是"模式与位置解耦"的结构先验，样本效率由此而来。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">卷积层的默认机制；第 10 章 RNN 沿时间轴共享参数是同一思想。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 3</div>
+            <div class="q-text">等变与不变（Equivariance / Invariance）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">等变：f(g(x)) = g(f(x))，输入平移则输出同步平移；不变：f(g(x)) = f(x)，输入平移输出不动。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">等变保留位置信息供检测/分割用；不变抹掉位置供分类用——两者分工不同。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">等变是"猫动我也动"的影子；不变是"任你动，我只报有没有"的哨兵。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">把平移不变性记在卷积头上——等变来自卷积（参数共享），近似不变来自池化，归属不能混。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">分类头前要不变（池化/全局池化）；检测分割要保位置，慎用池化。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 4</div>
+            <div class="q-text">池化（Pooling）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">把特征图划成小窗口各压成一个数的无参数操作；最大池化取 max，平均池化取均值。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">把卷积的等变折成对微小平移的近似不变；降分辨率、扩大后续层感受野。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">窗口里只汇报"有没有"，不汇报"在哪里"。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为有可学习参数（没有）；以为必不可少（可用 s=2 卷积替代）；分割任务乱用会丢位置。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">经典 CNN 的 conv-pool 堆叠；需要小范围平移鲁棒性与降采样时。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 5</div>
+            <div class="q-text">感受野（Receptive Field）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">某输出神经元在原始输入上能影响它的区域大小：r<sub>l</sub> = r<sub>l−1</sub> + (k−1)·∏s<sub>i</sub>。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">回答"3×3 的小核凭什么认出大物体"——深度在堆视野，两层 3×3 = 一个 5×5。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">神经元像越站越高的瞭望员，层数每加一，看到的原图区域往外扩一圈。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为等于本层核大小（要逐层递推且含步幅连乘）；以为越大越好（小目标会被背景淹没）。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">设计网络时核对深层视野是否覆盖目标尺度；VGG 小核堆叠论证的依据。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 6</div>
+            <div class="q-text">填充与步幅（Padding / Stride）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">填充 p：输入边缘补零圈数；步幅 s：核每次滑动的距离。输出边长 ⌊(n+2p−k)/s⌋+1。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">填充管边界信息不流失与尺寸保持（same）；步幅管降采样节奏与计算量。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">填充是给照片加一圈白边让角落实物也能被窗口完整覆盖；步幅是侦探迈步的步长。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">输出尺寸忘加 1 或忘向下取整（⌊13.5⌋+1 = 14，不是 14.5 或 15）。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">p=(k−1)/2 保尺寸（same）；s=2 替代池化降采样，现代 CNN 的主流做法。</span></div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- ===== 章末五件套之 2：分层习题 ===== -->
+    <h2><span class="sec-no">📝</span>分层习题</h2>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>
+        <p>判断并说明理由：(1) "深度学习框架里的卷积层在滑动窗口之前，会先把卷积核翻转 180°，因为数学上卷积就是这么定义的。" (2) "既然翻转不影响学习结果，那么把训练好的核翻转 180° 再推理，网络输出不变。"</p>
+      </div>
+      <details>
+        <summary>提示</summary>
+        <p>区分两件事：训练时学的是"翻转过的核"还是"未翻转的核"？推理时核已固定，还享受"翻转被吸收"的自由吗？</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p>(1) <strong>错。</strong>深度学习框架实际计算的是互相关：核不翻转，直接对齐窗口逐元素相乘求和。之所以敢这么干，是因为核可学习——数学卷积要求的翻转只是参数化方式不同，学习算法自己会收敛到合适的核；交换律等数学性质在训练场景里用不上。说"框架会翻转"与事实相反。</p>
+          <p>(2) <strong>错。</strong>"翻转被学习吸收"只在训练阶段成立：给互相关一个自由核，它能学到任何模式（包括某个数学卷积核的翻转版）。但训练完成后核已经固定为一个具体的数表，此时翻转它等于换了一个不同的函数：S(i,j) = ∑I·K 变为 ∑I·K_flipped，逐窗口的点积一般不同，输出必然改变。自由属于训练，不属于推理。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>
+        <p>判断并说明理由："max pooling 层和卷积层一样需要在反向传播中更新参数，只是它的参数是窗口大小 2×2 和步幅 2 这类超参数。"</p>
+      </div>
+      <details>
+        <summary>提示</summary>
+        <p>参数和超参数的区别是什么？反向传播更新的是哪一类？max pooling 前向计算里有任何可调的数吗？</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p><strong>错，且错在两处。</strong>(1) max pooling <strong>没有任何可学习参数</strong>：前向只是一条固定的"取窗口内最大值"规则，没有权重可更新；反向传播经过它时只是把上游梯度原样路由给窗口内取到最大值的那个位置，其余位置梯度为 0——它是梯度的"路由器"，不是被训练的对象。(2) 窗口大小与步幅是<strong>超参数</strong>，由人在训练前设定（或用验证集选），从不参与梯度更新。把它与卷积层并列说"一样需要更新参数"混淆了参数与超参数、可学习层与固定运算的界限。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>
+        <p>用输出尺寸公式各算一遍（写全代入过程）：(1) n=28, k=3, p=1, s=2；(2) n=64, k=7, p=3, s=1。两问的输出边长各是多少？第 (2) 问的输出尺寸与输入有什么关系，为什么？</p>
+      </div>
+      <details>
+        <summary>提示</summary>
+        <p>公式只有一个：⌊(n+2p−k)/s⌋+1。先算括号里 n+2p−k，再除以 s 向下取整，最后加 1。第 (2) 问注意 p 与 k 的关系。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p>(1) n+2p−k = 28 + 2×1 − 3 = 27；27/2 = 13.5，向下取整 ⌊13.5⌋ = 13；加 1 得输出边长 <strong>14</strong>。（验证直觉：28 的输入步幅 2，尺寸约减半为 14 ✓）</p>
+          <p>(2) n+2p−k = 64 + 2×3 − 7 = 64 + 6 − 7 = 63；63/1 = 63；加 1 得输出边长 <strong>64</strong>。</p>
+          <p>第 (2) 问输出边长 = 输入边长（64 = 64）。原因：p = (k−1)/2 = (7−1)/2 = 3 时，2p = k−1，于是 n+2p−k = n−1，除以 s=1 再加 1 恰好回到 n——这就是 same 填充的设计方程，奇数核配 p=(k−1)/2 可保尺寸不变。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>
+        <p>某网络连堆四层 3×3 卷积，全部 s=1、无池化。(1) 用递推式逐层求感受野；(2) 它与单层多大核的感受野相同？(3) 设通道数为 C，比较"四层 3×3"与"该等效单层大核"的权重参数量，算出节省比例；(4) 除参数外，四层方案还比单层方案多什么？</p>
+      </div>
+      <details>
+        <summary>提示</summary>
+        <p>r₀ = 1，每层加 (k−1)·∏s<sub>i</sub>，这里每层的 ∏s<sub>i</sub> 都是 1。参数量：每层 k×k×C×C，四层相加。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p>(1) r₁ = 1 + (3−1)×1 = 3；r₂ = 3 + 2 = 5；r₃ = 5 + 2 = 7；r₄ = 7 + 2 = <strong>9</strong>。四层 3×3 感受野为 9×9。</p>
+          <p>(2) 与单层 <strong>9×9</strong> 核的感受野相同（1 + (9−1)×1 = 9 ✓）。</p>
+          <p>(3) 四层 3×3：4 × 9C² = 36C²；单层 9×9：81C²。节省 (81−36)/81 = 45/81 ≈ <strong>55.6%</strong>。</p>
+          <p>(4) 多三次非线性激活（每两层之间一个 ReLU，单层一次都没有）：同样的视野下，四层方案是四段仿射+三段非线性复合的函数，表达力远强于单层的一次仿射。这正是 VGG"小核堆叠"论证的完整版：感受野相同、参数更少（本题省约 56%，9.5 两层对 5×5 的情形省 28%）、非线性更多。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l3">L3 建模应用</span>
+        <p>你在做一个医学影像分类项目：输入 224×224×3 的 X 光片，二分类。设计网络的前三层卷积，要求：第一层就把分辨率降下来（早期降采样省算力），三层结束时感受野达到 15×15 左右、通道数到 128。逐层给出核大小/步幅/填充/通道数，并逐层手算输出尺寸、感受野与参数量（含偏置），最后汇总三层总参数。</p>
+      </div>
+      <details>
+        <summary>提示</summary>
+        <p>参考成熟做法：第一层用大核大步幅（如 7×7、s=2、p=3），之后换 3×3。感受野递推别忘了步幅连乘项：第一层之后 ∏s<sub>i</sub> 就含 2 了。参数量 = k×k×C<sub>in</sub>×C<sub>out</sub> + C<sub>out</sub>。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p><strong>设计（参考答案）：</strong>第一层 7×7、s=2、p=3、64 通道；第二层 3×3、s=1、p=1、64 通道；第三层 3×3、s=2、p=1、128 通道。</p>
+          <p><strong>第一层：</strong>输出边长 ⌊(224+6−7)/2⌋+1 = ⌊223/2⌋+1 = 111+1 = 112 → 112×112×64。感受野 r₁ = 1 + 6×1 = 7。参数 7×7×3×64 + 64 = 9,408 + 64 = 9,472。</p>
+          <p><strong>第二层：</strong>输出边长 ⌊(112+2−3)/1⌋+1 = 111+1 = 112 → 112×112×64（same）。感受野 r₂ = 7 + (3−1)×2 = 11（此前步幅连乘 = 2）。参数 3×3×64×64 + 64 = 36,864 + 64 = 36,928。</p>
+          <p><strong>第三层：</strong>输出边长 ⌊(112+2−3)/2⌋+1 = ⌊111/2⌋+1 = 55+1 = 56 → 56×56×128。感受野 r₃ = 11 + (3−1)×(2×1) = 15（此前步幅连乘 = 2×1 = 2）。参数 3×3×64×128 + 128 = 73,728 + 128 = 73,856。</p>
+          <p><strong>汇总：</strong>三层总参数 9,472 + 36,928 + 73,856 = <strong>120,256</strong>；分辨率 224 → 112 → 112 → 56，通道 3 → 64 → 64 → 128，感受野 7 → 11 → 15，全部满足要求。对照 9.1：若第一改用全连接哪怕只接 1000 单元也要约 1.5 亿参数——三层卷积合计才 12 万。</p>
+        </div>
+      </details>
+    </div>
+
+    <!-- ===== 章末五件套之 3：自测 ===== -->
+    <h2><span class="sec-no">✍️</span>本章自测</h2>
+    <p class="quiz-hint">点击选项判分，答错会给出原因。</p>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 1</div>
+      <div class="q-stem">32×32×3 的图像，接 256 单元全连接层 vs 5×5 卷积核 64 通道，参数量分别约为多少、差多少倍？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 786,688 vs 786,688——一样多，卷积只是算得更快</li>
+        <li data-opt="b">B. 786,688 vs 4,864——约 162 倍，差距来自局部连接与参数共享两条结构假设</li>
+        <li data-opt="c">C. 786,688 vs 76,800——约 162 倍，差距来自卷积核更小</li>
+        <li data-opt="d">D. 3072×256 vs 5×5×64——卷积省了通道数所以参数少</li>
+      </ul>
+      <div class="quiz-explain">解析：B 对——全连接 3072×256+256 = 786,688；卷积 5×5×3×64+64 = 4,864（核要乘输入通道 3、输出通道 64）；比值 ≈162。A 错：参数量天差地别，速度差异只是副产品。C 错：76,800 是 5×5×3×64×…算错账的数字（5×5×3×64=4,800 不含偏置，也凑不出 76,800），且归因只剩"核小"，丢了参数共享。D 错：64 是输出通道，参与乘法而非被省去；且漏了偏置项，账没算完。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="c">
+      <div class="q-no">自测 2</div>
+      <div class="q-stem">输入 n=32，核 k=5，无填充，步幅 s=2，输出边长是多少？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 28</li>
+        <li data-opt="b">B. 15</li>
+        <li data-opt="c">C. 14</li>
+        <li data-opt="d">D. 13</li>
+      </ul>
+      <div class="quiz-explain">解析：C 对——⌊(32+0−5)/2⌋+1 = ⌊13.5⌋+1 = 13+1 = 14。A 错：28 是 s=1 的结果（27+1），没体现步幅。B 错：15 是把 13.5 向上取整再加 1（或直接 (32−5+1)/2 向上取），公式要求先向下取整再加 1。D 错：13 只做了 ⌊13.5⌋，漏了公式末尾的 +1。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="a">
+      <div class="q-no">自测 3</div>
+      <div class="q-stem">关于平移等变性与平移不变性的归属，下列哪项正确？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 等变来自卷积的参数共享（输入平移则特征图同步平移）；近似不变来自池化（窗口内微小平移被抹掉）</li>
+        <li data-opt="b">B. 卷积同时提供等变与不变，池化只是降采样加速器</li>
+        <li data-opt="c">C. 不变来自卷积（核在哪里都一样），等变来自池化（把响应扩散出去）</li>
+        <li data-opt="d">D. 两者都来自数据增强，与网络结构无关</li>
+      </ul>
+      <div class="quiz-explain">解析：A 对——9.3 的 1D 例子逐格验证过：x=[1,2,3,0,0] 卷积得 [−2,2,3]，输入右移后输出为 [−2,−2,2]，响应同步右移（等变）；9.4 窗口 [[1,3],[0,5]] 中 5 任意挪动池化输出恒为 5（近似不变）。B 错：卷积忠实保留位置，不会"顺便"不变；池化也不只是加速器，它改变的是表示的位置敏感性。C 错：归属恰好颠倒。D 错：数据增强（第 7 章）是训练侧注入先验，等变/不变是架构本身的前向性质，没增强也成立。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="d">
+      <div class="q-no">自测 4</div>
+      <div class="q-stem">关于 max pooling，下列说法正确的是：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 它有可学习参数，反向传播会更新窗口权重</li>
+        <li data-opt="b">B. 它提供对任意幅度平移的完全不变性</li>
+        <li data-opt="c">C. 它缩小分辨率，因此会缩小后续层的感受野</li>
+        <li data-opt="d">D. 它无参数；提供对窗口尺度微小平移的近似不变性；分辨率减半使后续层感受野扩大</li>
+      </ul>
+      <div class="quiz-explain">解析：D 对——三个性质都在 9.4 验证过：无参数（纯取 max 规则）、窗口内最大值挪动输出不变（近似不变）、4×4→2×2 后后续核每步相当于原图两步（感受野扩大）。A 错：max pooling 是固定规则层，窗口大小/步幅是超参数，不参与梯度更新。B 错：不变性只在池化窗口尺度内成立，大平移仍会改变输出——所以叫"近似"。C 错：方向反了，分辨率下降让同样的核覆盖更大的原图区域，感受野是扩大（9.5 例 3：s=2 使两层 3×3 直达 r=7）。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 5</div>
+      <div class="q-stem">三层 3×3 卷积堆叠（全部 s=1、无池化）的感受野是多少？相比单层等效大核，参数是省了还是费了？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 9×9；参数 27C² 比单层 9×9 的 81C² 省——三层堆叠又小又省</li>
+        <li data-opt="b">B. 7×7；参数 27C² 比单层 7×7 的 49C² 省约 45%，还多两次非线性</li>
+        <li data-opt="c">C. 7×7；参数 27C² 与单层 7×7 的 49C² 相同，只是更深</li>
+        <li data-opt="d">D. 5×5；因为感受野只由最深层核大小决定</li>
+      </ul>
+      <div class="quiz-explain">解析：B 对——r₀=1，逐层加 2：3、5、7；参数三层 3×9C² = 27C² 对单层 7×7 = 49C²，省 22/49 ≈ 45%，且层间多两次 ReLU。A 错：9×9 是把核大小线性相加又加错（3+3+3），且 27C² 与 81C² 的比值安错了感受野。C 错：27C² ≠ 49C²，参数明明省了约 45%。D 错：感受野由所有层递推决定（r<sub>l</sub> = r<sub>l−1</sub> + (k−1)·∏s<sub>i</sub>），不是只看最后一层；两层才是 5×5。</div>
+    </div>
+
+    <!-- ===== 章末五件套之 4：三句话复述 ===== -->
+    <div class="retell">
+      <h3>🗣️ 用自己的话，三句话讲完本章</h3>
+      <p>对着空气（或室友）说出这三句。说卡壳的那句，回去重读对应小节。</p>
+      <details>
+        <summary>句1：这章解决什么问题？——</summary>
+        <div class="retell-answer">参考答案：全连接网络不懂图像结构，32×32 小图第一层就要 78 万参数、224×224 要上亿；本章解决"如何把图像的二维结构先验注入网络，把参数量压下来还保持表达力"。</div>
+      </details>
+      <details>
+        <summary>句2：核心机制是什么？——</summary>
+        <div class="retell-answer">参考答案：三条结构假设——局部连接（小核替代稠密矩阵）与参数共享（核滑窗复用，786,688→4,864）压参数；参数共享白送平移等变（输入移输出跟着移）；池化（无参数取 max）把等变折成近似不变并扩感受野；感受野递推 r<sub>l</sub> = r<sub>l−1</sub>+(k−1)∏s<sub>i</sub> 证明小核堆叠够用（两层 3×3=5×5，省 28% 参数还多一次非线性）。</div>
+      </details>
+      <details>
+        <summary>句3：它和前后章怎么分工？——</summary>
+        <div class="retell-answer">参考答案：第 6–8 章给"能表达、能训练、能泛化"的通用机器，本章给它装上图像的空间结构先验；序列与时间轴上的同类先验（参数共享的 1D 版）由第 10 章序列建模接管，第 11 章再把卷积网络放进完整实践流程。</div>
+      </details>
+    </div>
+
+    <!-- ===== 章末五件套之 5：间隔复习计划 ===== -->
+    <div class="review-plan">
+      <h3>🔁 间隔复习计划</h3>
+      <p>回忆本身比重读有效 10 倍。到点只做一件事：翻卡 + 重做标记题。</p>
+      <table>
+        <tr><th>时间点</th><th>复习内容</th><th>预计用时</th></tr>
+        <tr><td>第 1 天</td><td>概念卡 1–6 + 全部回忆卡（9.1 至 9.6 共 12 张）；重算 9.2 的 2×2 核手算与三个输出尺寸</td><td>12 分钟</td></tr>
+        <tr><td>第 3 天</td><td>概念卡 2、3、5（参数共享 / 等变与不变 / 感受野）+ 自测错题；重算 9.3 的 1D 等变例子与 9.4 池化手算</td><td>8 分钟</td></tr>
+        <tr><td>第 7 天</td><td>三句话复述 + 重做 L2 两题（输出尺寸 14/64；四层 3×3 感受野 9 与参数 36C² vs 81C²）</td><td>10 分钟</td></tr>
+        <tr><td>第 15 天</td><td>只做合上书挑战；能全过（尤其参数量账与 L3 三层设计）本章即毕业，进入第 10 章序列建模</td><td>15 分钟</td></tr>
+      </table>
+    </div>
+
+    <!-- 合上书挑战 -->
+    <div class="final-challenge">
+      <h3>📕 合上书挑战</h3>
+      <p class="fc-sub">现在关掉这个页面，拿一张纸，凭记忆完成以下任务。全部做完再回来核对——这是本章真正的毕业考试。</p>
+      <ol id="challenge-list">
+        <li><span class="fc-check"></span>手算参数量账：32×32×3 接 256 全连接（786,688）vs 5×5 卷积 64 通道（4,864），说出约 162 倍差距来自哪两条结构假设</li>
+        <li><span class="fc-check"></span>对输入 [[1,2,0],[3,1,2],[0,2,1]] 与核 [[2,0],[1,−1]] 逐格手算互相关输出 [[4,3],[4,3]]，并说明与数学卷积的差别</li>
+        <li><span class="fc-check"></span>默写输出尺寸公式 ⌊(n+2p−k)/s⌋+1，算出 (32,5,0,1)→28、(32,5,2,1)→32、(32,5,0,2)→14</li>
+        <li><span class="fc-check"></span>用 x=[1,2,3,0,0]、w=[1,0,−1] 逐格验证等变性（s=[−2,2,3]，移位后 [−2,−2,2]），并说清不变性为什么归池化</li>
+        <li><span class="fc-check"></span>对 4×4 特征图 [[1,3,2,0],[0,5,1,2],[2,0,1,1],[3,1,0,4]] 手算 2×2/s2 max pooling 得 [[5,2],[3,4]]，说明池化的两个作用</li>
+        <li><span class="fc-check"></span>用 r<sub>l</sub> = r<sub>l−1</sub>+(k−1)∏s<sub>i</sub> 推出两层 3×3 感受野 5×5，算出 18C² vs 25C²（省 28%）并解释 VGG 论证</li>
+        <li><span class="fc-check"></span>回答本章的主线问题：如何用三条结构假设（局部连接、参数共享、等变表示），把图像上的参数量压下来还保持表达力？（一句话）</li>
+      </ol>
+    </div>
+
+    <div class="complete-zone">
+      <button class="btn-complete" id="btn-complete" onclick="markDone()">✓ 我已完成本章（含合上书挑战）</button>
+    </div>
+
+    <div class="chapter-nav">
+      <a href="chapter-08.html"><span class="nav-dir">← 上一章</span>第8章 优化</a>
+      <a href="chapter-10.html" class="next"><span class="nav-dir">下一章 →</span>第10章 序列建模</a>
+    </div>
+
+  </div>
+</div>
+
+<footer class="footer">
+  <div class="wrap">第9章 卷积网络 · 深度学习互动讲义 · 基于 Goodfellow et al.《深度学习》(2016)</div>
+</footer>
+
+<script src="/lectures-assets/mermaid.min.js"></script>
+<script>
+mermaid.initialize({
+  startOnLoad: true,
+  theme: "base",
+  themeVariables: {
+    primaryColor: "#e3edf7",
+    primaryBorderColor: "#1d5f9e",
+    primaryTextColor: "#1d5f9e",
+    lineColor: "#5c554b",
+    secondaryColor: "#fbeedd",
+    tertiaryColor: "#f5f1e8",
+    fontFamily: "-apple-system, PingFang SC, sans-serif",
+    fontSize: "14px"
+  },
+  flowchart: { curve: "linear", htmlLabels: false }
+});
+</script>
+<script>
+// 自测题判分
+document.querySelectorAll(".quiz-block").forEach(block => {
+  const answer = block.dataset.answer;
+  const explain = block.querySelector(".quiz-explain");
+  block.querySelectorAll(".quiz-opts li").forEach(li => {
+    li.addEventListener("click", () => {
+      const opts = block.querySelectorAll(".quiz-opts li");
+      opts.forEach(o => o.classList.add("disabled"));
+      if (li.dataset.opt === answer) {
+        li.classList.add("correct");
+      } else {
+        li.classList.add("wrong");
+        block.querySelector(`[data-opt="${answer}"]`).classList.add("correct");
+      }
+      explain.classList.add("show");
+    });
+  });
+});
+
+// 合上书清单打勾
+document.querySelectorAll("#challenge-list li").forEach(li => {
+  li.addEventListener("click", () => li.classList.toggle("checked"));
+});
+
+// 完成标记 → localStorage（本系列键 dl_progress_v1，章号为字符串 "9"）
+const KEY = "dl_progress_v1";
+function loadProgress() {
+  try { return JSON.parse(localStorage.getItem(KEY)) || {}; } catch (e) { return {}; }
+}
+const progress = loadProgress();
+const btn = document.getElementById("btn-complete");
+if (progress["9"] && progress["9"].done) {
+  btn.textContent = "✓ 已完成 · 再次点击重置";
+  btn.classList.add("done");
+}
+function markDone() {
+  const p = loadProgress();
+  if (p["9"] && p["9"].done) {
+    delete p["9"];
+    btn.textContent = "✓ 我已完成本章（含合上书挑战）";
+    btn.classList.remove("done");
+  } else {
+    p["9"] = { done: true, completedAt: Date.now(), reviewsDone: 0 };
+    btn.textContent = "✓ 已完成 · 复习提醒已开启";
+    btn.classList.add("done");
+  }
+  localStorage.setItem(KEY, JSON.stringify(p));
+}
+</script>
+
+</body>
+</html>

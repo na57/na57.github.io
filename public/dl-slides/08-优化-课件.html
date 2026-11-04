@@ -1,0 +1,626 @@
+<!DOCTYPE html>
+<!--
+  ======================================================================
+  第8章 深度模型的优化 · 深度学习课件
+  基于 assets/deck-template.html 制作；head/CSS/JS 与模板保持一致
+  ======================================================================
+-->
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第8章 深度模型的优化 · 深度学习课件</title>
+<script>
+window.MathJax = {
+  tex: {
+    inlineMath: [['$', '$'], ['\\(', '\\)']],
+    displayMath: [['$$', '$$'], ['\\[', '\\]']],
+    processEscapes: true,
+    tags: 'none'
+  },
+  svg: { fontCache: 'global', scale: 1.05 },
+  options: { skipHtmlTags: ['script','noscript','style','textarea','pre','code'] }
+};
+</script>
+<!-- MathJax 本地引用（tex-svg 单文件全量组件，约2MB，自带字体数据），file:// 与断网均可用 -->
+<script src="/lectures-assets/tex-svg.js" async></script>
+<style>
+  :root{
+    --primary:#1a365d; --accent:#2b6cb0; --accent-light:#ebf8ff; --accent-border:#bee3f8;
+    --text:#2d3748; --muted:#718096; --border:#e2e8f0; --bg-light:#f7fafc;
+    --success:#38a169; --danger:#e53e3e; --warning:#dd6b20; --warn-bg:#fffaf0;
+  }
+  *{margin:0;padding:0;box-sizing:border-box;}
+  html,body{width:100%;height:100%;overflow:hidden;background:#0f172a;}
+  body{
+    font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Hiragino Sans GB","Microsoft YaHei","WenQuanYi Micro Hei",sans-serif;
+    color:var(--text);
+  }
+  #stage{
+    position:absolute; left:50%; top:50%;
+    width:1280px; height:720px;
+    transform:translate(-50%,-50%) scale(1);
+    transform-origin:center center;
+    background:#ffffff;
+    box-shadow:0 0 40px rgba(0,0,0,.4);
+    overflow:hidden;
+  }
+  .slide{
+    position:absolute; inset:0;
+    padding:36px 60px 52px;
+    display:none;
+    flex-direction:column;
+    background:#ffffff;
+    opacity:0;
+    transition:opacity .35s ease;
+  }
+  .slide.active{ display:flex; opacity:1; }
+
+  #progress{ position:absolute; top:0; left:0; height:6px; background:var(--accent); width:0; z-index:50; transition:width .35s; }
+
+  /* 封面 / 结束页 */
+  .slide-cover{ justify-content:center; align-items:center; text-align:center; }
+  .slide-cover{ background:linear-gradient(135deg,#1a365d 0%,#2b6cb0 100%); color:#fff; }
+  .slide-cover .kicker{ font-size:22px; letter-spacing:6px; opacity:.85; margin-bottom:18px;}
+  .slide-cover h1{ font-size:64px; font-weight:800; line-height:1.2; margin-bottom:22px; letter-spacing:2px;}
+  .slide-cover .sub{ font-size:26px; opacity:.92; margin-bottom:36px;}
+  .slide-cover .meta{ font-size:19px; opacity:.85; line-height:2;}
+  .slide-cover .divider{ width:160px;height:5px;background:#fff;opacity:.6;margin:0 auto 30px;border-radius:3px;}
+  .slide-cover .question{ font-size:24px; background:rgba(255,255,255,.12); border:1px solid rgba(255,255,255,.35); border-radius:12px; padding:12px 28px; margin-bottom:30px;}
+
+  /* 页头：结论式标题 */
+  .slide-head{ display:flex; align-items:baseline; gap:16px; border-bottom:3px solid var(--accent); padding-bottom:9px; margin-bottom:12px;}
+  .slide-head .sec{ font-size:17px; color:var(--accent); font-weight:700; background:var(--accent-light); padding:3px 11px; border-radius:6px; white-space:nowrap;}
+  .slide-head h3{ font-size:29px; color:var(--primary); font-weight:700;}
+  .slide-body{ flex:1; display:flex; flex-direction:column; justify-content:center; min-height:0; }
+
+  p{ font-size:21px; line-height:1.65; margin-bottom:8px;}
+  .lead{ font-size:23px; color:#374151; line-height:1.75;}
+  ul,ol{ margin:0 0 8px 26px; font-size:21px; line-height:1.7;}
+  li{ margin-bottom:5px;}
+  strong{ color:var(--primary); }
+
+  /* 公式块 */
+  .formula{ background:var(--accent-light); border-left:5px solid var(--accent); border-radius:0 10px 10px 0; padding:9px 22px; margin:9px 0; text-align:center; font-size:23px;}
+  .formula-concl{ background:#fffaf0; border-left:5px solid var(--warning);}
+  .MathJax{ font-size:1.05em !important; }
+  mjx-container[display="true"]{ margin:6px 0 !important; }
+
+  /* 表格 */
+  table{ width:100%; border-collapse:collapse; margin:10px 0; font-size:20px;}
+  th{ background:var(--accent); color:#fff; padding:8px 12px; text-align:center; font-weight:600;}
+  td{ padding:7px 12px; border:1px solid var(--border); text-align:center; vertical-align:middle;}
+  tr:nth-child(even) td{ background:var(--bg-light);}
+  td.l{ text-align:left; }
+  table.small{ font-size:18px; }
+  table.small td, table.small th{ padding:6px 10px; }
+
+  /* 组件 */
+  .card{ background:var(--accent-light); border:1px solid var(--accent-border); border-radius:12px; padding:12px 20px; margin:10px 0;}
+  .tip{ background:#ebf8ff; border-left:5px solid var(--accent); border-radius:0 10px 10px 0; padding:10px 20px; margin:10px 0; font-size:20px; color:#2c5282;}
+  .deep{ background:#f0fff4; border-left:5px solid var(--success); border-radius:0 10px 10px 0; padding:10px 20px; margin:10px 0; font-size:20px; color:#22543d;}
+  .warn{ background:var(--warn-bg); border-left:5px solid var(--warning); border-radius:0 10px 10px 0; padding:10px 20px; margin:10px 0; font-size:20px; color:#744210;}
+  .trap{ background:#fef2f2; border-left:5px solid var(--danger); border-radius:0 10px 10px 0; padding:10px 20px; margin:10px 0; font-size:20px; color:#7f1d1d;}
+
+  .pause{
+    background:var(--warn-bg); border:2px dashed var(--warning); border-radius:14px;
+    padding:10px 22px; margin:10px 0; display:flex; align-items:center; gap:16px;
+  }
+  .pause .icon{ font-size:36px; line-height:1; }
+  .pause .txt b{ color:var(--warning); font-size:21px; }
+  .pause .txt p{ font-size:18px; color:#744210; margin:3px 0 0; }
+
+  .cols{ display:flex; gap:28px; align-items:stretch; }
+  .col{ flex:1; min-width:0; }
+
+  /* 推导分步：仅互动模式隐藏，截图(autohide)模式全部可见——此规则不可删 */
+  .step{ opacity:0; transform:translateY(8px); transition:opacity .3s ease, transform .3s ease; }
+  .step.on{ opacity:1; transform:none; }
+  body.autohide .step{ opacity:1 !important; transform:none !important; }
+  .step-hint{ font-size:14px; color:var(--muted); margin-top:4px;}
+  body.autohide .step-hint{ display:none; }
+
+  /* 因果链 */
+  .chain{ margin:6px 0; }
+  .chain .link{ display:flex; align-items:center; gap:14px; margin:6px 0;}
+  .chain .no{ width:34px; height:34px; border-radius:50%; background:var(--accent); color:#fff; font-size:18px; font-weight:700; display:flex; align-items:center; justify-content:center; flex-shrink:0;}
+  .chain .txt{ font-size:21px; line-height:1.5;}
+  .chain .txt strong{ color:var(--primary); }
+
+  /* mermaid 容器：高度封顶，防止溢出 720px 舞台 */
+  .mmd{ background:var(--bg-light); border:1px solid var(--border); border-radius:12px; padding:10px 14px; display:flex; justify-content:center; align-items:center; margin:8px 0;}
+  .mmd .mermaid{ display:flex; justify-content:center; width:100%; visibility:hidden; }
+  .mmd .mermaid[data-done]{ visibility:visible; }
+  .mmd .mermaid svg{ max-width:100%; height:auto; max-height:230px; }
+  .mmd.mmd-tall .mermaid svg{ max-height:330px; }
+  .mmd.mmd-sm svg{ max-height:150px; }
+  .mmd-row{ display:flex; gap:18px; }
+  .mmd-row .mmd{ flex:1; flex-direction:column; }
+  .mmd .cap{ font-size:17px; color:var(--muted); margin-top:6px; text-align:center;}
+  .mmd .cap b{ color:var(--text); }
+
+  #footer{ position:absolute; bottom:0; left:0; right:0; height:40px; display:flex; align-items:center; justify-content:space-between; padding:0 30px; font-size:15px; color:#94a3b8; background:rgba(247,250,252,.85); border-top:1px solid var(--border); z-index:40;}
+  #footer .brand{ font-weight:600; color:var(--accent); }
+
+  .nav{ position:absolute; bottom:48px; right:40px; display:flex; gap:12px; z-index:45;}
+  .nav button{ width:54px; height:54px; border-radius:50%; border:none; background:var(--accent); color:#fff; font-size:24px; cursor:pointer; box-shadow:0 3px 10px rgba(43,108,176,.4); display:flex; align-items:center; justify-content:center;}
+  .nav button:hover{ background:var(--primary); }
+  .nav button:disabled{ background:#cbd5d0; cursor:default; box-shadow:none;}
+
+  #hint{ position:absolute; bottom:48px; left:40px; font-size:14px; color:#94a3b8; z-index:45;}
+
+  body.autohide #progress, body.autohide #footer, body.autohide .nav, body.autohide #hint{ display:none !important; }
+</style>
+</head>
+<body>
+<div id="stage">
+
+  <div id="progress"></div>
+
+  <!-- ★ 1 封面 -->
+  <section class="slide slide-cover active" data-narration="你好，欢迎来到深度学习课件第8章，深度模型的优化。前面第6章我们有了反向传播，梯度算得出来；第7章又用正则化把目标函数改得更合理。看起来沿着负梯度一路走就完事了——本章要泼一盆冷水：真训练起来，你会发现它要么原地爆炸，要么慢得煎熬。本章的主线问题是：损失面如此崎岖，梯度法凭什么找得到路？学完这一章，你会手算三组数：条件数一百的二次碗里，学习率越界十步放大五十七点七倍；动量稳态速度负零点二，放大十倍；Adam 首步更新约负零点零零一。还会弄明白 minibatch、学习率衰减、动量、Adam 各自治哪一种病。">
+    <div class="kicker">深度学习 · 第 8 章 · 第②段 现代深度网络</div>
+    <h1>深度模型的优化</h1>
+    <div class="sub">Optimization for Training Deep Models —— 梯度已知之后，训练为什么还是走不动、走不稳</div>
+    <div class="question">本章要回答：损失面如此崎岖，梯度法凭什么找得到路？</div>
+    <div class="meta">
+      配套讲义：《深度学习互动讲义》第8章 · 基于 Goodfellow et al.《深度学习》(2016)<br>
+      ← → 或空格翻页 · 推导页逐步显示
+    </div>
+  </section>
+
+  <!-- ★ 2 全书位置 -->
+  <section class="slide" data-narration="先看本章在全书的位置。全书分四段：第一段第一到五章，是数学与机器学习基础；第二段第六到十一章，是现代深度网络，本章正站在这段的中腰；第三段十二到十六章，讲表示与推断；第四段十七到二十章，讲生成模型与前沿。在第二段内部，第6章给了万能逼近器和反向传播这把算梯度的刀，第7章把目标函数改得更合理，本章回答的是主线上的第八个问题：梯度都知道了，为什么训练还是走不动、走不稳？答案落在三个工具上：minibatch 抽样、动量、自适应学习率。训练调顺之后，接力棒交给第9章卷积网络，去图像上打第一场硬仗。">
+    <div class="slide-head"><span class="sec">定位</span><h3>本章站在现代深度网络的中腰：梯度与目标已定，轮到走法上场</h3></div>
+    <div class="slide-body">
+      <div class="mmd mmd-sm">
+        <div class="mermaid">
+flowchart TB
+  A["第①段 数学与机器学习基础 Ch1–5"] --> B["第②段 现代深度网络 Ch6–11"]:::here
+  B --> C["第③段 表示与推断 Ch12–16"]
+  C --> D["第④段 生成模型与前沿 Ch17–20"]
+  classDef here fill:#2b6cb0,color:#ffffff,stroke:#1a365d,stroke-width:3px
+        </div>
+      </div>
+      <p style="text-align:center; margin-top:10px;">第6章给<strong>反向传播</strong>、第7章改<strong>目标函数</strong>，本章解决「<strong>走法</strong>」——minibatch、衰减、动量、Adam；调顺的网络交给第9章卷积。</p>
+    </div>
+  </section>
+
+  <!-- ★ 3 本章主线 -->
+  <section class="slide" data-narration="本章的逻辑主线是一条因果链，我带你从头走一遍。第一环，底牌被换掉：我们真正想优化的期望泛化误差根本算不了，只能优化经验风险，而且梯度还得靠 minibatch 抽样估计，是指南针还带着噪声。第二环，曲面有病：不同方向曲率悬殊，条件数一大，同一个学习率让快方向发散、慢方向爬行，两头不讨好。第三环，先治噪声：学习率必须随时间衰减，满足和发散、平方和收敛这对条件。第四环，再治病态：动量给梯度装上惯性，一致方向放大十倍、震荡方向自动抵消；Adam 更进一步，给每个坐标各配一个步长。这条链就是本章的目录：八点一到八点五，一节扣一环。">
+    <div class="slide-head"><span class="sec">主线</span><h3>目标有噪声、曲面有病态，于是步长要衰减、方向要惯性、坐标要缩放</h3></div>
+    <div class="slide-body">
+      <div class="chain">
+        <div class="link"><span class="no">1</span><span class="txt"><strong>底牌</strong>：期望误差不可算，只能优化抽样的经验风险——梯度是带噪声的指南针（8.1）</span></div>
+        <div class="link"><span class="no">2</span><span class="txt"><strong>病根</strong>：曲面病态，同一学习率让快方向发散、慢方向爬行（8.2）</span></div>
+        <div class="link"><span class="no">3</span><span class="txt"><strong>治噪</strong>：学习率必须衰减，满足和发散、平方和收敛（8.3）</span></div>
+        <div class="link"><span class="no">4</span><span class="txt"><strong>治病</strong>：动量放大一致方向、抵消震荡（8.4）；Adam 逐坐标配步长（8.5）</span></div>
+      </div>
+      <div class="tip">这条链就是本章目录：8.1 目标 → 8.2 病态 → 8.3 步长 → 8.4 动量 → 8.5 自适应 → 8.6 二阶方法与结构。</div>
+    </div>
+  </section>
+
+  <!-- 4 动机 -->
+  <section class="slide" data-narration="先感受一下事情有多糟。第6、7章之后，我们手里有模型、有反向传播、有正则化好的目标函数，看起来万事俱备。但冷水有两盆。第一盆：你优化的根本不是真目标——期望泛化误差算不了，只能拿训练集的平均损失顶替，而且每步梯度还是抽样估计出来的，带着噪声。第二盆更疼：损失曲面是病态的，有的方向陡如悬崖，有的方向平如平原，同一个学习率，稍微大一点，误差十步放大五十七点七倍直接发散；守规矩调小呢，慢方向要二百三十步才下降九成。本章的方案就一句话：既然指南针带噪声、地形又崎岖，那就给这套走法配上抽样、衰减、惯性和逐坐标缩放四件装备。">
+    <div class="slide-head"><span class="sec">动机</span><h3>梯度算得出，训练却可能原地爆炸或慢如蜗牛</h3></div>
+    <div class="slide-body">
+      <p>第6、7章之后，模型、反向传播、正则化目标一应俱全——但一个条件数 100 的二次碗就足以让训练翻车：</p>
+      <div class="formula">$$\eta=0.025\;(\text{越界 }0.02)\Rightarrow 10\text{ 步误差 }\times 57.7\;;\qquad \eta=0.01\Rightarrow \text{慢方向降九成需 }230\text{ 步}$$</div>
+      <div class="cols">
+        <div class="col"><div class="card">🥶 <strong>冷水一：目标不对</strong><br>期望泛化误差算不了，只能优化抽样的经验风险——梯度带噪声。</div></div>
+        <div class="col"><div class="card">🥶 <strong>冷水二：曲面病态</strong><br>方向间曲率悬殊，同一学习率被快慢两个方向两头卡死。</div></div>
+      </div>
+      <div class="tip">💡 本章方案：给带噪声的指南针配四件装备——minibatch、学习率衰减、动量、自适应学习率。</div>
+    </div>
+  </section>
+
+  <!-- ★ 5 核心定义：经验风险 -->
+  <section class="slide" data-narration="先看第一个妥协：目标函数的替身。我们真正想要的是期望泛化误差，也就是在真实数据分布上损失的期望，但真实分布拿不到，只有一沓训练样本。于是退而求其次，用训练集上的平均损失来顶替，这叫经验风险，最小化它就是经验风险最小化。公式读法很直白：J 等于训练集上 m 个样本损失的平均值。但这还不够，零一损失处处梯度为零，根本没法用梯度法，所以实际优化的是代理损失，比如负对数似然；而且经验风险还不能降得太狠，降到底就是过拟合，第7章的早停正是在阻止这件事。一句话：我们刷的是题库的替身，而且只刷八分熟。">
+    <div class="slide-head"><span class="sec">定义</span><h3>我们优化的从来不是真目标，只是经验风险的替身</h3></div>
+    <div class="slide-body">
+      <div class="cols">
+        <div class="col"><div class="card">🗺️ <strong>经验风险（Empirical Risk）</strong><br>真实分布 p<sub>data</sub> 未知，用训练集平均损失代替期望损失；最小化它即经验风险最小化（ERM）。</div></div>
+        <div class="col"><div class="card">📋 <strong>代理损失（Surrogate Loss）</strong><br>0-1 损失处处梯度为 0，换成可微的负对数似然；且不降到最小——早停防过拟合。</div></div>
+      </div>
+      <div class="formula formula-concl">$$J(\theta)=\mathbb{E}_{(x,y)\sim\hat{p}_{\text{data}}}\,L(f(x;\theta),y)=\frac{1}{m}\sum_{i=1}^{m}L\!\left(f(x^{(i)};\theta),\,y^{(i)}\right)$$</div>
+      <div class="deep">读法：没见过题库全集，只能把手头这沓真题当全集刷——而且刷的还是替身题，只刷八分熟。</div>
+    </div>
+  </section>
+
+  <!-- 6 minibatch -->
+  <section class="slide" data-narration="就算只算经验风险的梯度，每步也要遍历全部样本，上千万样本时一步都走不动。出路是抽样：每次只取一个小批量，也就是 minibatch，用它估计梯度。估计有多准？把每个样本的梯度看成围绕真梯度波动的随机变量，标准差记 σ，那么 m 个样本平均梯度的标准误就是 σ 除以根号 m。代入数字感受一下：σ 等于一时，批量取一，标准误是一；批量一百，标准误零点一；批量一万，标准误零点零一。看规律：样本量翻一百倍，精度只提高十倍——根号 m 律决定了收益递减，再堆算力也只换来一位小数。而小批量每步便宜、能走更多步，噪声本身还有点正则化效果，这就是深度学习几乎全用几十到几百小批量的原因。">
+    <div class="slide-head"><span class="sec">minibatch</span><h3>批量翻一百倍，梯度精度只提高十倍</h3></div>
+    <div class="slide-body">
+      <div class="formula">$$\text{标准误（Standard Error）}\quad \mathrm{SE}=\frac{\sigma}{\sqrt{m'}}$$</div>
+      <table>
+        <thead><tr><th>批量大小 m′</th><th>标准误 σ/√m′（σ = 1）</th><th>相对上一档</th></tr></thead>
+        <tbody>
+          <tr><td>1</td><td>1/√1 = <strong>1</strong></td><td>—</td></tr>
+          <tr><td>100</td><td>1/√100 = <strong>0.1</strong></td><td>样本 ×100，误差 ÷10</td></tr>
+          <tr><td>10000</td><td>1/√10000 = <strong>0.01</strong></td><td>样本 ×100，误差 ÷10</td></tr>
+        </tbody>
+      </table>
+      <div class="deep">√m′ 律 = 收益递减：小批量每步便宜、能走更多步，噪声还有点正则化效果——这就是小批量划算的全部理由。</div>
+    </div>
+  </section>
+
+  <!-- ★ 7 核心定义：病态条件 -->
+  <section class="slide" data-narration="现在假设梯度精确已知，先不管噪声，训练是不是就稳了？远不是。梯度下降最大的敌人叫病态条件：损失曲面在不同方向上的曲率相差悬殊，有的方向陡峭如悬崖，有的方向平缓如平原。曲面局部由海森矩阵刻画，曲率悬殊的程度用条件数度量：κ 等于最大特征值比最小特征值。为什么曲率悬殊就难走？沿每个特征方向看，梯度下降每步把该方向的误差乘以因子一减 ηλ。要收敛，所有方向的这个因子绝对值都得小于一，解出来 η 必须小于二除以最大特征值——稳定步长被最陡方向封顶；而慢方向的速度又被同一个 η 卡住，走得慢如蜗牛。记住这个因子，下一页全靠它。">
+    <div class="slide-head"><span class="sec">定义</span><h3>曲率悬殊时，同一个学习率被快慢两个方向两头卡死</h3></div>
+    <div class="slide-body">
+      <div class="cols">
+        <div class="col"><div class="card">⛰️ <strong>病态条件（Ill Conditioning）</strong><br>损失曲面各方向曲率（Curvature）悬殊：陡如悬崖与平如平原并存，局部由海森矩阵（Hessian）H 刻画。</div></div>
+        <div class="col"><div class="card">📏 <strong>条件数（Condition Number）</strong><br>κ = 最大特征值 / 最小特征值；每个特征方向的误差每步乘 |1 − ηλ|，收敛要求 η 小于 2/λ<sub>max</sub>。</div></div>
+      </div>
+      <div class="formula formula-concl">$$\kappa(H)=\frac{\lambda_{\max}}{\lambda_{\min}}\;,\qquad \text{稳定步长界：}\ \eta \lt \frac{2}{\lambda_{\max}}$$</div>
+      <div class="deep">画面：梯度下降像只有一档速度的车——沿峡谷壁来回弹跳随时翻车，沿峡谷底慢如蜗牛。</div>
+    </div>
+  </section>
+
+  <!-- ★ 8 推导：η=0.025 发散（手算例 a） -->
+  <section class="slide" data-narration="这页我们把发散手算一遍。问题是二次碗：海森特征值最大一百、最小一，条件数一百。第一步，写稳定界：η 必须小于二除以一百，也就是零点零二。现在我们偏要取 η 等于零点零二五，只越界零点零零五。第二步，算快方向每步的误差因子：一减去零点零二五乘一百，等于负一点五，取绝对值就是一点五——每走一步，快方向误差放大一点五倍。第三步，连乘十步：一点五的五次方约等于七点五九，平方一下，一点五的十次方约等于五十七点七。也就是说，十步之后误差放大将近五十八倍，参数越走越远离最优，训练 loss 突然暴涨甚至变成 NaN——这就是发散。只越界千分之五，代价是五十八倍，病态条件就是这么记仇。">
+    <div class="slide-head"><span class="sec">推导</span><h3>学习率越界千分之五，十步误差放大五十八倍</h3></div>
+    <div class="slide-body">
+      <div class="step">
+        <p><strong>① 写稳定界</strong>：λ<sub>max</sub> = 100、λ<sub>min</sub> = 1，κ = 100；取 η = 0.025 越界</p>
+        <div class="formula">$$\eta \lt \frac{2}{\lambda_{\max}}=\frac{2}{100}=0.02\;,\qquad \eta=0.025\ \text{越界 }0.005$$</div>
+      </div>
+      <div class="step">
+        <p><strong>② 快方向每步误差因子</strong>：绝对值大于 1 → 每步放大</p>
+        <div class="formula">$$|1-\eta\lambda_{\max}|=|1-0.025\times 100|=|1-2.5|=1.5$$</div>
+      </div>
+      <div class="step">
+        <div class="formula formula-concl">$$1.5^{5}\approx 7.59\;\Rightarrow\;\boldsymbol{1.5^{10}\approx 57.7}\ \text{——十步放大近 58 倍，发散}$$</div>
+      </div>
+      <p class="step-hint">按空格 / → 逐步展开推导</p>
+    </div>
+  </section>
+
+  <!-- 9 慢方向爬行 + 峡谷示意 -->
+  <section class="slide" data-narration="那守规矩会怎样？取 η 等于零点零一，在界内。快方向：一减去零点零一乘一百，恰好等于零，一步就把快方向误差清零，完美。慢方向：一减去零点零一乘一，等于零点九九，每步只削减百分之一。想把慢方向误差降到十分之一，要解零点九九的 n 次方等于零点一，取对数算出来约二百二十九点一，也就是二百三十步。看这笔账：快方向一步收敛，慢方向要二百三十步——同一个学习率，不可能同时讨好两个方向。右边这张图就是病态曲面上的真实轨迹：参数在峡谷两壁之间来回弹跳，随时翻车，而沿谷底的前进几乎停滞。条件数一百还算温和，深度网络的海森条件数动辄成千上万。">
+    <div class="slide-head"><span class="sec">对照</span><h3>守规矩的代价：快方向一步收敛，慢方向要二百三十步</h3></div>
+    <div class="slide-body">
+      <div class="cols">
+        <div class="col">
+          <p>η = 0.01（守界）：快方向 |1 − 0.01×100| = 0，<strong>一步清零</strong>；慢方向每步 ×0.99：</p>
+          <div class="formula">$$0.99^{n}=0.1\Rightarrow n=\frac{\lg 0.1}{\lg 0.99}\approx\frac{-1}{-0.004365}\approx \boldsymbol{230\text{ 步}}$$</div>
+          <div class="warn">同一个 η，不可能同时讨好两个方向——这就是病态条件的诅咒。</div>
+        </div>
+        <div class="col">
+          <div class="mmd mmd-tall">
+            <div class="mermaid">
+flowchart TB
+  A["从峡谷一侧出发"] --> B["撞上对壁：误差 ×1.5"]
+  B --> C["弹回再撞：震荡发散"]
+  C --> D["谷底方向：每步仅 ×0.99"]
+  D --> E["同一学习率 两头难"]
+            </div>
+          </div>
+          <p style="text-align:center; font-size:18px; color:var(--muted);">峡谷状损失面：沿壁弹跳翻车，沿底慢如蜗牛</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 10 SGD 收敛条件 -->
+  <section class="slide" data-narration="把噪声和病态两个麻烦叠加，就是深度学习的日常：随机梯度下降，SGD。它要想收敛，学习率不能一成不变，必须满足一对经典条件：所有步长之和等于无穷，同时步长的平方和有限。第一条说，步子总量要够走任意远，否则最优点在远处就永远到不了；第二条说，步长衰减要足够快，才能压住噪声的累积扰动。验证一个例子：ηt 等于零点一除以 t。它的和是零点一倍调和级数，发散，第一条过；平方和是零点零一倍 p 等于二的级数，收敛到大约零点零一六四，第二条也过。反过来，常数学习率的平方和是无穷，第二条直接失败——所以常数步长在理论上就不收敛。">
+    <div class="slide-head"><span class="sec">收敛条件</span><h3>步长之和要发散，平方和要收敛，SGD 才肯停下</h3></div>
+    <div class="slide-body">
+      <div class="formula formula-concl">$$\sum_{t=1}^{\infty}\eta_t=\infty \qquad\text{且}\qquad \sum_{t=1}^{\infty}\eta_t^{2} \lt \infty$$</div>
+      <table>
+        <thead><tr><th>验证 η<sub>t</sub> = 0.1/t</th><th>级数</th><th>结论</th></tr></thead>
+        <tbody>
+          <tr><td class="l">∑ η<sub>t</sub></td><td>0.1 ×（1 + 1/2 + 1/3 + …）= 0.1 × 调和级数</td><td>发散 → ∞ ✓</td></tr>
+          <tr><td class="l">∑ η<sub>t</sub>²</td><td>0.01 ×（1 + 1/4 + 1/9 + …）= 0.01 × π²/6</td><td>≈ 0.0164 收敛 ✓</td></tr>
+          <tr><td class="l">常数 η<sub>t</sub> = η</td><td>∑ η² = ∞</td><td>第二条失败 ✗</td></tr>
+        </tbody>
+      </table>
+      <div class="deep">一句话：步子总量要够走任意远（和发散），后期步子要小到能被噪声原谅（平方和收敛）。</div>
+    </div>
+  </section>
+
+  <!-- 11 常数学习率的噪声地板 -->
+  <section class="slide" data-narration="常数学习率到底失败在哪？直觉很具体。假设参数已经站在最优点的碗里，此时真实梯度是零，但 minibatch 估计的梯度不是零——它在零附近随机波动，方差不为零。每步更新就是一个以零为均值、幅度正比于 η 的随机跳动。η 不衰减，跳动幅度就不衰减，参数永远在最优点附近做半径正比于 η 的随机游走——能靠近，却永远停不下。这就是训练后期 loss 曲线抖动着下不去的原因之一：不是模型坏了，是撞上了噪声地板。工程上的改法是线性衰减：第 t 轮的学习率按一减 t 比 T 的比例从初值滑向末值，到第 T 轮降到初值的百分之一左右，让跳动随步长一起消失。">
+    <div class="slide-head"><span class="sec">噪声地板</span><h3>常数学习率让参数在最优点附近永远随机游走</h3></div>
+    <div class="slide-body">
+      <ul>
+        <li>最优点处真实梯度 = 0，但估计梯度 ĝ 方差不为 0 → 更新 $-\eta\hat{g}$ 是均值 0、幅度 ∝ η 的随机跳动</li>
+        <li>η 不衰减 → 跳动不衰减 → 参数永远做半径 ≈ η ×（噪声水平）的随机游走，<strong>能靠近，停不下</strong></li>
+        <li>调大 batch 只能按 √m′ 律压噪声，除全量梯度外方差永远严格大于 0</li>
+      </ul>
+      <div class="formula">$$\eta_t=\Bigl(1-\frac{t}{T}\Bigr)\eta_0+\frac{t}{T}\eta_T\;,\qquad \eta_T\approx 1\%\,\eta_0$$</div>
+      <div class="tip">💡 随机性不随训练消失，只能靠步长消失来对冲——工程上用线性衰减收尾。</div>
+    </div>
+  </section>
+
+  <!-- 12 动量定义 -->
+  <section class="slide" data-narration="衰减治噪声，但对病态无能为力。动量换了个思路：不改步长，改步长由什么决定。它维护一个速度变量 v，更新规则是：v 等于 α 乘旧 v 减去 ε 乘梯度，然后参数直接加上 v。α 是动量系数，常取零点九。这个 v 其实是历史梯度的指数加权移动平均：方向一致的梯度会越积越大，方向来回翻转的梯度会相互抵消——这正是峡谷问题的对症药。谷底方向梯度永远同向，速度滚雪球；峡谷壁方向梯度正负交替，加进平均里正负抵消，速度涨不起来。α 的作用期也直白：一除以一减 α 等于十，历史梯度的影响大约延续十步。下一页我们把这个雪球算给你看。">
+    <div class="slide-head"><span class="sec">动量</span><h3>动量不改步长，改步长由历史梯度的加权平均决定</h3></div>
+    <div class="slide-body">
+      <div class="formula formula-concl">$$\boldsymbol{v\leftarrow \alpha v-\varepsilon\nabla J\;,\qquad \theta\leftarrow \theta+v}$$</div>
+      <div class="cols">
+        <div class="col"><div class="card">🌀 <strong>部件A：指数加权移动平均（EWMA）</strong><br>v 是历史梯度的指数加权平均；α = 0.9 时影响延续约 1/(1−α) = 10 步。</div></div>
+        <div class="col"><div class="card">⚖️ <strong>部件B：共识累加、分歧抵消</strong><br>一致方向梯度越积越大（加速）；震荡方向梯度正负翻转、相互抵消（抑振）。</div></div>
+      </div>
+      <div class="deep">画面：参数是小球，梯度是坡度，α 是无摩擦程度——冲下谷底越滚越快，撞上谷壁来回弹、平均为零。</div>
+    </div>
+  </section>
+
+  <!-- ★ 13 演练：动量手算（手算例 b，本章唯一互动停顿页） -->
+  <section class="slide" data-narration="现在轮到你动手。题目：α 取零点九，ε 取零点零一，梯度恒为二，模拟峡谷底那种方向永远一致的慢方向，初始速度为零，逐代公式是 v 等于零点九乘旧 v 减零点零二。请你算前三步的速度，再猜稳态速度是多少。先暂停视频自己推一遍。推出来了吗？好，对答案。第一步，零点九乘零减零点零二，得负零点零二。第二步，零点九乘负零点零二再减零点零二，得负零点零三八。第三步，得负零点零五四二。稳态就是 v 不再变化：v 等于零点九 v 减零点零二，解出零点一 v 等于负零点零二，稳态速度负零点二。裸 SGD 同样条件下每步只走负零点零二，动量的终端速度是它的整整十倍。">
+    <div class="slide-head"><span class="sec">演练</span><h3>一致方向上，动量把步速放大整整十倍</h3></div>
+    <div class="slide-body">
+      <div class="step"><p>① v<sub>1</sub> = 0.9×0 − 0.02 = <strong>−0.02</strong>；v<sub>2</sub> = 0.9×(−0.02) − 0.02 = <strong>−0.038</strong>；v<sub>3</sub> = 0.9×(−0.038) − 0.02 = <strong>−0.0542</strong></p></div>
+      <div class="step"><p>② 稳态：令 v<sub>∞</sub> = 0.9v<sub>∞</sub> − 0.02 ⟹ 0.1v<sub>∞</sub> = −0.02</p></div>
+      <div class="step">
+        <div class="formula formula-concl">$$v_{\infty}=-\frac{\varepsilon\nabla}{1-\alpha}=-\frac{0.02}{0.1}=\boldsymbol{-0.2}\;,\quad \text{放大 }\frac{1}{1-\alpha}=10\text{ 倍（裸 SGD 仅 }-0.02\text{）}$$</div>
+      </div>
+      <div class="pause"><div class="icon">✍️</div><div class="txt"><b>暂停推导</b><p>动手：按 v<sub>t</sub> = 0.9v<sub>t−1</sub> − 0.02 算出 v<sub>1</sub>、v<sub>2</sub>、v<sub>3</sub>，再解稳态方程 v = 0.9v − 0.02，写下你的 v<sub>∞</sub> 再回来对答案。</p></div></div>
+      <p class="step-hint">按空格 / → 逐步揭示答案</p>
+    </div>
+  </section>
+
+  <!-- 14 算法演进图 -->
+  <section class="slide" data-narration="到这里，本章的算法谱系就齐了，我们站在高处看一眼。最底下是 SGD：所有参数共享一个步长，沿估计梯度的反方向走，朴素但两头难。加第一味药，动量：在时间维上给梯度加惯性，方向一致的越走越快，方向震荡的自动抵消，治的是峡谷里的来回弹跳。加第二味药，RMSProp：换一个维度，在空间上逐坐标缩放，历史梯度大的坐标自动压小步长，治的是不同方向曲率悬殊。最后 Adam 把两者缝在一起：一阶动量加二阶缩放，再补一个偏差修正治冷启动。从 SGD 到 Adam 的每一步，都是在给不同方向、不同坐标配上各自合适的速度。">
+    <div class="slide-head"><span class="sec">谱系</span><h3>从 SGD 到 Adam，每一步都在给不同方向配不同速度</h3></div>
+    <div class="slide-body">
+      <div class="mmd">
+        <div class="mermaid">
+flowchart TB
+  S["SGD：所有参数共享一个步长"] --> M["动量：时间维加惯性，放大共识、抵消震荡"]
+  M --> R["RMSProp：空间维逐坐标，按梯度平方缩放步长"]
+  R --> AD["Adam：动量 + RMSProp + 偏差修正"]
+        </div>
+      </div>
+      <div class="tip">💡 谱系一句话：动量治「时间上的震荡」，RMSProp 治「坐标间的悬殊」，Adam 把两味药缝在一起再补冷启动。</div>
+    </div>
+  </section>
+
+  <!-- 15 RMSProp -->
+  <section class="slide" data-narration="先看 RMSProp，它治的病最直接：8.2 说了，病根是不同方向曲率不同，却共享一个学习率，那就给每个参数单独配学习率。做法：维护梯度平方的指数加权平均 r，更新时用学习率除以根号 r 加一个小量 δ。效果正是我们要的：快方向梯度持续很大，r 就大，实际步长被压缩，不发散；慢方向梯度持续很小，r 就小，步长相对放大，不爬行。δ 不是摆设，它防的是 r 极小时除零爆炸，量级十的负八次方就够。注意 RMSProp 结构很素：只有二阶矩缩放，没有动量那样的一阶平均，也没有偏差修正——这两块短板，正是下一页 Adam 要补的。">
+    <div class="slide-head"><span class="sec">RMSProp</span><h3>历史梯度越大的坐标，实际步长压得越小</h3></div>
+    <div class="slide-body">
+      <div class="formula">$$r\leftarrow \beta_2 r+(1-\beta_2)g^{2}\;,\qquad \Delta\theta=-\frac{\varepsilon}{\sqrt{r}+\delta}\,g$$</div>
+      <ul>
+        <li>快方向 g 持续大 → r 大 → 步长被压缩，<strong>不发散</strong>；慢方向 g 持续小 → r 小 → 步长相对放大，<strong>不爬行</strong></li>
+        <li>δ ≈ 10⁻⁸：防 r 极小时除零爆炸，不是摆设</li>
+      </ul>
+      <div class="warn">RMSProp 只有二阶矩缩放：无一阶动量、无偏差修正——这两块短板由 Adam 补齐。</div>
+    </div>
+  </section>
+
+  <!-- 16 Adam 定义 -->
+  <section class="slide" data-narration="Adam，自适应矩估计，等于 RMSProp 的逐坐标缩放，加上动量的一阶平均，再加一项常被忽视却关键的偏差修正。四行公式我逐一读给你听：第一行，m 是梯度的一阶矩估计，相当于动量里的速度；第二行，v 是梯度平方的二阶矩估计，相当于 RMSProp 里的 r；第三行，把 m 和 v 各除以一减 β 的 t 次方，这叫偏差修正，t 是步数；第四行，更新量等于负 ε 乘 m 帽除以根号 v 帽加 δ。一句话读法：Adam 是信噪比驱动——分子是梯度的共识，分母是梯度的规模，方向稳定时比值接近正负一，全速走 ε；方向混乱时比值趋零，自动减速。">
+    <div class="slide-head"><span class="sec">Adam</span><h3>Adam = 动量 + RMSProp + 偏差修正，信噪比驱动</h3></div>
+    <div class="slide-body">
+      <div class="cols">
+        <div class="col">
+          <div class="formula">$$m\leftarrow\beta_1 m+(1-\beta_1)g\quad\text{（一阶矩≈动量）}$$</div>
+          <div class="formula">$$v\leftarrow\beta_2 v+(1-\beta_2)g^{2}\quad\text{（二阶矩≈RMSProp）}$$</div>
+        </div>
+        <div class="col">
+          <div class="formula">$$\hat{m}=\frac{m}{1-\beta_1^{t}}\;,\ \hat{v}=\frac{v}{1-\beta_2^{t}}\quad\text{（偏差修正）}$$</div>
+          <div class="formula formula-concl">$$\boldsymbol{\Delta\theta=-\varepsilon\,\frac{\hat{m}}{\sqrt{\hat{v}}+\delta}}$$</div>
+        </div>
+      </div>
+      <div class="deep">读法：分子是「梯度的共识」，分母是「梯度的规模」——方向稳则比值 ≈ ±1 全速走 ε，方向乱则趋 0 自动减速。</div>
+    </div>
+  </section>
+
+  <!-- ★ 17 推导：Adam 首步（手算例 c） -->
+  <section class="slide" data-narration="我们把 Adam 的第一步完整手算一遍。设定：梯度 g 恒为二，β一零点九，β二零点九九九，ε 零点零零一，m 和 v 从零启动。第一步，算两个矩：m 一等于零点九乘零加零点一乘二，得零点二；v 一等于零点九九九乘零加零点零零一乘四，得零点零零四。第二步，偏差修正：m 帽等于零点二除以一减零点九，也就是除以零点一，得二；v 帽等于零点零零四除以一减零点九九九，也就是除以零点零零一，得四。注意修正后恰好还原了观测本身。第三步，更新量：负零点零零一乘二，除以根号四加十的负八，约等于负零点零零一。对比裸 SGD 同条件下的负零点零零二，Adam 首步有效步长约等于 ε，而且与 g 的大小几乎无关——这正是它的设计意图：步长以 ε 为天然单位。">
+    <div class="slide-head"><span class="sec">推导</span><h3>Adam 首步有效步长约等于 ε，与梯度大小几乎无关</h3></div>
+    <div class="slide-body">
+      <div class="step">
+        <p><strong>① 两个矩</strong>（g = 2，β₁ = 0.9，β₂ = 0.999，ε = 0.001，m₀ = v₀ = 0）</p>
+        <div class="formula">$$m_1=0.9\times 0+0.1\times 2=0.2\;,\qquad v_1=0.999\times 0+0.001\times 4=0.004$$</div>
+      </div>
+      <div class="step">
+        <p><strong>② 偏差修正</strong>：恰好还原观测本身</p>
+        <div class="formula">$$\hat{m}_1=\frac{0.2}{1-0.9}=\frac{0.2}{0.1}=2\;,\qquad \hat{v}_1=\frac{0.004}{1-0.999}=\frac{0.004}{0.001}=4$$</div>
+      </div>
+      <div class="step">
+        <div class="formula formula-concl">$$\Delta\theta=-0.001\times\frac{2}{\sqrt{4}+10^{-8}}\approx \boldsymbol{-0.001}\ \text{（裸 SGD 同条件 }-0.002\text{）}$$</div>
+      </div>
+      <p class="step-hint">按空格 / → 逐步展开推导</p>
+    </div>
+  </section>
+
+  <!-- 18 偏差修正不可省 -->
+  <section class="slide" data-narration="偏差修正能不能省？算给你看。如果跳过修正，直接用 m 一等于零点二、v 一等于零点零零四，更新量就是负零点零零一乘零点二，除以根号零点零零四，约等于负零点零零三一六——比正常值负零点零零一大了三倍还多。病根在哪？m 和 v 从零启动，初期被压向零：第一步的 m 只有真值的十分之一，v 更惨，只有真值的千分之一。两个偏差差着两个数量级，开根号之后比例彻底失衡，步长和方向一起失真。修正项一减 β 的 t 次方恰好把估计拉回无偏：第一步时 m 帽、v 帽恰好等于观测本身；t 变大以后 β 的 t 次方趋零，修正自动退场，不用你手动关闭。">
+    <div class="slide-head"><span class="sec">深挖</span><h3>省掉偏差修正，首步更新立刻大三倍</h3></div>
+    <div class="slide-body">
+      <div class="formula">$$\text{不修正：}\ \Delta\theta=-0.001\times\frac{0.2}{\sqrt{0.004}}\approx -0.001\times\frac{0.2}{0.0632}\approx \boldsymbol{-0.00316}\ \text{（大三倍多）}$$</div>
+      <ul>
+        <li>m、v 从 0 启动被压向 0：m₁ 仅真值的 <strong>1/10</strong>，v₁ 仅真值的 <strong>1/1000</strong></li>
+        <li>两个偏差差两个数量级，开根号后比例失衡 → 步长与方向一起失真</li>
+        <li>1 − βᵗ 把估计拉回无偏；t 变大后 βᵗ → 0，<strong>修正自动退场</strong></li>
+      </ul>
+      <div class="deep">一句话：冷启动时二阶矩偏得最狠，偏差修正专治这个；它不是可选项，是 Adam 的一部分。</div>
+    </div>
+  </section>
+
+  <!-- 19 二阶方法与 BN -->
+  <section class="slide" data-narration="病态条件在教科书里有现成答案：牛顿法直接用海森逆矩阵乘梯度，一步纠正所有方向的曲率差异。问题是深度网络有 n 个参数，海森就有 n 平方个元素——n 取十的九次方时，光存它就要十的十八次方个数，求逆更是 n 立方量级。二阶方法在精确曲率上是赢家，在存储和算力上直接出局。更工程化的出路是改造曲面本身：批量归一化，BN，把每层输入在 batch 内减均值、除标准差再仿射还原。从优化视角看，它是一次重参数化：层与层之间的尺度不再互相追逐，损失曲面被捋平，条件数显著改善，于是可以安全用更大的学习率。算法迁就曲面，结构改造曲面——这是一枚硬币的两面。">
+    <div class="slide-head"><span class="sec">二阶与结构</span><h3>牛顿法出局，BN 用重参数化把曲面捋平</h3></div>
+    <div class="slide-body">
+      <div class="cols">
+        <div class="col"><div class="card">🏛️ <strong>牛顿法（Newton's Method）</strong><br>H⁻¹∇J 一步纠正所有方向曲率；但 n = 10⁹ 时 H 要存 10¹⁸ 个数、求逆 O(n³)——存储与算力上直接出局。</div></div>
+        <div class="col"><div class="card">🦴 <strong>批量归一化（BN）的优化视角</strong><br>每层输入减均值除标准差再仿射 = 重参数化（Reparameterization）：解耦层间尺度、捋平曲面、改善条件数 → 可用更大学习率。</div></div>
+      </div>
+      <div class="deep">一枚硬币的两面：算法迁就曲面（动量、Adam），结构改造曲面（BN、残差连接）。训练困难时先问该换算法还是该改结构。</div>
+    </div>
+  </section>
+
+  <!-- ★ 20 误区 -->
+  <section class="slide" data-narration="本章三个高频误区，挨个扫雷。第一个：一看训练后期 loss 抖动就以为模型坏了，急着换模型。多数时候只是常数学习率撞上噪声地板——最优点附近估计梯度方差不为零，参数永远做半径正比于 η 的随机游走，把学习率衰减下去就解决了。第二个：训练一发散就怀疑反向传播算错了。其实多数时候反向传播没问题，是 η 越过了二除以最大特征值这条线——我们的例子里只差零点零零五就越界。第三个：以为 Adam 免调学习率、偏差修正能省。ε 仍然是第一超参数，只是容忍度比 SGD 高；不修正的话首步更新放大三倍还多，方向也失真。记住口诀：后期抖动先衰减，发散先砍学习率，Adam 修正不能省。">
+    <div class="slide-head"><span class="sec">避坑</span><h3>本章最容易错的三件事</h3></div>
+    <div class="slide-body">
+      <div class="trap">❌ <strong>loss 后期抖动 = 模型坏了，换模型</strong><br>✅ 多数是常数学习率撞上噪声地板——噪声方差不为零，参数永远随机游走；衰减 η 即解。</div>
+      <div class="trap">❌ <strong>训练发散 = 反向传播算错了</strong><br>✅ 多数只是 η 越过 2/λ<sub>max</sub>（例中 0.025 对界 0.02，只差 0.005）；先砍学习率再怀疑梯度。</div>
+      <div class="trap">❌ <strong>Adam 免调学习率，偏差修正可省</strong><br>✅ ε 仍是第一超参数；不修正首步更新放大三倍多。口诀：抖动先衰减，发散先砍 η，修正不能省。</div>
+    </div>
+  </section>
+
+  <!-- 21 接口 -->
+  <section class="slide" data-narration="本章和前后章怎么分工？看这张表。第7章改的是目标函数：用正则化把经验风险变得更合理，它的失败信号是过拟合；本章第8章改的是走法：用 minibatch、衰减、动量、Adam 把带噪声的梯度走稳，失败信号是发散、震荡和噪声地板；第9章改的是结构：用卷积把图像的平移不变性变成参数共享，失败信号是参数爆炸、算力吃不消。三者各管一层，互不替代。钩子在 8.6 已经埋下：BN 说明结构能改造曲面——既然结构与优化是一枚硬币的两面，第9章卷积网络就来看看，结构设计的另一场革命怎么让图像任务脱胎换骨。">
+    <div class="slide-head"><span class="sec">接口</span><h3>第7章改目标，本章改走法，第9章改结构</h3></div>
+    <div class="slide-body">
+      <table>
+        <thead><tr><th></th><th>第7章 正则化</th><th>第8章 优化（本章）</th><th>第9章 卷积网络</th></tr></thead>
+        <tbody>
+          <tr><td class="l"><strong>改什么</strong></td><td class="l">目标函数</td><td class="l">走法（优化算法）</td><td class="l">网络结构</td></tr>
+          <tr><td class="l"><strong>典型工具</strong></td><td class="l">正则化、早停</td><td class="l">minibatch、衰减、动量、Adam</td><td class="l">卷积、参数共享、池化</td></tr>
+          <tr><td class="l"><strong>失败信号</strong></td><td class="l">过拟合</td><td class="l">发散、震荡、噪声地板</td><td class="l">参数爆炸、算力吃不消</td></tr>
+        </tbody>
+      </table>
+      <div class="tip">钩子：BN 已证明结构能改造曲面——第9章看卷积怎么用结构让图像任务脱胎换骨。</div>
+    </div>
+  </section>
+
+  <!-- ★ 22 小结 -->
+  <section class="slide" data-narration="三句话讲完第8章。第一句，解决什么：回到主线问题——损失面如此崎岖，梯度法凭什么找得到路？答案是：目标只是抽样的经验风险，梯度带噪声，曲面又病态，朴素梯度下降要么发散、要么爬行。第二句，核心机制：minibatch 用根号 m 律在噪声与成本间取平衡；学习率衰减让随机游走停得下；动量把一致方向放大十倍、震荡方向抵消；Adam 用信噪比给每个坐标配步长，偏差修正治冷启动。第三句，遗留问题：有些病根在模型结构本身，BN 只是露了一手，曲面与结构的耦合交给第9章卷积网络和第11章方法论。合上书也要能默写这条公式：更新量等于负 ε 乘 m 帽，除以根号 v 帽加 δ。">
+    <div class="slide-head"><span class="sec">小结</span><h3>三句话讲完第8章</h3></div>
+    <div class="slide-body">
+      <div class="chain">
+        <div class="link"><span class="no">1</span><span class="txt"><strong>主线问题</strong>：损失面如此崎岖，梯度法凭什么找得到路？——目标带噪声、曲面有病态，朴素梯度法要么发散要么爬行</span></div>
+        <div class="link"><span class="no">2</span><span class="txt"><strong>核心机制</strong>：√m′ 律取平衡、学习率衰减停得住、动量放大共识抵消震荡、Adam 信噪比逐坐标配步长</span></div>
+        <div class="link"><span class="no">3</span><span class="txt"><strong>遗留问题</strong>：有些病根在结构本身——曲面与结构的耦合，交给 BN、第9章卷积与第11章方法论</span></div>
+      </div>
+      <div class="formula formula-concl">$$\Delta\theta=-\varepsilon\,\frac{\hat{m}}{\sqrt{\hat{v}}+\delta} \quad\text{——合上书也要能默写}$$</div>
+    </div>
+  </section>
+
+  <!-- ★ 23 结束页 -->
+  <section class="slide slide-cover" data-narration="本章到此结束。送你一句金句：动量放大的是共识，抵消的是分歧；Adam 给每个坐标配自己的速度——崎岖的损失面，就是这样被一步步走平的。毕业挑战，合上书拿一张纸：第一，写出标准误公式，算出批量一、一百、一万时的三个数；第二，对条件数一百的二次碗写出稳定界，手算越界时十步放大五十七点七倍、守界时慢方向二百三十步；第三，手算动量前三步与稳态负零点二；第四，手算 Adam 首步，并算出不修正时的负零点零零三一六。全过，本章毕业。下一章，第9章卷积网络：图像的平移不变性，怎么变成参数共享？">
+    <div class="kicker">本 章 结 束</div>
+    <h1>崎岖的损失面，是被配好速度的步子走平的</h1>
+    <div class="sub">毕业挑战：合上书，拿一张纸</div>
+    <div class="divider"></div>
+    <div class="meta">
+      ☑ SE 公式与 1 / 0.1 / 0.01 三个数　　☑ 稳定界 0.02、发散 57.7 倍、慢方向 230 步<br>
+      ☑ 动量前三步与稳态 −0.2　　☑ Adam 首步 −0.001 与不修正的 −0.00316<br><br>
+      下一章 · 第9章 卷积网络：图像的平移不变性，怎么变成参数共享？
+    </div>
+  </section>
+
+  <!-- 页脚 -->
+  <div id="footer">
+    <span class="brand">第8章 深度模型的优化 · 深度学习课件</span>
+    <span id="pagenum">1 / 23</span>
+  </div>
+
+  <!-- 导航 -->
+  <div class="nav">
+    <button id="prev" title="上一页 (←)">‹</button>
+    <button id="next" title="下一页 (→ / 空格)">›</button>
+  </div>
+  <div id="hint">← → 翻页 · 空格下一页 · 推导页逐步显示 · 点击左右半屏翻页</div>
+
+</div>
+
+<!-- mermaid 本地引用，保证离线可用；初始化参数全套课件统一，勿改 -->
+<script src="/lectures-assets/mermaid.min.js"></script>
+<script>
+mermaid.initialize({
+  startOnLoad: false,   // 必须为 false：display:none 的隐藏页渲染会得到 0 宽高的退化 SVG，
+                        // 改为页面激活时懒渲染（见 renderMermaid）
+  theme: "base",
+  themeVariables: {
+    primaryColor: "#ebf8ff",
+    primaryBorderColor: "#2b6cb0",
+    primaryTextColor: "#1a365d",
+    lineColor: "#718096",
+    fontFamily: "-apple-system, PingFang SC, sans-serif",
+    fontSize: "15px"
+  },
+  flowchart: { curve: "linear", htmlLabels: false }
+});
+</script>
+<script>
+(function(){
+  const slides = Array.from(document.querySelectorAll('.slide'));
+  const total = slides.length;
+  let idx = 0;
+
+  const params = new URLSearchParams(location.search);
+  const startSlide = parseInt(params.get('slide'), 10);
+  if (params.get('autohide') === '1') document.body.classList.add('autohide');
+  if (!isNaN(startSlide) && startSlide >= 1 && startSlide <= total) idx = startSlide - 1;
+
+  const progress = document.getElementById('progress');
+  const pagenum = document.getElementById('pagenum');
+  const prevBtn = document.getElementById('prev');
+  const nextBtn = document.getElementById('next');
+
+  // 推导分步：每页记住已展开的步数；autohide（截图）模式下 CSS 强制全显
+  const stepState = new Map();
+  function stepsOf(i){ return Array.from(slides[i].querySelectorAll('.step')); }
+  function applySteps(){
+    stepsOf(idx).forEach((el, k)=> el.classList.toggle('on', k < (stepState.get(idx) || 0)));
+  }
+  // 前进一步：先展开本页下一步，全部展开后才翻页
+  function forward(){
+    const steps = stepsOf(idx);
+    const shown = stepState.get(idx) || 0;
+    if (shown < steps.length){ stepState.set(idx, shown + 1); applySteps(); return; }
+    go(idx + 1);
+  }
+  // 后退一步：先收起本页最后一步，收完才回上一页
+  function backward(){
+    const steps = stepsOf(idx);
+    const shown = stepState.get(idx) || 0;
+    if (shown > 0){ stepState.set(idx, shown - 1); applySteps(); return; }
+    go(idx - 1);
+  }
+
+  // mermaid 懒渲染：只在页面激活（有真实宽高）时渲染该页的图，渲染后打 data-done 防重复
+  function renderMermaid(slide){
+    if (typeof mermaid === 'undefined') return;
+    const nodes = Array.from(slide.querySelectorAll('.mermaid:not([data-done])'));
+    if (!nodes.length) return;
+    nodes.forEach(n => n.setAttribute('data-done', ''));
+    mermaid.run({ nodes }).catch(err => {
+      nodes.forEach(n => n.removeAttribute('data-done'));
+      console.error('mermaid 渲染失败：', err);
+    });
+  }
+
+  function render(){
+    slides.forEach((s,i)=> s.classList.toggle('active', i===idx));
+    progress.style.width = ((idx+1)/total*100) + '%';
+    pagenum.textContent = (idx+1) + ' / ' + total;
+    prevBtn.disabled = (idx===0);
+    nextBtn.disabled = (idx===total-1);
+    applySteps();
+    renderMermaid(slides[idx]);
+  }
+  function go(n){ idx = Math.max(0, Math.min(total-1, n)); render(); }
+
+  prevBtn.addEventListener('click', e=>{ e.stopPropagation(); backward(); });
+  nextBtn.addEventListener('click', e=>{ e.stopPropagation(); forward(); });
+
+  document.addEventListener('keydown', e=>{
+    if(e.key==='ArrowRight'||e.key===' '||e.key==='PageDown'){ e.preventDefault(); forward(); }
+    else if(e.key==='ArrowLeft'||e.key==='PageUp'){ e.preventDefault(); backward(); }
+    else if(e.key==='Home'){ stepState.set(idx, 0); go(0); }
+    else if(e.key==='End'){ go(total-1); }
+  });
+
+  document.getElementById('stage').addEventListener('click', e=>{
+    if(e.target.closest('.nav')) return;
+    const x = e.clientX;
+    if(x < window.innerWidth*0.5) backward(); else forward();
+  });
+
+  function fit(){
+    const s = Math.min(window.innerWidth/1280, window.innerHeight/720);
+    document.getElementById('stage').style.transform = 'translate(-50%,-50%) scale(' + s + ')';
+  }
+  window.addEventListener('resize', fit);
+  fit();
+  render();
+})();
+</script>
+</body>
+</html>

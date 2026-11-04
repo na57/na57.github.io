@@ -1,0 +1,667 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第10章 等式约束极小化 · 凸优化互动讲义</title>
+<link rel="stylesheet" href="/lectures-assets/style.css">
+</head>
+<body>
+
+<nav class="topbar">
+  <div class="topbar-inner">
+    <span class="brand"><a href="index.html" style="color:inherit">← 学习地图</a></span>
+    <span class="crumb">阶段④ · 算法 / 第10章</span>
+  </div>
+</nav>
+
+<div class="wrap">
+
+  <div class="lecture-head">
+    <span class="ch-label">CHAPTER 10 · 算法</span>
+    <h1>等式约束极小化</h1>
+    <p class="lead">第9章的 Newton 法只能处理没有约束的问题。本章回答：多了 Ax=b 这排钉子，每一步怎么走、从不可行的点怎么出发、每一步比无约束贵多少。</p>
+  </div>
+
+  <div class="position-bar">
+    <strong>本章在主线上的位置：</strong>第9章解决了无约束问题的下降方向与收敛率 → <u>本章把 Newton 法推广到等式约束 Ax=b</u> → 第11章再把不等式约束吸收进障碍函数，完成全书算法收束。<br>
+    第10章回答主线上的第10个问题：<strong>Ax=b 约束下，Newton 步长什么样，从不可行点怎么出发？</strong>
+    <div class="map-inline">
+      <span class="node">Ch9 无约束 Newton（给了迭代框架）</span><span class="arrow">→</span>
+      <span class="node here">Ch10 等式约束极小化</span><span class="arrow">→</span>
+      <span class="node">Ch11 内点法（用到可行 Newton 解中心问题）</span><span class="arrow">→</span>
+      <span class="node">回到 Ch4–5（LP/QP 终于能算了）</span>
+    </div>
+  </div>
+
+  <div class="objectives">
+    <h4>🎯 学完本章，合上书你应该能：</h4>
+    <ol>
+      <li>说出消元法的三步，并指出它何时比直接解 KKT 系统更贵</li>
+      <li>写出等式约束问题的 KKT 最优性条件 ∇f(x*)+Aᵀν*=0、Ax*=b</li>
+      <li>手算一个二元二次问题的消元解与 KKT 乘子</li>
+      <li>写出可行起点 Newton 的 KKT 增量方程并手算一步</li>
+      <li>写出不可行起点 Newton 的原始-对偶残差方程并手算一步</li>
+      <li>解释为什么 KKT 系统不定但仍可唯一求解，以及稀疏结构如何省钱</li>
+    </ol>
+  </div>
+
+  <div class="lecture">
+
+    <div class="figure">
+      <div class="mermaid">
+flowchart LR
+  A["无约束 Newton 不会走直线约束"] --> B["思路一：消元<br/>y = Fx + x̂ 代入变无约束"]
+  A --> C["思路二：直接解 KKT 增量方程<br/>KKT 矩阵一步出 Δx 与 ν⁺"]
+  B --> D["可行起点 Newton<br/>每步解 KKT 系统"]
+  C --> D
+  D --> E["不可行起点 Newton<br/>对偶残差 + 原始残差一起压"]
+  E --> F["代价：KKT 系统不定<br/>但结构可利用"]
+  classDef hot fill:#fbeedd,stroke:#c4651f,stroke-width:2.5px,color:#c4651f;
+  classDef danger fill:#fae9e7,stroke:#b03a2e,stroke-width:2.5px,color:#b03a2e;
+  class D hot;
+  class F danger;
+      </div>
+      <div class="caption">本章推导主线：从「消元」与「直接解 KKT」两条路出发，汇到可行 Newton，再推到不可行起点，最后落到代价账。</div>
+    </div>
+
+    <!-- ============ 10.1 ============ -->
+    <h2><span class="sec-no">10.1</span>消元法：把约束问题变回无约束</h2>
+
+    <p>第9章我们有了可靠的 Newton 法，但它不认识约束。面对 <strong>min f(x) s.t. Ax=b</strong>，最古老的想法是：既然 Ax=b 把 x 钉在一个仿射集上，那就先把这个仿射集参数化，代回目标，变回无约束问题。</p>
+
+    <p>设 A ∈ R<sup>p×n</sup>，rank A = p。分三步：</p>
+    <ol>
+      <li>找一个特解 x̂：Ax̂ = b；</li>
+      <li>找 A 的零空间基矩阵 F ∈ R<sup>n×(n−p)</sup>：AF = 0；</li>
+      <li>写 <strong>x = Fz + x̂</strong>，z ∈ R<sup>n−p</sup>，问题变成无约束的 min f(Fz + x̂)。</li>
+    </ol>
+
+    <p><strong>完整手算例。</strong>解 min f(x,y) = ½(x² + 2y²)，约束 x + y = 1。</p>
+
+    <p>代入 y = 1 − x：</p>
+    <div class="formula">f̃(x) = ½[x² + 2(1−x)²] = ½(3x² − 4x + 2)</div>
+    <p>求导置零：</p>
+    <div class="formula">f̃′(x) = 3x − 4 + 2 · 0 ⇒ 3x − 2 = 0 ⇒ x* = <span class="frac"><span class="num-part">2</span><span class="den-part">3</span></span>， y* = <span class="frac"><span class="num-part">1</span><span class="den-part">3</span></span></div>
+    <div class="formula">p* = ½( <span class="frac"><span class="num-part">4</span><span class="den-part">9</span></span> + 2·<span class="frac"><span class="num-part">1</span><span class="den-part">9</span></span> ) = <span class="frac"><span class="num-part">1</span><span class="den-part">3</span></span></div>
+
+    <p>消元把变量从 2 个减到 1 个，一维求导直接出答案。但注意：消元不是免费的——求零空间基 F 本身要一次分解，而且当 A 稀疏时 F 往往是稠密的，会把结构毁掉。这是 10.4 代价账的伏笔。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>等式约束 Ax=b 不是「限制」，而是「降维」：可行集是一个 n−p 维的仿射子空间。消元法就是换个坐标系，在这个子空间里做无约束优化。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>误区：「消元总是更简单」。错。当 p 很小（比如只有 10 个约束钉住 1000 个变量）时，消元后还有 990 维，且 F 是 1000×990 的稠密阵——还不如直接解原来的 KKT 系统。消元适合 p 接近 n 或 A 结构特殊的情形。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 10.1-1</div>
+              <div class="q-text">消元法把 min f(x) s.t. Ax=b 变成无约束问题的三步是什么？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              ① 找特解 x̂ 使 Ax̂=b；② 找零空间基 F 使 AF=0；③ 代换 x=Fz+x̂，对 z 做无约束优化。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 10.1-2</div>
+              <div class="q-text">min ½(x²+2y²) s.t. x+y=1 的最优解和最优值？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              代入 y=1−x 求导得 x*=2/3，y*=1/3，p*=1/3。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 10.2 ============ -->
+    <h2><span class="sec-no">10.2</span>KKT 条件与可行起点 Newton</h2>
+
+    <p>不消元也能刻画最优性。Lagrange 函数 L(x,ν) = f(x) + νᵀ(Ax−b)，最优性条件（<span class="term">KKT 条件</span>，Karush–Kuhn–Tucker conditions）是：</p>
+    <div class="formula">∇f(x*) + Aᵀν* = 0 &nbsp;&nbsp;（对偶可行），&nbsp;&nbsp;&nbsp; Ax* = b &nbsp;&nbsp;（原始可行）</div>
+
+    <p><strong>验算 10.1 的例。</strong>∇f = (x, 2y)，在 x*=(2/3, 1/3) 处 ∇f=(2/3, 2/3)。取 ν*=−2/3，则 ∇f + ν*·(1,1) = (0, 0) ✓，且 x*+y*=1 ✓。最优性得证。</p>
+
+    <p>现在把 Newton 法搬过来。若当前点 x 已经可行（Ax=b），我们要求下一步 <strong>仍在可行集上</strong>，即 A(x+Δx)=b，也就是 AΔx=0。对 f 做二阶展开并在约束下极小化，得到的增量方程是（<span class="term">KKT 系统</span>，KKT system）：</p>
+
+    <div class="formula">
+      [ <span class="frac"><span class="num-part">∇²f(x)</span><span class="den-part">A</span></span> &nbsp;<span class="frac"><span class="num-part">Aᵀ</span><span class="den-part">0</span></span> ] · (Δx; ν⁺) = ( −∇f(x); 0 )
+    </div>
+
+    <p>这是一个 (n+p)×(n+p) 的线性方程组：左上角是 Hessian，右下角是零块。解出 Δx 后，用回溯线搜索（保证 A(x+tΔx)=b 自动成立）定步长，迭代到 Newton 减量 λ²/2 ≤ ε 为止。</p>
+
+    <p><strong>完整手算例。</strong>同题 min ½(x²+2y²) s.t. x+y=1，从可行点 x⁰=(1, 0) 出发。</p>
+    <p>∇f(x⁰) = (1, 0)，∇²f = [[1,0],[0,2]]。KKT 增量方程：</p>
+    <div class="formula">Δx + ν⁺ = −1，&nbsp;&nbsp; 2Δy + ν⁺ = 0，&nbsp;&nbsp; Δx + Δy = 0</div>
+    <p>第三式给 Δy=−Δx，代入前两式相减：3Δx = −1，得</p>
+    <div class="formula">Δx = −<span class="frac"><span class="num-part">1</span><span class="den-part">3</span></span>，&nbsp; Δy = <span class="frac"><span class="num-part">1</span><span class="den-part">3</span></span>，&nbsp; ν⁺ = −<span class="frac"><span class="num-part">2</span><span class="den-part">3</span></span></div>
+    <p>取 t=1：x⁰+Δx = (2/3, 1/3) = x*。<strong>一步收敛</strong>——f 是二次函数，Newton 对二次问题本来就应该一步到位，这正是收敛性验证。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>可行起点 Newton = 在切空间 {d : Ad=0} 里做无约束 Newton。KKT 系统的下半块 AΔx=0 就是「不许离开可行集」的代数表达。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>误区：「KKT 矩阵右下角是 0、不定，所以数值上不可靠」。错。虽然 KKT 矩阵不定（有正有负特征值），但只要 ∇²f 在 A 的零空间上正定（f 沿可行方向凸），它就一定非奇异，解唯一。不定 ≠ 奇异。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 10.2-1</div>
+              <div class="q-text">等式约束问题的 KKT 最优性条件是哪两个方程？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              ∇f(x*)+Aᵀν*=0（对偶可行）与 Ax*=b（原始可行）。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 10.2-2</div>
+              <div class="q-text">可行起点 Newton 的 KKT 增量方程中，右下角的 0 块和右端的 0 各表示什么？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              0 块来自约束对 ν 的线性性；右端 0 表示要求 AΔx=0，即步长不离开可行集。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 10.3 ============ -->
+    <h2><span class="sec-no">10.3</span>不可行起点 Newton：找不到可行点怎么办</h2>
+
+    <p>可行起点 Newton 有个前提：你得先有一个可行点。对一般 Ax=b，找一个可行点本身就要解线性方程。更优雅的做法是<strong>干脆从任意点出发</strong>，让 Newton 同时消灭两种残差：</p>
+    <div class="formula">r<sub>dual</sub>(x,ν) = ∇f(x) + Aᵀν，&nbsp;&nbsp;&nbsp; r<sub>pri</sub>(x,ν) = Ax − b</div>
+    <p>最优点就是 r=(r<sub>dual</sub>, r<sub>pri</sub>)=0 的根。对 r 做一阶 Taylor 展开，得到（<span class="term">不可行起点 Newton 步</span>，infeasible-start Newton step）：</p>
+    <div class="formula">
+      [ ∇²f(x) &nbsp; Aᵀ ; A &nbsp; 0 ] · (Δx; Δν) = −( r<sub>dual</sub>; r<sub>pri</sub> )
+    </div>
+    <p>和可行版唯一的区别：右端下半不再是 0，而是 −(Ax−b)。步长用回溯线搜索压残差范数 ‖r‖，直到同时原始可行、对偶可行。</p>
+
+    <p><strong>完整手算例。</strong>还是 min ½(x²+2y²) s.t. x+y=1，这次从 <strong>不可行点</strong> x⁰=(0,0)、ν⁰=0 出发。</p>
+    <p>残差：r<sub>dual</sub> = ∇f(x⁰)+Aᵀν⁰ = (0,0)，r<sub>pri</sub> = x⁰+y⁰−1 = −1。增量方程：</p>
+    <div class="formula">Δx + Δν = 0，&nbsp;&nbsp; 2Δy + Δν = 0，&nbsp;&nbsp; Δx + Δy = 1</div>
+    <p>前两式得 Δν=−Δx=−2Δy，即 Δx=2Δy；代入第三式：3Δy=1，得</p>
+    <div class="formula">Δx = <span class="frac"><span class="num-part">2</span><span class="den-part">3</span></span>，&nbsp; Δy = <span class="frac"><span class="num-part">1</span><span class="den-part">3</span></span></div>
+    <p>t=1 一步：x = (2/3, 1/3)，直接落在最优点上——二次问题 + 线性约束，残差是仿射的，Newton 依然一步到位。这次我们没有事先求任何可行点。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>不可行起点 Newton 把「求解优化问题」变成「求非线性方程组 r(x,ν)=0 的根」。可行性不再是一步一步保持的不变量，而是和最优性一起被逼近的终点。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>误区：「不可行起点法既然更方便，收敛性质应该一样好」。要小心：它的线搜索压的是残差范数而非目标值，分析上更微妙；且对强非凸问题，残差下降不代表接近最优。对凸问题两者都多项式时间可证，这就是我们只讨论凸情形的红利。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 10.3-1</div>
+              <div class="q-text">不可行起点 Newton 的两个残差分别是什么？最优点满足什么？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              r_dual=∇f(x)+Aᵀν，r_pri=Ax−b；最优点处两个残差同时为 0。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 10.3-2</div>
+              <div class="q-text">不可行起点与可行起点的 KKT 增量方程，形式上唯一的区别在哪？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              右端下半块：可行起点是 0（已在可行集上），不可行起点是 −(Ax−b)（要同时消灭原始残差）。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 10.4 ============ -->
+    <h2><span class="sec-no">10.4</span>代价账：消元 vs 直接解 KKT，结构就是钱</h2>
+
+    <p>每个 Newton 步的代价 = 组装并求解 KKT 系统。账面算法有三档：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>方法</th><th>每步主项代价</th><th>适用情形</th></tr>
+        <tr><td>消元后解 (n−p) 维 Newton 系统</td><td>O((n−p)³)</td><td>p 接近 n，消元后维数小</td></tr>
+        <tr><td>直接解 (n+p) 维 KKT 系统（稠密）</td><td>O((n+p)³)</td><td>无结构可借时的保底</td></tr>
+        <tr><td>KKT + Schur 补（H 易求逆）</td><td>O(n·p²) 或更低</td><td>H 对角/分块对角，A 稀疏</td></tr>
+      </table>
+    </div>
+
+    <p><strong>具体数字账。</strong>设 n=1000，p=10（10 个等式约束，如资源/守恒约束），Hessian 为对角阵（可分离目标，非常常见）：</p>
+    <ul>
+      <li>消元：需要解 990×990 稠密系统，约 (990)³ ≈ 9.7×10⁸ flops，且 F 是 1000×990 稠密阵，组装就贵；</li>
+      <li>直接解 KKT：1010×1010 不定系统，约 (1010)³ ≈ 1.0×10⁹ flops；</li>
+      <li>Schur 补：先算 S = A H⁻¹ Aᵀ（H 对角 ⇒ H⁻¹ 免费，S 是 10×10，组装 O(n·p²)=10⁵），再解 S·w = rhs 只要 O(p³)=10³，回代 O(n)。<strong>每步约 10⁵ flops，比稠密路线便宜四个数量级。</strong></li>
+    </ul>
+
+    <p>再和第9章的迭代次数相乘，就是等式约束问题的总账：<strong>总代价 ≈ Newton 步数（对凸问题通常 15–30 步，与规模几乎无关）× 每步代价（由结构决定）</strong>。步数这项是凸性的礼物，每步代价这项是线性代数的战场。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>Schur 补的本质：先解乘子 ν（p 维小系统），再回代 x。约束少（p≪n）时，「先在乘子空间里算清楚」永远比「在原始空间里硬解」便宜。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>误区：「约束越多问题越难算」。不一定。p 大时 Schur 补的 p×p 系统变贵，但消元后的 n−p 维系统变小——p 大反而该走消元路线。选算法的依据是 p 与 n 的相对大小和稀疏结构，不是约束的绝对数量。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 10.4-1</div>
+              <div class="q-text">n=1000、p=10、H 对角时，Schur 补路线每步代价大约多少？比稠密路线省多少？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              约 10⁵ flops（组装 10×10 的 A H⁻¹ Aᵀ）；稠密路线约 10⁹，省约四个数量级。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 10.4-2</div>
+              <div class="q-text">等式约束凸问题的总复杂度为什么是「迭代次数 × 每步代价」两因子结构？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              凸性保证 Newton 步数少且与规模几乎无关；每步是一次 KKT 线性求解，代价由矩阵结构决定。两因子相互独立，分别由分析和线性代数优化。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 概念卡 ============ -->
+    <h2><span class="sec-no">🃏</span>概念卡：本章概念的一分钟画像</h2>
+    <p>翻面前先自问：这个概念我能用一句话讲清楚吗？</p>
+    <div class="flip-grid">
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 1</div>
+            <div class="q-text">消元法（Elimination）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">用 x=Fz+x̂ 参数化可行集，把等式约束问题化为 z 上的无约束问题。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">让第9章的无约束算法可以直接用。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">在可行子空间里换一套局部坐标。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为消元总是更省；p≪n 且 A 稀疏时它反而毁掉结构。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">p 接近 n，或需要显式低维参数化的理论推导。</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 2</div>
+            <div class="q-text">KKT 条件（KKT Conditions）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">∇f(x*)+Aᵀν*=0 且 Ax*=b；凸问题中充分必要。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">给出不消元也能刻画最优性的代数条件。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">梯度沿可行方向的投影为零——在可行集里「无处可降」。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">把 ν 当可有可无的辅助量；ν 其实是约束的「影子价格」。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">一切约束优化的最优性验证；Ch11 中心路径的定义基础。</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 3</div>
+            <div class="q-text">KKT 系统（KKT System）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">Newton 步的 (n+p) 维分块线性方程 [H Aᵀ; A 0](Δx;ν⁺)=−(∇f;0)。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">一步同时给出下降方向 Δx 与更新后的乘子。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">上块「沿 Hessian 走」，下块「不许离开可行集」。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为不定矩阵就奇异；零空间上正定即保证唯一解。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">可行起点 Newton 的每一步；Ch11 解中心问题就靠它。</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 4</div>
+            <div class="q-text">不可行起点 Newton（Infeasible-Start Newton）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">从任意 (x,ν) 出发，用 Newton 同时压 r_dual 与 r_pri 到零。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">免去「先找一个可行点」的前置步骤。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">把优化问题改写成求根问题 r(x,ν)=0。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为残差下降等于目标下降；两者只在凸+收敛时才汇合。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">可行点难求、或线性等式约束的一般求解器实现。</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 5</div>
+            <div class="q-text">Schur 补（Schur Complement）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">解 KKT 系统时先消去 Δx，得到 S=A H⁻¹ Aᵀ 的 p 维小系统。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">p≪n 且 H 易求逆时，把每步代价压几个数量级。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">先在小的乘子空间算清账，再回代大变量。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">H 稠密难逆时硬套 Schur 补；此时应直接分解 KKT 矩阵。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">Ch11 内点法每步解中心方程的核心技巧。</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 6</div>
+            <div class="q-text">复杂度两因子结构</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">总代价 = Newton 步数 × 每步线性求解代价。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">把「算法分析」与「线性代数实现」解耦，各自优化。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">凸性负责让步数小而稳，结构利用负责让步子便宜。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">只盯渐近记号忽略常数；p=10 与 p=500 的实际差别全在常数里。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">Ch11 内点法 O(√m log(1/ε)) 步数 × O(n³) 每步的收官总账。</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 分层习题 ============ -->
+    <h2><span class="sec-no">📝</span>分层习题</h2>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>判断：「KKT 矩阵因为右下角是零块、特征值有正有负，所以它是奇异的，Newton 步不唯一。」这句话对不对？</div>
+      <details>
+        <summary>提示</summary>
+        <p>不定（indefinite）和奇异（singular）是两回事。想想保证非奇异需要什么条件。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">不对。KKT 矩阵不定但非奇异，只要：① A 行满秩；② ∇²f 在 A 的零空间上正定（即 d≠0、Ad=0 ⇒ dᵀ∇²f d > 0）。凸问题自动满足②。此时方程组解 (Δx, ν⁺) 唯一。把「不定」与「奇异」混淆是本节最常见的错误。</div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>消元法在什么参数情形下比直接解 KKT 系统更划算？</div>
+      <details>
+        <summary>提示</summary>
+        <p>比较 (n−p)³ 与 (n+p)³，再想想 F 矩阵的稀疏性。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">当 p 接近 n（消元后维数 n−p 很小）时消元划算；当 p≪n 时消元后仍是 ≈n 维问题，且零空间基 F 通常稠密，反而不如直接解带结构的 KKT 系统（尤其 Schur 补路线，代价 O(n·p²)）。</div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>用消元法解 min ½(x₁² + x₂² + x₃²) s.t. x₁+x₂+x₃=3，并用 KKT 条件验证。</div>
+      <details>
+        <summary>提示</summary>
+        <p>代入 x₃=3−x₁−x₂，对 x₁、x₂ 各求偏导；乘子 ν 由 ∇f+ν·(1,1,1)=0 读出。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">f̃=½[x₁²+x₂²+(3−x₁−x₂)²]。∂f̃/∂x₁ = x₁−(3−x₁−x₂)=0，∂f̃/∂x₂ = x₂−(3−x₁−x₂)=0。两式相减得 x₁=x₂，代回得 3x₁=3，x₁=x₂=1，x₃=1。最优值 p*=3/2。验证：∇f=(1,1,1)，ν=−1 使 ∇f+ν·(1,1,1)=0 ✓，且 x₁+x₂+x₃=3 ✓。几何意义：原点到平面 x₁+x₂+x₃=3 的最近点是 (1,1,1)，距离 √3。</div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>对 min ½(x²+y²) s.t. x−y=2，从不可行点 x⁰=(0,0)、ν⁰=0 出发，手算一步不可行起点 Newton。</div>
+      <details>
+        <summary>提示</summary>
+        <p>残差 r_dual=(0,0)，r_pri=−2；增量方程 HΔx+AᵀΔν=0、AΔx=2，A=(1,−1)。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">∇²f=I。方程：Δx+Δν=0，Δy−Δν=0，Δx−Δy=2。前两式 Δx=−Δν、Δy=Δν，代入第三式 −2Δν=2 ⇒ Δν=−1，Δx=1，Δy=−1。t=1 得 x=(1,−1)，满足约束且 ∇f=(1,−1)=−ν·(1,−1)（ν=−1），一步到达最优。最优值 p*=1。</div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l3">L3 建模应用</span>电网潮流：n=500 个节点的注入功率 x 满足平衡方程 Ax=b（p=5 个区域守恒约束），目标是最小化发电成本 ½∑cᵢxᵢ²（cᵢ>0）。选什么算法框架？每步代价多少？</div>
+      <details>
+        <summary>提示</summary>
+        <p>Hessian 是什么结构？p 与 n 的比例支持哪条路线？</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">Hessian = diag(c₁..c₅₀₀) 对角正定，A 是稀疏的节点-区域关联阵。目标凸 + 线性约束 ⇒ 等式约束凸问题。选可行起点（或不可行起点）Newton + Schur 补：S=A H⁻¹ Aᵀ 只有 5×5，H⁻¹=diag(1/cᵢ) 免费。每步代价 O(n·p²)≈500×25=1.25×10⁴，Newton 步数约 15–25 步，总代价约 10⁵–10⁶ flops，毫秒级。若误用稠密路线，(505)³≈1.3×10⁸/步，慢四个数量级。</div>
+      </details>
+    </div>
+
+    <!-- ============ 自测 ============ -->
+    <h2><span class="sec-no">✍️</span>本章自测</h2>
+    <p class="quiz-hint">点击选项判分，答错会给出原因。</p>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 1</div>
+      <div class="q-stem">min ½(x²+2y²) s.t. x+y=1 的 KKT 乘子 ν* 等于？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 2/3</li>
+        <li data-opt="b">B. −2/3</li>
+        <li data-opt="c">C. 0</li>
+        <li data-opt="d">D. 1/3</li>
+      </ul>
+      <div class="quiz-explain">解析：∇f(x*)=(2/3, 2/3)，约束梯度是 (1,1)，要 ∇f+ν·(1,1)=0 必须 ν*=−2/3，B 对。A 符号错——忘记 KKT 条件是 ∇f+Aᵀν=0 而不是 ∇f=Aᵀν；C 错，ν=0 意味着约束不起作用，但无约束最优 (0,0) 不可行；D 是 y* 的值，张冠李戴。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="c">
+      <div class="q-no">自测 2</div>
+      <div class="q-stem">可行起点 Newton 中，为什么回溯线搜索不需要检查可行性？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 因为步长 t≤1 时约束自动满足</li>
+        <li data-opt="b">B. 因为 f 是凸的</li>
+        <li data-opt="c">C. 因为增量方程含 AΔx=0，沿 Δx 走任何步长都留在可行集上</li>
+        <li data-opt="d">D. 因为乘子 ν⁺ 会校正约束违反</li>
+      </ul>
+      <div class="quiz-explain">解析：C 对。A(x+tΔx)=Ax+tAΔx=b+0=b，线性约束 + 切向步 ⇒ 任意 t 均可行，线搜索只需管目标下降。A 错，「t≤1」不是原因，t>1 也照样可行；B 错，凸性保证的是收敛性而非每步可行性；D 错，ν 不进入 x 的更新，谈不上「校正」。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="a">
+      <div class="q-no">自测 3</div>
+      <div class="q-stem">不可行起点 Newton 与可行起点 Newton 的增量方程，形式上的区别是？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 右端下半块从 0 换成 −(Ax−b)</li>
+        <li data-opt="b">B. 系数矩阵右下角从 0 换成 I</li>
+        <li data-opt="c">C. 左上的 Hessian 换成梯度</li>
+        <li data-opt="d">D. 乘子不再出现在方程中</li>
+      </ul>
+      <div class="quiz-explain">解析：A 对。系数矩阵完全一样（都是 [H Aᵀ; A 0]），唯一区别是右端：可行起点已在可行集上，原始残差为 0；不可行起点要同时压原始残差 −(Ax−b)。B 错，系数矩阵不动；C 错，Hessian 不能换；D 错，Δν 仍是未知量之一。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="d">
+      <div class="q-no">自测 4</div>
+      <div class="q-stem">n=1000、p=10、Hessian 对角时，Schur 补路线每个 Newton 步的代价量级是？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. O(10⁹)</li>
+        <li data-opt="b">B. O(10⁷)</li>
+        <li data-opt="c">C. O(10³)</li>
+        <li data-opt="d">D. O(10⁵)</li>
+      </ul>
+      <div class="quiz-explain">解析：D 对。组装 S=A H⁻¹ Aᵀ 要 O(n·p²)=1000×100=10⁵，解 10×10 系统只要 O(10³)，主项是组装，合计约 10⁵。A 是直接解稠密 KKT（或消元）的账；B 是中间档，不符合此处结构；C 只算了解 p 维小系统，漏掉了组装 S 的 O(n·p²) 主项——这是最常见的漏项。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 5</div>
+      <div class="q-stem">「约束越多，等式约束问题一定越难算」——这个论断的问题在哪？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 没有问题，约束当然越多越难</li>
+        <li data-opt="b">B. p 大时消元后维数 n−p 反而变小，走消元路线可能更便宜；难度取决于 p 与 n 的相对大小和结构</li>
+        <li data-opt="c">C. 约束多会让问题变非凸</li>
+        <li data-opt="d">D. 约束多时 Newton 法不再收敛</li>
+      </ul>
+      <div class="quiz-explain">解析：B 对。p 大 ⇒ Schur 补的 p×p 系统变贵，但消元后的 (n−p) 维系统变小——p 接近 n 时消元几乎免费。A 错在把直觉当结论；C 错，线性等式约束不改变凸性；D 错，只要 A 行满秩且 f 凸，Newton 收敛性与 p 无直接关系。</div>
+    </div>
+
+    <!-- ============ 章末五件套之 4：复述 ============ -->
+    <div class="retell">
+      <h3>🗣️ 用自己的话，三句话讲完本章</h3>
+      <p>对着空气（或室友）说出这三句。说卡壳的那句，回去重读对应小节。</p>
+      <details>
+        <summary>句1：这章解决什么问题？——</summary>
+        <div class="retell-answer">第9章的 Newton 法不认识约束，本章解决「目标凸 + 线性等式约束 Ax=b」这一类问题怎么迭代求解，以及从不可行点怎么出发。</div>
+      </details>
+      <details>
+        <summary>句2：核心机制是什么？——</summary>
+        <div class="retell-answer">每个 Newton 步解一个 KKT 线性系统：左上 Hessian 管曲率，下方 A 管「不许离开可行集」；消元是它的坐标变换版，Schur 补是它的省钱版，不可行起点版只是右端多了原始残差。</div>
+      </details>
+      <details>
+        <summary>句3：它和前后章怎么分工？——</summary>
+        <div class="retell-answer">第9章给了无约束的下降框架，本章把等式约束折进每一步的线性代数里；第11章再用对数障碍把不等式约束也折进目标函数，最终每步仍归结为解本章这种 KKT 系统。</div>
+      </details>
+    </div>
+
+    <!-- ============ 章末五件套之 5：复习计划 ============ -->
+    <div class="review-plan">
+      <h3>🔁 间隔复习计划</h3>
+      <p>回忆本身比重读有效 10 倍。到点只做一件事：翻卡 + 重做标记题。</p>
+      <table>
+        <tr><th>时间点</th><th>复习内容</th><th>预计用时</th></tr>
+        <tr><td>第 1 天</td><td>全部概念卡 + 回忆卡 10.2-1、10.3-2</td><td>10 分钟</td></tr>
+        <tr><td>第 3 天</td><td>概念卡 2、3、5 + 自测错题</td><td>8 分钟</td></tr>
+        <tr><td>第 7 天</td><td>三句话复述 + 手算 L2 两题（不看书）</td><td>12 分钟</td></tr>
+        <tr><td>第 15 天</td><td>只重做合上书挑战；能全过就毕业</td><td>15 分钟</td></tr>
+      </table>
+    </div>
+
+    <!-- 合上书挑战 -->
+    <div class="final-challenge">
+      <h3>📕 合上书挑战</h3>
+      <p class="fc-sub">现在关掉这个页面，拿一张纸，凭记忆完成以下任务。全部做完再回来核对——这是本章真正的毕业考试。</p>
+      <ol id="challenge-list">
+        <li><span class="fc-check"></span>写出等式约束问题的 KKT 最优性条件（两个方程），并解释每一项的意义</li>
+        <li><span class="fc-check"></span>手算 min ½(x²+2y²) s.t. x+y=1：消元求解 + KKT 乘子验证</li>
+        <li><span class="fc-check"></span>写出可行起点 Newton 的 KKT 增量方程（分块矩阵形式），说明 0 块和右端 0 的含义</li>
+        <li><span class="fc-check"></span>写出不可行起点 Newton 的两个残差，并说明它与可行版增量方程的唯一区别</li>
+        <li><span class="fc-check"></span>解释 KKT 矩阵不定但非奇异的条件，反驳「不定⇒奇异」</li>
+        <li><span class="fc-check"></span>回答本章的主线问题：Ax=b 约束下，Newton 步长什么样，从不可行点怎么出发？（一句话）</li>
+      </ol>
+    </div>
+
+    <div class="complete-zone">
+      <button class="btn-complete" id="btn-complete" onclick="markDone()">✓ 我已完成本章（含合上书挑战）</button>
+    </div>
+
+    <div class="chapter-nav">
+      <a href="chapter-09.html"><span class="nav-dir">← 上一章</span>第9章 无约束极小化</a>
+      <a href="chapter-11.html" class="next"><span class="nav-dir">下一章 →</span>第11章 内点法</a>
+    </div>
+
+  </div>
+</div>
+
+<footer class="footer">
+  <div class="wrap">第10章 等式约束极小化 · 凸优化互动讲义 · 基于 Boyd &amp; Vandenberghe《Convex Optimization》整理</div>
+</footer>
+
+<script src="/lectures-assets/mermaid.min.js"></script>
+<script>
+mermaid.initialize({
+  startOnLoad: true,
+  theme: "base",
+  themeVariables: {
+    primaryColor: "#e3edf7",
+    primaryBorderColor: "#1d5f9e",
+    primaryTextColor: "#1d5f9e",
+    lineColor: "#5c554b",
+    secondaryColor: "#fbeedd",
+    tertiaryColor: "#f5f1e8",
+    fontFamily: "-apple-system, PingFang SC, sans-serif",
+    fontSize: "14px"
+  },
+  flowchart: { curve: "linear", htmlLabels: false }
+});
+</script>
+<script>
+// 自测题判分
+document.querySelectorAll(".quiz-block").forEach(block => {
+  const answer = block.dataset.answer;
+  const explain = block.querySelector(".quiz-explain");
+  block.querySelectorAll(".quiz-opts li").forEach(li => {
+    li.addEventListener("click", () => {
+      const opts = block.querySelectorAll(".quiz-opts li");
+      opts.forEach(o => o.classList.add("disabled"));
+      if (li.dataset.opt === answer) {
+        li.classList.add("correct");
+      } else {
+        li.classList.add("wrong");
+        block.querySelector('[data-opt="' + answer + '"]').classList.add("correct");
+      }
+      explain.classList.add("show");
+    });
+  });
+});
+// 合上书挑战打勾
+document.querySelectorAll("#challenge-list li").forEach(li => {
+  li.addEventListener("click", () => li.classList.toggle("done"));
+});
+// 完成进度
+function markDone() {
+  const KEY = "cvx_progress_v1";
+  let progress = {};
+  try { progress = JSON.parse(localStorage.getItem(KEY)) || {}; } catch (e) {}
+  progress[10] = { done: true, completedAt: Date.now(), reviewsDone: (progress[10] && progress[10].reviewsDone) || 0 };
+  localStorage.setItem(KEY, JSON.stringify(progress));
+  const btn = document.getElementById("btn-complete");
+  btn.textContent = "✓ 已完成 · 进度已记录";
+  btn.classList.add("done-state");
+}
+</script>
+
+</body>
+</html>

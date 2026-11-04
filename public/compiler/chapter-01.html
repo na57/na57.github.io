@@ -1,0 +1,793 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第1章 引论 · 编译原理互动讲义</title>
+<link rel="stylesheet" href="/lectures-assets/style.css">
+</head>
+<body>
+
+<nav class="topbar">
+  <div class="topbar-inner">
+    <span class="brand"><a href="index.html" style="color:inherit">← 学习地图</a></span>
+    <span class="crumb">阶段一 · 前端与词法语法 / 第1章</span>
+  </div>
+</nav>
+
+<div class="wrap">
+
+  <div class="lecture-head">
+    <span class="ch-label">CHAPTER 01 · 前端与词法语法</span>
+    <h1>引论</h1>
+    <p class="lead">一段源代码怎样一步步变成可运行的机器码——为什么编译器要分成一串阶段，每个阶段吃什么、吐什么？</p>
+  </div>
+
+  <!-- ===== 章首四件套之 1：全书定位 ===== -->
+  <div class="position-bar">
+    <strong>本章在主线上的位置：</strong>本章是全书的起点，<strong>没有前驱章</strong>。它回答"编译器整体长什么样、为什么长这样"；<u>第 2–4 章将逐一放大这条流水线的前半段</u>（语法制导翻译、词法分析、语法分析），把本章画出的每一个"前端方框"变成可以动手实现的算法。因此本章你只需要建立全局地图，不需要掌握任何阶段的内部细节。<br>
+    第1章回答主线上的第一个问题：<strong>一段源代码怎样一步步变成可运行的机器码——为什么编译器要分成一串阶段，每个阶段吃什么、吐什么？</strong>
+    <div class="map-inline">
+      <span class="node here">① Ch1–4 前端与词法语法（源代码 → 语法树）← 本章</span><span class="arrow">→</span>
+      <span class="node">② Ch5–7 语义与中间代码（树 → 三地址码）</span><span class="arrow">→</span>
+      <span class="node">③ Ch8–11 后端与优化（三地址码 → 高效机器码）</span><span class="arrow">→</span>
+      <span class="node">④ Ch12 全书收束（现代编译系统案例）</span>
+    </div>
+  </div>
+
+  <!-- ===== 章首四件套之 2：学习目标 ===== -->
+  <div class="objectives">
+    <h4>🎯 学完本章，合上书你应该能：</h4>
+    <ol>
+      <li>说出编译器、解释器、Java 混合模式三者的区别，并各举一例。</li>
+      <li>按顺序写出编译器七个阶段的名称，并说出每个阶段的输入与输出。</li>
+      <li>手算：把 <span class="var">position = initial + rate * 60</span> 从字符流一路推到目标机器指令，中间每一步（记号流、语法树、三地址码、汇编）都写出来。</li>
+      <li>画出该语句的语法树，并标出语义分析插入的 inttofloat 节点。</li>
+      <li>用 <span class="var">m</span> 种语言 × <span class="var">n</span> 台机器的例子，解释"前端/后端"划分为什么把 <span class="var">m×n</span> 个编译器省成 <span class="var">m+n</span> 个。</li>
+      <li>说出符号表和错误处理器为什么不是流水线的一环，而是贯穿全程的两个"伴生系统"。</li>
+    </ol>
+  </div>
+
+  <div class="lecture">
+
+    <!-- ===== 章首四件套之 3：推导主线图 ===== -->
+    <div class="figure">
+      <div class="mermaid">
+flowchart LR
+  A["机器只懂 0 和 1"] --> B["高级语言必须被翻译"]
+  B --> C["一步直译太复杂"]
+  C --> D["拆成七个阶段流水线"]
+  D --> E["每阶段输入输出明确"]
+  E --> F["代价：各阶段内部如何实现 优化与目标机如何取舍"]
+  classDef hot fill:#fbeedd,stroke:#c4651f,stroke-width:2.5px,color:#c4651f;
+  classDef danger fill:#fae9e7,stroke:#b03a2e,stroke-width:2.5px,color:#b03a2e;
+  class F danger;
+      </div>
+      <div class="caption">本章推导主线：从"机器只懂 0/1"出发，每一步都回答"为什么需要下一步"，最后落在红色节点——各阶段的内部实现与优化取舍，正是第 2–11 章的内容。</div>
+    </div>
+
+    <!-- ================= 1.1 ================= -->
+    <h2><span class="sec-no">1.1</span>为什么需要编译器：从"机器只懂 0/1"说起</h2>
+
+    <p>计算机的 CPU 是一台极其固执的机器：它只认识一串串 0 和 1 组成的指令——取数、加法、跳转，仅此而已。而人类写程序用的是 <span class="var">position = initial + rate * 60</span> 这样的高级语言。两者之间隔着一道鸿沟：<strong>总要有人把高级语言翻译成机器码</strong>。这个"翻译官"就是本章的主角。</p>
+
+    <p>翻译官有两种工作方式：</p>
+    <ul>
+      <li><span class="term">编译器</span>（Compiler）：<strong>先把整份源代码翻译成一份完整的目标程序</strong>（通常是机器码），之后目标程序可以被反复运行。翻译是一次性的，运行是无数次的。C、C++、Go 是典型代表。</li>
+      <li><span class="term">解释器</span>（Interpreter）：<strong>不产出目标程序</strong>，而是拿着源代码逐条"现场口译"——读一句、执行一句，源程序始终在翻译官手里。早期 BASIC、纯 Python 风格的执行是典型代表。</li>
+    </ul>
+
+    <p>一个日常类比：编译器像"整本书的笔译"，交稿后读者随时翻看，翻得越多越划算；解释器像"会议同声传译"，每次开会都要重新请翻译。由此可以直接推出两者的开销模型：</p>
+
+    <div class="formula">编译：总开销 = 编译时间（一次） + 运行时间（每次）&nbsp;&nbsp;&nbsp;&nbsp;解释：总开销 ≈ 每句解释开销 × 执行句数（每次都付）</div>
+
+    <p>所以同一个程序要跑一百万次时，编译方案把翻译成本摊薄到几乎为零，而解释方案每次都重新付"口译费"。这就是对性能敏感的系统软件几乎全部走编译路线的原因。</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>对比项</th><th>编译器</th><th>解释器</th></tr>
+        <tr><td>是否产出目标程序</td><td>是（机器码文件，可反复运行）</td><td>否（边译边执行）</td></tr>
+        <tr><td>运行时还需要翻译官吗</td><td>不需要</td><td>需要</td></tr>
+        <tr><td>典型速度</td><td>快</td><td>慢</td></tr>
+        <tr><td>报错时机</td><td>编译期集中报告一批错误</td><td>执行到哪句才发现哪句的错</td></tr>
+        <tr><td>代表</td><td>gcc、clang</td><td>早期 BASIC、交互式 shell</td></tr>
+      </table>
+    </div>
+
+    <p>现实世界还有第三条路——<strong>混合模式</strong>。Java 先由编译器把 <span class="var">.java</span> 编译成与机器无关的<span class="term">字节码</span>（Bytecode），再由 Java 虚拟机（JVM）解释执行字节码；虚拟机里的即时编译器（JIT）还会把热点字节码进一步编译成真正的机器码。一次编译、处处运行，靠的就是把"翻译"拆成与机器无关的前半段和与机器相关的后半段——这个思想在 1.3 节会变成全书最重要的工程结论。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>编译器不是"一个翻译程序"，而是<strong>一条工程流水线</strong>：正因为整步翻译太复杂，工程上才把它切成一串小步骤，每步只做一种变换。本章剩下的全部内容，就是把这条流水线画出来。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>"Java 是解释型语言，C 是编译型语言"——这种说法是错的。<strong>语言本身不分编译型/解释型</strong>，分的只是它的主流实现方式：C 也可以写解释器，Python 也有编译实现（PyPy 带 JIT）。判断时问的是"这个实现产不产出可独立运行的目标程序"。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 1.1-1</div>
+              <div class="q-text">编译器和解释器最本质的区别是什么？（一句话）</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              编译器先产出一份完整的目标程序再运行；解释器不产出目标程序，边翻译边执行。判断标准：运行时还需不需要"翻译官"在场。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 1.1-2</div>
+              <div class="q-text">Java 程序从 .java 文件到在 CPU 上跑起来，经历了哪两级翻译？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              第一级：javac 把 .java 编译成与机器无关的字节码；第二级：JVM 解释执行字节码，热点代码再由 JIT 编译成机器码。即"编译 + 解释"混合模式。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ================= 1.2 ================= -->
+    <h2><span class="sec-no">1.2</span>一条流水线：七个阶段各吃什么、吐什么</h2>
+
+    <p>上一节说编译器是一条流水线，但它带出一个问题：<strong>这条流水线具体切成哪几段？每段交什么东西给下一段？</strong>龙书给出的经典答案是七个阶段。先看全景，再用一个完整例子走全程。</p>
+
+    <div class="figure">
+      <div class="mermaid">
+flowchart TB
+  S["源程序字符流"] --> L["词法分析器"]
+  L --> P["语法分析器"]
+  P --> SEM["语义分析器"]
+  SEM --> IR["中间代码生成器"]
+  IR --> OPT["机器无关代码优化器"]
+  OPT --> CG["代码生成器"]
+  CG --> CO["机器无关代码优化（目标相关）"]
+      </div>
+      <div class="caption">图 1.1 七阶段主链（简化版）：前四个属"前端"，后三个属"后端"。龙书原图中目标代码生成后还有目标机相关的代码优化，本章用下面的总表统一呈现。</div>
+    </div>
+
+    <p>完整手算例来了。考虑赋值语句：</p>
+
+    <div class="formula"><span class="var">position</span> = <span class="var">initial</span> + <span class="var">rate</span> * 60</div>
+
+    <p>假设 position、initial、rate 都是浮点变量，60 是整型常量。下面一个阶段一个阶段地走，<strong>每一步的输入和输出都写全</strong>。</p>
+
+    <h3>第 1 步：词法分析（Lexical Analysis）——字符流 → 记号流</h3>
+    <p><span class="term">词法分析器</span>（Lexer / Scanner）读入字符流，把字符分组为有意义的<span class="term">记号</span>（Token）：标识符、运算符、常量。空白被丢弃，每个标识符同时在<span class="term">符号表</span>（Symbol Table）里登记一个条目。本例输出：</p>
+    <div class="formula">⟨id, 1⟩ ⟨=⟩ ⟨id, 2⟩ ⟨+⟩ ⟨id, 3⟩ ⟨*⟩ ⟨60⟩</div>
+    <p>其中 id 后的数字是符号表条目编号。符号表此时内容：</p>
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>条目编号</th><th>标识符</th><th>后续阶段会补充的信息</th></tr>
+        <tr><td>1</td><td>position</td><td>类型 float、存储地址（语义分析、代码生成时填）</td></tr>
+        <tr><td>2</td><td>initial</td><td>类型 float、存储地址</td></tr>
+        <tr><td>3</td><td>rate</td><td>类型 float、存储地址</td></tr>
+      </table>
+    </div>
+
+    <h3>第 2 步：语法分析（Syntax Analysis）——记号流 → 语法树</h3>
+    <p><span class="term">语法分析器</span>（Parser）检查记号流是否符合文法，并把它组织成一棵<span class="term">语法树</span>（Syntax Tree）：树的结构精确表达"先算乘法、再算加法、最后赋值"的运算次序。</p>
+
+    <div class="figure">
+      <div class="mermaid">
+flowchart TB
+  A["="] --> B["⟨id,1⟩ position"]
+  A --> C["+"]
+  C --> D["⟨id,2⟩ initial"]
+  C --> E["*"]
+  E --> F["⟨id,3⟩ rate"]
+  E --> G["60"]
+      </div>
+      <div class="caption">图 1.2 position = initial + rate * 60 的语法树。乘法是加法的子树，所以 rate * 60 先算。</div>
+    </div>
+
+    <h3>第 3 步：语义分析（Semantic Analysis）——语法树 → 带类型信息的语法树</h3>
+    <p><span class="term">语义分析器</span>（Semantic Analyzer）做语法结构查不出来的检查，最重要的是<span class="term">类型检查</span>（Type Checking）：rate 是 float，60 是 int，乘法要求两边类型一致，于是自动在 60 的父节点处插入一次类型转换 inttofloat。树的形状不变，只是 * 的右孩子从"60"变成了"inttofloat(60)"。</p>
+
+    <h3>第 4 步：中间代码生成（Intermediate Code Generation）——树 → 三地址码</h3>
+    <p>编译器把树翻译成一种低级的、与机器无关的<span class="term">中间表示</span>（Intermediate Representation），常用形式是<span class="term">三地址码</span>（Three-Address Code）：每条指令至多一个运算符、至多三个操作数，临时变量依次命名 t1、t2……本例得到：</p>
+    <div class="formula">t1 = inttofloat(60)&nbsp;&nbsp;&nbsp;&nbsp;t2 = id3 * t1&nbsp;&nbsp;&nbsp;&nbsp;t3 = id2 + t2&nbsp;&nbsp;&nbsp;&nbsp;id1 = t3</div>
+
+    <h3>第 5 步：机器无关代码优化（Machine-Independent Optimization）——三地址码 → 更好的三地址码</h3>
+    <p>优化器发现 inttofloat(60) 是编译期就能算出的常量 60.0，且 t3 只被用了一次，于是合并：</p>
+    <div class="formula">t1 = id3 * 60.0&nbsp;&nbsp;&nbsp;&nbsp;id1 = id2 + t1</div>
+    <p>四条指令变两条。注意：这一步不知道目标机长什么样，只做"任何机器上都划算"的改进。</p>
+
+    <h3>第 6 步：代码生成（Code Generation）——三地址码 → 目标机器指令</h3>
+    <p><span class="term">代码生成器</span>（Code Generator）把三地址码映射成具体机器的指令，并做<span class="term">寄存器分配</span>（Register Allocation）：</p>
+    <div class="formula">LDF R2, id3&nbsp;&nbsp;&nbsp;&nbsp;MULF R2, R2, #60.0&nbsp;&nbsp;&nbsp;&nbsp;LDF R1, id2&nbsp;&nbsp;&nbsp;&nbsp;ADDF R1, R1, R2&nbsp;&nbsp;&nbsp;&nbsp;STF id1, R1</div>
+
+    <h3>第 7 步：目标机相关优化（Machine-Dependent Optimization）——指令 → 更贴合硬件的指令</h3>
+    <p>最后还可针对具体处理器做指令调度、窥孔优化等，本例已足够短，原样输出。</p>
+
+    <p>把七步放进一张总表，这就是本章要背下来的"主线地图"：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>阶段</th><th>输入</th><th>输出（本例实际内容）</th></tr>
+        <tr><td>词法分析</td><td>字符流 position = initial + rate * 60</td><td>记号流 ⟨id,1⟩⟨=⟩⟨id,2⟩⟨+⟩⟨id,3⟩⟨*⟩⟨60⟩ + 符号表三条</td></tr>
+        <tr><td>语法分析</td><td>记号流</td><td>语法树（图 1.2）</td></tr>
+        <tr><td>语义分析</td><td>语法树 + 符号表</td><td>插入 inttofloat 的类型已检查树</td></tr>
+        <tr><td>中间代码生成</td><td>带类型的树</td><td>t1=inttofloat(60); t2=id3*t1; t3=id2+t2; id1=t3</td></tr>
+        <tr><td>机器无关优化</td><td>三地址码</td><td>t1=id3*60.0; id1=id2+t1</td></tr>
+        <tr><td>代码生成</td><td>优化后三地址码 + 符号表</td><td>LDF/MULF/ADDF/STF 五条机器指令</td></tr>
+        <tr><td>目标机相关优化</td><td>机器指令</td><td>调度后的最终机器指令</td></tr>
+      </table>
+    </div>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>七个阶段其实是同一条信息的七次"换表示"：字符 → 记号 → 树 → 带类型的树 → 三地址码 → 优化的三地址码 → 机器指令。<strong>每个阶段只负责一种变换，不越界</strong>——这就是它能被拆开单独实现、单独测试的原因。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>误区一："inttofloat 是中间代码生成阶段加的。"错——类型检查（含插入类型转换节点）属于<strong>语义分析</strong>，中间代码生成只是把它忠实地翻译成一条三地址指令。误区二："优化阶段会改变程序的结果。"错——优化必须保持语义不变，只改效率；本例 60→60.0 的常量折叠结果完全相同。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 1.2-1</div>
+              <div class="q-text">七个阶段按顺序背一遍。词法分析的输出、语法分析的输出各是什么？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              词法 → 语法 → 语义 → 中间代码生成 → 机器无关优化 → 代码生成 → 目标机相关优化。词法输出记号流（并登记符号表）；语法输出语法树。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 1.2-2</div>
+              <div class="q-text">在 position = initial + rate * 60 的例子里，60.0 这个浮点常量第一次出现在哪个阶段的输出里？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              机器无关代码优化。语义分析只插入 inttofloat 节点，中间代码里是 t1 = inttofloat(60)；优化阶段做常量折叠后才得到 id3 * 60.0。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ================= 1.3 ================= -->
+    <h2><span class="sec-no">1.3</span>前端 vs 后端：为什么这个划分省钱</h2>
+
+    <p>上一节画出了七个阶段，但它带出一个工程问题：世界有几十种源语言、几十种目标机，难道每对组合都重写一个编译器？观察七阶段表会发现：前四个阶段（词法、语法、语义、中间代码生成）<strong>只关心源语言</strong>，不知道目标机长什么样；后面生成与目标相关优化的阶段<strong>只关心目标机</strong>，对源语言已经无感（它看到的是三地址码）。于是自然切成两块：</p>
+
+    <ul>
+      <li><span class="term">前端</span>（Front End）：词法 + 语法 + 语义 + 中间代码生成，外加机器无关优化的大部分。依赖源语言，不依赖目标机。</li>
+      <li><span class="term">后端</span>（Back End）：代码生成 + 目标机相关优化。依赖目标机，不依赖源语言。</li>
+      <li>两块之间只用一个约定好的中间表示（如三地址码）交接。</li>
+    </ul>
+
+    <p>这条划分的回报是一笔账。设有 <span class="var">m</span> 种源语言、<span class="var">n</span> 台目标机：</p>
+
+    <div class="formula">不划分：编译器数量 = <span class="var">m</span> × <span class="var">n</span>&nbsp;&nbsp;&nbsp;&nbsp;划分后：编译器数量 = <span class="var">m</span> 个前端 + <span class="var">n</span> 个后端</div>
+
+    <p>代入 <span class="var">m</span> = <span class="var">n</span> = 10：不划分要写 100 个编译器；划分后只需 10 + 10 = 20 个可拼接的部件，且任何一个新语言只要写 1 个前端就立刻获得全部 10 台机器的后端。GCC、LLVM 正是靠这个结构支持几十种语言 × 几十种架构。</p>
+
+    <p>还有两个角色不在流水线主链上，却从头到尾都在场：</p>
+    <ul>
+      <li><span class="term">符号表</span>（Symbol Table）：词法阶段登记标识符，语义阶段填类型，代码生成阶段填地址——每个阶段都读它、写它，是贯穿全程的共享数据库。</li>
+      <li><span class="term">错误处理器</span>（Error Handler）：词法错误（非法字符）、语法错误（缺括号）、语义错误（类型不匹配）……任何阶段都可能报错，编译器被要求"尽可能多地报告错误并继续编译"，而不是遇到第一个错就罢工。</li>
+    </ul>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>前端/后端划分的本质是<strong>用中间表示当"标准接口"</strong>：接口定得越稳，两边越能独立演化。这和 1.1 节 Java"一次编译、处处运行"用的是同一个思想——字节码就是 Java 世界的中间表示。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>"符号表是词法分析阶段用完就扔的临时结构。"错。符号表在词法阶段<strong>创建</strong>，但它的生命贯穿整个编译过程：语义分析往里写类型，中间代码生成和代码生成往里查名字、写地址。把它当成某一个阶段的内部产物，是初学者最常见的结构误判。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 1.3-1</div>
+              <div class="q-text">5 种源语言、8 台目标机。不做前端/后端划分要写几个编译器？做了之后要几个？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              不划分：5 × 8 = 40 个。划分后：5 个前端 + 8 个后端 = 13 个部件，且接口（中间表示）统一。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 1.3-2</div>
+              <div class="q-text">前端包含哪几个阶段？它"知道"目标机的什么信息吗？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              前端 = 词法 + 语法 + 语义 + 中间代码生成（加机器无关优化）。它对目标机一无所知，输出的是与机器无关的中间表示。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ================= 1.4 ================= -->
+    <h2><span class="sec-no">1.4</span>编译技术还用在哪 + 本书地图</h2>
+
+    <p>前三节给出了编译器的骨架，但它带出一个收尾问题：学这套东西只能去写编译器吗？恰恰相反，"分阶段处理语言"的技术在很多地方复用：</p>
+
+    <ul>
+      <li><strong>结构化查询的处理</strong>：数据库执行 SQL 同样经历"解析 → 语义检查 → 生成查询计划（中间表示）→ 优化 → 执行"，与编译器流水线同构。</li>
+      <li><strong>程序分析与验证</strong>：静态检查工具（找空指针、未初始化变量）复用编译器前端的词法/语法分析成果，在语法树上做检查而不生成代码。</li>
+      <li><strong>程序优化技术的外溢</strong>：常量折叠、公共子表达式消除等思想出现在解释器、JIT、甚至电子表格的重算引擎里。</li>
+      <li><strong>新硬件的配套软件</strong>：每出现一种新芯片（GPU、AI 加速器），第一件软件工作就是为它写后端——这正是 1.3 节 m + n 结构的现实生意。</li>
+    </ul>
+
+    <p>本书十二章正好对应这条流水线的四个阶段（即页首 position-bar 的地图）：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>阶段</th><th>章节</th><th>回答的问题</th></tr>
+        <tr><td>① 前端与词法语法</td><td>Ch1–4</td><td>源代码如何被读成结构（本章地图 → 语法制导翻译 → 词法 → 语法）</td></tr>
+        <tr><td>② 语义与中间代码</td><td>Ch5–7</td><td>结构如何被检查并翻译成与机器无关的中间代码</td></tr>
+        <tr><td>③ 后端与优化</td><td>Ch8–11</td><td>中间代码如何变成又快又省的目标机器码</td></tr>
+        <tr><td>④ 全书收束</td><td>Ch12</td><td>现代编译系统如何把这一切组织起来（案例研究）</td></tr>
+      </table>
+    </div>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>学完本章你只欠一样东西：<strong>每个方框内部怎么实现</strong>。第 2 章先给一个"玩具但完整"的语法制导翻译器，把全流程跑通一遍；第 3、4 章再分别把词法分析器、语法分析器做成严肃的算法（自动机、文法）。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>"引论只是背景知识，可以直接跳到第 3 章。"风险很大：第 2–4 章的每一节都在引用本章的七阶段图定位自己。如果在"inttofloat 属于哪个阶段"这种问题上含糊，后面会把语义动作、中间代码生成的分工一直搞混。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 1.4-1</div>
+              <div class="q-text">举一个"不是写编译器、却用到编译技术"的例子，并说出它复用的是哪一段。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              例：数据库 SQL 引擎——复用解析（词法/语法分析）与查询计划优化（对应中间代码优化）；或静态代码检查工具——只复用前端，不生成代码。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 1.4-2</div>
+              <div class="q-text">本书四个阶段各覆盖哪几章？第 2 章在整条流水线上扮演什么角色？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              ① Ch1–4 前端与词法语法；② Ch5–7 语义与中间代码；③ Ch8–11 后端与优化；④ Ch12 收束。第 2 章用一个完整的小翻译器把全流程先跑通一遍。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===== 章末五件套之 1：概念卡 ===== -->
+    <h2><span class="sec-no">🃏</span>概念卡：本章概念的一分钟画像</h2>
+    <p>翻面前先自问：这个概念我能用一句话讲清楚吗？</p>
+    <div class="flip-grid">
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 1</div>
+            <div class="q-text">编译器（Compiler）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">把源语言程序整体翻译成等价的目标语言程序（通常是机器码）的程序。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">弥合"人类写的高级语言"与"机器只懂的 0/1"之间的鸿沟。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">整书笔译：一次翻完，读者随时翻看。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为"某语言天生是编译型"——编译/解释是实现方式的属性，不是语言的属性。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">全书主角；第 2 章亲手写一个迷你的。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 2</div>
+            <div class="q-text">词法分析（Lexical Analysis）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">把字符流分组为记号流（Token Stream），并登记符号表的第一阶段。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">字符层面太琐碎，先把"字母数字串"聚合成有意义的单词。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">读书时的"断词"：把一连串字母切成单词再谈理解。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为它检查拼写/括号配对——括号配对错是语法错误，不归它管。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">第 3 章整章：用正则表达式 + 有穷自动机实现它。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 3</div>
+            <div class="q-text">语法分析（Syntax Analysis）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">按文法把记号流组织成语法树，暴露运算次序与结构的阶段。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">记号流是"一串单词"，不知道谁先算谁后算；树给出层次。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">给句子画语法成分图：主谓宾定状补各归其位。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为它能发现类型错误——"int + 字符串"结构合法但语义错，归语义分析。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">第 4 章整章：自顶向下、自底向上、LR 分析器。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 4</div>
+            <div class="q-text">中间代码 / 三地址码（Intermediate Code）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">前端与后端之间、与具体机器无关的低级表示；三地址码每条指令至多一个运算符、三个操作数。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">让前端不必懂机器、后端不必懂语言，是 m + n 结构的接口。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">国际贸易里的英语：任何语言先翻成英语，再由英语翻向任何语言。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为只有一种中间表示——语法树、三地址码、字节码都是不同层次的 IR。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">第 6 章生成它，第 8–9 章优化它，第 8/9 章之后把它译成机器码。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 5</div>
+            <div class="q-text">符号表（Symbol Table）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">记录每个标识符的名字、类型、作用域、存储地址等信息的共享数据结构。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">各阶段对"同一个名字"的信息要前后一致，需要一处公共档案。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">全班名册：报到（词法）登记，班主任（语义）填成绩，教务处（代码生成）分宿舍。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为它是词法阶段用完即弃的临时产物——它贯穿编译全程。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">第 2 章就会实现一个简化版；第 6、8 章读写它。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 6</div>
+            <div class="q-text">前端 / 后端划分（Front End / Back End）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">前端 = 依赖源语言的各阶段；后端 = 依赖目标机的各阶段；两者用中间表示交接。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">把 m 语言 × n 机器的 m×n 个编译器压缩成 m + n 个可拼接部件。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">耳机与插孔：3.5mm 标准接口让任何耳机配任何播放器等。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为优化全在后端——机器无关优化（常量折叠等）通常算前端一侧。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">全书结构的脊梁：Ch2–7 是前端，Ch8–11 是后端。</span></div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- ===== 章末五件套之 2：分层习题 ===== -->
+    <h2><span class="sec-no">📝</span>分层习题</h2>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>判断并说明理由：(a) "Python 是解释型语言，所以任何 Python 程序都不可能被编译。" (b) "javac 把 Java 源程序直接翻译成 x86 机器码，所以 Java 是编译执行的。"</div>
+      <details>
+        <summary>提示</summary>
+        <p>回到 1.1 的判断标准：这个"实现"产不产出可独立运行的目标程序？语言本身有没有编译/解释属性？Java 的字节码算不算目标机器码？</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p>(a) 错。编译/解释是<strong>实现方式</strong>的属性，不是语言的属性。PyPy 等实现就把 Python 字节码即时编译成机器码；完全可以为 Python 写一个传统编译器。</p>
+          <p>(b) 错。javac 的产物是<strong>与机器无关的字节码</strong>，不是 x86 机器码；字节码由 JVM 解释执行（热点代码再由 JIT 编译）。所以 Java 是"编译 + 解释"的混合模式，不是纯编译执行。易错点：把"编译过一次"当成"直接跑机器码"。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>同学甲说："括号不匹配是词法错误，因为词法分析器读到了括号。"同学乙说："类型不匹配是语法错误，因为语法树里有这两个运算数。"两人各错在哪里？</div>
+      <details>
+        <summary>提示</summary>
+        <p>词法分析器输出的是记号，它理解"结构"吗？类型检查需要知道变量的声明类型，语法树本身带这个信息吗？</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p>甲错：词法分析只负责把字符切成记号，单个括号 ( 和 ) 都是合法记号；<strong>配对问题是结构问题，属于语法分析</strong>，由文法规则发现。</p>
+          <p>乙错：语法分析只看结构是否合文法，"int + string"在结构上完全合法；<strong>类型检查属于语义分析</strong>，要查符号表里的声明类型才能发现。口诀：词法管"词"、语法管"形"、语义管"义"。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>仿照 1.2 节的完整例子，把语句 <span class="var">x = a + b * 2</span>（x、a、b 均为 float，2 为 int）走完七个阶段，写出每个阶段的输入与输出（含符号表）。</div>
+      <details>
+        <summary>提示</summary>
+        <p>先数记号、建符号表；画树时注意 * 是 + 的子树；语义分析在哪里插入 inttofloat；三地址码按"先转换、再乘、再加、最后赋值"的顺序；优化做常量折叠。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p><strong>① 词法分析</strong>：输入字符流 x = a + b * 2。输出记号流 ⟨id,1⟩⟨=⟩⟨id,2⟩⟨+⟩⟨id,3⟩⟨*⟩⟨2⟩。符号表：1↔x（float）、2↔a（float）、3↔b（float）。共 7 个记号、3 条符号表项。</p>
+          <p><strong>② 语法分析</strong>：输出语法树——根是 =，左孩子 ⟨id,1⟩，右孩子是 +；+ 的左孩子 ⟨id,2⟩，右孩子是 *；* 的左孩子 ⟨id,3⟩，右孩子 2。</p>
+          <p><strong>③ 语义分析</strong>：类型检查发现 b（float）* 2（int）类型不一致，在 2 处插入 inttofloat，得到 * 的右孩子 inttofloat(2)。</p>
+          <p><strong>④ 中间代码生成</strong>：t1 = inttofloat(2)；t2 = id3 * t1；t3 = id2 + t2；id1 = t3。</p>
+          <p><strong>⑤ 机器无关优化</strong>：常量折叠 inttofloat(2) → 2.0，合并单次使用的 t3，得 t1 = id3 * 2.0；id1 = id2 + t1。</p>
+          <p><strong>⑥ 代码生成</strong>：LDF R2, id3；MULF R2, R2, #2.0；LDF R1, id2；ADDF R1, R1, R2；STF id1, R1。</p>
+          <p><strong>⑦ 目标机相关优化</strong>：指令已足够短，原样输出（若目标机有乘加融合指令 FMA，可进一步合并 MULF 与 ADDF——这正说明第 ⑦ 步依赖具体硬件）。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>对语句 <span class="var">total = count + rate2 * 10</span>：(a) 词法分析输出多少个记号？(b) 符号表建几个条目？分别是什么？(c) 若把语句改成 <span class="var">total = total + rate2 * 10</span>，记号数和符号表条目数各变不变？为什么？</div>
+      <details>
+        <summary>提示</summary>
+        <p>逐字符扫描，数一数"单词"；符号表按"不同标识符"登记，同一个名字第二次出现时是新建条目还是查旧条目？</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p>(a) 记号流为 ⟨id,1⟩⟨=⟩⟨id,2⟩⟨+⟩⟨id,3⟩⟨*⟩⟨10⟩，共 <strong>7 个记号</strong>（3 个标识符、3 个运算符、1 个常量）。</p>
+          <p>(b) 符号表 <strong>3 个条目</strong>：1↔total、2↔count、3↔rate2。</p>
+          <p>(c) 改成 total = total + rate2 * 10 后：记号流为 ⟨id,1⟩⟨=⟩⟨id,1⟩⟨+⟩⟨id,3⟩⟨*⟩⟨10⟩——记号仍是 <strong>7 个</strong>；但符号表只剩 <strong>2 个条目</strong>（1↔total、3↔rate2，count 消失，total 第二次出现时查到已有条目）。关键结论：记号数按"出现次数"算，符号表条目按"不同名字"算，同一个标识符多次出现只登记一次。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l3">L3 建模应用</span>某创业团队设计了 3 门新语言（脚本语言 S、系统语言 C2、教学语言 T），希望它们都能跑在 4 款芯片（x86、ARM、RISC-V、自研 NPU）上。用本章的前端/后端思想给出开发方案：(a) 不划分时要写多少个编译器？(b) 划分后要写哪些部件、共多少个？(c) 若半年后新增第 4 门语言，两种方案各自要追加多少工作量？(d) 用一句话说明该方案对"自研 NPU"这种新硬件的意义。</div>
+      <details>
+        <summary>提示</summary>
+        <p>把 1.3 节的 m×n 与 m+n 公式代入 m=3、n=4，再讨论增量（m→m+1）时两种方案各加几个部件。中间表示是接口，新硬件只动接口哪一侧？</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p>(a) 不划分：3 × 4 = <strong>12 个</strong>完整编译器。</p>
+          <p>(b) 划分后：3 个前端（S、C2、T 各一）+ 4 个后端（x86、ARM、RISC-V、NPU 各一）= <strong>7 个部件</strong>，约定一个统一的中间表示（如三地址码）作为拼接接口。</p>
+          <p>(c) 新增第 4 门语言：不划分方案要为 4 款芯片各写 1 个编译器，追加 <strong>4 个</strong>；划分方案只需写 <strong>1 个新前端</strong>，立刻复用已有 4 个后端。</p>
+          <p>(d) 对自研 NPU 的意义：只需为它写 <strong>1 个新后端</strong>，现有 3 门（未来 n 门）语言立刻全部"免费"获得 NPU 支持——这就是 LLVM/GCC 生态能快速覆盖新硬件的原因，也是 m+n 结构从"省工作量"升级为"生态杠杆"的地方。</p>
+        </div>
+      </details>
+    </div>
+
+    <!-- ===== 章末五件套之 3：自测 ===== -->
+    <h2><span class="sec-no">✍️</span>本章自测</h2>
+    <p class="quiz-hint">点击选项判分，答错会给出原因。</p>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 1</div>
+      <div class="q-stem">编译器与解释器最本质的区别是：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 编译器运行快，解释器运行慢</li>
+        <li data-opt="b">B. 编译器先产出完整的目标程序再运行；解释器不产出目标程序，边翻译边执行</li>
+        <li data-opt="c">C. 编译器能发现错误，解释器不能发现错误</li>
+        <li data-opt="d">D. 编译型语言比解释型语言高级</li>
+      </ul>
+      <div class="quiz-explain">B 对：产出目标程序与否是定义性区别。A 错在把常见现象当定义（快慢是结果不是本质）；C 错，解释器同样报错，只是报错时机在执行中；D 错，"编译型/解释型语言"本身就是错误说法——语言不分型，分型的只是实现。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="c">
+      <div class="q-no">自测 2</div>
+      <div class="q-stem">下列哪个顺序正确描述了编译器的处理流程？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 语法分析 → 词法分析 → 语义分析 → 中间代码生成</li>
+        <li data-opt="b">B. 词法分析 → 语义分析 → 语法分析 → 代码生成</li>
+        <li data-opt="c">C. 词法分析 → 语法分析 → 语义分析 → 中间代码生成 → 优化 → 代码生成</li>
+        <li data-opt="d">D. 代码生成 → 优化 → 语义分析 → 语法分析</li>
+      </ul>
+      <div class="quiz-explain">C 对，这是七阶段主链的标准顺序。A 错：必须先有记号流才能做语法分析，词法在语法之前；B 错：语义分析检查的是语法树，必须先有语法分析；D 错：代码生成是最后阶段，不可能排在最前，且语义在语法之后。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="d">
+      <div class="q-no">自测 3</div>
+      <div class="q-stem">关于符号表，下列说法正确的是：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 它只在词法分析阶段使用，之后即被销毁</li>
+        <li data-opt="b">B. 它是语法分析器的内部数据结构</li>
+        <li data-opt="c">C. 每个标识符每出现一次就要新建一个条目</li>
+        <li data-opt="d">D. 它由词法分析创建，贯穿编译全程，语义分析往里填类型、代码生成往里填地址</li>
+      </ul>
+      <div class="quiz-explain">D 对：符号表是贯穿全程的共享数据库。A 错在"用完即弃"，代码生成还要查它分配地址；B 错，它不属于任何单一阶段；C 错，同一标识符多次出现只登记一次（见 L2 习题），条目按不同名字计。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="a">
+      <div class="q-no">自测 4</div>
+      <div class="q-stem">有 6 种源语言和 6 台目标机。采用前端/后端划分（中间表示统一）相比不划分，部件总数从多少降到多少？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 从 36 降到 12</li>
+        <li data-opt="b">B. 从 36 降到 6</li>
+        <li data-opt="c">C. 从 12 降到 6</li>
+        <li data-opt="d">D. 从 72 降到 12</li>
+      </ul>
+      <div class="quiz-explain">A 对：不划分 m×n = 6×6 = 36；划分后 m + n = 6 + 6 = 12。B 错，6 个部件无法同时覆盖两侧（至少要 6 前端 + 6 后端）；C 错，12 是划分后的结果而非起点；D 错，72 没有任何依据，m×n 就是 36。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 5</div>
+      <div class="q-stem">在 position = initial + rate * 60 的例子里，inttofloat 这个转换是在哪个阶段被决定插入的？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 词法分析——它读到了 int 常量 60</li>
+        <li data-opt="b">B. 语义分析——类型检查发现 float * int 不一致，决定插入转换节点</li>
+        <li data-opt="c">C. 中间代码生成——它生成了 t1 = inttofloat(60)</li>
+        <li data-opt="d">D. 代码生成——它知道目标机没有混合类型乘法指令</li>
+      </ul>
+      <div class="quiz-explain">B 对：插入类型转换是类型检查的职责，属于语义分析。A 错，词法只认出 60 是常量，不知道上下文类型；C 错，中间代码生成只是<strong>忠实翻译</strong>语义分析已插好的节点，是执行者不是决策者；D 错，目标机细节属于后端，而插入转换发生在与机器无关的前端。</div>
+    </div>
+
+    <!-- ===== 章末五件套之 4：三句话复述 ===== -->
+    <div class="retell">
+      <h3>🗣️ 用自己的话，三句话讲完本章</h3>
+      <p>对着空气（或室友）说出这三句。说卡壳的那句，回去重读对应小节。</p>
+      <details>
+        <summary>句1：这章解决什么问题？——</summary>
+        <div class="retell-answer">参考答案：机器只懂 0/1，高级语言程序必须被翻译；本章回答"翻译这件事为什么被做成一条七个阶段的流水线，每个阶段吃什么、吐什么"，并给出全书地图。</div>
+      </details>
+      <details>
+        <summary>句2：核心机制是什么？——</summary>
+        <div class="retell-answer">参考答案：七个阶段依次变换表示（字符→记号→树→带类型的树→三地址码→优化三地址码→机器指令）；前端管源语言、后端管目标机，中间表示当接口，把 m×n 个编译器省成 m+n 个；符号表与错误处理贯穿全程。</div>
+      </details>
+      <details>
+        <summary>句3：它和前后章怎么分工？——</summary>
+        <div class="retell-answer">参考答案：本章无前驱，是起点，只画地图不讲实现；第 2 章用一个完整小翻译器把全流程跑通，第 3、4 章分别把词法分析器和语法分析器做成严肃算法，之后第 5–11 章沿流水线向后推进。</div>
+      </details>
+    </div>
+
+    <!-- ===== 章末五件套之 5：间隔复习计划 ===== -->
+    <div class="review-plan">
+      <h3>🔁 间隔复习计划</h3>
+      <p>回忆本身比重读有效 10 倍。到点只做一件事：翻卡 + 重做标记题。</p>
+      <table>
+        <tr><th>时间点</th><th>复习内容</th><th>预计用时</th></tr>
+        <tr><td>第 1 天</td><td>概念卡 1–6 全部 + 回忆 1.1-1、1.2-1、1.3-1；重看 1.2 节七阶段总表</td><td>10 分钟</td></tr>
+        <tr><td>第 3 天</td><td>概念卡 2、5、6（词法/符号表/前后端）+ 回忆 1.2-2、1.3-2；重做 L2 习题（x = a + b * 2）不看答案</td><td>10 分钟</td></tr>
+        <tr><td>第 7 天</td><td>三句话复述 + 自测错题重做；回忆 1.4-1、1.4-2</td><td>10 分钟</td></tr>
+        <tr><td>第 15 天</td><td>只做合上书挑战；把 position = initial + rate * 60 的七阶段输出默写一遍，能全过就毕业</td><td>15 分钟</td></tr>
+      </table>
+    </div>
+
+    <!-- 合上书挑战 -->
+    <div class="final-challenge">
+      <h3>📕 合上书挑战</h3>
+      <p class="fc-sub">现在关掉这个页面，拿一张纸，凭记忆完成以下任务。全部做完再回来核对——这是本章真正的毕业考试。</p>
+      <ol id="challenge-list">
+        <li><span class="fc-check"></span>写出编译器与解释器的定义，并各举一个例子（含一个混合模式的例子）。</li>
+        <li><span class="fc-check"></span>按顺序默写编译器七个阶段，并为每个阶段写一句"输入 → 输出"。</li>
+        <li><span class="fc-check"></span>手算：position = initial + rate * 60 的记号流、符号表、语法树（画出）、四行三地址码、优化后两行、五行目标指令。</li>
+        <li><span class="fc-check"></span>解释 inttofloat 为什么由语义分析插入而不是中间代码生成。</li>
+        <li><span class="fc-check"></span>用 m=n=10 算一遍 m×n vs m+n，并解释"新增一门语言时两种方案各加多少工作量"。</li>
+        <li><span class="fc-check"></span>说明符号表与错误处理器为什么不是流水线的一环，并各举一个它们在两不同阶段被使用的例子。</li>
+        <li><span class="fc-check"></span>回答本章的主线问题：一段源代码怎样一步步变成可运行的机器码——为什么编译器要分成一串阶段，每个阶段吃什么、吐什么？（一句话）</li>
+      </ol>
+    </div>
+
+    <div class="complete-zone">
+      <button class="btn-complete" id="btn-complete" onclick="markDone()">✓ 我已完成本章（含合上书挑战）</button>
+    </div>
+
+    <div class="chapter-nav">
+      <a href="index.html"><span class="nav-dir">← 学习地图</span>全书学习地图</a>
+      <a href="chapter-02.html" class="next"><span class="nav-dir">下一章 →</span>第2章 一个简单的语法制导翻译器</a>
+    </div>
+
+  </div>
+</div>
+
+<footer class="footer">
+  <div class="wrap">第1章 引论 · 编译原理互动讲义 · 基于 Aho/Lam/Sethi/Ullman《编译原理》（第 2 版）</div>
+</footer>
+
+<script src="/lectures-assets/mermaid.min.js"></script>
+<script>
+mermaid.initialize({
+  startOnLoad: true,
+  theme: "base",
+  themeVariables: {
+    primaryColor: "#e3edf7",
+    primaryBorderColor: "#1d5f9e",
+    primaryTextColor: "#1d5f9e",
+    lineColor: "#5c554b",
+    secondaryColor: "#fbeedd",
+    tertiaryColor: "#f5f1e8",
+    fontFamily: "-apple-system, PingFang SC, sans-serif",
+    fontSize: "14px"
+  },
+  flowchart: { curve: "linear", htmlLabels: false }
+});
+</script>
+<script>
+// 自测题判分
+document.querySelectorAll(".quiz-block").forEach(block => {
+  const answer = block.dataset.answer;
+  const explain = block.querySelector(".quiz-explain");
+  block.querySelectorAll(".quiz-opts li").forEach(li => {
+    li.addEventListener("click", () => {
+      const opts = block.querySelectorAll(".quiz-opts li");
+      opts.forEach(o => o.classList.add("disabled"));
+      if (li.dataset.opt === answer) {
+        li.classList.add("correct");
+      } else {
+        li.classList.add("wrong");
+        block.querySelector('[data-opt="' + answer + '"]').classList.add("correct");
+      }
+      explain.classList.add("show");
+    });
+  });
+});
+
+// 合上书清单打勾
+document.querySelectorAll("#challenge-list li").forEach(li => {
+  li.addEventListener("click", () => li.classList.toggle("checked"));
+});
+
+// 完成标记 → localStorage
+const KEY = "comp_progress_v1";
+function loadProgress() {
+  try { return JSON.parse(localStorage.getItem(KEY)) || {}; } catch (e) { return {}; }
+}
+const progress = loadProgress();
+const btn = document.getElementById("btn-complete");
+if (progress[1] && progress[1].done) {
+  btn.textContent = "✓ 已完成 · 再次点击重置";
+  btn.classList.add("done");
+}
+function markDone() {
+  const p = loadProgress();
+  if (p[1] && p[1].done) {
+    delete p[1];
+    btn.textContent = "✓ 我已完成本章（含合上书挑战）";
+    btn.classList.remove("done");
+  } else {
+    p[1] = { done: true, completedAt: Date.now(), reviewsDone: 0 };
+    btn.textContent = "✓ 已完成 · 复习提醒已开启";
+    btn.classList.add("done");
+  }
+  localStorage.setItem(KEY, JSON.stringify(p));
+}
+</script>
+
+</body>
+</html>

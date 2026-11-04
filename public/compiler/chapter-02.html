@@ -1,0 +1,854 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第2章 一个简单的语法制导翻译器 · 编译原理互动讲义</title>
+<link rel="stylesheet" href="/lectures-assets/style.css">
+</head>
+<body>
+
+<nav class="topbar">
+  <div class="topbar-inner">
+    <span class="brand"><a href="index.html" style="color:inherit">← 学习地图</a></span>
+    <span class="crumb">阶段一 · 前端与词法语法 / 第2章</span>
+  </div>
+</nav>
+
+<div class="wrap">
+
+  <div class="lecture-head">
+    <span class="ch-label">CHAPTER 02 · 前端与词法语法</span>
+    <h1>一个简单的语法制导翻译器</h1>
+    <p class="lead">只凭一份文法，手写一个能跑的中缀 → 后缀翻译器——这是全书第一个"最小可行编译器"。</p>
+  </div>
+
+  <!-- ===== 章首四件套之 1：全书定位 ===== -->
+  <div class="position-bar">
+    <strong>本章在主线上的位置：</strong>第1章给了流水线全景 → <u>本章造出最小可行翻译器</u> → 第3、4章把其中的词法/语法部分做扎实。<br>
+    第2章回答主线上的第2个问题：<strong>只靠"语法"能不能直接造出一个能跑的翻译器？最小可行的编译器长什么样？</strong>
+    <div class="map-inline">
+      <span class="node here">Ch1–4 前端与词法语法 ← 本章</span><span class="arrow">→</span>
+      <span class="node">Ch5–7 语义与中间代码</span><span class="arrow">→</span>
+      <span class="node">Ch8–11 后端与优化</span><span class="arrow">→</span>
+      <span class="node">Ch12 全书收束</span>
+    </div>
+  </div>
+
+  <!-- ===== 章首四件套之 2：学习目标 ===== -->
+  <div class="objectives">
+    <h4>🎯 学完本章，合上书你应该能：</h4>
+    <ol>
+      <li>说出上下文无关文法的四元组，并对任意"一位数加减串"写出最左推导、画出分析树。</li>
+      <li>写出中缀 → 后缀的翻译方案，画出注释分析树并按深度优先遍历手算输出。</li>
+      <li>解释左递归为什么让递归下降死循环，并套用消除规则改写文法。</li>
+      <li>写出 expr() / rest() / term() 三个过程的伪代码，并对给定输入复述完整调用轨迹。</li>
+      <li>说出扫描器（peek、空白、num 记号）与符号表（put/get）的职责，画出最小翻译器的整体结构图。</li>
+    </ol>
+  </div>
+
+  <div class="lecture">
+
+    <!-- ===== 章首四件套之 3：推导主线图 ===== -->
+    <div class="figure">
+      <div class="mermaid">
+flowchart LR
+  A["文法定义语言"] --> B["翻译方案挂动作"]
+  B --> C["左递归挡路"]
+  C --> D["消除左递归"]
+  D --> E["递归下降预测分析"]
+  E --> F["拼出完整翻译器"]
+  F --> G["局限：手写扫描器与递归下降 → Ch3/Ch4 机械化"]
+  classDef danger fill:#fae9e7,stroke:#b03a2e,stroke-width:2.5px,color:#b03a2e;
+  class G danger;
+      </div>
+      <div class="caption">本章推导主线：每一步都回答"为什么需要下一步"；末节点是本章留下的代价，通向第3、4章。</div>
+    </div>
+
+    <!-- ================= 2.1 ================= -->
+    <h2><span class="sec-no">2.1</span>语法是什么：一套"生成合法串"的规则</h2>
+
+    <p>第1章画出了编译器流水线，但"语法分析"这一格到底吃什么、吐什么？要回答它，先得把"语法"本身形式化：我们需要的不是"表达式大概长这样"这种自然语言描述，而是一套<strong>能机械判定一个串合不合法</strong>的规则。</p>
+
+    <p>这套规则就是 <span class="term">上下文无关文法</span>（Context-Free Grammar，CFG）。它由四个部分组成（四元组）：</p>
+    <ul>
+      <li><span class="term">终结符</span>（Terminal）：语言里实际出现的基本符号，如数字 0–9、运算符 +、-。它们是推导的终点，不能再展开。</li>
+      <li><span class="term">非终结符</span>（Nonterminal）：语法变量，代表"一类串"，如 list、digit。它们可以被产生式继续展开。</li>
+      <li><span class="term">开始符号</span>（Start Symbol）：指定一个非终结符作为推导的起点，本章是 list（或 expr）。</li>
+      <li><span class="term">产生式</span>（Production）：形如"左部 → 右部"的替换规则，左部是一个非终结符，右部是终结符与非终结符的串。</li>
+    </ul>
+
+    <p>本章的第一份文法（龙书图 2-1 的简化版）——"一位数字的加减表达式"：</p>
+    <div class="formula">
+      list → list + digit &nbsp;|&nbsp; list - digit &nbsp;|&nbsp; digit<br>
+      digit → 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9
+    </div>
+    <p>读法：list 是"加减表达式"，它要么是"一个表达式加/减一位数字"，要么本身就是一位数字。竖线 | 表示"或"。</p>
+
+    <p>从开始符号出发，反复用产生式替换非终结符，直到串里只剩终结符，这个过程叫 <span class="term">推导</span>（Derivation）。如果每一步都替换<strong>当前句型中最左边的非终结符</strong>，就叫 <span class="term">最左推导</span>（Leftmost Derivation）。下面对串 <code>9-5+2</code> 做最左推导，一步都不跳：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>步</th><th>当前句型</th><th>本步所用产生式</th></tr>
+        <tr><td>0</td><td>list</td><td>（开始符号）</td></tr>
+        <tr><td>1</td><td>list + digit</td><td>list → list + digit</td></tr>
+        <tr><td>2</td><td>list - digit + digit</td><td>list → list - digit</td></tr>
+        <tr><td>3</td><td>digit - digit + digit</td><td>list → digit</td></tr>
+        <tr><td>4</td><td>9 - digit + digit</td><td>digit → 9</td></tr>
+        <tr><td>5</td><td>9 - 5 + digit</td><td>digit → 5</td></tr>
+        <tr><td>6</td><td>9 - 5 + 2</td><td>digit → 2</td></tr>
+      </table>
+    </div>
+    <p>注意第 1、2 步：因为加、减运算要<strong>从左向右结合</strong>，所以根部的 list 先展开成 list + digit（最右边的 +2），里面那层再展开成 list - digit（-5）。推导顺序对应着运算的结合顺序。</p>
+
+    <p>把推导过程画成一棵树，就得到 <span class="term">分析树</span>（Parse Tree）：根是开始符号，内部节点是非终结符，叶子从左到右读出来恰好是原串。</p>
+
+    <div class="figure">
+      <div class="mermaid">
+flowchart TB
+  R["list"] --> A["list"]
+  R --> P["+"]
+  R --> D3["digit"]
+  A --> B["list"]
+  A --> M["-"]
+  A --> D2["digit"]
+  B --> D1["digit"]
+  D3 --> L2["2"]
+  D2 --> L5["5"]
+  D1 --> L9["9"]
+      </div>
+      <div class="caption">图 2.1 串 9-5+2 的分析树：叶子从左到右读是 9-5+2；树的嵌套层次体现了加减的左结合（先算 9-5，再加 2）。</div>
+    </div>
+
+    <p>最后提一个本章故意绕开的概念：<span class="term">二义性</span>（Ambiguity）。如果一个文法能让同一个串长出<strong>两棵不同的分析树</strong>，这个文法就是二义的（经典的例子是"悬空 else"）。二义文法对编译器是灾难——树不同，含义就不同。<strong>本章所有文法都特意设计成无二义的</strong>，所以可以放心地把"推导"和"分析树"当作一一对应。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>文法是"语言的菜谱"，推导是"照菜谱做菜的过程记录"，分析树是这份记录的图形化——叶子拼起来是串本身，树的结构就是串的语法身份。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>把 digit 当成终结符。判断标准只有一个：能否出现在产生式<strong>左部</strong>被继续展开。digit → 0|…|9 说明 digit 是非终结符；9 才是真正的终结符。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 2.1-1</div>
+              <div class="q-text">上下文无关文法的四元组是哪四个成分？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              终结符、非终结符、开始符号、产生式。终结符不再展开；非终结符可被产生式展开；开始符号是推导起点。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 2.1-2</div>
+              <div class="q-text">最左推导的"最左"是什么意思？9-5+2 的最左推导第一步用了哪条产生式？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              每一步都替换当前句型中最左边的非终结符。第一步用 list → list + digit（先展开最右边的 +2，体现左结合）。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ================= 2.2 ================= -->
+    <h2><span class="sec-no">2.2</span>语法制导翻译：把动作挂到产生式上</h2>
+
+    <p>上一节解决了"串长什么样才算合法"，但编译器要的不是"合法"这个判决，而是<strong>翻译</strong>。能不能不另写一套翻译程序，直接在文法上"顺手"完成翻译？能——这就是 <span class="term">语法制导翻译</span>（Syntax-Directed Translation）。</p>
+
+    <p>它有两个层次，务必分清：</p>
+    <ul>
+      <li><span class="term">语法制导定义</span>（Syntax-Directed Definition，SDD）：给每个文法符号关联<span class="term">属性</span>（Attribute），给每个产生式关联"语义规则"，只说明<strong>要算什么</strong>（如 expr.t = expr₁.t || term.t || '+'），不规定计算顺序。</li>
+      <li><span class="term">翻译方案</span>（Translation Scheme）：把语义动作直接用花括号 { } 嵌进产生式<strong>右部的具体位置</strong>。位置即时机——动作写在哪，就在分析进行到那里时执行。</li>
+    </ul>
+
+    <p>本章的核心翻译方案：把中缀表达式翻译成<strong>后缀表达式</strong>（运算符写在两个运算对象之后，如 9-5+2 → 95-2+）：</p>
+    <div class="formula">
+      expr → expr + term { print('+') } &nbsp;|&nbsp; expr - term { print('-') } &nbsp;|&nbsp; term<br>
+      term → 0 { print('0') } | 1 { print('1') } | … | 9 { print('9') }
+    </div>
+    <p>动作的直觉：expr + term 的子表达式和右操作数都翻译完之后，最后输出运算符 '+'——"先两边、后运算符"，这正是后缀记法的定义。</p>
+
+    <p>动作的执行过程用 <span class="term">注释分析树</span>（Annotated Parse Tree）来观察：把每个动作当作产生式右部一个<strong>额外的叶子节点</strong>挂在树上，然后对整棵树做深度优先遍历，走到动作节点就执行它。9-5+2 的注释分析树如下：</p>
+
+    <div class="figure">
+      <div class="mermaid">
+flowchart TB
+  E0["expr"] --> E1["expr"]
+  E0 --> PL["+"]
+  E0 --> T2["term"]
+  E0 --> A1["print +"]
+  E1 --> E2["expr"]
+  E1 --> MI["-"]
+  E1 --> T5["term"]
+  E1 --> A2["print -"]
+  E2 --> T9["term"]
+  T9 --> N9["9"]
+  T9 --> A3["print 9"]
+  T5 --> N5["5"]
+  T5 --> A4["print 5"]
+  T2 --> N2["2"]
+  T2 --> A5["print 2"]
+      </div>
+      <div class="caption">图 2.2 9-5+2 的注释分析树：print 动作是额外的叶子；深度优先遍历（左子树 → 动作）依次输出 9、5、-、2、+。</div>
+    </div>
+
+    <p>深度优先遍历的完整步骤（访问到 print 节点才产生输出）：</p>
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>步</th><th>遍历到达</th><th>做什么</th><th>累计输出</th></tr>
+        <tr><td>1</td><td>根 expr</td><td>先深入左子 expr（不输出）</td><td>（空）</td></tr>
+        <tr><td>2</td><td>中层 expr</td><td>继续深入最左 expr → term</td><td>（空）</td></tr>
+        <tr><td>3</td><td>term → 9</td><td>执行 print('9')</td><td>9</td></tr>
+        <tr><td>4</td><td>回到中层 expr</td><td>走过终结符 '-'，深入 term → 5，执行 print('5')</td><td>95</td></tr>
+        <tr><td>5</td><td>中层 expr 的动作叶</td><td>执行 print('-')</td><td>95-</td></tr>
+        <tr><td>6</td><td>回到根 expr</td><td>走过终结符 '+'，深入 term → 2，执行 print('2')</td><td>95-2</td></tr>
+        <tr><td>7</td><td>根 expr 的动作叶</td><td>执行 print('+')，遍历结束</td><td>95-2+</td></tr>
+      </table>
+    </div>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>动作嵌在右部的位置 = 执行的时机。写在末尾意味着"右部符号全部处理完再执行"，于是每个运算符都排在它的两个运算对象之后——后缀输出是树形结构 + 末尾动作的自然产物，一行翻译代码都不用写。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>以为翻译方案里动作的位置无所谓。{ print('+') } 若写在右部<strong>开头</strong>，就会先输出 '+' 再输出运算对象，得到的将是前缀表达式而非后缀。SDD 不谈顺序，翻译方案的顺序就是生命线。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 2.2-1</div>
+              <div class="q-text">SDD 和翻译方案的区别是什么？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              SDD 只给属性和语义规则，不规定计算顺序；翻译方案把动作嵌进产生式右部的具体位置，位置决定执行时机。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 2.2-2</div>
+              <div class="q-text">注释分析树怎么产生输出？9-5+2 的后缀结果是什么？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              动作作为额外叶子挂进分析树，深度优先遍历时执行。9-5+2 依次输出 9、5、-、2、+，即 95-2+。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ================= 2.3 ================= -->
+    <h2><span class="sec-no">2.3</span>预测分析：左递归为什么挡路，怎么绕开</h2>
+
+    <p>翻译方案有了，怎么让它"跑"起来？最直觉的实现：每个非终结符写成一个函数，产生式右部变成函数体——非终结符对应递归调用，终结符对应"吃掉一个输入符号"。这就是 <span class="term">预测分析</span>（Predictive Parsing），也叫 <span class="term">递归下降</span>（Recursive Descent）：只凭当前这一个 <span class="term">向前看符号</span>（Lookahead）就能决定选哪条产生式，不回溯。</p>
+
+    <p>但 2.2 的文法直接翻译成函数会当场爆炸。看 expr → expr + term 这条产生式，照抄成函数就是：</p>
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>反例：照抄左递归文法</th></tr>
+        <tr><td><pre>procedure expr()
+  expr()      // 第一条语句就调自己
+  match('+')
+  term()
+  print('+')</pre></td></tr>
+      </table>
+    </div>
+    <p>expr() 被调用后，<strong>在不消耗任何输入的情况下</strong>第一件事又是调 expr()，于是无限递归直到栈溢出。问题就出在产生式右部以自身开头——这叫 <span class="term">左递归</span>（Left Recursion）。左递归对自顶向下分析是致命的，必须消除。</p>
+
+    <p>消除规则（龙书 2.5 节）：对 A → Aα | β（α 是"+ term {print('+')}"这样的尾巴，β 是不以 A 开头的备选），改写为：</p>
+    <div class="formula">
+      A → β R &nbsp;&nbsp;&nbsp; R → α R &nbsp;|&nbsp; ε
+    </div>
+    <p>直觉：原来的 A 能生成"β 后面跟任意多个 α"，新文法里 R 专门负责"还有多少个 α 没处理"，ε 表示"一个都不剩了"。套用到我们的文法上：</p>
+    <div class="formula">
+      expr → term rest<br>
+      rest → + term { print('+') } rest &nbsp;|&nbsp; - term { print('-') } rest &nbsp;|&nbsp; ε<br>
+      term → 0 { print('0') } | … | 9 { print('9') }
+    </div>
+
+    <p>由此写出三个过程的伪代码（match(t) 是公共小助手：若向前看符号等于 t 就读入下一个记号，否则报错）：</p>
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>过程</th><th>伪代码</th></tr>
+        <tr><td>expr()</td><td><pre>procedure expr()
+  term()
+  rest()</pre></td></tr>
+        <tr><td>rest()</td><td><pre>procedure rest()
+  if lookahead = '+':
+    match('+'); term(); print('+'); rest()
+  else if lookahead = '-':
+    match('-'); term(); print('-'); rest()
+  else:
+    return    // 选 ε：什么也不做</pre></td></tr>
+        <tr><td>term()</td><td><pre>procedure term()
+  if lookahead 是数字 d:
+    match(d); print(d)
+  else:
+    报错</pre></td></tr>
+        <tr><td>match(t)</td><td><pre>procedure match(t)
+  if lookahead = t:
+    lookahead ← 下一个输入记号
+  else:
+    报错</pre></td></tr>
+      </table>
+    </div>
+
+    <p>对输入 <code>9-5+2</code> 跑一遍，完整调用轨迹如下（这就是本章的"主实验"，务必能独立复述）：</p>
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>步</th><th>当前调用</th><th>向前看</th><th>动作</th><th>累计输出</th></tr>
+        <tr><td>1</td><td>expr() → term()</td><td>9</td><td>匹配数字 9，print('9')</td><td>9</td></tr>
+        <tr><td>2</td><td>expr() → rest()</td><td>-</td><td>不是数字，选 rest → - term {print('-')} rest</td><td>9</td></tr>
+        <tr><td>3</td><td>match('-')</td><td>-</td><td>消耗 '-'，向前看前进到 5</td><td>9</td></tr>
+        <tr><td>4</td><td>term()</td><td>5</td><td>匹配数字 5，print('5')</td><td>95</td></tr>
+        <tr><td>5</td><td>动作叶</td><td>5</td><td>执行 print('-')</td><td>95-</td></tr>
+        <tr><td>6</td><td>rest() 递归调 rest()</td><td>+</td><td>选 rest → + term {print('+')} rest</td><td>95-</td></tr>
+        <tr><td>7</td><td>match('+')</td><td>+</td><td>消耗 '+'，向前看前进到 2</td><td>95-</td></tr>
+        <tr><td>8</td><td>term()</td><td>2</td><td>匹配数字 2，print('2')</td><td>95-2</td></tr>
+        <tr><td>9</td><td>动作叶</td><td>2</td><td>执行 print('+')</td><td>95-2+</td></tr>
+        <tr><td>10</td><td>rest() 递归调 rest()</td><td>结束</td><td>既不是 + 也不是 -，选 ε，层层返回</td><td>95-2+</td></tr>
+      </table>
+    </div>
+    <p>对照 2.2 的注释分析树遍历结果：输出完全一样（95-2+）。这不是巧合——递归下降的<strong>调用顺序恰好实现了注释分析树的深度优先遍历</strong>。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>rest 就是"一串 +term / -term 的循环尾巴"：每处理一个运算符就递归一次，输入耗尽时走 ε 退出。左递归改写成 rest 之后，"左结合的循环"变成了"向右的尾递归"，递归下降才能一步步向前吃输入。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>以为向前看符号每次判断都会被消耗。只有 match() 会消耗输入；rest() 里的 if 判断只是"看一眼"。rest 选 ε 分支时一个符号都不消耗——这正是它能在输入末尾安全退出的原因。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 2.3-1</div>
+              <div class="q-text">为什么左递归文法会让递归下降死循环？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              expr → expr + term 照抄成函数后，expr() 的第一条语句就是不消耗任何输入地调用 expr()，无限递归直到栈溢出。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 2.3-2</div>
+              <div class="q-text">A → Aα | β 的左递归如何消除？rest 的 ε 什么时候被选？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              改写为 A → βR，R → αR | ε。当向前看符号既不是 + 也不是 -（如输入结束或右括号）时，rest 选 ε 直接返回。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ================= 2.4 ================= -->
+    <h2><span class="sec-no">2.4</span>组装：一个完整的中缀 → 后缀翻译器</h2>
+
+    <p>上一节的预测分析器吃的是"记号"，但真实输入是一串字符——9-5+2 在磁盘上是字符 '9'、'-'、'5'、'+'、'2'。还缺一块把字符流切成记号的零件：<span class="term">词法分析器</span>（Scanner / Lexer）。本章手写一个最简单的，它只做三件事：</p>
+    <ul>
+      <li><strong>跳过空白</strong>：空格、制表符、换行直接丢弃。</li>
+      <li><strong>识别数字</strong>：用一个 <span class="term">peek</span> 变量预读一个字符；若 peek 是数字，就把连续的数字拼成一个 <span class="term">记号</span>（Token）num（本章只有一位数，但多位数只是多读几位的事）。</li>
+      <li><strong>识别运算符</strong>：peek 是 '+' 或 '-' 等单字符，直接作为记号返回。</li>
+    </ul>
+    <p>顺便记住一个名词：<span class="term">符号表</span>（Symbol Table）——编译器存标识符信息的数据结构，核心操作就两个：<code>put</code>（登记）和 <code>get</code>（查询）。本章表达式里还没有变量，它只是露个脸，到后面章节才会真正上场。</p>
+
+    <p>把零件拼起来，整体结构如下：</p>
+    <div class="figure">
+      <div class="mermaid">
+flowchart LR
+  S["源程序 字符流"] --> L["词法分析器 Scanner"]
+  L --> P["预测分析器 expr/rest/term 内嵌翻译动作"]
+  P --> O["后缀输出"]
+  T["符号表 put/get"] -.-> P
+      </div>
+      <div class="caption">图 2.3 最小可行翻译器的整体结构：扫描器切记号，预测分析器边分析边输出后缀。</div>
+    </div>
+
+    <p>回头看第1章的流水线：词法分析、语法分析、翻译三个环节在本章被压成了一个小而能跑的程序——扫描器是手写的，分析器是手写的，翻译动作直接 print。<strong>这就是全书的"最小可行编译器"</strong>。接下来的路线很清晰：第3章用正则表达式和有穷自动机把手写扫描器换成机械化生成；第4章用 LL/LR 分析技术把手写递归下降换成由文法自动构造。手工件一个一个被换掉，流水线的骨架却始终是本章这副。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>本章翻译器的全部复杂度都在"结构"而不在"代码量"：文法定形状，翻译方案挂动作，消左递归后每个非终结符一个函数。理解了这三层，后面所有章都是在给这三层换更强大的引擎。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>以为词法分析器能看懂"表达式结构"。扫描器是"文盲"，它只认字符模式（数字、运算符），完全不知道谁跟谁结合——结构判断是语法分析器（expr/rest/term）的职责。两层职责一旦混淆，后面学自动机时会非常痛苦。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 2.4-1</div>
+              <div class="q-text">本章词法分析器做了哪三件事？peek 变量的作用是什么？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              跳过空白；把连续数字拼成 num 记号；单字符运算符直接返回。peek 预读一个字符，用于判断当前该认哪种记号。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 2.4-2</div>
+              <div class="q-text">本章翻译器对应第1章流水线的哪些阶段？哪些会在第3、4章被换掉？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              词法分析 + 语法分析 + 翻译动作的最小合体。第3章用正则/有穷自动机换掉手写扫描器，第4章用 LL/LR 换掉手写递归下降。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===== 章末五件套之 1：概念卡 ===== -->
+    <h2><span class="sec-no">🃏</span>概念卡：本章概念的一分钟画像</h2>
+    <p>翻面前先自问：这个概念我能用一句话讲清楚吗？</p>
+    <div class="flip-grid">
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 1</div>
+            <div class="q-text">上下文无关文法（Context-Free Grammar）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">四元组：终结符、非终结符、开始符号、产生式；产生式左部是单个非终结符。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">精确、机械地定义"哪些串是合法程序/表达式"。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">菜谱：产生式是替换规则，推导是按规则做菜。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为文法规定语义——它只管形状不管含义。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">第3、4章词法语法的机械化，全书描述语言的通用工具。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 2</div>
+            <div class="q-text">推导与分析树（Derivation &amp; Parse Tree）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">推导：从开始符号反复替换非终结符到全终结符；分析树：推导的树形记录。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">给出"这个串为什么合法"的完整证据与结构。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">树的嵌套 = 运算的结合次序；叶子横读 = 原串。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为最左推导是"从左往右读输入"——它是"每次替换最左非终结符"。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">第4章语法分析、二义性讨论、语法制导翻译的执行模型。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 3</div>
+            <div class="q-text">语法制导翻译方案（Translation Scheme）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">把 { 动作 } 嵌进产生式右部具体位置的 CFG 扩展。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">不另写翻译程序，让语法分析的过程顺带完成翻译。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">位置即时机：动作写在末尾 = 右部处理完再执行。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为动作位置随意——换位置就换了输出顺序（前缀/后缀之差）。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">第5章语法制导定义、第6章中间代码生成的直接前身。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 4</div>
+            <div class="q-text">注释分析树（Annotated Parse Tree）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">把翻译方案的动作作为额外叶子挂进分析树得到的树。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">让"动作何时执行"可视化：深度优先遍历即执行序。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">挂铃铛：遍历到哪个动作节点就敲哪下。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为动作节点参与语法——它们只是翻译的挂件，不是文法符号。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">本章手算后缀输出；第5章依赖图与属性求值顺序。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 5</div>
+            <div class="q-text">左递归（Left Recursion）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">产生式右部以左部自身开头：A → Aα。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">它本身不是工具而是障碍——识别并消除它，自顶向下分析才能工作。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">原地踏步：函数第一件事调自己，一口输入没吃。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为左递归文法是"错的"——它生成的语言没错，只是不适合自顶向下。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">第4章 LL 文法的先决条件；LR 分析反而能容忍左递归。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 6</div>
+            <div class="q-text">预测分析器（Predictive Parser）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">每个非终结符一个函数，仅凭当前向前看符号选产生式、不回溯的递归下降分析器。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">把文法直接变成可执行代码，分析过程顺带执行翻译动作。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">看一格走一步：lookahead 是唯一的决策依据，match 是唯一吃输入的口。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为它能处理任意文法——必须先无二义、无左递归、可预测。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">第4章 LL(1) 表驱动分析器的手写版前身。</span></div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- ===== 章末五件套之 2：分层习题 ===== -->
+    <h2><span class="sec-no">📝</span>分层习题</h2>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>判断：在文法 list → list + digit | list - digit | digit；digit → 0|…|9 中，"+" 和 "digit" 都是终结符。这句话对吗？</div>
+      <details>
+        <summary>提示</summary>
+        <p>判断终结符的唯一标准：能不能出现在产生式左部被继续展开。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">错。"+" 是终结符——它只出现在产生式右部，不能再展开，是推导的终点。而 digit 出现在产生式 digit → 0|…|9 的左部，还能展开成具体数字，所以 digit 是<strong>非终结符</strong>。易错点：digit 在推导最后一步才展开，看起来像"基本符号"，但分类看的是文法中的角色，不是展开的早晚。</div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>判断：翻译方案中动作 { print('+') } 写在产生式右部的开头还是末尾，只是风格差异，不影响输出。这句话对吗？</div>
+      <details>
+        <summary>提示</summary>
+        <p>回忆注释分析树：动作是深度优先遍历中的一个节点，位置不同则访问顺序不同。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">错。动作的位置就是执行时机。expr → expr + term { print('+') } 写在末尾：两个运算对象输出完才输出 '+'，得到后缀表达式（95-2+）。若写成 expr → { print('+') } expr + term，则先输出 '+' 再深入两棵子树，得到的是前缀表达式（+-952）。这正体现了 SDD（不管顺序）与翻译方案（顺序即语义）的区别。</div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>用本章 list 文法与后缀翻译方案，对串 2+3-4：(a) 写出最左推导；(b) 画出注释分析树（文字描述层次即可）；(c) 按深度优先遍历写出后缀输出。</div>
+      <details>
+        <summary>提示</summary>
+        <p>最左推导第一步展开最右边的运算（-4），体现左结合；遍历时"左子树 → 动作"。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p>(a) 最左推导：</p>
+          <p>list ⟹ list - digit ⟹ list + digit - digit ⟹ digit + digit - digit ⟹ 2 + digit - digit ⟹ 2 + 3 - digit ⟹ 2 + 3 - 4。</p>
+          <p>(b) 注释分析树（层次）：根 expr 的三个右部元素依次为 左子expr、'-'、term(→4，挂 print 4)、根动作 print -；左子 expr 同样展开为 expr(→term→2，挂 print 2)、'+'、term(→3，挂 print 3)、动作 print +。</p>
+          <p>(c) 深度优先遍历：先到底输出 2；中层输出 3，执行动作输出 +；回根输出 4，执行动作输出 -。后缀结果：<strong>23+4-</strong>。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>给带乘法的文法 term → term * factor | factor（factor 是一位数字，乘法输出后缀）：(a) 消除左递归；(b) 写出 term()/trest()/factor() 的递归下降伪代码；(c) 对输入 2*3 给出完整调用轨迹。</div>
+      <details>
+        <summary>提示</summary>
+        <p>套用 A → Aα | β 的改写：A=term，α="* factor {print('*')}"，β=factor。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p>(a) 消除后：term → factor trest；trest → * factor { print('*') } trest | ε。</p>
+          <p>(b) 伪代码：</p>
+          <div class="tbl-wrap">
+            <table>
+              <tr><th>过程</th><th>伪代码</th></tr>
+              <tr><td>term()</td><td><pre>procedure term()
+  factor()
+  trest()</pre></td></tr>
+              <tr><td>trest()</td><td><pre>procedure trest()
+  if lookahead = '*':
+    match('*'); factor(); print('*'); trest()
+  else:
+    return    // ε</pre></td></tr>
+              <tr><td>factor()</td><td><pre>procedure factor()
+  if lookahead 是数字 d:
+    match(d); print(d)
+  else:
+    报错</pre></td></tr>
+            </table>
+          </div>
+          <p>(c) 输入 2*3 的调用轨迹：term() → factor() 匹配 2、print('2')（输出 2）→ trest() 见 '*'：match('*')，factor() 匹配 3、print('3')（输出 23），执行 print('*')（输出 23*），递归 trest() 见输入结束走 ε 返回。最终输出 <strong>23*</strong>。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l3">L3 建模应用</span>设计"一位数加、减、乘"的完整中缀 → 后缀翻译器：给出文法与翻译动作，要求乘法优先于加减（2+3*4 应输出 234*+）。说明文法靠什么手段体现优先级。</div>
+      <details>
+        <summary>提示</summary>
+        <p>优先级 = 在分析树中的深度：优先级高的运算符要离叶子更近。把 * 放到比 +、- 更深一层的非终结符里。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p>文法（已消左递归）与动作：</p>
+          <div class="tbl-wrap">
+            <table>
+              <tr><th>层</th><th>产生式与动作</th></tr>
+              <tr><td>加减层</td><td>expr → term rest<br>rest → + term { print('+') } rest | - term { print('-') } rest | ε</td></tr>
+              <tr><td>乘法层</td><td>term → factor trest<br>trest → * factor { print('*') } trest | ε</td></tr>
+              <tr><td>原子层</td><td>factor → d { print(d) }（d 为 0–9）</td></tr>
+            </table>
+          </div>
+          <p>优先级的体现：<strong>非终结符分层</strong>。expr 只认识加减，它调 term；term 只认识乘法，它调 factor。于是 * 在分析树中的位置比 +、- 更深（离叶子更近），深度优先遍历时 * 的动作先于 + 执行。验证 2+3*4：expr→term(输出2)→rest 见 '+'：term 内 trest 先处理 3*4 输出 34*，回到 rest 输出 '+'，结果 <strong>234*+</strong>，乘法确实先算。</p>
+        </div>
+      </details>
+    </div>
+
+    <!-- ===== 章末五件套之 3：自测 ===== -->
+    <h2><span class="sec-no">✍️</span>本章自测</h2>
+    <p class="quiz-hint">点击选项判分，答错会给出原因。</p>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 1</div>
+      <div class="q-stem">下列哪一项<strong>不属于</strong>上下文无关文法的四元组？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 终结符集合</li>
+        <li data-opt="b">B. 向前看符号缓冲区</li>
+        <li data-opt="c">C. 开始符号</li>
+        <li data-opt="d">D. 产生式集合</li>
+      </ul>
+      <div class="quiz-explain">解析：四元组 = 终结符、非终结符、开始符号、产生式，B 正确。向前看符号（lookahead）是<strong>分析器实现</strong>里的机制，用来在分析时决策，文法本身描述的是语言长什么样，不包含它。A/C/D 都是四元组成员，错在它们是文法定义的本体。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="c">
+      <div class="q-no">自测 2</div>
+      <div class="q-stem">用本章后缀翻译方案，输入 7-2+1 的输出是？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 721-+</li>
+        <li data-opt="b">B. -+721</li>
+        <li data-opt="c">C. 72-1+</li>
+        <li data-opt="d">D. 721+-</li>
+      </ul>
+      <div class="quiz-explain">解析：加减左结合，先算 7-2 再加 1，后缀为 72-1+，C 正确。A（721-+）错在把运算顺序当成从右到左结合；B 是前缀表达式，错在动作被当成写在右部开头；D（721+-）错在两个运算符的执行顺序颠倒，违背了左结合对应的树形。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="c">
+      <div class="q-no">自测 3</div>
+      <div class="q-stem">把 expr → expr + term | term 不加修改地直接写成递归下降函数，会发生什么？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 正常运行，只是慢一点</li>
+        <li data-opt="b">B. 编译器拒绝编译</li>
+        <li data-opt="c">C. expr() 一进入就调用 expr()，不消耗输入地无限递归，直至栈溢出</li>
+        <li data-opt="d">D. 输出顺序颠倒但结果可用</li>
+      </ul>
+      <div class="quiz-explain">解析：C 正确——左递归使 expr() 的第一条语句就是调自身，一口输入不吃。A 错：不是慢，是永远跑不完。B 错：这在语法上是合法代码，编译器发现不了，问题暴露在运行时刻。D 错：它根本到不了输出那一步。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 4</div>
+      <div class="q-stem">消除左递归后的 rest() 中，ε 分支什么时候被选中？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 输入为空串时</li>
+        <li data-opt="b">B. 向前看符号既不是 + 也不是 - 时（如输入结束、或遇到右括号）</li>
+        <li data-opt="c">C. term() 报错之后</li>
+        <li data-opt="d">D. 每次 rest() 被调用时都会先选一次 ε</li>
+      </ul>
+      <div class="quiz-explain">解析：B 正确——rest 的两个非 ε 分支分别由 lookahead 为 '+'、'-' 触发，其余情况（表达式结束）走 ε 安全退出。A 错：空串只是"其余情况"的一种，说法太窄。C 错：报错即中止，不存在"报错后继续选 ε"。D 错：若每次都先选 ε，任何运算符都永远不会被处理。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 5</div>
+      <div class="q-stem">词法分析器（Scanner）与预测分析器的职责分界，哪种说法正确？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 扫描器负责判断表达式结构是否合法</li>
+        <li data-opt="b">B. 扫描器只把字符流切成记号（跳空白、认 num、返回运算符），结构判断归 expr/rest/term</li>
+        <li data-opt="c">C. 预测分析器负责把多位数字拼成一个数</li>
+        <li data-opt="d">D. 两者都直接执行 print 动作</li>
+      </ul>
+      <div class="quiz-explain">解析：B 正确——扫描器是"文盲"，只认字符模式；结构与翻译动作归语法分析层。A 错：结构判断需要递归分析，扫描器做不到也不该做。C 错：把连续数字拼成 num 恰恰是扫描器的活。D 错：print 动作嵌在产生式里，由分析器在执行到对应位置时触发，扫描器不参与翻译。</div>
+    </div>
+
+    <!-- ===== 章末五件套之 4：三句话复述 ===== -->
+    <div class="retell">
+      <h3>🗣️ 用自己的话，三句话讲完本章</h3>
+      <p>对着空气（或室友）说出这三句。说卡壳的那句，回去重读对应小节。</p>
+      <details>
+        <summary>句1：这章解决什么问题？——</summary>
+        <div class="retell-answer">参考答案：只凭一份文法、不借助任何自动生成工具，能不能直接手写一个能跑的翻译器？答案：能——本章造出了全书最小可行的编译器：中缀表达式 → 后缀表达式。</div>
+      </details>
+      <details>
+        <summary>句2：核心机制是什么？——</summary>
+        <div class="retell-answer">参考答案：给产生式挂动作（翻译方案），动作位置即执行时机；把左递归改写成"首项 + rest 尾递归"后，每个非终结符对应一个递归过程，递归下降的调用顺序天然实现了注释分析树的深度优先遍历，后缀输出顺势产生。</div>
+      </details>
+      <details>
+        <summary>句3：它和前后章怎么分工？——</summary>
+        <div class="retell-answer">参考答案：第1章只画了流水线；本章用手写扫描器 + 手写递归下降把流水线的前端跑通，证明"可行"；第3章用正则表达式与有穷自动机机械化词法分析，第4章用 LL/LR 机械化语法分析，逐个换掉本章的手工件。</div>
+      </details>
+    </div>
+
+    <!-- ===== 章末五件套之 5：间隔复习计划 ===== -->
+    <div class="review-plan">
+      <h3>🔁 间隔复习计划</h3>
+      <p>回忆本身比重读有效 10 倍。到点只做一件事：翻卡 + 重做标记题。</p>
+      <table>
+        <tr><th>时间点</th><th>复习内容</th><th>预计用时</th></tr>
+        <tr><td>第 1 天</td><td>概念卡 1–6 + 回忆 2.1-1 至 2.4-2 全翻一遍</td><td>10 分钟</td></tr>
+        <tr><td>第 3 天</td><td>概念卡 3、5、6 + 回忆 2.3-1、2.3-2 + 重做 L2 习题（2+3-4）</td><td>8 分钟</td></tr>
+        <tr><td>第 7 天</td><td>三句话复述 + 重做 L2 习题（2*3 调用轨迹）+ 自测错题</td><td>10 分钟</td></tr>
+        <tr><td>第 15 天</td><td>只做合上书挑战，重点第 2、4、5 条；能全过就毕业</td><td>15 分钟</td></tr>
+      </table>
+    </div>
+
+    <!-- 合上书挑战 -->
+    <div class="final-challenge">
+      <h3>📕 合上书挑战</h3>
+      <p class="fc-sub">现在关掉这个页面，拿一张纸，凭记忆完成以下任务。全部做完再回来核对——这是本章真正的毕业考试。</p>
+      <ol id="challenge-list">
+        <li><span class="fc-check"></span>默写 CFG 四元组和 list 文法，对 9-5+2 写出最左推导并画出分析树。</li>
+        <li><span class="fc-check"></span>默写中缀 → 后缀翻译方案，画出 9-5+2 的注释分析树并写出遍历输出。</li>
+        <li><span class="fc-check"></span>写出 A → Aα | β 的左递归消除规则，并说明为什么消除后递归下降才能工作。</li>
+        <li><span class="fc-check"></span>默写 expr() / rest() / term() / match() 四个过程的伪代码。</li>
+        <li><span class="fc-check"></span>对输入 4-7+1 写出完整调用轨迹（每步的向前看、动作、累计输出），最终输出应为 47-1+。</li>
+        <li><span class="fc-check"></span>画出最小翻译器的整体结构图，标出扫描器、预测分析器、符号表各自职责。</li>
+        <li><span class="fc-check"></span>一句话回答本章主线问题：只靠"语法"能不能直接造出一个能跑的翻译器？最小可行的编译器长什么样？</li>
+      </ol>
+    </div>
+
+    <div class="complete-zone">
+      <button class="btn-complete" id="btn-complete" onclick="markDone()">✓ 我已完成本章（含合上书挑战）</button>
+    </div>
+
+    <div class="chapter-nav">
+      <a href="chapter-01.html"><span class="nav-dir">← 上一章</span>第1章 引论</a>
+      <a href="chapter-03.html" class="next"><span class="nav-dir">下一章 →</span>第3章 词法分析</a>
+    </div>
+
+  </div>
+</div>
+
+<footer class="footer">
+  <div class="wrap">第2章 一个简单的语法制导翻译器 · 编译原理互动讲义 · 基于 Aho/Lam/Sethi/Ullman《编译原理》（第 2 版）</div>
+</footer>
+
+<script src="/lectures-assets/mermaid.min.js"></script>
+<script>
+mermaid.initialize({
+  startOnLoad: true,
+  theme: "base",
+  themeVariables: {
+    primaryColor: "#e3edf7",
+    primaryBorderColor: "#1d5f9e",
+    primaryTextColor: "#1d5f9e",
+    lineColor: "#5c554b",
+    secondaryColor: "#fbeedd",
+    tertiaryColor: "#f5f1e8",
+    fontFamily: "-apple-system, PingFang SC, sans-serif",
+    fontSize: "14px"
+  },
+  flowchart: { curve: "linear", htmlLabels: false }
+});
+</script>
+<script>
+// 自测题判分
+document.querySelectorAll(".quiz-block").forEach(block => {
+  const answer = block.dataset.answer;
+  const explain = block.querySelector(".quiz-explain");
+  block.querySelectorAll(".quiz-opts li").forEach(li => {
+    li.addEventListener("click", () => {
+      const opts = block.querySelectorAll(".quiz-opts li");
+      opts.forEach(o => o.classList.add("disabled"));
+      if (li.dataset.opt === answer) {
+        li.classList.add("correct");
+      } else {
+        li.classList.add("wrong");
+        block.querySelector(`[data-opt="${answer}"]`).classList.add("correct");
+      }
+      explain.classList.add("show");
+    });
+  });
+});
+
+// 合上书清单打勾
+document.querySelectorAll("#challenge-list li").forEach(li => {
+  li.addEventListener("click", () => li.classList.toggle("checked"));
+});
+
+// 完成标记 → localStorage
+const KEY = "comp_progress_v1";
+function loadProgress() {
+  try { return JSON.parse(localStorage.getItem(KEY)) || {}; } catch (e) { return {}; }
+}
+const progress = loadProgress();
+const btn = document.getElementById("btn-complete");
+if (progress[2] && progress[2].done) {
+  btn.textContent = "✓ 已完成 · 再次点击重置";
+  btn.classList.add("done");
+}
+function markDone() {
+  const p = loadProgress();
+  if (p[2] && p[2].done) {
+    delete p[2];
+    btn.textContent = "✓ 我已完成本章（含合上书挑战）";
+    btn.classList.remove("done");
+  } else {
+    p[2] = { done: true, completedAt: Date.now(), reviewsDone: 0 };
+    btn.textContent = "✓ 已完成 · 复习提醒已开启";
+    btn.classList.add("done");
+  }
+  localStorage.setItem(KEY, JSON.stringify(p));
+}
+</script>
+
+</body>
+</html>

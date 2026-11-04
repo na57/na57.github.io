@@ -1,0 +1,914 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第2章 模型评估与选择 · 机器学习互动讲义</title>
+<link rel="stylesheet" href="/lectures-assets/style.css">
+</head>
+<body>
+
+<nav class="topbar">
+  <div class="topbar-inner">
+    <span class="brand"><a href="index.html" style="color:inherit">← 学习地图</a></span>
+    <span class="crumb">阶段一 · 基础与评估 / 第2章</span>
+  </div>
+</nav>
+
+<div class="wrap">
+
+  <div class="lecture-head">
+    <span class="ch-label">CHAPTER 02 · 基础与评估</span>
+    <h1>模型评估与选择</h1>
+    <p class="lead">第 1 章说学习 = 在假设空间里挑一个模型；可候选模型有那么多——本章回答：用什么尺子，才知道自己挑对了。</p>
+  </div>
+
+  <!-- ===== 章首四件套之 1：全书定位 ===== -->
+  <div class="position-bar">
+    <strong>本章在主线上的位置：</strong>Ch1 告诉我们"模型有很多个、归纳偏好决定挑谁"；本章给出判断"挑得对不对"的整套方法——评估协议与性能度量。<br>
+    第 2 章回答主线上的这个问题：<strong>模型训练完之后，怎么知道它是真的好，而不是只是"背下了答案"？</strong>
+    <div class="map-inline">
+      <span class="node here">① 基础与评估 Ch1–2</span><span class="arrow">→</span>
+      <span class="node">② 经典模型 Ch3–8</span><span class="arrow">→</span>
+      <span class="node">③ 无监督与理论 Ch9–12</span><span class="arrow">→</span>
+      <span class="node">④ 进阶专题 Ch13–16</span>
+    </div>
+    <br>
+    前驱 Ch1 的假设空间与归纳偏好说明"模型有很多个" → <u>本章回答"哪个模型真的好"</u> → 后继 Ch3–8 的每个模型都要用本章方法做评估与选择。
+  </div>
+
+  <!-- ===== 章首四件套之 2：学习目标 ===== -->
+  <div class="objectives">
+    <h4>🎯 学完本章，合上书你应该能：</h4>
+    <ol>
+      <li>说出训练误差为什么不可信，区分经验误差与泛化误差、过拟合与欠拟合。</li>
+      <li>写出留出法、k 折交叉验证、自助法三种评估协议的做法与各自代价。</li>
+      <li>手算自助法中"约 36.8% 样本不被抽中"的极限推导 (1−1/m)ᵐ → 1/e。</li>
+      <li>给定混淆矩阵，手算错误率、精度、查准率、查全率、F1。</li>
+      <li>给定按得分排序的样本序列，画出 ROC 折线并用两种方法手算 AUC。</li>
+      <li>用偏差-方差分解解释"模型复杂度升高时误差先降后升"的现象。</li>
+    </ol>
+  </div>
+
+  <div class="lecture">
+
+    <!-- ===== 章首四件套之 3：推导主线图 ===== -->
+    <div class="figure">
+      <div class="mermaid">
+flowchart LR
+  A["训练误差不可信：过拟合让它虚低"] --> B["留出测试集：没见过数据的误差"]
+  B --> C{"一次划分运气成分大？"}
+  C -->|是| D["k 折交叉验证：轮流当测试集取均值"]
+  C -->|数据太少| D2["自助法：有放回抽样，约 36.8% 留作测试"]
+  D --> E{"误差算出来了，用什么度量？"}
+  D2 --> E
+  E --> F1["查准率 / 查全率 / F1"]
+  E --> F2["ROC 与 AUC：排序质量"]
+  F1 --> G["偏差-方差分解：误差从哪来"]
+  F2 --> G
+  G --> L["遗留：算出来的好未必是因果的好；评估本身有开销"]
+  classDef hot fill:#fbeedd,stroke:#c4651f,stroke-width:2.5px,color:#c4651f;
+  classDef danger fill:#fae9e7,stroke:#b03a2e,stroke-width:2.5px,color:#b03a2e;
+  class E hot;
+  class L danger;
+      </div>
+      <div class="caption">图 2.0 本章推导主线：训练误差为什么不可信 → 怎么得到可信的误差 → 用什么度量这把尺子 → 误差的来源分解 → 遗留问题。</div>
+    </div>
+
+    <!-- ============ 2.1 ============ -->
+    <h2><span class="sec-no">2.1</span>为什么不能看训练误差：过拟合与欠拟合</h2>
+
+    <p>第 1 章把学习定义为"在假设空间里挑一个拟合数据的好模型"。一个很自然的想法是：谁拟合得好谁就赢——直接在训练数据上数错误率不就行了？本节用一个反例说明：<strong>训练误差低，恰恰可能是病</strong>。</p>
+
+    <p>先给两个术语。<span class="term">经验误差</span>（Empirical Error，也叫训练误差/训练错误率）是模型在<strong>训练集</strong>上的错误率；<span class="term">泛化误差</span>（Generalization Error）是模型在<strong>未来新样本</strong>上的错误率。学习的目标永远是后者——模型终究要用在没见过的数据上。麻烦在于：训练时我们只能看到前者。</p>
+
+    <h3>反例：背下编号的"学霸"</h3>
+
+    <p>西瓜数据集每个瓜都有编号 1–17。假设一个"模型"什么规律都没学，只是把训练集背了下来：见到编号 1–8 输出"好瓜"，9–17 输出"坏瓜"。它在训练集上<strong>经验误差 = 0</strong>，完美。可一旦瓜摊上进了一批新瓜——没有编号，只有色泽根蒂——它只能瞎猜。这个模型犯了<span class="term">过拟合</span>（Overfitting）：把训练样本的<strong>偶然特点（编号）当作了普遍规律</strong>，学得"太好"了。</p>
+
+    <p>反方向的病叫<span class="term">欠拟合</span>（Underfitting）：模型太简单，连数据里真实存在的规律都没学到——比如只用"瓜重 &gt; 1kg 就是好瓜"一条规则，训练误差本身就很高。两者的对照：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th></th><th>欠拟合</th><th>恰好</th><th>过拟合</th></tr>
+        <tr><td>模型复杂度</td><td>太低</td><td>适中</td><td>太高</td></tr>
+        <tr><td>训练误差</td><td>高</td><td>低</td><td><strong>极低（≈0）</strong></td></tr>
+        <tr><td>泛化误差</td><td>高</td><td><strong>低</strong></td><td>高</td></tr>
+        <tr><td>比喻</td><td>没学会</td><td>学到规律</td><td>连噪声和编号都背下来了</td></tr>
+      </table>
+    </div>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>训练误差是"闭卷考试的模拟卷成绩"——如果你提前背了答案，模拟分再高也说明不了实力。泛化误差才是真高考分。因此<strong>评估模型必须用训练时没见过的数据</strong>，这是本章全部方法的第一公理。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>误区："过拟合就是模型在训练集上错得太多。"恰好相反——过拟合是训练误差<strong>异常地低</strong>、低得可疑（接近 0），而真实表现差。看到训练误差几乎为零时，第一反应不该是庆祝，而是警惕。另一个误区是把过拟合归咎于"数据太少"：数据多能缓解，但只要模型容量足够大、训练足够久，过拟合永远可能发生。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 2.1-1</div>
+              <div class="q-text">经验误差与泛化误差分别定义在什么数据上？学习目标追求的是哪一个？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              经验误差定义在训练集上，泛化误差定义在未来新样本上。学习的目标是泛化误差最小；经验误差只是我们能观测到的代理，且可能严重失真。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 2.1-2</div>
+              <div class="q-text">用"背编号"的例子说明什么是过拟合。欠拟合与它在训练误差上的表现有何不同？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              过拟合：把训练样本的偶然特点（编号）当普遍规律记住，训练误差≈0 但泛化差。欠拟合：模型太简单、连真实规律都没学到，训练误差本身就高。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 2.2 ============ -->
+    <h2><span class="sec-no">2.2</span>评估方法：留出法、交叉验证、自助法</h2>
+
+    <p>上一节立下公理：评估必须用没见过的数据。但手里只有一份数据集 <span class="var">D</span>，怎么变出"没见过"的数据？本节给出三种标准做法，全部配上算术——它们回答的都是同一个问题：<strong>数据怎么分，误差才可信。</strong></p>
+
+    <h3>手算例 1：留出法——1000 个样本怎么分</h3>
+
+    <p><span class="term">留出法</span>（Hold-out）最直接：把 <span class="var">D</span> 随机切成互斥的两块，一块训练、一块测试。关键细节是<span class="term">分层采样</span>（Stratified Sampling）：按类别比例分别抽，保持两块里类别分布一致，否则划分本身就引入了偏差。</p>
+
+    <p>设数据集 1000 个样本（500 正 / 500 负），按 7:3 留出：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th></th><th>正例</th><th>负例</th><th>合计</th></tr>
+        <tr><td>全集</td><td>500</td><td>500</td><td>1000</td></tr>
+        <tr><td>训练集（70%）</td><td>500 × 0.7 = 350</td><td>500 × 0.7 = 350</td><td><strong>700</strong></td></tr>
+        <tr><td>测试集（30%）</td><td>500 × 0.3 = 150</td><td>500 × 0.3 = 150</td><td><strong>300</strong></td></tr>
+      </table>
+    </div>
+
+    <p>问题：一次随机划分的结果带很大的运气成分——这次切分测试集恰好简单，误差就虚低。补救：多次随机划分取平均；或者干脆用下面的系统化方案。</p>
+
+    <h3>手算例 2：k 折交叉验证——100 个样本轮 10 圈</h3>
+
+    <p><span class="term">k 折交叉验证</span>（k-fold Cross Validation）：把 <span class="var">D</span> 均分为 k 个互斥子集，每次取其中 1 折做测试、其余 k−1 折做训练，轮流 k 次，把 k 个误差取平均。每个样本恰好当过 1 次测试者，运气成分被摊平。</p>
+
+    <p>设 100 个样本做 10 折交叉验证：</p>
+
+    <ul>
+      <li>每折大小 = 100 / 10 = <strong>10 个样本</strong>；</li>
+      <li>第 1 轮：折 1（10 个）做测试，折 2–10（90 个）做训练，得误差 E₁；</li>
+      <li>第 2 轮：折 2 做测试，其余 90 个做训练，得 E₂；……</li>
+      <li>共训练 <strong>10 次</strong>，最终估计 = (E₁ + E₂ + … + E₁₀) / 10。</li>
+    </ul>
+
+    <p>想再稳一点，可以换不同的随机切分重复多次：做 <strong>10 次 10 折交叉验证</strong> = 10 × 10 = <strong>100 次训练</strong>。误差估计更可靠，代价也真实可见——评估本身是有计算开销的，k 越大、重复次数越多，训练次数线性增长。</p>
+
+    <p>特例：令 k = m（样本数），每折只剩 1 个样本，这就是<span class="term">留一法</span>（Leave-One-Out，LOO）。m = 100 就要训练 100 个模型；估计很准（训练集与全集只差 1 个样本），但数据一大就完全不可行——m = 100 万意味着训练 100 万次。</p>
+
+    <h3>手算例 3：自助法——(1−1/m)ᵐ → 1/e 的推导</h3>
+
+    <p>数据很少时，留出一块测试太奢侈。<span class="term">自助法</span>（Bootstrapping）换一个思路：<strong>有放回</strong>地从 m 个样本里抽 m 次，得到训练集 D′（必有重复）；没被抽中过的样本组成测试集。</p>
+
+    <p>某个特定样本一次抽样不被选中的概率是 (1 − 1/m)；m 次抽样都躲过，概率为：</p>
+
+    <div class="formula">P(始终未被抽中) = (1 − <span class="frac"><span class="num-part">1</span><span class="den-part">m</span></span>)<sup>m</sup> ⟶ <span class="frac"><span class="num-part">1</span><span class="den-part">e</span></span> ≈ 0.368 （m → ∞）</div>
+
+    <p>也就是说，无论数据多大，<strong>约 36.8% 的样本不会出现在 D′ 中</strong>，天然就是测试集。验算一下极限：m = 10 时 (0.9)¹⁰ ≈ 0.349；m = 100 时 (0.99)¹⁰⁰ ≈ 0.366；m = 1000 时 ≈ 0.3677——确实快速逼近 0.368。</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>方法</th><th>做法一句话</th><th>优点</th><th>代价 / 陷阱</th></tr>
+        <tr><td>留出法</td><td>分层随机切 7:3（或 2/3 : 1/3）</td><td>一次训练，最便宜</td><td>单次结果运气成分大，需多次重复取均值</td></tr>
+        <tr><td>k 折交叉验证</td><td>均分 k 折轮流当测试集，k 次结果取均值</td><td>每个样本都测过，估计稳定</td><td>k 次训练；10×10 折 = 100 次训练；k=m 即留一法</td></tr>
+        <tr><td>自助法</td><td>有放回抽 m 次，未抽中的 36.8% 做测试</td><td>数据少时训练集仍有 m 个样本</td><td>抽样改变了原始分布，估计有偏</td></tr>
+      </table>
+    </div>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>三种方法是同一个权衡的不同落点：<strong>估计的可靠性</strong> vs <strong>计算开销</strong> vs <strong>训练数据利用率</strong>。数据充足用留出法最省；想要稳用交叉验证；数据太少时自助法让训练集"看起来"仍是 m 个样本，代价是分布被抽样扭曲。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>误区一："自助法测试集约占 1/m。"错——是 (1−1/m)ᵐ ≈ <strong>36.8%</strong>，不是 1/m。误区二："交叉验证选 k 越大越好。"k 大则单次训练集更大、偏差更小，但训练次数 = k 随之增大，且各折训练集高度重叠，方差反而可能上升；常用 k = 10 只是经验上的平衡点。误区三：调完超参数后在同一个"测试集"上报喜——此时它已沦为验证集，真正的泛化估计需要另留一份从没参与任何决策的数据。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 2.2-1</div>
+              <div class="q-text">1000 样本（500 正 500 负）按 7:3 分层留出，训练集和测试集各含多少正例、负例？为什么要分层？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              训练 700（350 正 350 负），测试 300（150 正 150 负）。分层采样保持各块类别比例与全集一致，避免划分本身引入偏差。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 2.2-2</div>
+              <div class="q-text">写出自助法中某样本始终不被抽中的概率式及其极限。它适合做测试集的比例是多少？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              (1−1/m)ᵐ，m→∞ 时趋于 1/e ≈ 0.368。即约 36.8% 样本天然留作测试集；适合小数据集，但改变了原始分布。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 2.3 ============ -->
+    <h2><span class="sec-no">2.3</span>性能度量（上）：错误率、查准率与查全率</h2>
+
+    <p>上一节解决了"误差在哪测"，本节解决"测出来用什么尺子量"。最朴素的尺子是<span class="term">错误率</span>（Error Rate，错分样本占比）与<span class="term">精度</span>（Accuracy，正确率 = 1 − 错误率）。但很多场景下它们不够用——癌症筛查中 99% 的人是阴性，一个"永远判阴性"的模型精度 99%，却毫无价值。需要更细的尺子，先把二分类结果拆成四格：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>混淆矩阵</th><th>预测为正</th><th>预测为负</th></tr>
+        <tr><td><strong>真实为正</strong></td><td>TP（真正例）</td><td>FN（假反例）</td></tr>
+        <tr><td><strong>真实为负</strong></td><td>FP（假正例）</td><td>TN（真反例）</td></tr>
+      </table>
+    </div>
+
+    <p>两把细尺子的定义：<span class="term">查准率</span>（Precision）= 被判为正的样本里，真为正的比例——"判好的瓜里真是好瓜的比例"；<span class="term">查全率</span>（Recall，召回率）= 所有真正例里，被找回来的比例——"所有好瓜里，捞回来了多少"。</p>
+
+    <div class="formula">P = <span class="frac"><span class="num-part">TP</span><span class="den-part">TP + FP</span></span> &nbsp;&nbsp;&nbsp;&nbsp; R = <span class="frac"><span class="num-part">TP</span><span class="den-part">TP + FN</span></span> &nbsp;&nbsp;&nbsp;&nbsp; F1 = <span class="frac"><span class="num-part">2 × P × R</span><span class="den-part">P + R</span></span></div>
+
+    <h3>手算例 4：一组混淆矩阵上的完整计算</h3>
+
+    <p>某模型在 100 个测试样本上给出：TP = 30，FP = 10，FN = 20，TN = 40。逐项算：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>指标</th><th>代入</th><th>结果</th></tr>
+        <tr><td>查准率 P</td><td>30 / (30 + 10) = 30 / 40</td><td><strong>0.75</strong></td></tr>
+        <tr><td>查全率 R</td><td>30 / (30 + 20) = 30 / 50</td><td><strong>0.60</strong></td></tr>
+        <tr><td>F1</td><td>2 × 0.75 × 0.60 / (0.75 + 0.60) = 0.90 / 1.35</td><td><strong>≈ 0.667</strong></td></tr>
+        <tr><td>错误率</td><td>(FP + FN) / 总数 = (10 + 20) / 100</td><td><strong>0.30</strong>（精度 0.70）</td></tr>
+      </table>
+    </div>
+
+    <p>注意 F1 是 P 与 R 的<strong>调和平均</strong>：调和平均会被较小者拖低——R = 0.60 比 P = 0.75 低，F1 = 0.667 就落在两者之间且更靠近低者，比算术平均 0.675 更严格。</p>
+
+    <p><strong>P 与 R 此消彼长</strong>：回到西瓜。若把"判好瓜"的标准放得很宽（稍微像好瓜就收下），好瓜几乎全被捞回（R 高），但混进不少坏瓜（P 低）；若把标准收得很紧（十拿九稳才判好），判好的几乎全对（P 高），但漏掉大批好瓜（R 低）。两者通常不可兼得，F1 是二者的折中度量。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>查准率回答"我说是的，靠谱吗"；查全率回答"真有的，我漏了吗"。它们是同一个判定阈值的两副面孔：阈值一动，P 和 R 朝相反方向走。选哪个优先，取决于业务上<strong>哪种错误更贵</strong>。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>误区一："F1 = (P + R) / 2。"错，是调和平均 2PR/(P+R)，不是算术平均。误区二：把查全率的分母记成 TP + FP——查全率的分母是"所有真正例"TP + FN；查准率的分母才是"所有被判正的"TP + FP。口诀：<strong>准看判，全看真</strong>。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 2.3-1</div>
+              <div class="q-text">写出 P、R、F1 的公式，并说明各自分母的含义。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              P = TP/(TP+FP)，分母是所有被判为正的样本；R = TP/(TP+FN)，分母是所有真正例；F1 = 2PR/(P+R)，是调和平均。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 2.3-2</div>
+              <div class="q-text">用西瓜例子解释为什么 P 与 R 通常此消彼长。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              判定标准放宽：好瓜几乎都捞回（R↑）但混入坏瓜（P↓）；标准收紧：判好的几乎全对（P↑）但漏掉大量好瓜（R↓）。阈值向一个方向移动，两者反向变化。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 2.4 ============ -->
+    <h2><span class="sec-no">2.4</span>性能度量（下）：P-R 曲线、ROC 与 AUC 实算</h2>
+
+    <p>上一节的 P、R 依赖一个判定阈值。更彻底的做法是：<strong>不固定阈值</strong>，让模型输出一个"像正例的程度"得分，把样本按得分从高到低排序，然后让阈值从最高分到最低分逐格下移——每移一格，就得到一对新的 (P, R) 或 (TPR, FPR)。连成曲线，前者是 <span class="term">P-R 曲线</span>，后者就是本节主角 <span class="term">ROC 曲线</span>（Receiver Operating Characteristic）。</p>
+
+    <p>ROC 的两个轴：<span class="term">真正例率</span> TPR = TP/(TP+FN)（= 查全率）作纵轴；<span class="term">假正例率</span> FPR = FP/(FP+TN) 作横轴。绘图规则一句话：<strong>扫到一个正样本，向上走一步（1/m⁺）；扫到一个负样本，向右走一步（1/m⁻）</strong>。</p>
+
+    <h3>手算例 5：8 个样本的 ROC 与 AUC（方法一：折线面积）</h3>
+
+    <p>4 正 4 负共 8 个样本，按预测得分降序排列后的真实标签序列为：</p>
+
+    <div class="formula">+ &nbsp; + &nbsp; − &nbsp; + &nbsp; − &nbsp; + &nbsp; − &nbsp; −</div>
+
+    <p>阈值从 +∞ 开始逐格下移，每步 (FPR, TPR) 坐标（向上步长 1/4 = 0.25，向右步长 1/4 = 0.25）：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>扫到样本</th><th>方向</th><th>坐标 (FPR, TPR)</th></tr>
+        <tr><td>起点</td><td>—</td><td>(0, 0)</td></tr>
+        <tr><td>第1个 +</td><td>↑</td><td>(0, 0.25)</td></tr>
+        <tr><td>第2个 +</td><td>↑</td><td>(0, 0.5)</td></tr>
+        <tr><td>第3个 −</td><td>→</td><td>(0.25, 0.5)</td></tr>
+        <tr><td>第4个 +</td><td>↑</td><td>(0.25, 0.75)</td></tr>
+        <tr><td>第5个 −</td><td>→</td><td>(0.5, 0.75)</td></tr>
+        <tr><td>第6个 +</td><td>↑</td><td>(0.5, 1)</td></tr>
+        <tr><td>第7个 −</td><td>→</td><td>(0.75, 1)</td></tr>
+        <tr><td>第8个 −</td><td>→</td><td>(1, 1)</td></tr>
+      </table>
+    </div>
+
+    <p><span class="term">AUC</span>（Area Under ROC Curve）= ROC 折线下的面积。逐段算（每个向右步贡献一个矩形/梯形，高度取当前 TPR）：</p>
+
+    <ul>
+      <li>从 (0, 0.5) → (0.25, 0.5)：矩形 0.25 × 0.5 = <strong>0.125</strong></li>
+      <li>从 (0.25, 0.75) → (0.5, 0.75)：矩形 0.25 × 0.75 = <strong>0.1875</strong></li>
+      <li>从 (0.5, 1) → (1, 1)：矩形 0.5 × 1 = <strong>0.5</strong></li>
+    </ul>
+
+    <div class="formula">AUC = 0.125 + 0.1875 + 0.5 = <strong>0.8125</strong></div>
+
+    <h3>手算例 6：同一个 AUC，用排序对验证（方法二）</h3>
+
+    <p>AUC 有一个漂亮的概率含义：<strong>随机取一个正样本和一个负样本，正样本得分排在负样本之前的概率</strong>。于是 AUC = 1 −（逆序对比例）。数逆序对（负样本排在正样本之前的对数）：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>负样本（按出现顺序）</th><th>排在它前面的正样本数</th></tr>
+        <tr><td>第3位的 −</td><td>2（前两位都是 +）</td></tr>
+        <tr><td>第5位的 −</td><td>3</td></tr>
+        <tr><td>第7位的 −</td><td>4</td></tr>
+        <tr><td>第8位的 −</td><td>4</td></tr>
+      </table>
+    </div>
+
+    <p>等等——数的是"前面有几个正样本"，这正是该负样本参与形成的逆序对数：2 + 3 + 4 + 4 = 13？不对。逆序对的定义是"<strong>负样本排在正样本之前</strong>"，即对每个负样本，数它前面有多少个正样本——2 + 3 + 4 + 4 = 13 对？正负样本总数是 4 × 4 = 16 对，13 对逆序意味着 AUC = 1 − 13/16 = 0.1875，与方法一矛盾！仔细检查：方向弄反了。每个负样本前面的正样本，意味着<strong>正样本排在该负样本前</strong>，这是"顺序对"而非逆序对。逆序对 = 排在负样本<strong>之后</strong>的正样本数：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>负样本</th><th>排在它之后的正样本</th><th>逆序对数</th></tr>
+        <tr><td>第3位的 −</td><td>第4、6位两个 +</td><td>2</td></tr>
+        <tr><td>第5位的 −</td><td>第6位一个 +</td><td>1</td></tr>
+        <tr><td>第7位的 −</td><td>无</td><td>0</td></tr>
+        <tr><td>第8位的 −</td><td>无</td><td>0</td></tr>
+      </table>
+    </div>
+
+    <div class="formula">逆序对 = 2 + 1 + 0 + 0 = 3 对 &nbsp;⟹&nbsp; AUC = 1 − <span class="frac"><span class="num-part">3</span><span class="den-part">4 × 4</span></span> = <span class="frac"><span class="num-part">13</span><span class="den-part">16</span></span> = <strong>0.8125</strong> ✓</div>
+
+    <p>两种方法结果一致，互相印证。这个小陷阱（顺序对 vs 逆序对）正是手算时最容易栽的坑，值得在纸上亲手再走一遍。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>ROC 度量的是<strong>排序质量</strong>而非某个阈值下的表现：AUC = 1 表示所有正样本都排在负样本之前（完美排序）；AUC = 0.5 等于瞎猜（对角线）。它不关心你最后把阈值定在哪，只关心"好的整体是否排在坏的前面"。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>误区一："AUC 高 = 某个阈值下精度高。"AUC 只保证排序好，阈值选得烂照样精度差；两者要分开看。误区二：类别极不平衡时盲信 ROC——负样本极多时 FPR 的分母巨大，大量假正例只把 FPR 推高一点点，ROC 看起来仍漂亮；此时 P-R 曲线（直接以 P、R 为轴）更诚实。误区三：把 AUC = 0.8125 理解成"81.25% 的样本分对了"——它是"正样本排在负样本前的概率"，不是分类精度。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 2.4-1</div>
+              <div class="q-text">画 ROC 曲线时，扫到一个正样本和一个负样本，折线分别往哪个方向走？两个轴分别是什么？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              扫到正样本向上走 1/m⁺（纵轴 TPR = TP/(TP+FN)），扫到负样本向右走 1/m⁻（横轴 FPR = FP/(FP+TN)）。样本按预测得分降序扫描。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 2.4-2</div>
+              <div class="q-text">AUC 的概率含义是什么？用排序对怎么算？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              AUC = 随机取一正一负、正样本排在负样本前的概率 = 1 − 逆序对数/(m⁺×m⁻)，其中逆序对 = 负样本之后仍有正样本的对数。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 2.5 ============ -->
+    <h2><span class="sec-no">2.5</span>误差从哪来：偏差-方差分解</h2>
+
+    <p>前面四节都在回答"怎么量误差"。最后回答一个更深的问题：<strong>误差到底从哪来</strong>？知道了来源，才知道该往哪个方向修。<span class="term">偏差-方差分解</span>（Bias-Variance Decomposition）把回归任务的泛化误差拆成三块。对测试样本 x，设真实标记为 y（观测值 y<sub>D</sub> = y + 噪声），模型在训练集 D 上学得的预测为 f(x; D)。期望预测 f̄(x) = E<sub>D</sub>[f(x; D)]，则：</p>
+
+    <div class="formula">E<sub>D</sub>[ (f(x; D) − y<sub>D</sub>)² ] = <span class="term">偏差</span>² + <span class="term">方差</span> + <span class="term">噪声</span>²<br>= (f̄(x) − y)² + E<sub>D</sub>[ (f(x; D) − f̄(x))² ] + E[ (y<sub>D</sub> − y)² ]</div>
+
+    <p>三项的含义：<span class="term">偏差</span>（Bias）度量<strong>模型的期望预测与真实值的距离</strong>——拟合能力本身够不够；<span class="term">方差</span>（Variance）度量<strong>同样规模的不同训练集导致预测的波动</strong>——对数据扰动有多敏感；<span class="term">噪声</span>（Noise）是数据本身的随机性，任何模型都无法消除，是误差的下限。</p>
+
+    <p>打靶是最贴切的直觉：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th></th><th>低方差</th><th>高方差</th></tr>
+        <tr><td><strong>低偏差</strong></td><td>弹着点又准又稳，全在靶心 ✅</td><td>平均而言瞄准了靶心，但弹着点撒得满靶都是</td></tr>
+        <tr><td><strong>高偏差</strong></td><td>弹着点密集，但整体偏离靶心一截（系统性瞄歪）</td><td>又歪又散，最差情形</td></tr>
+      </table>
+    </div>
+
+    <p>这解释了 2.1 的两种病：<strong>欠拟合 = 偏差主导</strong>（模型太简单，系统性瞄歪）；<strong>过拟合 = 方差主导</strong>（对训练集的每个扰动都过度响应）。更要命的是二者难以同时压低——<span class="term">偏差-方差窘境</span>（Bias-Variance Dilemma）：模型复杂度升高时，偏差下降（拟合能力变强）但方差上升（对数据更敏感）；总误差呈 U 形曲线，最低点在"恰到好处"的复杂度上。</p>
+
+    <div class="figure">
+      <div class="mermaid">
+flowchart LR
+  A["模型复杂度升高"] --> B["偏差下降：拟合能力变强"]
+  A --> C["方差上升：对数据扰动更敏感"]
+  B --> D["总误差 = 偏差² + 方差 + 噪声²"]
+  C --> D
+  D --> E["U 形曲线：存在最优复杂度"]
+  classDef hot fill:#fbeedd,stroke:#c4651f,stroke-width:2.5px,color:#c4651f;
+  class E hot;
+      </div>
+      <div class="caption">图 2.5 偏差-方差窘境：复杂度这把旋钮往右拧，一项降、一项升，总误差先降后升。</div>
+    </div>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>诊断处方一句话：<strong>偏差大 → 让模型更复杂（加特征、加深树、减正则）；方差大 → 让模型更稳（加数据、加正则、剪枝、集成）</strong>。先判断误差是哪一项主导，再开药方——这就是为什么分解式比一个孤零零的误差数字更有用。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>误区："偏差和方差可以同时减到零。"噪声项不可消除，且偏差与方差在有限数据下此消彼长，所谓"最优模型"是三项之和的最小点，不是某一项为零。另一个误区：把这个分解当成万能诊断——它严格成立的是平方损失下的回归；分类任务的分解更复杂，但"复杂度↑ ⇒ 偏差↓方差↑"的定性结论普遍适用。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 2.5-1</div>
+              <div class="q-text">写出偏差-方差分解的三项结构，并各用一句话说明含义。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              泛化误差 = 偏差² + 方差 + 噪声²。偏差 = 期望预测与真实值之差（拟合能力）；方差 = 不同训练集导致的预测波动（稳定性）；噪声 = 数据固有随机性（误差下限）。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 2.5-2</div>
+              <div class="q-text">用偏差-方差语言解释欠拟合与过拟合，并说明"窘境"指什么。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              欠拟合 = 偏差主导，过拟合 = 方差主导。窘境：模型复杂度升高使偏差降、方差升，总误差 U 形，二者难以同时压低，只能折中取最优复杂度。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 章末五件套之 1：概念卡 ============ -->
+    <h2><span class="sec-no">🃏</span>概念卡：本章概念的一分钟画像</h2>
+    <p>翻面前先自问：这个概念我能用一句话讲清楚吗？</p>
+    <div class="flip-grid">
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 1</div>
+            <div class="q-text">泛化误差（Generalization Error）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">模型在未来新样本上的误差（期望意义下）。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">学习的真正目标；没有它，"模型好不好"无从定义。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">真高考分，而非模拟卷分。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">拿训练误差冒充泛化误差——过拟合时两者差很远。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">一切评估协议的最终估计对象；Ch3–8 每个模型都以它为标准。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 2</div>
+            <div class="q-text">过拟合（Overfitting）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">把训练样本的偶然特点当普遍规律学走，训练误差极低而泛化差。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">它是要防的病——所有正则化、剪枝、早停都为它而存在。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">背下编号、没学会挑瓜的"学霸"。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为训练误差高才是过拟合；恰恰相反，其特征是训练误差异常低。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">Ch4 剪枝、Ch5 早停/正则、Ch8 集成——全书反复与之搏斗。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 3</div>
+            <div class="q-text">交叉验证（Cross Validation）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">数据均分 k 折，轮流取 1 折测试、其余训练，k 次误差取均值。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">消除单次划分的运气成分，得到稳定的泛化估计。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">每个学生轮流当一回考官，分数平均。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为免费——10×10 折 = 100 次训练，评估本身有可观开销。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">调参、模型选择的默认协议；特例 k = m 即留一法 LOO。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 4</div>
+            <div class="q-text">查准率与查全率（Precision &amp; Recall）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">P = TP/(TP+FP)：判正的有多准；R = TP/(TP+FN)：真的找回多少。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">精度在类别不平衡时失真（99% 阴性时"全判阴"也有 99% 精度），需要分错种类型细看。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">准 = 说是的靠谱吗；全 = 有的漏了吗。口诀：准看判，全看真。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">F1 记成算术平均——它是调和平均 2PR/(P+R)，被较小者拖低。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">信息检索、医疗筛查、风控——一切"两类错误代价不同"的场景。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 5</div>
+            <div class="q-text">ROC / AUC</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">ROC：按得分降序扫描，遇正样本上移、遇负样本右移得到的 (FPR, TPR) 折线；AUC = 其下面积。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">不依赖具体阈值，度量模型的整体排序质量。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">AUC = 随机取一正一负、正排前的概率；1 完美，0.5 瞎猜。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">把 AUC 当成分类精度；类别极不平衡时盲信它（此时看 P-R 曲线）。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">排序任务、正负样本比例多变的评估；两模型排序能力对比。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 6</div>
+            <div class="q-text">偏差-方差分解（Bias-Variance Decomposition）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">泛化误差 = 偏差² + 方差 + 噪声²（平方损失回归下严格成立）。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">回答"误差从哪来"，从而决定该加复杂度还是加数据/正则。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">打靶：偏差 = 瞄歪了（系统性偏离靶心）；方差 = 手抖（弹着点散）。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为两项能同时归零——窘境决定了只能折中，噪声更是不可消除。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">诊断欠拟合/过拟合；Ch8 集成学习"降方差"的理论依据。</span></div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- ============ 章末五件套之 2：分层习题 ============ -->
+    <h2><span class="sec-no">📝</span>分层习题</h2>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>
+        <p>判断并说明理由："模型在训练集上误差为 0，说明它是一个好模型。"</p>
+      </div>
+      <details>
+        <summary>提示</summary>
+        <p>想想"背编号"的例子：训练误差为 0 还有哪种可能？</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p><strong>错。</strong>训练误差为 0 有两种可能：学到了真规律；或者把训练集连同噪声、编号等偶然特点一起背了下来（过拟合）。仅看训练误差无法区分这两种情形，必须用在训练时没见过的数据（测试集/交叉验证）上评估才能下结论。易错点：把"拟合训练数据"当成了学习目标——学习的目标是泛化误差最小，训练误差只是可能严重失真的代理。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>
+        <p>判断并说明理由："10 折交叉验证做了 10 次训练，所以它的估计恰好等于留一法估计的 1/10 精度。"</p>
+      </div>
+      <details>
+        <summary>提示</summary>
+        <p>留一法的 k 是多少？两者的差别是"训练次数"还是别的什么？</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p><strong>错。</strong>10 折交叉验证与留一法（LOO）的差别不在"次数折算"，而在<strong>每次训练集的规模与重叠结构</strong>：10 折每次用 90% 数据训练；留一法每次用 m−1 个样本训练、只测 1 个，共训练 m 次。留一法训练集更接近全集，估计偏差更小，但各折训练集几乎完全重叠、且开销是 10 折的 m/10 倍。两者是不同 k 取值的两个估计量，不存在"差 10 倍精度"的换算关系。易错点：把交叉验证家族理解成"同一种方法的稀释版"，忽略了 k 同时改变偏差、方差与开销三件事。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>
+        <p>某模型在 100 个测试样本上得到混淆矩阵：TP = 20，FP = 5，FN = 10，TN = 65。手算查准率 P、查全率 R、F1、错误率，步骤写全。</p>
+      </div>
+      <details>
+        <summary>提示</summary>
+        <p>先核对四格之和是否为 100；再按"准看判（TP+FP）、全看真（TP+FN）"写分母。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p>① 核对总数：20 + 5 + 10 + 65 = 100 ✓。</p>
+          <p>② 查准率 P = TP / (TP + FP) = 20 / (20 + 5) = 20 / 25 = <strong>0.80</strong>。</p>
+          <p>③ 查全率 R = TP / (TP + FN) = 20 / (20 + 10) = 20 / 30 ≈ <strong>0.667</strong>。</p>
+          <p>④ F1 = 2PR / (P + R) = 2 × 0.80 × 0.667 / (0.80 + 0.667) = 1.0667 / 1.4667 ≈ <strong>0.727</strong>。（验算捷径：F1 = 2TP / (2TP + FP + FN) = 40 / 55 ≈ 0.727 ✓）</p>
+          <p>⑤ 错误率 = (FP + FN) / 100 = (5 + 10) / 100 = <strong>0.15</strong>（精度 0.85）。</p>
+          <p>⑥ 解读：精度 0.85 看起来不错，但 R 只有 0.667——每 3 个真正例漏掉 1 个；若这是筛查场景，漏检的代价可能远超"精度 85%"给人的安全感。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>
+        <p>6 个样本（3 正 3 负）按预测得分降序排列，真实标签序列为：+ − + + − −。手算：① 逐点写出 ROC 坐标；② 用折线面积法算 AUC；③ 用排序对（逆序对）法验证 AUC。步骤写全。</p>
+      </details>
+      <details>
+        <summary>提示</summary>
+        <p>向上步长 1/3，向右步长 1/3；逆序对 = 每个负样本"之后还有几个正样本"之和。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p>① 坐标序列（步长均为 1/3 ≈ 0.333）：起点 (0, 0)；扫到 + → (0, 1/3)；扫到 − → (1/3, 1/3)；扫到 + → (1/3, 2/3)；扫到 + → (1/3, 1)；扫到 − → (2/3, 1)；扫到 − → (1, 1)。共 7 个点。</p>
+          <p>② 面积法：只有向右的步贡献面积，高度取当前 TPR。<br>
+          段1：(0, 1/3) → (1/3, 1/3)，面积 = 1/3 × 1/3 = <strong>1/9</strong>；<br>
+          段2：(1/3, 1) → (2/3, 1)，面积 = 1/3 × 1 = <strong>1/3</strong>；<br>
+          段3：(2/3, 1) → (1, 1)，面积 = 1/3 × 1 = <strong>1/3</strong>。<br>
+          AUC = 1/9 + 1/3 + 1/3 = 1/9 + 3/9 + 3/9 = <strong>7/9 ≈ 0.778</strong>。</p>
+          <p>③ 排序对法：逆序对 = 负样本之后仍有正样本的对数。<br>
+          第 2 位的 −：之后有第 3、4 位两个 + → 2 对；<br>
+          第 5 位的 −：之后无 + → 0 对；<br>
+          第 6 位的 −：之后无 + → 0 对。<br>
+          逆序对合计 = 2。总对数 = 3 × 3 = 9。<br>
+          AUC = 1 − 2/9 = <strong>7/9 ≈ 0.778</strong> ✓ 两法一致。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l3">L3 建模应用</span>
+        <p>场景：医院用模型做癌症早期筛查，阳性者进入价格昂贵的复查（穿刺活检）。讨论：① 查准率与查全率哪个更应优先？为什么？② 你会选什么评估协议（留出/交叉验证/自助）与什么度量指标？说明理由。③ 用偏差-方差语言说明：如果把模型不断加复杂以追求更高的查全率，会遇到什么风险。</p>
+      </details>
+      <details>
+        <summary>提示</summary>
+        <p>先列出两类错误各自的代价（漏诊 vs 误诊）；协议选择考虑医学数据通常规模不大；③ 想"复杂度↑ ⇒ 什么降什么升"。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p>① <strong>查全率优先</strong>。筛查的两类错误代价严重不对称：FN（漏诊，把癌症判成阴性）可能延误治疗、危及生命；FP（误诊，把健康判成阳性）的代价是一次昂贵的复查与短期焦虑。宁可多送进复查，也不能漏掉真病人。对应地，阈值应往"宽松"方向调，用高 R 换取可接受的 P。</p>
+          <p>② 协议：医学标注数据通常规模有限，留出法太奢侈，宜用 <strong>10 折交叉验证</strong>（必要时分层，保持各折阳性率一致）；若样本极少（如几百例），可用自助法补充。度量上<strong>不能只看精度</strong>（健康人占绝大多数时精度严重失真），应同时报告：查全率 R（首要）、查准率 P、F1，以及 ROC/AUC 看整体排序能力；又因类别极不平衡，建议补 P-R 曲线。最终结论需在从未参与调参的独立测试集上给出。</p>
+          <p>③ 不断加复杂度：偏差下降，模型对训练数据里的每个细节都更敏感，查全率在训练集上节节攀升；但<strong>方差同步上升</strong>——换一家医院、换一批病人，波动就会很大（过拟合）。总误差 U 形回升。正确做法不是无限加复杂度，而是用交叉验证找到 U 形谷底附近的复杂度，并用更多数据、正则化或集成（Ch8）来压方差。</p>
+        </div>
+      </details>
+    </div>
+
+    <!-- ============ 章末五件套之 3：本章自测 ============ -->
+    <h2><span class="sec-no">✍️</span>本章自测</h2>
+    <p class="quiz-hint">点击选项判分，答错会给出原因。</p>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 1</div>
+      <div class="q-stem">关于过拟合，下列说法正确的是？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 过拟合表现为训练误差很高</li>
+        <li data-opt="b">B. 过拟合是训练误差异常低、但泛化误差高的现象</li>
+        <li data-opt="c">C. 只要数据足够多，过拟合就不可能发生</li>
+        <li data-opt="d">D. 过拟合模型在测试集上表现一定比在训练集上好</li>
+      </ul>
+      <div class="quiz-explain">解析：B 对——过拟合 = 把训练样本的偶然特点当规律记住，特征是训练误差≈0 而泛化差。A 错：训练误差高是欠拟合的表现。C 错：数据多只是缓解，模型容量足够大、训练足够久仍可能过拟合。D 错：恰好相反，过拟合时测试表现显著差于训练表现。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="c">
+      <div class="q-no">自测 2</div>
+      <div class="q-stem">自助法中，数据集有 m 个样本，有放回地抽 m 次。当 m 很大时，约有多大比例的样本始终没被抽中（可用作测试集）？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 1/m</li>
+        <li data-opt="b">B. 50%</li>
+        <li data-opt="c">C. 约 36.8%</li>
+        <li data-opt="d">D. 约 63.2%</li>
+      </ul>
+      <div class="quiz-explain">解析：C 对——单样本始终不被抽中的概率 = (1−1/m)ᵐ → 1/e ≈ 0.368。A 错：1/m 是一次抽样不被抽中的概率，不是 m 次都躲过的概率。B 错：无依据的整除猜测。D 错：63.2% 是被抽中过至少一次的比例（进入训练集的部分），方向记反。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="a">
+      <div class="q-no">自测 3</div>
+      <div class="q-stem">已知 TP = 30，FP = 10，FN = 20，TN = 40。查全率 R 等于？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 0.60</li>
+        <li data-opt="b">B. 0.75</li>
+        <li data-opt="c">C. 0.30</li>
+        <li data-opt="d">D. 0.667</li>
+      </ul>
+      <div class="quiz-explain">解析：A 对——R = TP/(TP+FN) = 30/50 = 0.60，分母是"所有真正例"（口诀：全看真）。B 错：那是查准率 P = 30/(30+10) = 0.75，分母记成了"被判正的"。C 错：那是错误率 (FP+FN)/100。D 错：那是 F1 ≈ 2×0.75×0.60/1.35 ≈ 0.667，张冠李戴。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="d">
+      <div class="q-no">自测 4</div>
+      <div class="q-stem">关于 ROC 与 AUC，下列说法正确的是？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. ROC 曲线上扫到一个正样本时向右走一步</li>
+        <li data-opt="b">B. AUC = 0.5 表示模型排序完美</li>
+        <li data-opt="c">C. AUC 高说明在任意阈值下精度都高</li>
+        <li data-opt="d">D. AUC 等于"随机取一正一负，正样本得分排在前面的概率"</li>
+      </ul>
+      <div class="quiz-explain">解析：D 对——这是 AUC 的概率含义，也是排序对算法的依据。A 错：扫到正样本向<strong>上</strong>走（TPR 升），扫到负样本才向右走（FPR 升）。B 错：AUC = 0.5 是对角线水平，等于瞎猜；完美排序是 AUC = 1。C 错：AUC 只度量排序质量，与具体阈值下的精度是两回事，阈值选得差精度照样差。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="c">
+      <div class="q-no">自测 5</div>
+      <div class="q-stem">模型复杂度持续升高时，偏差-方差分解告诉我们通常会发生什么？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 偏差与方差同时下降</li>
+        <li data-opt="b">B. 偏差上升、方差下降</li>
+        <li data-opt="c">C. 偏差下降、方差上升，总误差呈 U 形</li>
+        <li data-opt="d">D. 噪声项随之下降</li>
+      </ul>
+      <div class="quiz-explain">解析：C 对——复杂度升高使拟合能力增强（偏差降），但对数据扰动更敏感（方差升），两者此消彼长，总误差先降后升呈 U 形，存在最优复杂度。A 错：这正是"窘境"否定的一厢情愿。B 错：方向整体说反。D 错：噪声是数据固有的随机性，与模型复杂度无关，任何模型都无法消除。</div>
+    </div>
+
+    <!-- ============ 章末五件套之 4：三句话复述 ============ -->
+    <div class="retell">
+      <h3>🗣️ 用自己的话，三句话讲完本章</h3>
+      <p>对着空气（或室友）说出这三句。说卡壳的那句，回去重读对应小节。</p>
+      <details>
+        <summary>句1：这章解决什么问题？——</summary>
+        <div class="retell-answer">参考答案：Ch1 说学习是在假设空间里挑一个模型，本章回答"怎么知道挑对了"——训练误差会撒谎（过拟合），所以要用没见过的数据估计泛化误差，并用对的尺子去量。</div>
+      </details>
+      <details>
+        <summary>句2：核心机制是什么？——</summary>
+        <div class="retell-answer">参考答案：两条线。评估协议：留出法、交叉验证、自助法，在可靠性、开销、数据利用率之间折中；性能度量：从精度细化到查准率/查全率/F1，再到不依赖阈值的 ROC/AUC；最后偏差-方差分解把误差拆成偏差² + 方差 + 噪声²，指明修模型的方向。</div>
+      </details>
+      <details>
+        <summary>句3：它和前后章怎么分工？——</summary>
+        <div class="retell-answer">参考答案：Ch1 给了"模型有很多个"的世界观，本章给出比较它们的裁判系统；Ch3–8 的每个模型（线性模型、决策树、神经网络……）都要用本章的协议与度量做评估，过拟合、偏差-方差这些概念会在剪枝、正则化、集成学习中反复出现。</div>
+      </details>
+    </div>
+
+    <!-- ============ 章末五件套之 5：复习计划 ============ -->
+    <div class="review-plan">
+      <h3>🔁 间隔复习计划</h3>
+      <p>回忆本身比重读有效 10 倍。到点只做一件事：翻卡 + 重做标记题。</p>
+      <table>
+        <tr><th>时间点</th><th>复习内容</th><th>预计用时</th></tr>
+        <tr><td>第 1 天</td><td>概念卡 1–6 + 全部回忆卡；重算手算例 4（混淆矩阵）与手算例 5（ROC 折线）</td><td>12 分钟</td></tr>
+        <tr><td>第 3 天</td><td>概念卡（重点翻错的）+ 回忆 2.2-2、2.4-2；重做 L2①</td><td>10 分钟</td></tr>
+        <tr><td>第 7 天</td><td>三句话复述 + 重做 L2②（6 样本 AUC 两种算法）、自测错题</td><td>10 分钟</td></tr>
+        <tr><td>第 15 天</td><td>只做合上书挑战；能全过就毕业</td><td>15 分钟</td></tr>
+      </table>
+    </div>
+
+    <!-- ============ 合上书挑战 ============ -->
+    <div class="final-challenge">
+      <h3>📕 合上书挑战</h3>
+      <p class="fc-sub">现在关掉这个页面，拿一张纸，凭记忆完成以下任务。全部做完再回来核对——这是本章真正的毕业考试。</p>
+      <ol id="challenge-list">
+        <li><span class="fc-check"></span>写出经验误差与泛化误差的定义，并用"背编号"解释过拟合。</li>
+        <li><span class="fc-check"></span>写出自助法 (1−1/m)ᵐ → 1/e ≈ 0.368 的含义：谁在左边、谁在右边、各做什么用。</li>
+        <li><span class="fc-check"></span>给定 TP/FP/FN/TN，写出 P、R、F1、错误率四个公式并口算一组数。</li>
+        <li><span class="fc-check"></span>给定排序序列 + − + + − −（3 正 3 负），画出 ROC 坐标并用两种方法算 AUC（答案 7/9）。</li>
+        <li><span class="fc-check"></span>写出偏差-方差分解式，用打靶比喻解释四项（偏差/方差/噪声/总误差）。</li>
+        <li><span class="fc-check"></span>一句话回答本章主线问题：怎么知道模型好不好？——用与训练独立的测试估计泛化误差，选与任务代价匹配的度量，并用偏差-方差理解误差来源。</li>
+      </ol>
+    </div>
+
+    <div class="complete-zone">
+      <button class="btn-complete" id="btn-complete" onclick="markDone()">✓ 我已完成本章（含合上书挑战）</button>
+    </div>
+
+    <div class="chapter-nav">
+      <a href="chapter-01.html"><span class="nav-dir">← 上一章</span>第1章 绪论</a>
+      <a href="chapter-03.html" class="next"><span class="nav-dir">下一章 →</span>第3章 线性模型</a>
+    </div>
+
+  </div>
+</div>
+
+<footer class="footer">
+  <div class="wrap">第2章 模型评估与选择 · 机器学习互动讲义 · 基于周志华《机器学习》(2016)</div>
+</footer>
+
+<script src="/lectures-assets/mermaid.min.js"></script>
+<script>
+mermaid.initialize({
+  startOnLoad: true,
+  theme: "base",
+  themeVariables: {
+    primaryColor: "#e3edf7",
+    primaryBorderColor: "#1d5f9e",
+    primaryTextColor: "#1d5f9e",
+    lineColor: "#5c554b",
+    secondaryColor: "#fbeedd",
+    tertiaryColor: "#f5f1e8",
+    fontFamily: "-apple-system, PingFang SC, sans-serif",
+    fontSize: "14px"
+  },
+  flowchart: { curve: "linear", htmlLabels: false }
+});
+</script>
+<script>
+// 自测题判分（原样复用，勿改）
+document.querySelectorAll(".quiz-block").forEach(block => {
+  const answer = block.dataset.answer;
+  const explain = block.querySelector(".quiz-explain");
+  block.querySelectorAll(".quiz-opts li").forEach(li => {
+    li.addEventListener("click", () => {
+      const opts = block.querySelectorAll(".quiz-opts li");
+      opts.forEach(o => o.classList.add("disabled"));
+      if (li.dataset.opt === answer) {
+        li.classList.add("correct");
+      } else {
+        li.classList.add("wrong");
+        block.querySelector(`[data-opt="${answer}"]`).classList.add("correct");
+      }
+      explain.classList.add("show");
+    });
+  });
+});
+
+// 合上书清单打勾（原样复用，勿改）
+document.querySelectorAll("#challenge-list li").forEach(li => {
+  li.addEventListener("click", () => li.classList.toggle("checked"));
+});
+
+// 完成标记 → localStorage（章号 2）
+const KEY = "ml_progress_v1";
+function loadProgress() {
+  try { return JSON.parse(localStorage.getItem(KEY)) || {}; } catch (e) { return {}; }
+}
+const progress = loadProgress();
+const btn = document.getElementById("btn-complete");
+if (progress[2] && progress[2].done) {
+  btn.textContent = "✓ 已完成 · 再次点击重置";
+  btn.classList.add("done");
+}
+function markDone() {
+  const p = loadProgress();
+  if (p[2] && p[2].done) {
+    delete p[2];
+    btn.textContent = "✓ 我已完成本章（含合上书挑战）";
+    btn.classList.remove("done");
+  } else {
+    p[2] = { done: true, completedAt: Date.now(), reviewsDone: 0 };
+    btn.textContent = "✓ 已完成 · 复习提醒已开启";
+    btn.classList.add("done");
+  }
+  localStorage.setItem(KEY, JSON.stringify(p));
+}
+</script>
+
+</body>
+</html>

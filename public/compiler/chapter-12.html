@@ -1,0 +1,853 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第12章 理论回顾：形式语言与自动机 · 编译原理互动讲义</title>
+<link rel="stylesheet" href="/lectures-assets/style.css">
+</head>
+<body>
+
+<nav class="topbar">
+  <div class="topbar-inner">
+    <span class="brand"><a href="index.html" style="color:inherit">← 学习地图</a></span>
+    <span class="crumb">阶段④ · 全书收束 / 第12章</span>
+  </div>
+</nav>
+
+<div class="wrap">
+
+  <div class="lecture-head">
+    <span class="ch-label">CHAPTER 12 · 全书收束</span>
+    <h1>理论回顾：形式语言与自动机</h1>
+    <p class="lead">前十一章每一道工序背后都站着一台抽象机器和一类形式语言。本章把它们全部摆上同一张桌子：乔姆斯基层级给每道工序划了能力边界，也标出了编译器永远做不到的事。</p>
+  </div>
+
+  <!-- ===== 章首四件套之 1：全书定位 ===== -->
+  <div class="position-bar">
+    <strong>本章在主线上的位置：</strong>第1–11章逐站建成编译流水线 → <u>本章把每一站映射回形式语言与自动机的理论地基，标出各工序的能力边界</u> → 全书闭环，回到学习地图的复习中心。<br>
+    第12章回答主线上最后一个问题：<strong>整套编译技术背后的理论地基是什么，它给每道工序划了怎样的能力边界？</strong>
+    <div class="map-inline">
+      <span class="node">Ch1–4 前端：词法与语法</span><span class="arrow">→</span>
+      <span class="node">Ch5–7 语义与中间代码</span><span class="arrow">→</span>
+      <span class="node">Ch8–11 后端与优化</span><span class="arrow">→</span>
+      <span class="node here">Ch12 全书收束 ← 本章</span>
+    </div>
+  </div>
+
+  <!-- ===== 章首四件套之 2：学习目标 ===== -->
+  <div class="objectives">
+    <h4>🎯 学完本章，合上书你应该能：</h4>
+    <ol>
+      <li>默写乔姆斯基层级：四型文法、对应语言类、对应自动机，各配一个能与不能的例子。</li>
+      <li>解释为什么词法用正则、语法用 CFG 而语义必须在 CFG 之外另起炉灶。</li>
+      <li>对 (a|b)*abb 独立完成 正则 → NFA → DFA → 最小 DFA 的全链手算，不跳步。</li>
+      <li>各用一句话说出 LL 与 LR 的能力边界，并指出属性文法补上的是哪块空缺。</li>
+      <li>解释"精确程序分析不可判定"与停机问题的关系，说清优化为什么必须保守。</li>
+      <li>按顺序说出源程序到机器码每一站的信息形态。</li>
+    </ol>
+  </div>
+
+  <div class="lecture">
+
+    <!-- ===== 章首四件套之 3：全书地图 ===== -->
+    <div class="figure">
+      <div class="mermaid">
+flowchart TB
+  subgraph FE["阶段① 前端：词法与语法"]
+    direction LR
+    SRC["源程序：字符流"] -->|"字符流 → 单词流"| LEX["词法分析 Ch3：正则与有穷自动机"]
+    LEX -->|"单词流 → 语法树"| SYN["语法分析 Ch4：上下文无关文法"]
+  end
+  subgraph MID["阶段② 语义与中间代码"]
+    direction LR
+    SEM["语义分析 Ch5：属性文法"] -->|"带类型的树 → 三地址码"| ICG["中间代码生成 Ch6"]
+  end
+  subgraph BE["阶段③ 后端与优化"]
+    direction LR
+    OPT["机器无关优化 Ch9：数据流分析"] -->|"优化后的三地址码"| CG["代码生成 Ch8：指令选择"]
+    CG --> ILP["指令级并行 Ch10"]
+    ILP --> PAR["并行与局部性 Ch11"]
+  end
+  subgraph RT["运行时"]
+    direction LR
+    SUP["运行时支持 Ch7：栈与堆"]
+  end
+  SYN -->|"语法树挂上类型与语义"| SEM
+  ICG -->|"三地址码"| OPT
+  PAR -->|"指令流"| SUP
+  SUP -->|"可执行文件"| GRAD["毕业：一套边界清晰的翻译理论"]
+  classDef hot fill:#fbeedd,stroke:#c4651f,stroke-width:2.5px,color:#c4651f;
+  classDef danger fill:#fae9e7,stroke:#b03a2e,stroke-width:2.5px,color:#b03a2e;
+  class GRAD hot;
+      </div>
+      <div class="caption">图 12.1 全书地图：每条边标注该工序消费什么、产出什么，每个节点标注对应章号。本章的任务是回答：每一站背后的理论机器是什么，它的能力边界在哪里。</div>
+    </div>
+
+    <!-- ============================================================
+      12.1 全书地图：每一站消费什么、产出什么
+    ============================================================ -->
+    <h2><span class="sec-no">12.1</span>全书地图：每一站消费什么、产出什么</h2>
+
+    <p>十一章走下来，我们手里有了一条完整的流水线。回看它的最好方式不是背工序名单，而是盯住<strong>信息形态的嬗变</strong>：每一站吃进什么形态、吐出什么形态。把图 12.1 压成一张表：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>工序（章号）</th><th>消费</th><th>产出</th><th>背后的理论工具</th></tr>
+        <tr><td>词法分析（Ch3）</td><td>字符流</td><td>单词流</td><td>正则表达式、有穷自动机</td></tr>
+        <tr><td>语法分析（Ch4）</td><td>单词流</td><td>语法树</td><td>上下文无关文法、下推自动机</td></tr>
+        <tr><td>语义分析（Ch5）</td><td>语法树</td><td>带类型与属性的树</td><td>属性文法</td></tr>
+        <tr><td>中间代码生成（Ch6）</td><td>带类型的树</td><td>三地址码</td><td>语法制导翻译方案</td></tr>
+        <tr><td>机器无关优化（Ch9）</td><td>三地址码</td><td>优化后的三地址码</td><td>数据流分析（保守近似）</td></tr>
+        <tr><td>代码生成（Ch8）</td><td>三地址码</td><td>指令流</td><td>指令选择、寄存器分配</td></tr>
+        <tr><td>ILP / 并行与局部性（Ch10–11）</td><td>指令流 / 循环</td><td>重排与切块后的指令流</td><td>依赖分析、仿射变换</td></tr>
+        <tr><td>运行时支持（Ch7）</td><td>可执行文件</td><td>正确运行的进程</td><td>栈、堆、垃圾回收</td></tr>
+      </table>
+    </div>
+
+    <p>注意一个反复出现的模式：<strong>每一站都把上一站的表面细节丢掉一层</strong>——词法丢掉空白与注释，语法丢掉单词的具体拼写只留结构，语义给树挂上类型后表达式的中缀形态不再重要，三地址码把树拍平，优化再把具体的计算顺序抽象成数据依赖。这是一条不断丢失表面细节、沉淀执行本质的链。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>编译器不是一个大函数，而是一串<strong>形态转换器</strong>的级联。每站只做一种形态到另一种形态的翻译，并且只用刚好够强的理论机器——这就是整本书的组织原则。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>以为优化会"改变程序的行为让它更快"。错：一切合法优化都是<strong>语义保持变换</strong>——对所有输入，优化前后程序的可观察行为必须一致。优化改的是成本（时间、空间、能耗），不是语义。12.5 的问2 会追问：编译器凭什么确信自己没改错？</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 12.1-1</div>
+              <div class="q-text">按顺序说出从源程序到指令流的信息形态链（至少六站）。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              字符流 → 单词流 → 语法树 → 带类型的树 → 三地址码 → 优化后的三地址码 → 指令流（→ 可执行文件）。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 12.1-2</div>
+              <div class="q-text">机器无关优化的输入和输出各是什么形态？它凭什么敢改动代码？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              三地址码 → 优化后的三地址码。凭的是语义保持：数据流分析给出保守但安全的结论，优化只在不改变可观察行为的前提下降低成本。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============================================================
+      12.2 乔姆斯基层级
+    ============================================================ -->
+    <h2><span class="sec-no">12.2</span>乔姆斯基层级：四级语言与四种机器</h2>
+
+    <p>图 12.1 的每一站都声称自己"够强"又"够用"。强与够用由什么度量？由<span class="term">乔姆斯基层级</span>（Chomsky Hierarchy）：按文法规则形态把形式语言分成四级，每级恰好对应一种自动机——这是整个计算机科学最漂亮的对应之一。</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>型别</th><th>语言类</th><th>文法规则形态</th><th>对应自动机</th><th>能表达</th><th>不能表达</th></tr>
+        <tr><td>3 型</td><td>正则语言</td><td>A → aB 或 A → a（右线性）</td><td><span class="term">有穷自动机</span>（FA）</td><td>单词结构：标识符、数、ab*</td><td>aⁿbⁿ（任意深的配对计数）</td></tr>
+        <tr><td>2 型</td><td>上下文无关语言</td><td>A → 任意串（左部单非终结符）</td><td><span class="term">下推自动机</span>（PDA）</td><td>嵌套括号、表达式结构、aⁿbⁿ</td><td>wcw、"先声明后使用"类上下文约束</td></tr>
+        <tr><td>1 型</td><td>上下文有关语言</td><td>αAβ → αγβ（左右带上下文）</td><td><span class="term">线性有界自动机</span>（LBA）</td><td>aⁿbⁿcⁿ、声明-使用约束</td><td>——（分析代价不可承受）</td></tr>
+        <tr><td>0 型</td><td>递归可枚举语言</td><td>无限制</td><td><span class="term">图灵机</span>（TM）</td><td>一切可计算之物</td><td>停机问题等不可判定问题</td></tr>
+      </table>
+    </div>
+
+    <p>层级上升的实质是<strong>机器记忆能力的升级</strong>：FA 只有状态、没有外部记忆，所以数不清任意大的 n——泵引理说的就是：n 个状态的自动机走 n 步必有环，环上多绕几圈就分不清 aⁿbⁿ 的两头是否相等。PDA 加一个栈，一层嵌套就能数；但要表达 wcw（前一半与后一半相同），栈读完前一半就空了，没法再回头比对——所以"标识符先声明后使用"超出 CFG。LBA 的带长受输入线性限制，可以做局部上下文检查；TM 带长无限，能算一切可算的——同时也继承了不可判定性。</p>
+
+    <div class="box insight">
+      <span class="box-tag">✅ 判定规则</span>
+      <p>编译器选型的原则是"最弱够用"：能用电线就不用电池。词法只数不配对 → 3 型正则足够；语法要处理任意深嵌套 → 必须升到 2 型 CFG；语义要查跨子树的上下文约束 → CFG 不够，但 1 型分析代价太高，于是工程上用属性文法在 CFG 语法树上外挂语义计算。</p>
+    </div>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>乔姆斯基层级就是一张"记忆能力价格表"：每升一级，表达力更强，判定与分析的成本更高。编译器每一层都买刚好够用的那一档。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>以为 C / Java 的语法"就是"一个上下文无关文法。几乎对，但"先声明后使用""类型匹配""方法重载决议"都超出 CFG 的表达力。工程实践：用 CFG 描述语法骨架，把管不了的约束推给语义分析（属性文法 / 符号表）兜底——这正是 12.4 的主题。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 12.2-1</div>
+              <div class="q-text">默写四级乔姆斯基层级与各自对应的自动机。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              3 型正则 ↔ 有穷自动机；2 型上下文无关 ↔ 下推自动机；1 型上下文有关 ↔ 线性有界自动机；0 型递归可枚举 ↔ 图灵机。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 12.2-2</div>
+              <div class="q-text">各举一例：正则语言不能表达什么？CFG 不能表达什么？这跟编译器分工有什么关系？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              正则不能表达 aⁿbⁿ（任意深配对）；CFG 不能表达 wcw / 先声明后使用。所以括号结构归语法分析管，声明-使用约束推给语义分析。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============================================================
+      12.3 一条完整理论链
+    ============================================================ -->
+    <h2><span class="sec-no">12.3</span>一条完整理论链：从 (a|b)*abb 到最小 DFA</h2>
+
+    <p>第3章埋下的那条链——正则表达式如何变成可执行的词法分析器——现在是收拢它的时候。我们全程不跳步走完：<strong>正则 (a|b)*abb → NFA（Thompson 构造）→ DFA（子集构造）→ 最小 DFA（划分求精）</strong>。这个语言是"以 abb 结尾的所有 a/b 串"，够小能算到底，又够典型覆盖全部构造。</p>
+
+    <p><strong>第一步：Thompson 构造。</strong>对每个基本符号建双态小自动机，再用模板拼装：并（r|s）加新起点分叉，星（r*）加新起点与回边，连接（rs）首尾相接。对 (a|b)*abb 得到 11 个状态的 NFA（状态编号沿用龙书图 3.26）：</p>
+
+    <div class="figure">
+      <div class="mermaid">
+flowchart LR
+  S0((0)) -->|ε| S1((1))
+  S0 -->|ε| S7((7))
+  S1 -->|ε| S2((2))
+  S1 -->|ε| S4((4))
+  S2 -->|a| S3((3))
+  S3 -->|ε| S6((6))
+  S4 -->|b| S5((5))
+  S5 -->|ε| S6
+  S6 -->|ε| S1
+  S6 -->|ε| S7
+  S7 -->|a| S8((8))
+  S8 -->|b| S9((9))
+  S9 -->|b| S10((10))
+  classDef acc fill:#e4f0e9,stroke:#33735a,stroke-width:2.5px,color:#33735a;
+  class S10 acc;
+      </div>
+      <div class="caption">图 12.2 (a|b)*abb 的 Thompson NFA。0 是起点，10（绿色）是唯一接受态；左半部分是 (a|b)* 的自循环，右半部分是 abb 的三步直路。</div>
+    </div>
+
+    <p><strong>第二步：子集构造（Subset Construction）。</strong>DFA 的每个状态 = NFA 状态的一个子集；起点 = ε-闭包({0})。每一步把闭包算全：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>DFA 状态</th><th>NFA 子集（ε-闭包后）</th><th>读 a 到</th><th>读 b 到</th></tr>
+        <tr><td>A（起点）</td><td>{0,1,2,4,7}</td><td>B</td><td>C</td></tr>
+        <tr><td>B</td><td>{1,2,3,4,6,7,8}</td><td>B</td><td>D</td></tr>
+        <tr><td>C</td><td>{1,2,4,5,6,7}</td><td>B</td><td>C</td></tr>
+        <tr><td>D</td><td>{1,2,4,5,6,7,9}</td><td>B</td><td>E</td></tr>
+        <tr><td>E（接受）</td><td>{1,2,4,5,6,7,10}</td><td>B</td><td>C</td></tr>
+      </table>
+    </div>
+
+    <p>手算过程逐个写清：</p>
+    <ol>
+      <li>起点 A = ε-闭包({0})：0 经 ε 到 1、7；1 再到 2、4 → A = {0,1,2,4,7}。</li>
+      <li>move(A, a)：A 中读 a 的只有 2→3、7→8 → {3,8}；ε-闭包：3→6，6→1、7，1→2、4，8 无 ε 出边 → {1,2,3,4,6,7,8} = B（新状态）。</li>
+      <li>move(A, b)：只有 4→5 → {5}；闭包：5→6→1、7，1→2、4 → {1,2,4,5,6,7} = C（新状态）。</li>
+      <li>move(B, a)：3 由 2 来、8 由 7 来，同第 2 步 → B 自身。move(B, b)：4→5 且 8→9 → {5,9}；闭包 {1,2,4,5,6,7,9} = D（新状态）。</li>
+      <li>move(C, a) = B，move(C, b) = C。</li>
+      <li>move(D, a) = B。move(D, b)：4→5、9→10 → {5,10}；闭包 {1,2,4,5,6,7,10} = E（新状态，含 10 → <strong>接受态</strong>）。</li>
+      <li>move(E, a) = B，move(E, b) = C。没有新子集，构造终止：共 5 个状态。</li>
+    </ol>
+
+    <p><strong>第三步：最小化（划分求精）。</strong>初始按"接受 / 非接受"二分，反复检查同组状态对每个输入是否仍落在同组，不一致就分裂：</p>
+    <ol>
+      <li>初始划分：{A,B,C,D} | {E}。</li>
+      <li>检查 {A,B,C,D} 对 b 的转移：A→C（组内）、B→D（组内）、C→C（组内）、D→E（<strong>组外</strong>）→ 把 D 分裂出去：{A,B,C} | {D} | {E}。</li>
+      <li>检查 {A,B,C}：对 a，A→B、B→B、C→B（都落在 {A,B,C}，一致）；对 b，A→C、C→C（组内），B→D（<strong>组外</strong>）→ 分裂 B：{A,C} | {B} | {D} | {E}。</li>
+      <li>检查 {A,C}：对 a，A→B、C→B（同组）；对 b，A→C、C→C（同组）→ 稳定。算法终止，共 4 个状态。</li>
+    </ol>
+
+    <div class="figure">
+      <div class="mermaid">
+flowchart LR
+  P0(("S0 = {A,C}")) -->|a| P1(("S1 = {B}"))
+  P0 -->|b| P0
+  P1 -->|a| P1
+  P1 -->|b| P2(("S2 = {D}"))
+  P2 -->|a| P1
+  P2 -->|b| P3(("S3 = {E}"))
+  P3 -->|a| P1
+  P3 -->|b| P0
+  classDef acc fill:#e4f0e9,stroke:#33735a,stroke-width:2.5px,color:#33735a;
+  class P3 acc;
+      </div>
+      <div class="caption">图 12.3 最小 DFA：四个状态，S3 是唯一接受态。验证串 abab：S0 -a→ S1 -b→ S2 -a→ S1 -b→ S2，停在非接受态 S2，拒绝（abab 不以 abb 结尾）✓；串 aabb：S0→S1→S1→S2→S3，接受 ✓。</div>
+    </div>
+
+    <p>这条链的每一环都是<strong>机械可执行</strong>的：Thompson 是模板拼装，子集构造是闭包迭代，最小化是划分求精。没有任何一步需要"灵感"——所以词法分析器可以由 Lex/Flex 这类工具从正则描述自动生成。理论的价值在此显形：把一门手艺变成一台机器。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>NFA 是"并行试探所有可能"，DFA 是"把并行试探的结果预先算成状态"。子集构造就是把不确定性在编译期一次性付清，换运行期的线性时间。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>以为子集构造永远这么便宜。n 个状态的 NFA，子集最多 2ⁿ 个——理论上可能指数爆炸（本例 11 个 NFA 状态只生出 5 个 DFA 状态，属运气好）。但也别反向误读：最小化后的 DFA 在同构意义下<strong>唯一</strong>，这是 Myhill-Nerode 定理的礼物，与你怎么构造无关。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 12.3-1</div>
+              <div class="q-text">子集构造中，DFA 的起点怎么确定？(a|b)*abb 一例中起点子集是哪个？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              起点 = NFA 起始状态的 ε-闭包。本例为 ε-闭包({0}) = {0,1,2,4,7}，记作 A。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 12.3-2</div>
+              <div class="q-text">DFA 最小化的分裂准则是什么？本例三步划分各因谁而分裂？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              同组状态若对某输入符号转移到不同组，则分裂。本例：先按接受/非接受分出 {E}；D 因读 b 到 E 而分裂；B 因读 b 到 D 而分裂；{A,C} 稳定。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============================================================
+      12.4 CFG、PDA 与属性文法
+    ============================================================ -->
+    <h2><span class="sec-no">12.4</span>语法之后还剩什么：PDA、LL/LR 与属性文法</h2>
+
+    <p>正则世界收拢完毕，视线升到 2 型。CFG 的识别机器是<span class="term">下推自动机</span>（Pushdown Automaton, PDA）= 有穷自动机 + 一个栈。理论要点有两层：其一，（非确定）PDA 与 CFG 识别能力恰好等价；其二，<strong>确定性</strong> PDA 比非确定 PDA 弱——而编译器只玩得起确定性。这个"弱出来的空档"不是灾难，正是第4章 LL 与 LR 存在的理论理由：它们是"确定性地、在线性时间内可分析"的 CFG 子类。</p>
+
+    <p><strong>LL 与 LR 的边界，各一句话：</strong></p>
+    <div class="tbl-wrap">
+      <table>
+        <tr><th></th><th>LL（自顶向下，最左推导）</th><th>LR（自底向上，最右推导的逆）</th></tr>
+        <tr><td>判定时机</td><td>只看向前 k 个单词就要选定产生式展开</td><td>整个右部都进栈之后，看向前 k 个符号再决定归约</td></tr>
+        <tr><td>能力边界</td><td>容不下左递归与公共左因子（须改写文法）；LL(k) 文法类较小</td><td>LR(1) 文法类严格大于任何 LL(k)；左递归天然无害</td></tr>
+        <tr><td>工程取舍</td><td>分析器直观（递归下降），错误定位好</td><td>表驱动、能力强，分析器由工具生成（Yacc/Bison）</td></tr>
+      </table>
+    </div>
+
+    <p>直觉就一句：LR 比 LL 强，因为它<strong>见得更多才决策</strong>——LL 在只看到一个符号时就要押注展开式，LR 可以等右部全部现身再翻牌。</p>
+
+    <p>但即便最强实用的 LR，也仍然只是 CFG 世界的事。12.2 说过，"标识符先声明后使用"（wcw 型约束）超出 CFG；类型是否匹配、数组维度是否一致，也都不是语法树骨架能携带的信息。怎么办？第5章的答案是<span class="term">属性文法</span>（Attribute Grammar）：保留 CFG 的骨架，在每个文法符号上挂属性、在每条产生式上挂语义规则，让值沿树流动——综合属性自底向上，继承属性自顶向下，求值顺序由依赖图的拓扑序决定。CFG 管"结构对不对"，属性文法管"结构上算的数对不对"。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>三道工序的理论机器各是：词法 = FA（无记忆），语法 = 确定性 PDA（一个栈），语义 = 属性文法（在树上外挂计算器）。表达能力一层比一层强，分析成本一层比一层高——分层不是偷懒，是精打细算。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>以为"LR 更强所以 LL 该淘汰"。错：能力之外还有工程维度——手写递归下降（LL 风格）可读、可调试、错误恢复好，GCC 与 Clang 的 C/C++ 前端都是手写递归下降加各种技巧的混合体。理论给出的是能力上界，选型看的是综合成本。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 12.4-1</div>
+              <div class="q-text">为什么"确定性 PDA 弱于非确定 PDA"这个事实反而催生了 LL 与 LR 的研究？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              编译器只能用确定性机器（线性时间、可工程实现），确定性 PDA 认不全所有 CFG，于是必须刻画"确定性可分析的 CFG 子类"——这就是 LL 与 LR 文法类。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 12.4-2</div>
+              <div class="q-text">属性文法补上了 CFG 的哪块空缺？综合属性与继承属性的流向分别是什么？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              补上"上下文相关约束"的空缺（声明-使用、类型匹配等）。综合属性自底向上（由子节点算），继承属性自顶向下或横向（由父节点、兄弟节点算）。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============================================================
+      12.5 毕业三问
+    ============================================================ -->
+    <h2><span class="sec-no">12.5</span>毕业三问</h2>
+
+    <p>全书的最后一公里，不留新知，只留三个问题。每个问题先自己作答，再展开参考答案比对——能讲到参考答案的八成，这门课就算真正毕业了。</p>
+
+    <p><strong>问1：词法用正则、语法用 CFG、语义用属性文法——为什么一层比一层"强"，强的代价是什么？</strong>提示：从乔姆斯基层级的"记忆能力价格表"想，从各层分析算法的时间复杂度想。</p>
+    <details>
+      <summary>参考答案</summary>
+      <div class="retell-answer">因为每一层只买"刚好够用"的表达力。正则配 FA：无记忆，识别只要 O(n)，还能从描述自动生成分析器（Lex）；但数不了配对，管不了嵌套。CFG 配确定性 PDA：一个栈换来任意深嵌套，LL/LR 仍保持 O(n)，代价是文法要满足子类约束、表构造复杂。语义面对的是上下文相关约束（声明-使用、类型），理论上是 1 型问题、一般分析 PSPACE 完全不可用，于是工程上用属性文法把语义计算挂在 CFG 树上，代价是属性求值顺序要另解依赖图、且表达力仍不是万能的。层级的"强"用更高的判定成本、更弱的自动化程度来换；分层的艺术在于让每个难题都沉到刚好能消化它的那一层。</div>
+    </details>
+
+    <p><strong>问2：优化凭什么敢改代码？</strong>提示：语义保持的"证据"是什么？"两个程序行为完全一致"这件事本身可判定吗？</p>
+    <details>
+      <summary>参考答案</summary>
+      <div class="retell-answer">凭的是语义保持（semantic preservation）：对所有输入，优化前后可观察行为一致。但"两个程序是否等价"在一般情形下不可判定——Rice 定理说程序语言的任何非平凡语义性质都不可判定，其根子是图灵机的停机问题：连"会不会停"都判不了，遑论"行为是否相同"。所以编译器不做精确分析，只做保守近似：数据流分析给出的答案保证安全（sound）但允许粗糙（"可能是"就当"是"）。保守的代价是漏掉一些优化机会，保守的底线是绝不能改错程序——这就是第11章指针别名让并行化变保守、第9章数据流方程取交汇运算的理论根源。停机问题的幽灵笼罩着整个优化篇：完美的优化器不存在，存在的只是安全的近似。</div>
+    </details>
+
+    <p><strong>问3：从源程序到机器码，信息在每一站被"翻译"成了什么形态？</strong>提示：沿着图 12.1 的边走一遍，注意每站丢掉了什么、沉淀了什么。</p>
+    <details>
+      <summary>参考答案</summary>
+      <div class="retell-answer">字符流 →（词法，Ch3）→ 单词流：丢掉空白注释，认出标识符与关键字；单词流 →（语法，Ch4）→ 语法树：丢掉线性排列，沉淀嵌套结构；语法树 →（语义，Ch5）→ 带类型的树：挂上声明、类型与作用域；带类型的树 →（中间代码，Ch6）→ 三地址码：树被拍平成线性指令，控制流显式化；三地址码 →（优化，Ch9）→ 优化后的三地址码：丢掉冗余计算，保留数据依赖本质；三地址码 →（代码生成，Ch8，再经 Ch10–11 重排与切块）→ 指令流：虚拟寄存器落到物理寄存器，指令带上调度与局部性安排。整条链是一部"不断丢失表面细节、沉淀执行本质"的翻译史——这就是编译原理这门课讲的事。</div>
+    </details>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 12.5-1</div>
+              <div class="q-text">"两个程序是否等价"为什么不可判定？这对优化器设计下了什么死命令？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              Rice 定理：任何非平凡语义性质不可判定，根子是停机问题。死命令：优化必须保守（sound）——宁可漏优化，不可改错程序。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 12.5-2</div>
+              <div class="q-text">用一句话概括源程序到机器码的整条信息链在做什么。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              不断丢失表面细节（空白、拼写、括号、顺序），沉淀执行本质（结构、类型、操作、数据依赖）的一串形态翻译。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===== 章末五件套之 1：概念卡 ===== -->
+    <h2><span class="sec-no">🃏</span>概念卡：本章概念的一分钟画像</h2>
+    <p>翻面前先自问：这个概念我能用一句话讲清楚吗？</p>
+    <div class="flip-grid">
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 1</div>
+            <div class="q-text">乔姆斯基层级（Chomsky Hierarchy）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">按文法规则形态分的四级语言类：3 型正则 ⊂ 2 型上下文无关 ⊂ 1 型上下文有关 ⊂ 0 型递归可枚举。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">给"表达力"分级，让编译器每层买刚好够用的那一档。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">记忆能力价格表：没记忆 → 一个栈 → 有限带 → 无限带。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为级别越高越好——级别越高，分析代价越不可承受。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">回答"这道工序为什么用这种理论机器"的总开关。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 2</div>
+            <div class="q-text">有穷自动机（Finite Automaton）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">有限状态集 + 转移函数 + 起点与接受集；NFA 允许 ε 与分叉，DFA 每状态每符号唯一出边。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">识别正则语言：词法分析的执行机器。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">一台只有指示灯的机器，没有纸笔。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为 NFA 比 DFA 表达力强——两者识别能力等价，差在状态数与构造方式。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">Ch3 词法分析、12.3 的全链构造。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 3</div>
+            <div class="q-text">下推自动机（Pushdown Automaton）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">有穷自动机外挂一个栈，识别能力与 CFG 等价。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">栈提供了任意深嵌套所需的记忆：语法分析的理论机器。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">只有一摞盘子的记忆：只能压栈弹栈，不能随机访问。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为确定性 PDA 也能认全 CFG——它更弱，LL/LR 正是确定性可分析的子类。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">Ch4 语法分析、12.4 的能力边界讨论。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 4</div>
+            <div class="q-text">图灵机（Turing Machine）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">无限长纸带 + 读写头 + 有限控制器，0 型文法的识别机器，可计算性的标准模型。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">标定"可计算"的边界，也标定不可判定的深渊（停机问题）。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">一个记性无限好但动作极原始的抄写员。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为不可判定 = 工程上很难——它是原理性不可能，再强的机器也不行。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">解释优化为何只能保守近似（12.5 问2）。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 5</div>
+            <div class="q-text">Thompson 构造（Thompson's Construction）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">把正则表达式按运算符（并/连接/星）递归拼装成 NFA 的模板算法。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">正则到自动机的第一棒：机械、保正确、状态数线性。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">乐高式拼装：每个运算符一块积木。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为它直接给出可执行分析器——产出的是 NFA，还需子集构造确定化。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">12.3 第一步；Lex 类工具的内部流水线。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 6</div>
+            <div class="q-text">子集构造（Subset Construction）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">以 NFA 状态子集为 DFA 状态、用 ε-闭包与 move 迭代求转移的确定化算法。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">把 NFA 的不确定性在编译期付清，换运行期 O(n) 识别。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">把所有"可能身处之地"打包成一个超级状态。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">忘了最坏情形指数爆炸：n 个 NFA 状态至多 2ⁿ 个 DFA 状态。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">12.3 第二步；凡 NFA 要落地执行都要过这关。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 7</div>
+            <div class="q-text">可判定性（Decidability）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">一个问题可判定 ⟺ 存在总能在有限步内给出正确答案的算法。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">给"编译器能做到什么"划原理性边界：等价性、精确别名、完美优化都不可判定。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">天花板不是技术限制，是数学限制。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为不可判定就什么都不能做——保守近似（宁可误判不可漏判安全）仍然可行且有用。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">Ch9 数据流分析、Ch11 别名分析、12.5 问2 的总理论根。</span></div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- ===== 章末五件套之 2：分层习题 ===== -->
+    <h2><span class="sec-no">📝</span>分层习题</h2>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>判断："aⁿbⁿ 是上下文无关语言，因此也可以用正则表达式描述。"这句话对吗？说明理由。</div>
+      <details>
+        <summary>提示</summary>
+        <p>层级是严格包含关系：2 型真包含 3 型。想想泵引理说有穷自动机"数不了"什么。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">错。乔姆斯基层级是严格包含：正则 ⊂ 上下文无关，且包含是真子集关系。aⁿbⁿ 恰是分界的标准证人——PDA 用栈数 a 的个数再逐个对 b 弹栈即可，故它是上下文无关语言；但任何 n 状态有穷自动机走 n 步必成环，环上多绕一圈就分不清两头个数是否仍相等（泵引理），故它不是正则语言。"属于上级就能用下级描述"把包含关系搞反了。</div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>判断："LR 能分析的文法类严格大于 LL；其根本原因是 LR 在决策前能看到更多信息。"对吗？</div>
+      <details>
+        <summary>提示</summary>
+        <p>比较两者的决策时机：LL 什么时候必须选定产生式？LR 什么时候才决定归约？</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">对。LL 自顶向下，看到向前 k 个单词就必须选定展开式——决策时右部还一个符号都没确认；LR 自底向上，把整个右部都移进栈后才结合向前 k 个符号决定归约——决策时右部已全部现身。见得更多才决策，所以 LR(1) 文法类严格大于任何 LL(k)。推论：左递归对 LL 是死症（须改写），对 LR 天然无害。易错点：把"能力强"误读为"LL 无存在价值"——工程上递归下降可读可调试，能力不是唯一选型维度。</div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>设字母表 {a, b} 上的 NFA：状态 {0,1,2}，起点 0，接受态 {2}，转移为 0 -a→ 0、0 -a→ 1、1 -b→ 2。用子集构造求等价的 DFA，写出每个子集的 ε-闭包与 move 计算过程。</div>
+      <details>
+        <summary>提示</summary>
+        <p>本 NFA 没有 ε 边，ε-闭包各自平凡。起点子集是 {0}；注意 move({0}, a) 会同时命中 0 和 1；空集也要作为一个（陷阱）状态保留。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          ① 起点：ε-闭包({0}) = {0} = S0。② move(S0, a) = {0,1}（0 读 a 到 0 和 1）；无 ε 边，闭包不变 → 新状态 S1 = {0,1}。move(S0, b) = ∅ → 陷阱状态 S∅。③ 处理 S1：move(S1, a) = move(0,a) ∪ move(1,a) = {0,1} ∪ ∅ = {0,1} = S1 自身；move(S1, b) = move(0,b) ∪ move(1,b) = ∅ ∪ {2} = {2} → 新状态 S2 = {2}，含 2 → 接受态。④ 处理 S2：move(S2, a) = ∅，move(S2, b) = ∅，都到 S∅。⑤ S∅ 对所有符号回到自身。终止：DFA 共 4 个状态 {S0, S1, S2, S∅}，接受态仅 S2。识别语言：先读若干个 a（至少一个），再读一个 b——即 a⁺b。验证串 aab：S0 -a→ S1 -a→ S1 -b→ S2，接受 ✓；串 ab 也接受 ✓；串 b：S0 -b→ S∅ 拒绝 ✓。
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>对如下 DFA 做最小化：状态 {0,1,2,3}，起点 0，接受态 {3}；δ(0,a)=1，δ(0,b)=2，δ(1,a)=1，δ(1,b)=3，δ(2,a)=1，δ(2,b)=3，δ(3,a)=3，δ(3,b)=3。写出划分求精的每一步及分裂理由。</div>
+      <details>
+        <summary>提示</summary>
+        <p>初始按接受/非接受划分；之后逐组检查：对每个输入符号，组内成员是否都落到同一组。重点盯 b 转移。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          ① 初始划分：非接受 {0,1,2} | 接受 {3}。② 检查 {0,1,2}：对 a，0→1、1→1、2→1，都落在 {0,1,2}，一致；对 b，0→2（组内）、1→3（<strong>组外</strong>）、2→3（<strong>组外</strong>）→ 0 与 {1,2} 行为不同，分裂为 {0} | {1,2} | {3}。③ 检查 {1,2}：对 a，1→1、2→1，都落在 {1,2}；对 b，1→3、2→3，都落在 {3} → 稳定，不再分裂。④ 终止：最小 DFA 三个状态 {0}、{1,2}、{3}。转移：{0} -a→ {1,2}，{0} -b→ {1,2}（因 2 ∈ {1,2}），{1,2} -a→ {1,2}，{1,2} -b→ {3}，{3} 自环。识别语言：以 b 结尾且此前全为 a 的串——即 a*b。
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l3">L3 建模应用</span>设计一个"学号校验器"：合法格式 = 2 位年份数字 + 3 位学院码数字 + 4 位序号数字（共 9 位数字）。要求：① 选出该用乔姆斯基层级哪一级，说明理由；② 写出对应正则表达式；③ 说出把它变成程序的两条路线（手写 DFA / 工具生成）。④ 追问：若再加一条规则"第 9 位必须等于前 8 位数字之和的个位数"，你的选型还成立吗？</div>
+      <details>
+        <summary>提示</summary>
+        <p>格式里没有嵌套与配对，只有固定长度的字符类别——这是哪一级的标志？追问中的"校验和"是否引入了两段文本之间的数量约束？有限性还在不在？</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          ① 3 型正则语言：格式是"9 个固定位置各有字符类别"，没有任意深度的嵌套或配对，FA 的无记忆能力足够。② 正则：令 d = [0-9]，则 dd ddd dddd（即 [0-9]{9}；若学院码有枚举范围，再细化中间三位）。③ 路线一：手写 9+1 个状态的顺序 DFA（每位一个状态，读满 9 位进接受态），代码十几行；路线二：把正则交给 Lex/正则库，由 Thompson 构造 + 子集构造自动生成——12.3 的链就是为这种场景准备的。④ 校验和规则把"第 9 位"与"前 8 位的和"关联起来，这是一种跨位置的上下文约束。但注意：前 8 位只有 10⁸ 种可能，理论上仍可展开成一个（巨大的）正则——语言仍是正则的，只是正则表达式不再可写。工程结论：格式匹配部分留在正则层，校验和交给语义/代码层检查——这正是编译器"CFG 骨架 + 属性文法兜底"分工在微缩场景的重演。若约束升级成"任意深度括号配对"这类真无限结构，才必须升到 2 型。
+        </div>
+      </details>
+    </div>
+
+    <!-- ===== 章末五件套之 3：自测 ===== -->
+    <h2><span class="sec-no">✍️</span>本章自测</h2>
+    <p class="quiz-hint">点击选项判分，答错会给出原因。</p>
+
+    <div class="quiz-block" data-answer="c">
+      <div class="q-no">自测 1</div>
+      <div class="q-stem">语言 { aⁿbⁿcⁿ | n ≥ 1 } 属于乔姆斯基层级的哪一级？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 3 型正则语言</li>
+        <li data-opt="b">B. 2 型上下文无关语言</li>
+        <li data-opt="c">C. 1 型上下文有关语言</li>
+        <li data-opt="d">D. 0 型但不属于 1 型</li>
+      </ul>
+      <div class="quiz-explain">解析：C 对：三段相等需要两处计数比对，线性有界自动机可做（如上下文有关文法可生成），但超出一个栈的能力。A 错：FA 连 aⁿbⁿ 都数不了。B 错：PDA 的栈数完 a 对 b 就空了，无法再对 c——泵引理可证 aⁿbⁿcⁿ 不是上下文无关语言。D 错：它确实属于 1 型，无需升到 0 型。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="c">
+      <div class="q-no">自测 2</div>
+      <div class="q-stem">对 n 个状态的 NFA 做子集构造，所得 DFA 的状态数上界是？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. n</li>
+        <li data-opt="b">B. 2n</li>
+        <li data-opt="c">C. 2ⁿ</li>
+        <li data-opt="d">D. n²</li>
+      </ul>
+      <div class="quiz-explain">解析：C 对：DFA 的每个状态是 NFA 状态集的一个子集，n 元集合的子集共 2ⁿ 个，这是组合上界（且存在达到上界的 NFA）。A、B、D 错在低估了最坏情形——虽然实践中（如 12.3 的 11 → 5）远小于上界，但理论上界由"幂集"决定，这正是该算法叫"子集"构造的原因。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 3</div>
+      <div class="q-stem">"标识符必须先声明后使用"为什么超出 CFG 的表达力？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 因为标识符可能任意长</li>
+        <li data-opt="b">B. 因为它要求远处声明处与使用处的文本相等（wcw 型约束），CFG 的产生式无法携带跨子树的上下文信息</li>
+        <li data-opt="c">C. 因为声明语句有多种写法</li>
+        <li data-opt="d">D. 因为正则表达式不支持它</li>
+      </ul>
+      <div class="quiz-explain">解析：B 对：该约束本质是"使用处的串 = 声明处的串"（wcw 型），产生式左部单非终结符、展开只看局部，无法把两棵相距遥远的子树关联起来——所以交给属性文法/符号表在语义分析兜底。A 错：任意长的标识符正则就能处理（[a-zA-Z][a-zA-Z0-9]*）。C 错：写法多样不等于上下文相关。D 错：方向反了，该约束连 CFG 都超出，拿正则为挡箭牌没有意义。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 4</div>
+      <div class="q-stem">编译器优化为什么必须满足于保守近似，而不能追求精确分析？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 因为精确分析太慢，编译速度等不起</li>
+        <li data-opt="b">B. 因为"两个程序是否等价"等语义性质不可判定（停机问题 / Rice 定理），精确分析在原理上不存在</li>
+        <li data-opt="c">C. 因为硬件型号太多，无法统一建模</li>
+        <li data-opt="d">D. 因为语言标准禁止精确分析</li>
+      </ul>
+      <div class="quiz-explain">解析：B 对：程序等价性、精确别名这类语义性质被 Rice 定理一网打尽——任何非平凡语义性质都不可判定，根子是停机问题；这不是工程难度而是原理性不可能。A 错："慢"暗示更快机器或更好算法有救，恰恰没有。C 错：硬件差异影响代码生成的参数，不影响分析的可判定性。D 错：标准约束的是语义，不是分析方法。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 5</div>
+      <div class="q-stem">下列信息形态链的顺序，哪一个是正确的？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 字符流 → 语法树 → 单词流 → 三地址码 → 指令流</li>
+        <li data-opt="b">B. 字符流 → 单词流 → 语法树 → 带类型的树 → 三地址码 → 优化后的三地址码 → 指令流</li>
+        <li data-opt="c">C. 单词流 → 字符流 → 三地址码 → 语法树 → 指令流</li>
+        <li data-opt="d">D. 字符流 → 单词流 → 三地址码 → 语法树 → 带类型的树 → 指令流</li>
+      </ul>
+      <div class="quiz-explain">解析：B 对：词法（字符→单词）→ 语法（单词→树）→ 语义（树挂类型）→ 中间代码（树拍平成三地址码）→ 优化（三地址码到三地址码）→ 代码生成（到指令流），与图 12.1 一致。A 错：语法树不可能先于单词流出现。C 错：字符流是最初输入，不可能由单词流"生成"。D 错：三地址码由带类型的树翻译而来，不能先于语法树。</div>
+    </div>
+
+    <!-- ===== 章末五件套之 4：三句话复述 ===== -->
+    <div class="retell">
+      <h3>🗣️ 用自己的话，三句话讲完本章</h3>
+      <p>对着空气（或室友）说出这三句。说卡壳的那句，回去重读对应小节。</p>
+      <details>
+        <summary>句1：这章解决什么问题？——</summary>
+        <div class="retell-answer">参考答案：把前十一章的每道工序映射回形式语言与自动机的理论地基，回答"每站用什么理论机器、能力边界在哪里、什么是原理上做不到的"。</div>
+      </details>
+      <details>
+        <summary>句2：核心机制是什么？——</summary>
+        <div class="retell-answer">参考答案：乔姆斯基层级按机器记忆能力给语言分级（无记忆 FA → 一个栈 PDA → 有限带 LBA → 无限带 TM），编译器每层只买刚好够用的一档；词法由 正则→NFA→DFA→最小DFA 全机械化，语法取确定性 PDA 可分析的 LL/LR 子类，语义由属性文法在 CFG 之外兜底，优化在不可判定的阴影下做保守近似。</div>
+      </details>
+      <details>
+        <summary>句3：它和前后章怎么分工？——</summary>
+        <div class="retell-answer">参考答案：前十一章逐站建流水线，本章回头给每站标注理论型号与能力边界，完成全书闭环——之后回到学习地图的复习中心，按 1/3/7/15 天节奏固化全部十二章。</div>
+      </details>
+    </div>
+
+    <!-- ===== 章末五件套之 5：间隔复习计划 ===== -->
+    <div class="review-plan">
+      <h3>🔁 间隔复习计划</h3>
+      <p>回忆本身比重读有效 10 倍。到点只做一件事：翻卡 + 重做标记题。</p>
+      <table>
+        <tr><th>时间点</th><th>复习内容</th><th>预计用时</th></tr>
+        <tr><td>第 1 天</td><td>概念卡 1–7 + 回忆 12.1-1 至 12.5-2 全部翻一遍</td><td>12 分钟</td></tr>
+        <tr><td>第 3 天</td><td>概念卡 1、5、6、7 + 重做两道 L2 + 自测错题</td><td>12 分钟</td></tr>
+        <tr><td>第 7 天</td><td>三句话复述 + 独立重走 (a|b)*abb 全链 + 毕业三问口答</td><td>15 分钟</td></tr>
+        <tr><td>第 15 天</td><td>只做合上书挑战；能默写层级表并重走全链，全书毕业</td><td>20 分钟</td></tr>
+      </table>
+    </div>
+
+    <!-- 合上书挑战 -->
+    <div class="final-challenge">
+      <h3>📕 合上书挑战</h3>
+      <p class="fc-sub">现在关掉这个页面，拿一张纸，凭记忆完成以下任务。全部做完再回来核对——这是全书真正的毕业考试。</p>
+      <ol id="challenge-list">
+        <li><span class="fc-check"></span>默写乔姆斯基层级表：四型文法、对应自动机，各配一个"能表达"与"不能表达"的例子。</li>
+        <li><span class="fc-check"></span>画出 (a|b)*abb 的 Thompson NFA（11 个状态），标出起点与接受态。</li>
+        <li><span class="fc-check"></span>独立重做子集构造：写出 5 个 DFA 状态各自的 NFA 子集与全部转移。</li>
+        <li><span class="fc-check"></span>写出 DFA 最小化的三步划分，说清每步因谁、因哪个输入符号而分裂。</li>
+        <li><span class="fc-check"></span>各用一句话说出 LL 与 LR 的能力边界，并解释属性文法补上的是哪块空缺。</li>
+        <li><span class="fc-check"></span>解释"精确程序分析不可判定"与停机问题的关系，以及它如何要求优化必须保守。</li>
+        <li><span class="fc-check"></span>一句话回答：编译原理这门课到底讲了什么？</li>
+      </ol>
+    </div>
+
+    <div class="complete-zone">
+      <button class="btn-complete" id="btn-complete" onclick="markDone()">✓ 我已完成本章（含合上书挑战）</button>
+    </div>
+
+    <div class="chapter-nav">
+      <a href="chapter-11.html"><span class="nav-dir">← 上一章</span>第11章 并行性与局部性优化</a>
+      <a href="index.html" class="next"><span class="nav-dir">回到学习地图 →</span>全书完 · 复习中心见</a>
+    </div>
+
+  </div>
+</div>
+
+<footer class="footer">
+  <div class="wrap">第12章 理论回顾：形式语言与自动机 · 编译原理互动讲义 · 基于 Aho, Lam, Sethi &amp; Ullman《编译原理》(第2版)</div>
+</footer>
+
+<script src="/lectures-assets/mermaid.min.js"></script>
+<script>
+mermaid.initialize({
+  startOnLoad: true,
+  theme: "base",
+  themeVariables: {
+    primaryColor: "#e3edf7",
+    primaryBorderColor: "#1d5f9e",
+    primaryTextColor: "#1d5f9e",
+    lineColor: "#5c554b",
+    secondaryColor: "#fbeedd",
+    tertiaryColor: "#f5f1e8",
+    fontFamily: "-apple-system, PingFang SC, sans-serif",
+    fontSize: "14px"
+  },
+  flowchart: { curve: "linear", htmlLabels: false }
+});
+</script>
+<script>
+// 自测题判分（原样复用，勿改）
+document.querySelectorAll(".quiz-block").forEach(block => {
+  const answer = block.dataset.answer;
+  const explain = block.querySelector(".quiz-explain");
+  block.querySelectorAll(".quiz-opts li").forEach(li => {
+    li.addEventListener("click", () => {
+      const opts = block.querySelectorAll(".quiz-opts li");
+      opts.forEach(o => o.classList.add("disabled"));
+      if (li.dataset.opt === answer) {
+        li.classList.add("correct");
+      } else {
+        li.classList.add("wrong");
+        block.querySelector(`[data-opt="${answer}"]`).classList.add("correct");
+      }
+      explain.classList.add("show");
+    });
+  });
+});
+
+// 合上书清单打勾（原样复用，勿改）
+document.querySelectorAll("#challenge-list li").forEach(li => {
+  li.addEventListener("click", () => li.classList.toggle("checked"));
+});
+
+// 完成标记 → localStorage（章号：12）
+const KEY = "comp_progress_v1";
+function loadProgress() {
+  try { return JSON.parse(localStorage.getItem(KEY)) || {}; } catch (e) { return {}; }
+}
+const progress = loadProgress();
+const btn = document.getElementById("btn-complete");
+if (progress[12] && progress[12].done) {
+  btn.textContent = "✓ 已完成 · 再次点击重置";
+  btn.classList.add("done");
+}
+function markDone() {
+  const p = loadProgress();
+  if (p[12] && p[12].done) {
+    delete p[12];
+    btn.textContent = "✓ 我已完成本章（含合上书挑战）";
+    btn.classList.remove("done");
+  } else {
+    p[12] = { done: true, completedAt: Date.now(), reviewsDone: 0 };
+    btn.textContent = "✓ 已完成 · 复习提醒已开启";
+    btn.classList.add("done");
+  }
+  localStorage.setItem(KEY, JSON.stringify(p));
+}
+</script>
+
+</body>
+</html>

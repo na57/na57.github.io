@@ -1,0 +1,672 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第3章 离散最优传输与线性规划 · 最优传输互动讲义</title>
+<link rel="stylesheet" href="/lectures-assets/style.css">
+</head>
+<body>
+
+<nav class="topbar">
+  <div class="topbar-inner">
+    <span class="brand"><a href="index.html" style="color:inherit">← 学习地图</a></span>
+    <span class="crumb">② 离散与算法 / 第3章</span>
+  </div>
+</nav>
+
+<div class="wrap">
+
+  <div class="lecture-head">
+    <span class="ch-label">CHAPTER 03 · 离散与算法</span>
+    <h1>离散最优传输与线性规划</h1>
+    <p class="lead">本章回答的核心问题：第2章把 OT 写成了线性规划，但一个 n² 变量的 LP 到底怎么算？手算能走到哪一步，又在哪里撞墙？</p>
+  </div>
+
+  <div class="position-bar">
+    <strong>本章在主线上的位置：</strong>第2章定义了耦合上的 LP → <u>本章给出 LP 的完整手算流程（北西角起步、单纯形改进、对偶势收官）并算清复杂度账</u> → 第4章用熵正则绕开这堵墙。<br>
+    第3章回答主线上的第3个问题：<strong>Kantorovich LP 怎么真算出来，代价有多大？</strong>
+    <div class="map-inline">
+      <span class="node">① Ch1 引言（为什么需要新距离）</span><span class="arrow">→</span>
+      <span class="node">① Ch2 Monge 与 Kantorovich（把距离定义严格化）</span><span class="arrow">→</span>
+      <span class="node here">② Ch3 离散 OT 与线性规划（怎么算）</span><span class="arrow">→</span>
+      <span class="node">② Ch4 熵正则与 Sinkhorn（怎么算得快）</span><span class="arrow">→</span>
+      <span class="node">③ Ch5–6 连续与扩展</span><span class="arrow">→</span>
+      <span class="node">④ Ch7–8 应用与前沿</span>
+    </div>
+  </div>
+
+  <div class="objectives">
+    <h4>🎯 学完本章，合上书你应该能：</h4>
+    <ol>
+      <li>写出离散 OT 的 LP 标准形 min⟨C,P⟩ s.t. P1=a, Pᵀ1=b, P≥0，并说出变量个数与约束结构；</li>
+      <li>解释基本可行解为何至多有 n+m−1 个非零元；</li>
+      <li>用北西角规则手算一个 3×3 运输问题的初始可行解；</li>
+      <li>用势（u,v）与检验数判定当前解是否最优，并沿环做一次枢轴改进；</li>
+      <li>说出一般 OT 的复杂度量级，以及一维特例为什么只要排序。</li>
+    </ol>
+  </div>
+
+  <div class="lecture">
+
+    <div class="figure">
+      <div class="mermaid">
+flowchart TB
+  A["Kantorovich LP：n² 个变量怎么解"] --> B["结构：全幺模，最优解是基本可行解"]
+  B --> C["基本可行解至多 n+m−1 个非零元"]
+  C --> D["北西角规则：从左上角贪心填出初始解"]
+  D --> E["运输单纯形：求势、算检验数、沿环改进"]
+  E --> F["有限步收敛，对偶势即证书"]
+  F --> G["代价：一般情形约 n³ 级，n 上万就扛不住"]
+  G --> H["遗留问题：能否换掉精确 LP 换取速度"]
+  classDef hot fill:#fbeedd,stroke:#c4651f,stroke-width:2.5px,color:#c4651f;
+  classDef danger fill:#fae9e7,stroke:#b03a2e,stroke-width:2.5px,color:#b03a2e;
+  class F hot;
+  class H danger;
+      </div>
+      <div class="caption">本章推导主线：LP 结构 → 稀疏基 → 北西角起步 → 单纯形沿环改进 → 复杂度撞墙，把"更快的算法"传给第4章。</div>
+    </div>
+
+    <h2><span class="sec-no">3.1</span>把 OT 写成 LP：变量是 n×m 矩阵，约束只有两条边际</h2>
+
+    <p>第2章的 Kantorovich 问题落到离散测度 μ = ∑ᵢ aᵢδ_{xᵢ}、ν = ∑ⱼ bⱼδ_{yⱼ} 上，耦合 π 就是一张 n×m 的非负矩阵 P。给定<span class="term">成本矩阵</span>（Cost Matrix）Cᵢⱼ = c(xᵢ,yⱼ)，离散 OT 是一个标准线性规划：</p>
+
+    <div class="formula">min<sub>P</sub> ⟨C, P⟩ = ∑ᵢⱼ CᵢⱼPᵢⱼ，&nbsp;&nbsp;s.t.&nbsp; P1<sub>m</sub> = a，&nbsp; Pᵀ1<sub>n</sub> = b，&nbsp; P ≥ 0</div>
+
+    <p>数一数规模：变量 n×m 个（n=m 时就是 n²），等式约束 n+m 个（但有一个冗余——所有行和之和与所有列和之和都是 1，独立约束只有 n+m−1 个）。LP 的基本定理告诉我们：最优解可以在<span class="term">基本可行解</span>（Basic Feasible Solution, BFS）上取到，而 BFS 的非零元个数 ≤ 独立约束数 = <strong>n+m−1</strong>。</p>
+
+    <p>这个稀疏性结论很反直觉：P 有 n² 个格子，最优解却只填其中约 2n 个——99% 以上的格子是零。2.2 节的 2×2 例已经演示过：π* 只有 3 个非零元（= 2+2−1）。这正是北西角规则和运输单纯形能成立的结构性原因。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>运输问题的约束矩阵是<strong>全幺模</strong>（Totally Unimodular）的：当 a、b 是整数时，每个 BFS 自动是整数解。所以运输 LP 从不需要整数规划——单纯形法直接给出整数答案。这也解释了 BFS 的组合本质：它对应支撑图里的一棵生成树。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>以为 LP 有 n² 个变量就"没法算"。变量多不可怕，结构才重要：全幺模 + 稀疏基让专用算法（运输单纯形、网络单纯形）远快于通用 LP 求解器。真正可怕的是后面 3.4 节要算的渐进账。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 3.1-1</div>
+              <div class="q-text">写出离散 OT 的 LP 标准形，并指出变量数、等式约束数、独立约束数各是多少。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              min⟨C,P⟩ s.t. P1=a、Pᵀ1=b、P≥0。变量 nm 个，等式约束 n+m 个，独立约束 n+m−1 个（行列总和都为 1，有一个冗余）。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 3.1-2</div>
+              <div class="q-text">为什么 OT 的最优解矩阵 P 一定是稀疏的？大约有多少非零元？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              LP 最优可在基本可行解取到，BFS 非零元 ≤ 独立约束数 = n+m−1 ≈ 2n，远小于 n²。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <h2><span class="sec-no">3.2</span>北西角规则：三步贪心填出第一个可行解</h2>
+
+    <p>单纯形法需要一个初始 BFS。运输问题的经典做法是<span class="term">北西角规则</span>（Northwest Corner Rule）：从矩阵左上角开始，贪心地把当前行剩余供应和当前列剩余需求的较小者填进去，然后划掉耗尽的一行（或一列），继续向右下走。</p>
+
+    <div class="box insight">
+      <span class="box-tag">✅ 手算示例：3×3 北西角全流程</span>
+      <p>供应 a = (0.3, 0.5, 0.2)，需求 b = (0.4, 0.4, 0.2)，成本矩阵：</p>
+      <div class="tbl-wrap">
+        <table>
+          <tr><th>C</th><th>列1 (需0.4)</th><th>列2 (需0.4)</th><th>列3 (需0.2)</th><th>供应</th></tr>
+          <tr><td>行1</td><td>2</td><td>1</td><td>3</td><td>0.3</td></tr>
+          <tr><td>行2</td><td>1</td><td>4</td><td>2</td><td>0.5</td></tr>
+          <tr><td>行3</td><td>3</td><td>2</td><td>1</td><td>0.2</td></tr>
+        </table>
+      </div>
+      <p>逐步执行：</p>
+      <p><strong>第1步</strong>（格(1,1)）：min(行1余0.3, 列1需0.4) = 0.3 → π₁₁ = 0.3。行1耗尽，划掉行1；列1还需 0.1。</p>
+      <p><strong>第2步</strong>（格(2,1)）：min(行2余0.5, 列1需0.1) = 0.1 → π₂₁ = 0.1。列1满足，划掉列1；行2还剩 0.4。</p>
+      <p><strong>第3步</strong>（格(2,2)）：min(行2余0.4, 列2需0.4) = 0.4 → π₂₂ = 0.4。行2与列2<strong>同时</strong>耗尽——这是退化情形，两个一起划掉。</p>
+      <p><strong>第4步</strong>（格(3,3)）：只剩行3余0.2、列3需0.2 → π₃₃ = 0.2。收工。</p>
+      <p>初始解 P⁰：π₁₁=0.3, π₂₁=0.1, π₂₂=0.4, π₃₃=0.2，代价 = 0.3×2 + 0.1×1 + 0.4×4 + 0.2×1 = 0.6+0.1+1.6+0.2 = <strong>2.5</strong>。注意只有 4 个非零元，少于 n+m−1 = 5——第3步的"同时耗尽"造成了退化，基里少了一个元素，下一步要补。</p>
+    </div>
+
+    <p>北西角完全不看成本（π₂₂ 走的恰是最贵的格子 4），所以它给的只是"合法起点"，通常离最优很远。改进它是下一节的事。</p>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>以为北西角在"优化"。它只求可行、不求好——连成本矩阵都不看。想要好一点的起点可用最小元素法（每次选当前最便宜格子），但同样不保证最优；真正的最优化只能靠下一节的检验数迭代。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 3.2-1</div>
+              <div class="q-text">描述北西角规则的一步操作，并说明它输出的解有什么性质（可行？最优？）。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              在当前最左上未划掉的格子填入 min(行余量, 列余量)，划掉耗尽行/列。输出：满足全部边际约束的可行解，但完全不看成本，一般不最优。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 3.2-2</div>
+              <div class="q-text">什么叫退化？上面例子里哪一步造成了退化，后果是什么？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              填入值同时耗尽一行和一列即退化。第3步 π₂₂=0.4 同时耗尽行2与列2，导致非零元只有 4 个 &lt; n+m−1=5，基缺一个元素，求势时需补零基元。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <h2><span class="sec-no">3.3</span>运输单纯形：用势发现"哪条闲置路线能省钱"</h2>
+
+    <p>有了初始解，怎么判断它好不好、怎么改进？运输单纯形（Transportation Simplex）每轮做三件事：<strong>求势 → 算检验数 → 沿环调整</strong>。</p>
+
+    <p><strong>求势</strong>：对每个基元（非零元所在格 (i,j)）令 uᵢ + vⱼ = Cᵢⱼ。n+m 个未知数、n+m−1 个方程，令 u₁ = 0 即可解出。这个 (u,v) 正是第2章对偶势 φ、ψ 的离散化身。<strong>检验数</strong>：对每个非基元格算 Δᵢⱼ = Cᵢⱼ − uᵢ − vⱼ。Δᵢⱼ &lt; 0 意味着"把流量挪进格子 (i,j) 能省钱"；全部 Δᵢⱼ ≥ 0 则已达最优——这就是 2.4 节对偶约束 φ+ψ ≤ c 的等价位。<strong>沿环调整</strong>：把负检验数格子加入基，它在基的支撑树里形成唯一一个环，沿环交替 +/- 调整流量 δ，δ 取环上减方最小值。</p>
+
+    <div class="box insight">
+      <span class="box-tag">✅ 手算示例：两轮枢轴从 2.5 降到 1.2</span>
+      <p><strong>第1轮</strong>：上节解只有 4 个非零元，补零基元 (3,2) 凑齐基 {(1,1),(2,1),(2,2),(3,2),(3,3)}。令 u₁=0 解方程组 uᵢ+vⱼ=Cᵢⱼ：</p>
+      <div class="tbl-wrap">
+        <table>
+          <tr><th>基元</th><th>方程</th><th>结果</th></tr>
+          <tr><td>(1,1)</td><td>u₁+v₁=2</td><td>v₁=2</td></tr>
+          <tr><td>(2,1)</td><td>u₂+v₁=1</td><td>u₂=−1</td></tr>
+          <tr><td>(2,2)</td><td>u₂+v₂=4</td><td>v₂=5</td></tr>
+          <tr><td>(3,2)</td><td>u₃+v₂=2</td><td>u₃=−3</td></tr>
+          <tr><td>(3,3)</td><td>u₃+v₃=1</td><td>v₃=4</td></tr>
+        </table>
+      </div>
+      <p>势：u=(0,−1,−3)，v=(2,5,4)。算非基元检验数：Δ₁₂ = 1−0−5 = <strong>−4</strong>（其余如 Δ₁₃=3−0−4=−1、Δ₃₁=3+3−2=4 等，选最负的 −4 进基）。</p>
+      <p>格子 (1,2) 进基形成环 (1,2)+ → (2,2)− → (2,1)+ → (1,1)−。减方是 (2,2)=0.4 与 (1,1)=0.3，δ = min(0.4, 0.3) = 0.3。更新：π₁₂=0.3, π₂₂=0.4−0.3=0.1, π₂₁=0.1+0.3=0.4, π₁₁=0.3−0.3=0（出基）。新代价 = 2.5 − 4×0.3 = <strong>1.3</strong>（验证：0.3×1+0.4×1+0.1×4+0.2×1 = 1.3 ✓）。</p>
+      <p><strong>第2轮</strong>：补零基元 (2,3) 后重求势，算得 Δ₃₂ = 2−u₃−v₂ = <strong>−1</strong>，(3,2) 进基。环 (3,2)+ → (2,2)− → (2,3)+ → (3,3)−，δ = min(π₂₂, π₃₃) = min(0.1, 0.2) = 0.1。更新：π₃₂=0.1, π₂₂=0（出基）, π₂₃=0.1, π₃₃=0.2−0.1=0.1。新代价 = 1.3 − 1×0.1 = <strong>1.2</strong>。</p>
+      <p><strong>最优性证书</strong>：当前基 {(1,2),(2,1),(2,3),(3,2),(3,3)}，求势得 u=(0,2,1)、v=(−1,1,0)，验证全部非基元检验数：Δ₁₁=2−0+1=3，Δ₁₃=3−0−0=3，Δ₂₂=4−2−1=1，Δ₃₁=3−1+1=3，全部 ≥ 0 → <strong>1.2 即最优</strong>。最终方案：π₁₂=0.3, π₂₁=0.4, π₂₃=0.1, π₃₂=0.1, π₃₃=0.1。</p>
+    </div>
+
+    <p>把视角再抬高一层：运输问题是一张二分图上的最小费用流，基就是图里的生成树，换基就是在树上加一条边成环、再断一条边——这正是<span class="term">网络单纯形</span>（Network Simplex）：<strong>在图上维护一棵生成树，每次用一条"划算的弦"替换树上的一条边</strong>。一句话版本到此为止，细节留给优化课程。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>势 (u,v) 不是 bookkeeping 技巧，它就是第2章的对偶势：Δᵢⱼ = Cᵢⱼ − uᵢ − vⱼ ≥ 0 正是对偶约束 φ+ψ ≤ c。检验数全负消失的那一刻，对偶可行且与原始值相等——最优性证书自动到手，不需要额外验证。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 3.3-1</div>
+              <div class="q-text">写出检验数公式 Δᵢⱼ，并说明 Δᵢⱼ&lt;0 与全部 ≥0 分别意味着什么。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              Δᵢⱼ = Cᵢⱼ − uᵢ − vⱼ（基元满足 uᵢ+vⱼ=Cᵢⱼ）。Δᵢⱼ&lt;0：把格子 (i,j) 引入基能降价；全部 ≥0：对偶可行，当前解最优。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 3.3-2</div>
+              <div class="q-text">沿环调整时 δ 怎么取？第1轮枢轴中 δ 为什么等于 0.3 而不是 0.4？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              δ = 环上减方格子的最小流量（再大就有格子变负）。第1轮减方是 (2,2)=0.4 与 (1,1)=0.3，取 min = 0.3，(1,1) 归零出基。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <h2><span class="sec-no">3.4</span>复杂度账：精确 LP 在哪里撞墙，一维为什么例外</h2>
+
+    <p>运输单纯形实战很快，但最坏情形仍是指数的；即使换用内点法或网络单纯形的多项式实现，一般 n×n 的 OT 也要 ~O(n³) 量级的运算。代入数字感受一下：n = 10³ 时约 10⁹ 次运算，秒级；n = 10⁵（一张 300×300 图像的像素数）时约 10¹⁵ 次，<strong>完全不可行</strong>。而机器学习要比较的分布动辄 n = 10⁵ ~ 10⁷。这就是全书的核心张力：OT 理论漂亮，精确计算却贵得离谱。</p>
+
+    <p>有一个重要例外：<strong>一维</strong>。2.3 节的分位数公式说最优方案 = 单调重排，离散化后只需：把 xᵢ、yⱼ 各自排序（O(n log n)），再用双指针从左到右配对质量（O(n)）。总复杂度 <strong>O(n log n)</strong>，n = 10⁷ 也毫无压力。第6章的切片 Wasserstein（Sliced Wasserstein）正是把高维投影回一维来白嫖这个特例。</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>方法</th><th>复杂度</th><th>n = 10⁵ 可行？</th><th>精度</th></tr>
+        <tr><td>通用 LP（内点法）</td><td>~O(n³) 以上</td><td>✗</td><td>精确</td></tr>
+        <tr><td>网络/拍卖算法</td><td>~O(n³) 级，常数小</td><td>勉强~✗</td><td>精确</td></tr>
+        <tr><td>一维排序法</td><td>O(n log n)</td><td>✓</td><td>精确（仅一维）</td></tr>
+        <tr><td>熵正则 Sinkhorn（第4章）</td><td>O(n²)/轮，可并行</td><td>✓</td><td>近似（偏差随 ε 缩）</td></tr>
+      </table>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>把"多项式时间"当"可扩展"。O(n³) 是多项式，但 n=10⁵ 时就是算不动；可扩展性要看绝对量级与常数、并行性、内存（n² 的成本矩阵在 n=10⁵ 时就要 80GB）。第4章的 Sinkhorn 每轮 O(n²) 且全矩阵乘法——GPU 友好，这才是它胜出的真正原因。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 3.4-1</div>
+              <div class="q-text">一般 n×n OT 精确求解的复杂度量级是多少？n=10⁵ 时为什么不可行？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              约 O(n³) 级。n=10⁵ → ~10¹⁵ 次运算且 C 矩阵存不下（80GB 级），精确 LP 路线撞墙。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 3.4-2</div>
+              <div class="q-text">一维 OT 为什么只要 O(n log n)？瓶颈步骤是什么？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              分位数闭式解把问题变成"排序 + 双指针配对"，瓶颈是排序 O(n log n)，配对本身 O(n)。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <h2><span class="sec-no">🃏</span>概念卡：本章概念的一分钟画像</h2>
+    <p>翻面前先自问：这个概念我能用一句话讲清楚吗？</p>
+    <div class="flip-grid">
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 1</div>
+            <div class="q-text">运输问题（Transportation Problem）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">min⟨C,P⟩ s.t. P1=a、Pᵀ1=b、P≥0 的线性规划。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">离散 OT 的计算化身，也是运筹学最经典的 LP。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">m 个仓库 n 家店的最低运费调度。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为要整数规划；全幺模性保证 LP 松弛即整数解。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">本章全部；第4章 Sinkhorn 解的是它的熵正则版。</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 2</div>
+            <div class="q-text">成本矩阵（Cost Matrix）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">Cᵢⱼ = c(xᵢ, yⱼ)，全部两两搬运单价的 n×m 表。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">把几何/业务成本编码进 LP 的唯一入口。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">快递公司仓库×门店的价目表。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">忘了它是 n² 规模——n=10⁵ 时光存储就撞墙。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">一切离散 OT 算法的输入；第4章 K=e^{−C/ε} 由它生成。</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 3</div>
+            <div class="q-text">基本可行解（Basic Feasible Solution）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">可行域多面体的顶点；运输问题中非零元 ≤ n+m−1。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">LP 最优解必为 BFS，把搜索从连续域缩到有限个顶点。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">多面体的角点；支撑图上的一棵生成树。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为退化（非零元 &lt; n+m−1）是错误；补零基元即可继续。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">北西角输出、单纯形迭代的每一步都是 BFS。</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 4</div>
+            <div class="q-text">北西角规则（Northwest Corner Rule）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">从左上角起贪心填 min(行余,列余)，划掉耗尽行列直到填完。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">O(n+m) 构造一个初始 BFS，给单纯形一个起点。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">填表格时从左上往右下"先到先得"。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为它在优化；它完全不看成本，只求可行。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">手算与教学；工程实现多用最小元素法起步。</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 5</div>
+            <div class="q-text">检验数与势（Reduced Costs &amp; Potentials）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">基元上解 uᵢ+vⱼ=Cᵢⱼ 得势；Δᵢⱼ=Cᵢⱼ−uᵢ−vⱼ 为检验数。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">判定当前解是否最优，并指出改进方向。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">每条闲置路线的"机会成本"，负值=能省钱。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">把势当新东西；它就是第2章的对偶势 φ、ψ。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">单纯形每轮迭代；全部 ≥0 即最优性证书。</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 6</div>
+            <div class="q-text">网络单纯形（Network Simplex）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">单纯形法在最小费用流图上的实现：维护生成树，用弦换树边。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">利用图结构加速换基，实践中远快于通用 LP。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">树上加一条划算的弦成环，再砍掉环上最贵的边。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为它能扩展到 n=10⁶；仍是 ~n³ 级，大 n 要靠 Sinkhorn。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">中小规模精确 OT（n ≲ 10³–10⁴）的主力算法。</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <h2><span class="sec-no">📝</span>分层习题</h2>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>判断对错：北西角规则给出的初始解一定是最优解的一个好近似，因为它系统地覆盖了所有行列。</div>
+      <details>
+        <summary>提示</summary>
+        <p>回看 3.2 例：π₂₂=0.4 走的格子成本是多少？这个成本在全矩阵里排第几？</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p>错。北西角完全不读成本矩阵：例中它把 0.4 的流量塞进全矩阵第二贵的格子 (2,2)=4，代价 2.5，而最优值是 1.2——差距超过一倍。系统性覆盖只保证可行，不保证好。易错点：把"确定性构造"误认为"合理优化"；贪心方向（左上→右下）与成本结构毫无关系。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>选择：运输问题中检验数 Δᵢⱼ = Cᵢⱼ − uᵢ − vⱼ 全部非负时，可以断定：（A）当前解可行（B）当前解最优（C）需要补零基元（D）发生了退化。</div>
+      <details>
+        <summary>提示</summary>
+        <p>把 Δᵢⱼ ≥ 0 翻译成第2章对偶约束的语言。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p>B。Δᵢⱼ ≥ 0 ⟺ uᵢ+vⱼ ≤ Cᵢⱼ，即 (u,−v 方向的) 对偶势满足全部对偶约束；此时对偶可行且对偶值=原始值，强对偶保证最优。A 错：可行性在每一步都成立，与检验数无关。C、D 错：退化是基的大小问题，与最优性判定无关。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>供应 a=(0.5,0.5)，需求 b=(0.3,0.7)，C=[[4,2],[1,3]]。用北西角规则求初始解与代价，再算势与检验数，判断是否最优；若不最优，做一次枢轴并给出最优值。</div>
+      <details>
+        <summary>提示</summary>
+        <p>北西角先填 (1,1)=0.3；2×2 时环就是整个矩阵四角，δ 取减方最小值。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p>步骤1（北西角）：(1,1)：min(0.5,0.3)=0.3 → π₁₁=0.3，列1满；行1余0.2。(1,2)：π₁₂=0.2，行1满；列2余0.5。(2,2)：π₂₂=0.5。代价 = 0.3×4+0.2×2+0.5×3 = 1.2+0.4+1.5 = <strong>3.1</strong>。</p>
+          <p>步骤2（求势）：基 {(1,1),(1,2),(2,2)}。u₁=0 ⇒ v₁=4；v₂=C₁₂−u₁=2；u₂=C₂₂−v₂=1。检验数 Δ₂₁ = C₂₁−u₂−v₁ = 1−1−4 = <strong>−4 &lt; 0</strong>，非最优。</p>
+          <p>步骤3（枢轴）：(2,1) 进基，环 (2,1)+ → (1,1)− → (1,2)+ → (2,2)−，δ = min(π₁₁,π₂₂) = min(0.3,0.5) = 0.3。更新：π₂₁=0.3, π₁₁=0, π₁₂=0.5, π₂₂=0.2。新代价 = 0.5×2+0.3×1+0.2×3 = 1+0.3+0.6 = <strong>1.9</strong>（= 3.1−4×0.3 ✓）。</p>
+          <p>步骤4（验证）：新基 {(1,2),(2,1),(2,2)}，u=(0,2,?)——u₁=0, v₂=2, u₂=1, v₁=0；Δ₁₁=4−0−0=4 ≥ 0，其余非基元无 → 最优，最优值 <strong>1.9</strong>。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>对 3.3 节最优解（π₁₂=0.3, π₂₁=0.4, π₂₃=0.1, π₃₂=0.1, π₃₃=0.1，代价 1.2），用第2章的对偶语言验证：(i) 势 u=(0,2,1)、v=(−1,1,0) 满足全部 9 条对偶约束；(ii) 对偶值等于原始值；(iii) 互补松弛成立。</div>
+      <details>
+        <summary>提示</summary>
+        <p>对偶值 = ∑ᵢ aᵢuᵢ + ∑ⱼ bⱼvⱼ；互补松弛要求非零 πᵢⱼ 处约束取等。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p>(i) 逐格核验 uᵢ+vⱼ ≤ Cᵢⱼ：行1（u₁=0）：(1,1) −1≤2 ✓，(1,2) 1=1 ✓，(1,3) 0≤3 ✓；行2（u₂=2）：(2,1) 1=1 ✓，(2,2) 3≤4 ✓，(2,3) 2=2 ✓；行3（u₃=1）：(3,1) 0≤3 ✓，(3,2) 2=2 ✓，(3,3) 1=1 ✓。9 条全过。</p>
+          <p>(ii) 对偶值 = (0.3×0+0.5×2+0.2×1) + (0.4×(−1)+0.4×1+0.2×0) = (0+1+0.2) + (−0.4+0.4+0) = <strong>1.2</strong> = 原始值 ✓。</p>
+          <p>(iii) 非零 π 的位置 (1,2),(2,1),(2,3),(3,2),(3,3) 恰好是上面取等的 5 格 → 互补松弛成立 ✓。这张证书一旦写出，任何人无需重跑算法即可确认 1.2 最优。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l3">L3 建模应用</span>你要在两张 500×500 的灰度图（各 25 万像素）之间算 OT 距离做图像检索。团队有人提议："直接调商业 LP 求解器，反正运输问题是多项式的。" 请列出三条反对理由（内存、时间、硬件利用率各一），并给出你的替代方案。</div>
+      <details>
+        <summary>提示</summary>
+        <p>算一算 C 矩阵的元素个数与字节数；n³ 代入 2.5×10⁵；想想 LP 求解器能不能用 GPU。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p>反对理由：①内存：n=2.5×10⁵，C 有 n²=6.25×10¹⁰ 个 double，约 500GB，普通机器放不下；②时间：~O(n³) ≈ 1.6×10¹⁶ 次运算，以 10⁹ 次/秒计要约 180 天一张图；③硬件：单纯形/内点法是顺序稀疏算法，几乎无法用 GPU 并行，而这正是图像场景的标配硬件。</p>
+          <p>替代方案：用第4章的熵正则 + Sinkhorn：每轮迭代是矩阵-向量乘（O(n²) 且可 GPU 并行），配合 ε 折减（先大后小）控制偏差；若追求更高吞吐，可用第6章的切片 Wasserstein（投影到一维后排序，O(n log n)/方向）。检索场景还可以先降采样到 64×64 再算，精度损失远小于算法差异。</p>
+        </div>
+      </details>
+    </div>
+
+    <h2><span class="sec-no">✍️</span>本章自测</h2>
+    <p class="quiz-hint">点击选项判分，答错会给出原因。</p>
+
+    <div class="quiz-block" data-answer="c">
+      <div class="q-no">自测 1</div>
+      <div class="q-stem">n×n 离散 OT 的基本可行解至多有多少个非零元？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. n²</li>
+        <li data-opt="b">B. n²−1</li>
+        <li data-opt="c">C. 2n−1</li>
+        <li data-opt="d">D. n</li>
+      </ul>
+      <div class="quiz-explain">解析：独立约束数 n+m−1 = 2n−1，选 C。A、B 错在把变量总数当非零元数——BFS 的稀疏性恰恰是 OT 结构的红利；D 错：那是 n 个约束的情形（少算了另一半边际）。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="a">
+      <div class="q-no">自测 2</div>
+      <div class="q-stem">3.2 节 3×3 例中，北西角给出的初始代价是：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 2.5</li>
+        <li data-opt="b">B. 1.2</li>
+        <li data-opt="c">C. 1.3</li>
+        <li data-opt="d">D. 2.2</li>
+      </ul>
+      <div class="quiz-explain">解析：0.3×2+0.1×1+0.4×4+0.2×1 = 2.5，选 A。B 错：那是单纯形两轮后的最优值；C 错：那是第一轮枢轴后的中间值；D 错：数字来自第2章的 2×2 例（2.2−4t 的截距），张冠李戴。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 3</div>
+      <div class="q-stem">运输单纯形中，检验数 Δᵢⱼ = Cᵢⱼ − uᵢ − vⱼ &lt; 0 表示：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 当前解不可行</li>
+        <li data-opt="b">B. 把流量引入格子 (i,j) 可以降低总代价</li>
+        <li data-opt="c">C. 发生了退化，需要补零基元</li>
+        <li data-opt="d">D. 对偶势算错了</li>
+      </ul>
+      <div class="quiz-explain">解析：Δᵢⱼ&lt;0 = 该路线的"自搬市价"低于当前组合报价，引入它能省钱，选 B。A 错：可行性由边际约束保证，与检验数无关；C 错：退化是基元数不足，与此无关；D 错：负检验数是算法的正常信号，不是错误。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="d">
+      <div class="q-no">自测 4</div>
+      <div class="q-stem">沿环调整时 δ 的取值规则是：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 环上所有流量的平均值</li>
+        <li data-opt="b">B. 环上加方格子的最小流量</li>
+        <li data-opt="c">C. 1（每次调整一个单位）</li>
+        <li data-opt="d">D. 环上减方格子的最小流量</li>
+      </ul>
+      <div class="quiz-explain">解析：减方格子流量下降，δ 超过最小者会出现负流量，故 δ=min(减方)，选 D。A 错：平均值无约束意义；B 错：加方只会增大不受限；C 错：连续问题没有"单位"概念，且小步长浪费迭代。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 5</div>
+      <div class="q-stem">一维离散 OT 可以做到 O(n log n)，根本原因是：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 一维的成本矩阵是稀疏的</li>
+        <li data-opt="b">B. 分位数闭式解把问题化为排序 + 双指针</li>
+        <li data-opt="c">C. 一维的 LP 规模更小</li>
+        <li data-opt="d">D. 一维不需要满足边际约束</li>
+      </ul>
+      <div class="quiz-explain">解析：单调重排给出闭式解，瓶颈只剩排序，选 B。A 错：|x−y| 型成本矩阵是稠密的；C 错：LP 变量仍是 n² 个，是结构（全序）而非规模救了场；D 错：边际约束一条不少，只是被单调配对自动满足。</div>
+    </div>
+
+    <div class="retell">
+      <h3>🗣️ 用自己的话，三句话讲完本章</h3>
+      <p>对着空气（或室友）说出这三句。说卡壳的那句，回去重读对应小节。</p>
+      <details>
+        <summary>句1：这章解决什么问题？——</summary>
+        <div class="retell-answer">参考答案：第2章把 OT 定义成 LP，本章回答"这个 n² 变量的 LP 怎么算"——以及算清它的复杂度账，说明精确算法在大规模下不可行。</div>
+      </details>
+      <details>
+        <summary>句2：核心机制是什么？——</summary>
+        <div class="retell-answer">参考答案：利用 BFS 稀疏性（≤n+m−1 非零元）：北西角贪心构造初始基，运输单纯形用势算检验数、找负检验数沿环枢轴，全部检验数非负时即最优（对偶势自动成为证书）；一维特例靠分位数公式 O(n log n)。</div>
+      </details>
+      <details>
+        <summary>句3：它和前后章怎么分工？——</summary>
+        <div class="retell-answer">参考答案：本章给出精确解与 ~O(n³) 的墙；第4章放弃精确性换可扩展性（熵正则 + Sinkhorn，O(n²)/轮可并行）；第5–6章回到连续理论，第6章切片法复用本章的一维特例。</div>
+      </details>
+    </div>
+
+    <div class="review-plan">
+      <h3>🔁 间隔复习计划</h3>
+      <p>回忆本身比重读有效 10 倍。到点只做一件事：翻卡 + 重做标记题。</p>
+      <table>
+        <tr><th>时间点</th><th>复习内容</th><th>预计用时</th></tr>
+        <tr><td>第 1 天</td><td>概念卡 1–6 全部 + 回忆卡 3.2-1、3.3-1</td><td>12 分钟</td></tr>
+        <tr><td>第 3 天</td><td>概念卡 3、5（BFS 与检验数）+ 重做 L2 第一题（2×2 全流程）</td><td>12 分钟</td></tr>
+        <tr><td>第 7 天</td><td>三句话复述 + 自测错题 + 回忆卡全部</td><td>10 分钟</td></tr>
+        <tr><td>第 15 天</td><td>只做合上书挑战；能全过就毕业</td><td>15 分钟</td></tr>
+      </table>
+    </div>
+
+    <div class="final-challenge">
+      <h3>📕 合上书挑战</h3>
+      <p class="fc-sub">现在关掉这个页面，拿一张纸，凭记忆完成以下任务。全部做完再回来核对——这是本章真正的毕业考试。</p>
+      <ol id="challenge-list">
+        <li><span class="fc-check"></span>写出离散 OT 的 LP 标准形，并说明变量数、独立约束数、BFS 非零元上界</li>
+        <li><span class="fc-check"></span>对 a=(0.3,0.5,0.2)、b=(0.4,0.4,0.2) 手算北西角解（π₁₁=0.3, π₂₁=0.1, π₂₂=0.4, π₃₃=0.2，代价 2.5）</li>
+        <li><span class="fc-check"></span>写出求势方程与检验数公式，并解释 Δ₁₂=−4 意味着什么</li>
+        <li><span class="fc-check"></span>描述沿环枢轴的 δ 规则，复盘第一轮枢轴（δ=0.3，代价 2.5→1.3）</li>
+        <li><span class="fc-check"></span>说出一般 OT 的复杂度量级与一维特例的复杂度，并解释差异根源</li>
+        <li><span class="fc-check"></span>回答本章的主线问题：Kantorovich LP 怎么真算出来，代价有多大？（一句话）</li>
+      </ol>
+    </div>
+
+    <div class="complete-zone">
+      <button class="btn-complete" id="btn-complete" onclick="markDone()">✓ 我已完成本章（含合上书挑战）</button>
+    </div>
+
+    <div class="chapter-nav">
+      <a href="chapter-02.html"><span class="nav-dir">← 上一章</span>第2章 Monge 与 Kantorovich 问题</a>
+      <a href="chapter-04.html" class="next"><span class="nav-dir">下一章 →</span>第4章 熵正则与 Sinkhorn 算法</a>
+    </div>
+
+  </div>
+</div>
+
+<footer class="footer">
+  <div class="wrap">第3章 离散最优传输与线性规划 · 最优传输互动讲义 · 基于 Peyré &amp; Cuturi (2019)</div>
+</footer>
+
+<script src="/lectures-assets/mermaid.min.js"></script>
+<script>
+mermaid.initialize({
+  startOnLoad: true,
+  theme: "base",
+  themeVariables: {
+    primaryColor: "#e3edf7",
+    primaryBorderColor: "#1d5f9e",
+    primaryTextColor: "#1d5f9e",
+    lineColor: "#5c554b",
+    secondaryColor: "#fbeedd",
+    tertiaryColor: "#f5f1e8",
+    fontFamily: "-apple-system, PingFang SC, sans-serif",
+    fontSize: "14px"
+  },
+  flowchart: { curve: "linear", htmlLabels: false }
+});
+</script>
+<script>
+// 自测题判分
+document.querySelectorAll(".quiz-block").forEach(block => {
+  const answer = block.dataset.answer;
+  const explain = block.querySelector(".quiz-explain");
+  block.querySelectorAll(".quiz-opts li").forEach(li => {
+    li.addEventListener("click", () => {
+      const opts = block.querySelectorAll(".quiz-opts li");
+      opts.forEach(o => o.classList.add("disabled"));
+      if (li.dataset.opt === answer) {
+        li.classList.add("correct");
+      } else {
+        li.classList.add("wrong");
+        block.querySelector(`[data-opt="${answer}"]`).classList.add("correct");
+      }
+      explain.classList.add("show");
+    });
+  });
+});
+
+// 合上书清单打勾
+document.querySelectorAll("#challenge-list li").forEach(li => {
+  li.addEventListener("click", () => li.classList.toggle("checked"));
+});
+
+// 完成标记 → localStorage
+const KEY = "ot_progress_v1";
+const CH = "3";
+function loadProgress() {
+  try { return JSON.parse(localStorage.getItem(KEY)) || {}; } catch (e) { return {}; }
+}
+const progress = loadProgress();
+const btn = document.getElementById("btn-complete");
+if (progress[CH] && progress[CH].done) {
+  btn.textContent = "✓ 已完成 · 再次点击重置";
+  btn.classList.add("done");
+}
+function markDone() {
+  const p = loadProgress();
+  if (p[CH] && p[CH].done) {
+    delete p[CH];
+    btn.textContent = "✓ 我已完成本章（含合上书挑战）";
+    btn.classList.remove("done");
+  } else {
+    p[CH] = { done: true, completedAt: Date.now(), reviewsDone: 0 };
+    btn.textContent = "✓ 已完成 · 复习提醒已开启";
+    btn.classList.add("done");
+  }
+  localStorage.setItem(KEY, JSON.stringify(p));
+}
+</script>
+
+</body>
+</html>

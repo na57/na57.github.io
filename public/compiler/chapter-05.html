@@ -1,0 +1,924 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第5章 语法制导翻译 · 编译原理互动讲义</title>
+<link rel="stylesheet" href="/lectures-assets/style.css">
+</head>
+<body>
+
+<nav class="topbar">
+  <div class="topbar-inner">
+    <span class="brand"><a href="index.html" style="color:inherit">← 学习地图</a></span>
+    <span class="crumb">阶段二 · 语义与中间代码 / 第5章</span>
+  </div>
+</nav>
+
+<div class="wrap">
+
+  <div class="lecture-head">
+    <span class="ch-label">CHAPTER 05 · 语义与中间代码</span>
+    <h1>语法制导翻译</h1>
+    <p class="lead">语法分析只回答"结构对不对"，本章回答"结构之上怎么算"：把翻译规则系统地挂到文法上，并让求值顺序自动跟上分析器的脚步。</p>
+  </div>
+
+  <!-- ===== 章首四件套之 1：全书定位 ===== -->
+  <div class="position-bar">
+    <strong>本章在主线上的位置：</strong>第4章给了语法树与分析机制（LL / LR）→ <u>本章系统化"翻译规则怎么挂、何时算"</u> → 第6章因此能用它生成中间代码。<br>
+    第5章回答主线上的第2个问题：<strong>怎样把"翻译规则"系统地挂在文法上，让属性求值顺序与语法分析自动匹配？</strong>
+    <div class="map-inline">
+      <span class="node">Ch1–4 前端与词法语法</span><span class="arrow">→</span>
+      <span class="node here">Ch5–7 语义与中间代码 ← 本章</span><span class="arrow">→</span>
+      <span class="node">Ch8–11 后端与优化</span><span class="arrow">→</span>
+      <span class="node">Ch12 全书收束</span>
+    </div>
+  </div>
+
+  <!-- ===== 章首四件套之 2：学习目标 ===== -->
+  <div class="objectives">
+    <h4>🎯 学完本章，合上书你应该能：</h4>
+    <ol>
+      <li>说出 SDD 的三要素（CFG、属性、语义规则），以及综合属性与继承属性的求值方向差异。</li>
+      <li>对给定输入串，用全综合属性的 SDD 画出注释分析树，并自底向上写出全部求值步骤。</li>
+      <li>解释为什么消除左递归后光靠综合属性不够，并写出 E → T E′ 版本带继承属性的完整 SDD。</li>
+      <li>对含继承属性的 SDD 画出依赖图，给出一条合法的拓扑求值序列。</li>
+      <li>判定一个 SDD 是否为 S 属性 / L 属性定义，并说出它们各自适配 LR / LL 的原因。</li>
+      <li>把一个 SDD 改写成后缀 SDT，并说明 LR 分析过程中每个动作触发的时机。</li>
+    </ol>
+  </div>
+
+  <div class="lecture">
+
+    <!-- ===== 章首四件套之 3：推导主线图 ===== -->
+    <div class="figure">
+      <div class="mermaid">
+flowchart LR
+  A["翻译需求：语法树怎么算出值"] --> B["SDD：把语义规则挂到产生式上"]
+  B --> C["属性有方向：综合 与 继承"]
+  C --> D["问题：按什么顺序求值"]
+  D --> E["依赖图：谁先算 谁后算"]
+  E --> F["S 属性：只用综合，自底向上天然适配"]
+  F --> G["左递归消除：左边的信息传不动，S 属性被破坏"]
+  G --> H["L 属性：允许受限继承，自顶向下也能算"]
+  H --> I["遗留：SDD 只说算什么，没说何时算"]
+  classDef hot fill:#fbeedd,stroke:#c4651f,stroke-width:2.5px,color:#c4651f;
+  classDef danger fill:#fae9e7,stroke:#b03a2e,stroke-width:2.5px,color:#b03a2e;
+  class I danger;
+      </div>
+      <div class="caption">本章推导主线：从"挂规则"到"定方向"再到"排顺序"，最后落到 SDT 与第6章。</div>
+    </div>
+
+    <!-- ============================================================
+      5.1 为什么需要 SDD
+    ============================================================ -->
+    <h2><span class="sec-no">5.1</span>为什么需要 SDD：语法树只是骨架，翻译规则放哪</h2>
+
+    <p>第4章给了我们两样东西：一棵语法分析树，和一套驱动它生长的分析机制（LL 自顶向下、LR 自底向上）。但分析器到头只回答了一个问题——"这个串合不合法"。编译器的使命却是<strong>翻译</strong>：算出一个表达式的值、检查类型是否匹配、最终生成目标代码。这些"计算"挂在哪儿？随手塞进分析器代码里，规则一多就会缠成一团。本章的第一步，就是把"翻译规则"变成文法的一等公民。</p>
+
+    <p>这就是<span class="term">语法制导定义</span>（Syntax-Directed Definition, SDD）。一个 SDD 由三部分组成：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>成分</th><th>内容</th><th>在本章计算器例子里</th></tr>
+        <tr><td>上下文无关文法</td><td>产生式骨架（第2、4章已备）</td><td>E → E₁ + T 等</td></tr>
+        <tr><td><span class="term">属性</span>（Attribute）</td><td>挂在每个文法符号上的值，可任意多个</td><td>E.val、T.val、digit.lexval</td></tr>
+        <tr><td><span class="term">语义规则</span>（Semantic Rule）</td><td>挂在每条产生式上的等式，规定"左边的属性怎么由右部属性算出"</td><td>E.val := E₁.val + T.val</td></tr>
+      </table>
+    </div>
+
+    <p>属性按<strong>求值方向</strong>分成两类，这个区分是整章的轴心：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>类别</th><th>定义</th><th>方向直觉</th><th>例子</th></tr>
+        <tr><td><span class="term">综合属性</span>（Synthesized Attribute）</td><td>节点 N 的属性值，只由 N 的<strong>子节点</strong>与 N 自身的属性算出</td><td>自底向上，值从叶子往根汇总</td><td>E.val := E₁.val + T.val</td></tr>
+        <tr><td><span class="term">继承属性</span>（Inherited Attribute）</td><td>节点 N 的属性值，由 N 的<strong>父节点、兄弟节点</strong>与自身属性算出</td><td>自顶向下或横向，值从上面/左边流入</td><td>5.3 的 E′.i、类型声明里的 L.in</td></tr>
+      </table>
+    </div>
+
+    <p>约定：终结符只有综合属性（由词法分析器直接给出，如 digit.lexval），没有继承属性。</p>
+
+    <p><strong>例：桌面计算器的完整 SDD。</strong>文法处理以换行结尾的算术表达式（n 表示换行），全部使用综合属性 val：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>产生式</th><th>语义规则</th></tr>
+        <tr><td>L → E n</td><td>print(E.val)</td></tr>
+        <tr><td>E → E₁ + T</td><td>E.val := E₁.val + T.val</td></tr>
+        <tr><td>E → T</td><td>E.val := T.val</td></tr>
+        <tr><td>T → T₁ × F</td><td>T.val := T₁.val × F.val</td></tr>
+        <tr><td>T → F</td><td>T.val := F.val</td></tr>
+        <tr><td>F → ( E )</td><td>F.val := E.val</td></tr>
+        <tr><td>F → digit</td><td>F.val := digit.lexval</td></tr>
+      </table>
+    </div>
+
+    <p>注意这张表的写法：规则写成"X.属性 := 表达式"的形式，读作"X 的这个属性<strong>定义为</strong>右端的值"。SDD 只声明了这些等式，<strong>没有</strong>规定它们谁先算、谁后算——那是 5.2 与 5.3 要解决的问题。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>SDD 就是给文法"装仪表盘"：每条产生式是一个小公式，树一旦建好，每个节点的读数由它周围节点的读数唯一决定。编译器剩下的工作只是<strong>找一个不违心的读表顺序</strong>。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>把语义规则当成"按书写顺序从上往下执行的程序语句"。错：SDD 是<strong>声明式</strong>的等式系统，书写顺序不构成执行顺序；真正的执行顺序由属性之间的依赖关系决定（5.3 的依赖图）。把 print(E.val) 写在第一行，不代表它最先执行——恰恰相反，它最后才能算。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 5.1-1</div>
+              <div class="q-text">SDD 由哪三部分组成？语义规则挂在什么上面？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              上下文无关文法 + 每个文法符号的属性 + 每条产生式的语义规则。规则挂在<strong>产生式</strong>上，属性挂在<strong>文法符号</strong>上。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 5.1-2</div>
+              <div class="q-text">综合属性和继承属性的求值方向分别是什么？各依赖哪些节点？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              综合属性：自底向上，只依赖子节点（与自身）。继承属性：自顶向下或横向，依赖父节点与兄弟节点（与自身）。终结符只有综合属性。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============================================================
+      5.2 S 属性定义与自底向上求值
+    ============================================================ -->
+    <h2><span class="sec-no">5.2</span>S 属性：为什么"只用综合"就和自底向上分析天生合拍</h2>
+
+    <p>5.1 把规则挂好了，但留下一个问题：按什么顺序算？先看最顺的一种情形——SDD 里<strong>只出现综合属性</strong>。这种 SDD 叫<span class="term">S 属性定义</span>（S-Attributed Definition）。</p>
+
+    <p>综合属性"只看孩子"，于是求值顺序一目了然：<strong>后序遍历</strong>分析树——先把所有子树算完，再算父节点。这恰好与 LR 分析器的节奏严丝合缝：LR 每次"归约"一个产生式时，右部符号对应的子树刚刚全部处理完，此刻执行这条产生式的语义规则，需要的值一个不缺。</p>
+
+    <p><strong>完整手算例：对 3 × 5 + 4 求值。</strong>把每个节点算出的属性值写在节点旁边，得到的树叫<span class="term">注释分析树</span>（Annotated Parse Tree）：</p>
+
+    <div class="figure">
+      <div class="mermaid">
+flowchart TB
+  L["L 打印 19"] --> E["E.val = 19"]
+  L --> NL["n 换行"]
+  E --> EA["E.val = 15"]
+  E --> PLUS["+"]
+  E --> TB["T.val = 4"]
+  EA --> TA["T.val = 15"]
+  TA --> TAA["T.val = 3"]
+  TA --> MUL["×"]
+  TA --> FB["F.val = 5"]
+  TAA --> FA["F.val = 3"]
+  FA --> D1["digit.lexval = 3"]
+  FB --> D2["digit.lexval = 5"]
+  TB --> FC["F.val = 4"]
+  FC --> D3["digit.lexval = 4"]
+      </div>
+      <div class="caption">图 5.1　3 × 5 + 4 的注释分析树：每个非终结符节点旁标注它算出的 val。看值的流向——全部自叶向根。</div>
+    </div>
+
+    <p>自底向上逐个节点写出求值步骤（一步不跳）：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>步骤</th><th>用到的产生式</th><th>求值动作</th><th>结果</th></tr>
+        <tr><td>1</td><td>F → digit</td><td>F.val := digit.lexval（词法器给出 3）</td><td>F.val = 3</td></tr>
+        <tr><td>2</td><td>T → F</td><td>T.val := F.val</td><td>T.val = 3</td></tr>
+        <tr><td>3</td><td>F → digit</td><td>F.val := digit.lexval（5）</td><td>F.val = 5</td></tr>
+        <tr><td>4</td><td>T → T₁ × F</td><td>T.val := T₁.val × F.val = 3 × 5</td><td>T.val = 15</td></tr>
+        <tr><td>5</td><td>E → T</td><td>E.val := T.val</td><td>E.val = 15</td></tr>
+        <tr><td>6</td><td>F → digit</td><td>F.val := digit.lexval（4）</td><td>F.val = 4</td></tr>
+        <tr><td>7</td><td>T → F</td><td>T.val := F.val</td><td>T.val = 4</td></tr>
+        <tr><td>8</td><td>E → E₁ + T</td><td>E.val := E₁.val + T.val = 15 + 4</td><td>E.val = 19</td></tr>
+        <tr><td>9</td><td>L → E n</td><td>print(E.val)</td><td>输出 19</td></tr>
+      </table>
+    </div>
+
+    <p>把这张表和第4章的 LR 分析轨迹对照看：每一次归约恰好对应表里的一行，顺序完全一致。这不是巧合，而是 S 属性定义的结构性福利。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>LR 的"归约时刻"就是"这棵子树的值全部备齐的时刻"。<strong>归约即计算</strong>——所以 S 属性 SDD 挂在 LR 分析器上，求值顺序连排都不用排，分析器走到哪算到哪。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>以为"3 × 5 + 4 得 19 而不是 35（先算 5+4）是语义规则里写对了优先级"。错：语义规则只有 + 和 × 两条干巴巴的等式，<strong>优先级全部编码在文法层级里</strong>——× 被压进 T → T₁ × F（离叶子近、先归约），+ 放在 E → E₁ + T（离根近、后归约）。改优先级要改文法，不是改规则。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 5.2-1</div>
+              <div class="q-text">什么是 S 属性定义？它的求值顺序是什么？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              只用综合属性的 SDD。求值顺序 = 分析树的后序遍历（自底向上），与 LR 的归约序列天然同步。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 5.2-2</div>
+              <div class="q-text">什么是注释分析树？3 × 5 + 4 中 × 为什么先于 + 被计算？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              节点旁标注了属性值的分析树。× 在文法层级中更靠近叶子（T → T₁ × F），后序遍历时先被访问——优先级在文法里，不在语义规则里。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============================================================
+      5.3 继承属性与 L 属性
+    ============================================================ -->
+    <h2><span class="sec-no">5.3</span>继承属性与 L 属性：左递归消除后，信息怎么"向右传"</h2>
+
+    <p>上一节一切顺遂，但有个前提被悄悄打破了：第4章讲过，自顶向下（LL）分析<strong>必须消除左递归</strong>。E → E + T | T 要改写成 E → T E′，E′ → + T E′ | ε。改写之后，"从左到右累计的和"原本靠左递归自然携带，现在 E′ 孤零零地挂在 T 的右边——累计值进不去了。光靠综合属性，这账算不下去。</p>
+
+    <p>解决办法是引入继承属性：让父节点（或左侧兄弟）把"目前已累计的值"<strong>发下来</strong>。完整的 SDD 如下（i 是继承属性，表示"进入这个 E′ 时已累计的值"；s 是综合属性，表示"离开这个 E′ 时的总和"）：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>产生式</th><th>语义规则</th></tr>
+        <tr><td>E → T E′</td><td>E′.i := T.val　；　E.val := E′.s</td></tr>
+        <tr><td>E′ → + T E′₁</td><td>E′₁.i := E′.i + T.val　；　E′.s := E′₁.s</td></tr>
+        <tr><td>E′ → ε</td><td>E′.s := E′.i</td></tr>
+        <tr><td>T → F　/　F → digit</td><td>同 5.1（综合属性 val 照常上传）</td></tr>
+      </table>
+    </div>
+
+    <p><strong>完整手算例：对 3 + 5 求值。</strong>分析树形状是 E → T E′，E′ → + T E′₁，E′₁ → ε。哪些属性必须先算、哪些后算？画<span class="term">依赖图</span>（Dependency Graph）：为分析树中每个属性建一个节点，若属性 a 的定义式用到了属性 b，就画一条 b → a 的有向边（b 先算）。</p>
+
+    <div class="figure">
+      <div class="mermaid">
+flowchart TB
+  T1["T.val = 3（左边那个 T）"] --> EI["E′.i = 3"]
+  EI --> E1I["E′₁.i = 3 + 5 = 8"]
+  T2["T.val = 5（右边那个 T）"] --> E1I
+  E1I --> E1S["E′₁.s = 8"]
+  E1S --> ES["E′.s = 8"]
+  ES --> EV["E.val = 8"]
+      </div>
+      <div class="caption">图 5.2　3 + 5 的依赖图：箭头方向 = "必须先算"。看 E′.i 这条竖线——继承属性把累计值一路向右下方传。</div>
+    </div>
+
+    <p>对依赖图做一次拓扑排序，就得到一条合法求值序列（一步不跳）：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>步骤</th><th>求值动作</th><th>依据的语义规则</th></tr>
+        <tr><td>1</td><td>T.val = 3（由 F.val 上传，词法器给出 3）</td><td>T → F，F → digit</td></tr>
+        <tr><td>2</td><td>E′.i := T.val = 3</td><td>E → T E′ 的第一条规则</td></tr>
+        <tr><td>3</td><td>T.val = 5（右操作数）</td><td>T → F，F → digit</td></tr>
+        <tr><td>4</td><td>E′₁.i := E′.i + T.val = 3 + 5 = 8</td><td>E′ → + T E′₁ 的第一条规则</td></tr>
+        <tr><td>5</td><td>E′₁.s := E′₁.i = 8</td><td>E′ → ε</td></tr>
+        <tr><td>6</td><td>E′.s := E′₁.s = 8</td><td>E′ → + T E′₁ 的第二条规则</td></tr>
+        <tr><td>7</td><td>E.val := E′.s = 8</td><td>E → T E′ 的第二条规则</td></tr>
+      </table>
+    </div>
+
+    <p>这个例子里继承属性 E′.i 依赖的是<strong>父节点 E 的左兄弟 T 的综合属性</strong>和<strong>自己的继承属性传来的值</strong>——依赖关系干干净净。可一旦允许继承属性随便依赖（比如依赖右侧兄弟），依赖图可能出现环，求值就死锁了。于是需要一个"够用又安全"的限制，这就是<span class="term">L 属性定义</span>（L-Attributed Definition）：</p>
+
+    <div class="box insight">
+      <span class="box-tag">✅ 判定规则</span>
+      <p>一个 SDD 是 L 属性定义，当且仅当每条产生式 A → X₁ X₂ … Xₙ 中，每个 Xⱼ 的<strong>继承属性</strong>只依赖：① A 的继承属性；② Xⱼ <strong>左边</strong>的兄弟 X₁…Xⱼ₋₁ 的任意属性（综合或继承）。（L 取 Left 之意：信息只能从左往右流。）综合属性不受限制。S 属性定义天然是 L 属性定义的特例。</p>
+    </div>
+
+    <p><strong>例：类型声明。</strong>L 属性的用武之地远不止左递归消除。声明 float x, y 时，类型信息在树的最左边（T 节点），却要送到右边一串 id 上——这是典型的"横向传播"：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>产生式</th><th>语义规则</th></tr>
+        <tr><td>D → T L</td><td>L.in := T.type</td></tr>
+        <tr><td>T → int</td><td>T.type := integer</td></tr>
+        <tr><td>T → float</td><td>T.type := float</td></tr>
+        <tr><td>L → L₁ , id</td><td>L₁.in := L.in　；　addtype(id.entry, L.in)</td></tr>
+        <tr><td>L → id</td><td>addtype(id.entry, L.in)</td></tr>
+      </table>
+    </div>
+
+    <p>对 <strong>float x, y</strong> 走一遍（分析树：D → T L；T → float；L → L₁ , y；L₁ → x）：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>步骤</th><th>求值动作</th><th>结果</th></tr>
+        <tr><td>1</td><td>T → float：T.type := float</td><td>T.type = float</td></tr>
+        <tr><td>2</td><td>D → T L：L.in := T.type</td><td>L.in = float</td></tr>
+        <tr><td>3</td><td>L → L₁ , y：L₁.in := L.in</td><td>L₁.in = float</td></tr>
+        <tr><td>4</td><td>L → L₁ , y：addtype(y.entry, L.in)</td><td>y 登记为 float</td></tr>
+        <tr><td>5</td><td>L₁ → x：addtype(x.entry, L₁.in)</td><td>x 登记为 float</td></tr>
+      </table>
+    </div>
+
+    <p>检验 L 属性限制：L₁.in := L.in 依赖父节点的继承属性（合法①）；addtype 用的是 L.in（父的继承属性，合法①）。全部通过。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>继承属性就是"往下、往右发的通知"：上面（或左边）已经知道的事，打包发给右下方的子树，免得它自己重算或无从得知。L 属性限制则是邮局的规定——<strong>只许从左往右寄</strong>，这样整棵树从左到右扫一遍（深度优先），所有信都能送达，永不死循环。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>以为"继承属性想依赖谁就依赖谁，反正最后总能算"。错：若允许 Xⱼ.i 依赖它右边兄弟的属性，依赖图可能成环（a 等 b、b 等 a），任何求值顺序都不存在。L 属性的"只向左看"正是<strong>无环</strong>的充分保证，同时足够表达几乎所有翻译任务——这是它被广泛采用的原因。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 5.3-1</div>
+              <div class="q-text">为什么消除左递归后，光靠综合属性算不出 3 + 5 + 2？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              改写为 E → T E′ 后，累计值在 E′ 的<strong>左边</strong>（T 的子树里），综合属性只能自下而上传值，传不进右边的 E′；必须用继承属性 E′.i 把累计值发下去。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 5.3-2</div>
+              <div class="q-text">L 属性定义的两条依赖限制是什么？它排除了什么危险？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              Xⱼ 的继承属性只能依赖：①父节点 A 的继承属性；②左侧兄弟的任意属性。它排除了依赖右侧兄弟，从而保证依赖图无环、求值顺序存在。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============================================================
+      5.4 SDT：把动作嵌进产生式体
+    ============================================================ -->
+    <h2><span class="sec-no">5.4</span>SDT：把动作嵌进产生式体——从"算什么"到"何时算"</h2>
+
+    <p>SDD 是一份漂亮的规格说明书，但编译器最终要的是能跑的程序：动作<strong>何时</strong>执行，必须白纸黑字写死。把语义规则改写成可直接执行的<strong>程序片段</strong>（叫"语义动作"），并把它们像符号一样<strong>嵌进产生式右部的具体位置</strong>，就得到<span class="term">语法制导翻译方案</span>（Syntax-Directed Translation Scheme, SDT）。</p>
+
+    <p>SDT 与 SDD 的差别就一条：SDD 说"算什么"，SDT 额外说"在产生式的哪个位置执行"。位置即时机——分析器处理到产生式右部的那个位置时，就执行那段动作。</p>
+
+    <p>最重要的一类是<span class="term">后缀 SDT</span>（Postfix SDT）：所有动作都贴在产生式右部的<strong>最右端</strong>。把 5.1 的计算器 SDD 原样改写：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>后缀 SDT 的产生式</th><th>对应语义规则</th></tr>
+        <tr><td>L → E n { print(E.val) }</td><td>print(E.val)</td></tr>
+        <tr><td>E → E₁ + T { E.val := E₁.val + T.val }</td><td>E.val := E₁.val + T.val</td></tr>
+        <tr><td>E → T { E.val := T.val }</td><td>E.val := T.val</td></tr>
+        <tr><td>T → T₁ × F { T.val := T₁.val × F.val }</td><td>T.val := T₁.val × F.val</td></tr>
+        <tr><td>T → F { T.val := F.val }</td><td>T.val := F.val</td></tr>
+        <tr><td>F → ( E ) { F.val := E.val }</td><td>F.val := E.val</td></tr>
+        <tr><td>F → digit { F.val := digit.lexval }</td><td>F.val := digit.lexval</td></tr>
+      </table>
+    </div>
+
+    <p><strong>完整例：LR 分析 3 × 5 + 4 时，动作的触发顺序。</strong>后缀 SDT 的动作在最右端，意味着"右部全部进栈、即将归约"的那一刻触发。对照第4章的 LR 移进-归约轨迹：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>序</th><th>分析器动作</th><th>触发的语义动作</th><th>效果</th></tr>
+        <tr><td>1</td><td>移进 3</td><td>—（词法器已给 lexval = 3）</td><td>—</td></tr>
+        <tr><td>2</td><td>归约 F → digit</td><td>F.val := digit.lexval</td><td>F.val = 3</td></tr>
+        <tr><td>3</td><td>归约 T → F</td><td>T.val := F.val</td><td>T.val = 3</td></tr>
+        <tr><td>4</td><td>移进 ×，移进 5</td><td>—</td><td>—</td></tr>
+        <tr><td>5</td><td>归约 F → digit</td><td>F.val := digit.lexval</td><td>F.val = 5</td></tr>
+        <tr><td>6</td><td>归约 T → T₁ × F</td><td>T.val := T₁.val × F.val</td><td>T.val = 15</td></tr>
+        <tr><td>7</td><td>归约 E → T</td><td>E.val := T.val</td><td>E.val = 15</td></tr>
+        <tr><td>8</td><td>移进 +，移进 4</td><td>—</td><td>—</td></tr>
+        <tr><td>9</td><td>归约 F → digit</td><td>F.val := digit.lexval</td><td>F.val = 4</td></tr>
+        <tr><td>10</td><td>归约 T → F</td><td>T.val := F.val</td><td>T.val = 4</td></tr>
+        <tr><td>11</td><td>归约 E → E₁ + T</td><td>E.val := E₁.val + T.val</td><td>E.val = 19</td></tr>
+        <tr><td>12</td><td>移进 n，归约 L → E n</td><td>print(E.val)</td><td>输出 19</td></tr>
+      </table>
+    </div>
+
+    <p>逐行对比 5.2 的求值步骤表：<strong>完全一致</strong>。S 属性 SDD 转成的后缀 SDT，挂到 LR 分析器上即可机械执行——属性值存在分析栈里与符号并列，归约时右部符号连同它们的值一起弹出，算好后把左部符号连同新值压回。这就是"yacc/bison 里写 { … } 动作"的全部原理。</p>
+
+    <p>LL（自顶向下）的情况稍微妙：动作可以出现在产生式右部的<strong>任意</strong>位置，分析器展开到那个位置时执行它。比如 L 属性的继承属性计算，动作要放在使用该属性的符号<strong>左边</strong>（先把 E′.i 算好，再展开 E′）；综合属性的汇总动作放在<strong>最右端</strong>。位置排错，用到的属性就还没出生。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>SDT = SDD + 时刻表。SDD 声明等式系统，依赖图给出"哪些顺序合法"；SDT 从中挑定一种与分析器同步的顺序，把动作钉死在产生式的具体位置上。后缀 SDT 配 LR，左中右排布动作的 SDT 配 LL——<strong>翻译方案的形状由分析器的形状决定</strong>。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>以为"动作插在产生式中间只是写法花哨，不影响结果"。错：动作位置 = 执行时机。LL 分析中，插在 X 左边的动作会在展开 X <strong>之前</strong>执行；若这段动作要用 X 的综合属性，那时它根本不存在。排位置的硬约束：用继承属性的动作放该符号左边，算综合属性的动作放产生式最右端。</p>
+    </div>
+
+    <p><strong>预告：</strong>本章的例子都只在"算一个值"。第6章会把同样的机制推进一步——语义动作不再是算数，而是<strong>发射三地址码指令</strong>：E → E₁ + T { E.addr := new Temp(); gen(E.addr := E₁.addr + T.addr) }。挂规则的框架不变，换的只是"值"的含义。</p>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 5.4-1</div>
+              <div class="q-text">SDD 和 SDT 的区别是什么？后缀 SDT 的动作在 LR 分析中何时执行？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              SDD 只说"算什么"，SDT 把动作嵌进产生式右部的具体位置，额外规定"何时执行"。后缀 SDT 动作全在最右端，LR 每次<strong>归约</strong>该产生式时执行。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 5.4-2</div>
+              <div class="q-text">LL 分析中，使用某符号继承属性的动作应放在什么位置？为什么？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              放在该符号的<strong>左边</strong>。分析器展开到动作所在位置即执行它；放左边能保证展开该符号、其继承属性被消费之前，值已经算好。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============================================================
+      概念卡
+    ============================================================ -->
+    <h2><span class="sec-no">🃏</span>概念卡：本章概念的一分钟画像</h2>
+    <p>翻面前先自问：这个概念我能用一句话讲清楚吗？</p>
+    <div class="flip-grid">
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 1</div>
+            <div class="q-text">语法制导定义（Syntax-Directed Definition, SDD）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">CFG + 每个文法符号的属性 + 每条产生式的语义规则，三者合一的翻译规格说明。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">没有它，翻译逻辑只能散乱地塞进分析器代码，规则一多就无法维护、无法验证。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">给文法装仪表盘：每条产生式一个小公式，树建好后各表读数互相锁定。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">当成按书写顺序执行的程序——它是声明式等式系统，执行顺序由依赖决定。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">第6章中间代码生成、第8章类型检查的规格层；写翻译器前先写 SDD。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 2</div>
+            <div class="q-text">综合属性（Synthesized Attribute）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">节点的属性值只由其子节点（及自身）的属性算出的属性。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">表达"整体由部分构成"的翻译：表达式的值、语法树的代码、子树类型。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">层层上报：每个小组长汇总组员的成绩，再报给上一级。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为它什么都能算——左边的累计信息传不进右递归结构，需要继承属性补位。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">一切自底向上场合：LR 上的后缀 SDT、属性文法求值、代码生成（第6章）。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 3</div>
+            <div class="q-text">继承属性（Inherited Attribute）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">节点的属性值由父节点、兄弟节点（及自身）的属性算出的属性。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">把"上下文信息"送进子树：声明的类型、左边的累计值、当前作用域。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">下发通知：总部把政策文件逐级（或横向）发到基层，基层照章办事。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为只能父传子——左侧兄弟传值更常见（E′.i := T.val）；也怕乱用导致依赖成环。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">LL 分析（左递归已消除）上的翻译、类型声明传播、第8章作用域与类型检查。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 4</div>
+            <div class="q-text">注释分析树（Annotated Parse Tree）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">每个节点旁标注了其实际属性值的分析树。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">把抽象的 SDD 落地到一个具体输入：一眼看清每个值在哪算出、流向何方。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">批改了分数的试卷袋：每张小票（子树）都有数字，总分写在袋面。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">把它当新数据结构——它只是分析树的"标值版"，是手算与调试的工具。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">手算任何 SDD 求值题的第一步；调试属性文法时对照检查。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 5</div>
+            <div class="q-text">S 属性定义（S-Attributed Definition）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">只含综合属性的 SDD。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">给出求值顺序的最省事答案：后序遍历即合法顺序，与 LR 归约严格同步。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">逆流而上的鱼只能顺流产卵——值只往上走，顺序自然唯一。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为"简单所以弱"——多数表达式求值、代码生成 SDD 都是 S 属性的；它是 L 属性的特例。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">LR 底向上分析器的标准配置；yacc/bison 动作的直接理论对应（第6章）。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 6</div>
+            <div class="q-text">L 属性定义（L-Attributed Definition）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">继承属性只依赖父的继承属性与左侧兄弟的（任意）属性的 SDD。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">在"表达力够用"与"保证无环、顺序可排"之间取得的工程甜点。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">邮局规定只许从左往右寄信：整棵树深扫一遍，所有信必达，永无死锁。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为它禁止继承属性依赖综合属性——错，左侧兄弟的综合属性随便用；禁的只是"向右看"。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">LL 自顶向下分析上的 SDT（第6章递归下降翻译）、一遍扫描的语义检查。</span></div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- ============================================================
+      分层习题
+    ============================================================ -->
+    <h2><span class="sec-no">📝</span>分层习题</h2>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>判断正误并说明理由：（a）"继承属性的值只能由父节点传给子节点"；（b）"每个 S 属性定义都是 L 属性定义"。</div>
+      <details>
+        <summary>提示</summary>
+        <p>（a）回看 5.3 的 E′.i := T.val——T 是 E′ 的什么亲属？（b）回看 L 属性判定规则：它限制的是哪一类属性的依赖？S 属性定义里存在这类属性吗？</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p>（a）<strong>错误</strong>。继承属性还可以依赖<strong>左侧兄弟</strong>的属性：5.3 中 E′.i := T.val，T 是 E′ 的左兄弟而非父亲。甚至 L 属性定义明确允许"左侧兄弟的任意属性"。说"只能父传子"把继承属性想窄了。</p>
+          <p>（b）<strong>正确</strong>。L 属性的两条限制只管<strong>继承属性</strong>的依赖来源；S 属性定义里根本没有继承属性，限制自动（空虚地）满足。所以 S ⊂ L：S 属性定义是 L 属性定义的特例。反过来不成立——带 E′.i 的文法是 L 的但不是 S 的。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>下列关于 SDD 与 SDT 的说法，哪一个是正确的？① 二者等价，只是写法不同；② SDD 规定求值顺序，SDT 不规定；③ SDD 只声明"算什么"，SDT 通过动作在产生式中的位置额外规定"何时执行"；④ SDT 不能含继承属性。</div>
+      <details>
+        <summary>提示</summary>
+        <p>回忆 5.4 开头："SDT = SDD + 什么？"再逐项核对。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p>③ 正确。SDD 是声明式规格（等式系统），执行顺序由依赖图决定、本身不写死；SDT 把动作嵌进产生式右部具体位置，位置即时机。</p>
+          <p>① 错：二者相差的正是"时机"这一维，不是纯写法。② 错：说反了——不规定顺序的是 SDD。④ 错：SDT 完全可以配 L 属性（LL 分析上的翻译方案几乎都有继承属性），是否含继承属性与是不是 SDT 无关。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>用 5.1 的桌面计算器 SDD，对输入 2 + 3 × 4 画出注释分析树，并自底向上写出全部求值步骤。注意：优先级体现在文法层级里，请先想清楚 × 的子树挂在哪里。</div>
+      <details>
+        <summary>提示</summary>
+        <p>先按 E → E₁ + T、T → T₁ × F 的层级画出纯分析树：+ 的两个操作数分别是 E₁=2 与 T=3×4。然后从叶子 digit 开始，逐条产生式向上求值。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p>注释分析树（属性值标在节点旁）：</p>
+          <div class="figure">
+            <div class="mermaid">
+flowchart TB
+  L["L 打印 14"] --> E["E.val = 14"]
+  L --> NL["n 换行"]
+  E --> EA["E.val = 2"]
+  E --> PLUS["+"]
+  E --> TB["T.val = 12"]
+  EA --> TA["T.val = 2"]
+  TA --> FA["F.val = 2"]
+  FA --> D1["digit.lexval = 2"]
+  TB --> TAA["T.val = 3"]
+  TB --> MUL["×"]
+  TB --> FB["F.val = 4"]
+  TAA --> FC["F.val = 3"]
+  FC --> D2["digit.lexval = 3"]
+  FB --> D3["digit.lexval = 4"]
+            </div>
+            <div class="caption">习题 L2-1 解答图：3 × 4 整体是 + 的右操作数 T，所以先算完 12 再做加法。</div>
+          </div>
+          <p>求值步骤：</p>
+          <p>① F → digit：F.val := 2；② T → F：T.val := 2；③ E → T：E.val := 2（这就是 E₁.val）；④ F → digit：F.val := 3；⑤ T → F：T.val := 3（这是 T₁.val）；⑥ F → digit：F.val := 4；⑦ T → T₁ × F：T.val := 3 × 4 = 12；⑧ E → E₁ + T：E.val := 2 + 12 = 14；⑨ L → E n：print(14)。</p>
+          <p>关键点：步骤③在步骤⑦<strong>之前</strong>——左操作数 2 的子树先归约；但 + 的语义规则（步骤⑧）必须等右操作数 T=12 就绪，所以最终是 14 而非 20。若误把树画成 (2+3) × 4 的形状，说明没看清优先级在文法层级中的位置。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>小数十进制求值的继承属性 SDD：F → . R { R.i := 1; F.val := R.s }；R → digit R₁ { R₁.i := R.i + 1; R.s := digit.lexval ÷ 10^(R.i) + R₁.s }；R → ε { R.s := 0 }。其中 R.i 表示当前 digit 在小数点后第几位。对输入 .35 画出依赖图，给出拓扑求值序列，算出 F.val。</div>
+      <details>
+        <summary>提示</summary>
+        <p>先展开：F → . R，R → 3 R₁，R₁ → 5 R₂，R₂ → ε。继承属性 i 沿 R → R₁ → R₂ 一路向下传（1、2、3），综合属性 s 再一路向上回。依赖图节点 = 每个出现的属性。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p>依赖图（箭头 = "必须先算"）：</p>
+          <div class="figure">
+            <div class="mermaid">
+flowchart TB
+  RI["R.i = 1"] --> R1I["R₁.i = 2"]
+  R1I --> R2I["R₂.i = 3"]
+  R2I --> R2S["R₂.s = 0"]
+  R2S --> R1S["R₁.s = 5 ÷ 100 + 0 = 0.05"]
+  R1I --> R1S
+  R1S --> RS["R.s = 3 ÷ 10 + 0.05 = 0.35"]
+  RI --> RS
+  RS --> FV["F.val = 0.35"]
+            </div>
+            <div class="caption">习题 L2-2 解答图：i 自上而下传位次，s 自下而上回传加权和。</div>
+          </div>
+          <p>拓扑求值序列（一步不跳）：</p>
+          <p>① R.i := 1（F → . R 的规则）；② R₁.i := R.i + 1 = 2；③ R₂.i := R₁.i + 1 = 3；④ R₂.s := 0（R → ε）；⑤ R₁.s := 5 ÷ 10² + R₂.s = 0.05 + 0 = 0.05（此时 R.i 对 R₁ 而言等于 2，故除以 100）；⑥ R.s := 3 ÷ 10¹ + R₁.s = 0.3 + 0.05 = 0.35；⑦ F.val := R.s = 0.35。</p>
+          <p>检验：这正是 0.35 = 3/10 + 5/100。继承属性 i 把"第几位"逐层下发，综合属性 s 把"这一位及以后的加权和"逐层上交——一次下行、一次上行，是 L 属性求值的典型节奏。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l3">L3 建模应用</span>为一个迷你语言设计 SDD：程序 = 若干声明 + 若干赋值语句。声明形如 float x, y;（int / float 两种类型，逗号分隔多个变量）；赋值形如 x = e;，表达式 e 支持加法、变量、整数字面量。要求：声明语句用继承属性把类型传播到每个变量并登记符号表；赋值语句用综合属性从表达式上报类型，与左侧变量类型比较，输出 ok 或 error。</div>
+      <details>
+        <summary>提示</summary>
+        <p>声明部分直接搬 5.3 的 D → T L 方案。表达式部分仿 5.1：给 E 配综合属性 type，E → E₁ + E₂ 时比较两侧。赋值语句 A → id = E 的 ok 由什么决定？把它也设计成一个综合属性。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p>文法与完整语义规则：</p>
+          <div class="tbl-wrap">
+            <table>
+              <tr><th>产生式</th><th>语义规则</th></tr>
+              <tr><td>P → D S</td><td>—（D 完成登记，S 完成检查）</td></tr>
+              <tr><td>D → D₁ ; T L</td><td>L.in := T.type</td></tr>
+              <tr><td>D → T L</td><td>L.in := T.type</td></tr>
+              <tr><td>T → int</td><td>T.type := int</td></tr>
+              <tr><td>T → float</td><td>T.type := float</td></tr>
+              <tr><td>L → L₁ , id</td><td>L₁.in := L.in　；　addtype(id.entry, L.in)</td></tr>
+              <tr><td>L → id</td><td>addtype(id.entry, L.in)</td></tr>
+              <tr><td>S → S₁ ; A</td><td>S.ok := S₁.ok ∧ A.ok</td></tr>
+              <tr><td>S → A</td><td>S.ok := A.ok</td></tr>
+              <tr><td>A → id = E</td><td>A.ok := (gettype(id.entry) = E.type)；若不等则报错</td></tr>
+              <tr><td>E → E₁ + E₂</td><td>E.type := 若 E₁.type = E₂.type 则 E₁.type，否则 type_error</td></tr>
+              <tr><td>E → id</td><td>E.type := gettype(id.entry)</td></tr>
+              <tr><td>E → num</td><td>E.type := int</td></tr>
+            </table>
+          </div>
+          <p>属性清单：继承属性 L.in（类型下传）；综合属性 T.type、E.type、A.ok、S.ok。方向检验：全部继承属性只依赖父的继承属性（L₁.in := L.in），是 L 属性定义。</p>
+          <p>走一遍 <strong>int y; float x; x = y + 1;</strong>：① T→int：T.type=int；L→y：addtype(y, int)。② T→float：T.type=float；L→x：addtype(x, float)。③ E→id(y)：E.type=gettype(y)=int。④ E→num(1)：E.type=int。⑤ E→E₁+E₂：两侧都是 int，E.type=int。⑥ A→x = E：gettype(x)=float ≠ int，A.ok=false，<strong>输出 error：把 int 表达式赋给 float 变量（按本语言严格规则拒绝）</strong>。⑦ S.ok=false，整个程序检查失败。</p>
+          <p>这正是第8章类型检查器的骨架：符号表（addtype/gettype）+ 类型综合上报 + 语句级布尔汇总，全靠属性方向各就其位。</p>
+        </div>
+      </details>
+    </div>
+
+    <!-- ============================================================
+      本章自测
+    ============================================================ -->
+    <h2><span class="sec-no">✍️</span>本章自测</h2>
+    <p class="quiz-hint">点击选项判分，答错会给出原因。</p>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 1</div>
+      <div class="q-stem">综合属性的求值方向是？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 自顶向下，由父节点算给子节点</li>
+        <li data-opt="b">B. 自底向上，由子节点算给父节点</li>
+        <li data-opt="c">C. 从左到右，沿兄弟链传递</li>
+        <li data-opt="d">D. 任意顺序，与树结构无关</li>
+      </ul>
+      <div class="quiz-explain">解析：B 对——综合属性的定义就是"节点的值由其子节点的值算出"，方向自底向上。A 错：那是继承属性的经典方向之一；C 错：兄弟间传递属继承属性的范畴（如 E′.i 链）；D 错：综合属性的依赖图严格沿树形父子边，绝非任意顺序。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="c">
+      <div class="q-no">自测 2</div>
+      <div class="q-stem">S 属性定义为什么与 LR 分析"天然同步"？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 因为 LR 是自顶向下分析，先见父亲再见孩子</li>
+        <li data-opt="b">B. 因为 S 属性定义里没有属性需要计算</li>
+        <li data-opt="c">C. 因为 LR 归约某产生式时，其右部符号对应的子树恰已全部完成求值</li>
+        <li data-opt="d">D. 因为 S 属性定义禁止优先级，文法更简单</li>
+      </ul>
+      <div class="quiz-explain">解析：C 对——归约时刻 = 子树值备齐时刻，"归约即计算"，顺序零成本。A 错：LR 恰恰是自底向上；且自顶向下先建父节点，反而拿不到孩子的值。B 错：S 属性定义里全是要算的综合属性。D 错：S 属性与优先级无关，优先级由文法层级表达，计算器文法就是反例。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="a">
+      <div class="q-no">自测 3</div>
+      <div class="q-stem">把 E → E + T | T 消除左递归改成 E → T E′ 后，仅靠综合属性算不出连加的值，根本原因是？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 累计值在 E′ 左边的 T 子树里，综合属性只能向上传，进不了右边的 E′</li>
+        <li data-opt="b">B. 新文法产生了二义性，求值顺序不确定</li>
+        <li data-opt="c">C. E′ → ε 产生式没有右部，无法写语义规则</li>
+        <li data-opt="d">D. 综合属性不支持加法运算</li>
+      </ul>
+      <div class="quiz-explain">解析：A 对——综合属性的流向是"子→父"，而累计值需要"左兄弟→右节点"，方向对不上，只能靠继承属性 E′.i 下发。B 错：E → T E′、E′ → + T E′ | ε 是无二义文法。C 错：ε 产生式照样能写规则，E′ → ε { E′.s := E′.i } 就是本章的例子。D 错：属性运算与属性方向是两回事。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="d">
+      <div class="q-no">自测 4</div>
+      <div class="q-stem">下列哪条继承属性的定义<strong>违反</strong> L 属性限制？（产生式 X → Y Z，或 X → Y Z W）</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. Z.i := X.i（依赖父的继承属性）</li>
+        <li data-opt="b">B. Z.i := Y.s（依赖左侧兄弟的综合属性）</li>
+        <li data-opt="c">C. 对 X → Y Z W：W.i := Y.s + Z.i（依赖左兄弟综合属性与左兄弟继承属性）</li>
+        <li data-opt="d">D. Y.i := Z.s（依赖右侧兄弟的属性）</li>
+      </ul>
+      <div class="quiz-explain">解析：D 对——Y 在 Z 的左边，Y 的继承属性却依赖右边的 Z，"向右看"直接违反 L 属性限制，可能引入依赖环。A 合法：父的继承属性是允许来源①；B 合法：左侧兄弟的任意属性是允许来源②；C 合法：Y、Z 都在 W 左边，综合与继承属性均可用。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 5</div>
+      <div class="q-stem">后缀 SDT 的动作在 LR 分析中何时执行？在 LL 分析中动作位置意味着什么？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 移进时执行；LL 中位置无所谓</li>
+        <li data-opt="b">B. 归约该产生式时执行；LL 中动作位置 = 展开到该位置时的执行时机</li>
+        <li data-opt="c">C. 词法分析时执行；LL 中动作全在最左端执行</li>
+        <li data-opt="d">D. 打印语法树时统一执行；LL 中动作全部推迟到接受时执行</li>
+      </ul>
+      <div class="quiz-explain">解析：B 对——动作贴在右端，右部齐备即归约，归约即触发；LL 中分析器展开到动作所在位置就执行它，所以用继承属性的动作必须放该符号左边。A 错：移进时右部未必齐，值不存在。C 错：词法分析阶段连产生式都还没见到。D 错：推迟到接受时无法支撑中间计算（如 E′.i 要在展开 E′ 前就算好）。</div>
+    </div>
+
+    <!-- ============================================================
+      三句话复述
+    ============================================================ -->
+    <div class="retell">
+      <h3>🗣️ 用自己的话，三句话讲完本章</h3>
+      <p>对着空气（或室友）说出这三句。说卡壳的那句，回去重读对应小节。</p>
+      <details>
+        <summary>句1：这章解决什么问题？——</summary>
+        <div class="retell-answer">参考答案：语法分析只判断"结构合不合法"，本章解决"结构之上怎么算"——把翻译（求值、登记类型、将来生成代码）所需的计算规则系统地挂到文法上，并保证这些计算有一个与分析过程兼容的执行顺序。</div>
+      </details>
+      <details>
+        <summary>句2：核心机制是什么？——</summary>
+        <div class="retell-answer">参考答案：SDD = CFG + 属性 + 语义规则。属性分方向：综合属性自底向上（S 属性定义，后序遍历即顺序，与 LR 归约同步）；继承属性自顶向下/横向，受 L 属性限制（只依赖父的继承属性与左侧兄弟）保证无环；依赖图的拓扑序给出一切合法顺序；SDT 把动作嵌进产生式体的具体位置，把"算什么"落实为"何时算"。</div>
+      </details>
+      <details>
+        <summary>句3：它和前后章怎么分工？——</summary>
+        <div class="retell-answer">参考答案：第4章提供语法树与 LL/LR 分析机制（本章的挂点与时钟）；本章提供挂规则的框架与求值顺序理论；第6章把框架实例化为真正的翻译——语义动作从"算数"换成"发射三地址码"，类型检查（第8章）再用继承属性传播作用域信息。</div>
+      </details>
+    </div>
+
+    <!-- ============================================================
+      间隔复习计划
+    ============================================================ -->
+    <div class="review-plan">
+      <h3>🔁 间隔复习计划</h3>
+      <p>回忆本身比重读有效 10 倍。到点只做一件事：翻卡 + 重做标记题。</p>
+      <table>
+        <tr><th>时间点</th><th>复习内容</th><th>预计用时</th></tr>
+        <tr><td>第 1 天</td><td>概念卡 1–6 全部 + 回忆 5.1-1、5.2-1、5.3-1、5.4-1</td><td>10 分钟</td></tr>
+        <tr><td>第 3 天</td><td>概念卡 2、3、5、6（属性方向是易混点）+ 回忆 5.3-2、5.4-2 + 自测错题</td><td>8 分钟</td></tr>
+        <tr><td>第 7 天</td><td>重做习题 L2-1（2+3×4）与 L2-2（.35 依赖图）+ 三句话复述</td><td>12 分钟</td></tr>
+        <tr><td>第 15 天</td><td>只做合上书挑战；6 条全过即本章毕业，卡在哪条回翻哪节</td><td>15 分钟</td></tr>
+      </table>
+    </div>
+
+    <!-- ============================================================
+      合上书挑战
+    ============================================================ -->
+    <div class="final-challenge">
+      <h3>📕 合上书挑战</h3>
+      <p class="fc-sub">现在关掉这个页面，拿一张纸，凭记忆完成以下任务。全部做完再回来核对——这是本章真正的毕业考试。</p>
+      <ol id="challenge-list">
+        <li><span class="fc-check"></span>写出 SDD 的三要素，并默写桌面计算器文法中 E → E₁ + T 与 T → T₁ × F 的语义规则。</li>
+        <li><span class="fc-check"></span>画出 3 × 5 + 4 的注释分析树，并自底向上写出全部 9 步求值。</li>
+        <li><span class="fc-check"></span>写出左递归消除后 E → T E′ 的完整 SDD（三条产生式、全部语义规则），标出每个属性是综合还是继承。</li>
+        <li><span class="fc-check"></span>对 3 + 5 画出依赖图并给出拓扑求值序列；再说一遍 L 属性的两条依赖限制。</li>
+        <li><span class="fc-check"></span>把计算器 SDD 改写成后缀 SDT，并说明 LR 分析 3 × 5 + 4 时每个动作的触发时机。</li>
+        <li><span class="fc-check"></span>一句话回答本章主线问题：怎样把"翻译规则"系统地挂在文法上，让属性求值顺序与语法分析自动匹配？</li>
+      </ol>
+    </div>
+
+    <div class="complete-zone">
+      <button class="btn-complete" id="btn-complete" onclick="markDone()">✓ 我已完成本章（含合上书挑战）</button>
+    </div>
+
+    <div class="chapter-nav">
+      <a href="chapter-04.html"><span class="nav-dir">← 上一章</span>第4章 语法分析</a>
+      <a href="chapter-06.html" class="next"><span class="nav-dir">下一章 →</span>第6章 中间代码生成</a>
+    </div>
+
+  </div>
+</div>
+
+<footer class="footer">
+  <div class="wrap">第5章 语法制导翻译 · 编译原理互动讲义 · 基于 Aho/Lam/Sethi/Ullman《编译原理》（第 2 版）</div>
+</footer>
+
+<script src="/lectures-assets/mermaid.min.js"></script>
+<script>
+mermaid.initialize({
+  startOnLoad: true,
+  theme: "base",
+  themeVariables: {
+    primaryColor: "#e3edf7",
+    primaryBorderColor: "#1d5f9e",
+    primaryTextColor: "#1d5f9e",
+    lineColor: "#5c554b",
+    secondaryColor: "#fbeedd",
+    tertiaryColor: "#f5f1e8",
+    fontFamily: "-apple-system, PingFang SC, sans-serif",
+    fontSize: "14px"
+  },
+  flowchart: { curve: "linear", htmlLabels: false }
+});
+</script>
+<script>
+// 自测题判分（原样复用，勿改）
+document.querySelectorAll(".quiz-block").forEach(block => {
+  const answer = block.dataset.answer;
+  const explain = block.querySelector(".quiz-explain");
+  block.querySelectorAll(".quiz-opts li").forEach(li => {
+    li.addEventListener("click", () => {
+      const opts = block.querySelectorAll(".quiz-opts li");
+      opts.forEach(o => o.classList.add("disabled"));
+      if (li.dataset.opt === answer) {
+        li.classList.add("correct");
+      } else {
+        li.classList.add("wrong");
+        block.querySelector(`[data-opt="${answer}"]`).classList.add("correct");
+      }
+      explain.classList.add("show");
+    });
+  });
+});
+
+// 合上书清单打勾（原样复用，勿改）
+document.querySelectorAll("#challenge-list li").forEach(li => {
+  li.addEventListener("click", () => li.classList.toggle("checked"));
+});
+
+// 完成标记 → localStorage（章号：5）
+const KEY = "comp_progress_v1";
+function loadProgress() {
+  try { return JSON.parse(localStorage.getItem(KEY)) || {}; } catch (e) { return {}; }
+}
+const progress = loadProgress();
+const btn = document.getElementById("btn-complete");
+if (progress[5] && progress[5].done) {
+  btn.textContent = "✓ 已完成 · 再次点击重置";
+  btn.classList.add("done");
+}
+function markDone() {
+  const p = loadProgress();
+  if (p[5] && p[5].done) {
+    delete p[5];
+    btn.textContent = "✓ 我已完成本章（含合上书挑战）";
+    btn.classList.remove("done");
+  } else {
+    p[5] = { done: true, completedAt: Date.now(), reviewsDone: 0 };
+    btn.textContent = "✓ 已完成 · 复习提醒已开启";
+    btn.classList.add("done");
+  }
+  localStorage.setItem(KEY, JSON.stringify(p));
+}
+</script>
+
+</body>
+</html>

@@ -1,0 +1,660 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第8章 代码生成 · 编译原理课件</title>
+<script>
+window.MathJax = {
+  tex: {
+    inlineMath: [['$', '$'], ['\\(', '\\)']],
+    displayMath: [['$$', '$$'], ['\\[', '\\]']],
+    processEscapes: true,
+    tags: 'none'
+  },
+  svg: { fontCache: 'global', scale: 1.05 },
+  options: { skipHtmlTags: ['script','noscript','style','textarea','pre','code'] }
+};
+</script>
+<!-- MathJax 本地引用（tex-svg 单文件全量组件，约2MB，自带字体数据），file:// 与断网均可用 -->
+<script src="/lectures-assets/tex-svg.js" async></script>
+<style>
+  :root{
+    --primary:#1a365d; --accent:#2b6cb0; --accent-light:#ebf8ff; --accent-border:#bee3f8;
+    --text:#2d3748; --muted:#718096; --border:#e2e8f0; --bg-light:#f7fafc;
+    --success:#38a169; --danger:#e53e3e; --warning:#dd6b20; --warn-bg:#fffaf0;
+  }
+  *{margin:0;padding:0;box-sizing:border-box;}
+  html,body{width:100%;height:100%;overflow:hidden;background:#0f172a;}
+  body{
+    font-family:-apple-system,BlinkMacSystemFont,'PingFang SC','Hiragino Sans GB','Microsoft YaHei','WenQuanYi Micro Hei',sans-serif;
+    color:var(--text);
+  }
+  #stage{
+    position:absolute; left:50%; top:50%;
+    width:1280px; height:720px;
+    transform:translate(-50%,-50%) scale(1);
+    transform-origin:center center;
+    background:#ffffff;
+    box-shadow:0 0 40px rgba(0,0,0,.4);
+    overflow:hidden;
+  }
+  .slide{
+    position:absolute; inset:0;
+    padding:36px 60px 52px;
+    display:none;
+    flex-direction:column;
+    background:#ffffff;
+    opacity:0;
+    transition:opacity .35s ease;
+  }
+  .slide.active{ display:flex; opacity:1; }
+
+  #progress{ position:absolute; top:0; left:0; height:6px; background:var(--accent); width:0; z-index:50; transition:width .35s; }
+
+  /* 封面 / 结束页 */
+  .slide-cover{ justify-content:center; align-items:center; text-align:center; }
+  .slide-cover{ background:linear-gradient(135deg,#1a365d 0%,#2b6cb0 100%); color:#fff; }
+  .slide-cover .kicker{ font-size:22px; letter-spacing:6px; opacity:.85; margin-bottom:18px;}
+  .slide-cover h1{ font-size:64px; font-weight:800; line-height:1.2; margin-bottom:22px; letter-spacing:2px;}
+  .slide-cover .sub{ font-size:26px; opacity:.92; margin-bottom:36px;}
+  .slide-cover .meta{ font-size:19px; opacity:.85; line-height:2;}
+  .slide-cover .divider{ width:160px;height:5px;background:#fff;opacity:.6;margin:0 auto 30px;border-radius:3px;}
+  .slide-cover .question{ font-size:24px; background:rgba(255,255,255,.12); border:1px solid rgba(255,255,255,.35); border-radius:12px; padding:12px 28px; margin-bottom:30px;}
+
+  /* 页头：结论式标题 */
+  .slide-head{ display:flex; align-items:baseline; gap:16px; border-bottom:3px solid var(--accent); padding-bottom:9px; margin-bottom:12px;}
+  .slide-head .sec{ font-size:17px; color:var(--accent); font-weight:700; background:var(--accent-light); padding:3px 11px; border-radius:6px; white-space:nowrap;}
+  .slide-head h3{ font-size:29px; color:var(--primary); font-weight:700;}
+  .slide-body{ flex:1; display:flex; flex-direction:column; justify-content:center; min-height:0; }
+
+  p{ font-size:21px; line-height:1.65; margin-bottom:8px;}
+  .lead{ font-size:23px; color:#374151; line-height:1.75;}
+  ul,ol{ margin:0 0 8px 26px; font-size:21px; line-height:1.7;}
+  li{ margin-bottom:5px;}
+  strong{ color:var(--primary); }
+
+  /* 公式块 */
+  .formula{ background:var(--accent-light); border-left:5px solid var(--accent); border-radius:0 10px 10px 0; padding:9px 22px; margin:9px 0; text-align:center; font-size:23px;}
+  .formula-concl{ background:#fffaf0; border-left:5px solid var(--warning);}
+  .MathJax{ font-size:1.05em !important; }
+  mjx-container[display='true']{ margin:6px 0 !important; }
+
+  /* 表格 */
+  table{ width:100%; border-collapse:collapse; margin:10px 0; font-size:20px;}
+  th{ background:var(--accent); color:#fff; padding:8px 12px; text-align:center; font-weight:600;}
+  td{ padding:7px 12px; border:1px solid var(--border); text-align:center; vertical-align:middle;}
+  tr:nth-child(even) td{ background:var(--bg-light);}
+  td.l{ text-align:left; }
+  table.small{ font-size:18px; }
+  table.small td, table.small th{ padding:6px 10px; }
+
+  /* 组件 */
+  .card{ background:var(--accent-light); border:1px solid var(--accent-border); border-radius:12px; padding:12px 20px; margin:10px 0;}
+  .tip{ background:#ebf8ff; border-left:5px solid var(--accent); border-radius:0 10px 10px 0; padding:10px 20px; margin:10px 0; font-size:20px; color:#2c5282;}
+  .deep{ background:#f0fff4; border-left:5px solid var(--success); border-radius:0 10px 10px 0; padding:10px 20px; margin:10px 0; font-size:20px; color:#22543d;}
+  .warn{ background:var(--warn-bg); border-left:5px solid var(--warning); border-radius:0 10px 10px 0; padding:10px 20px; margin:10px 0; font-size:20px; color:#744210;}
+  .trap{ background:#fef2f2; border-left:5px solid var(--danger); border-radius:0 10px 10px 0; padding:10px 20px; margin:10px 0; font-size:20px; color:#7f1d1d;}
+
+  .pause{
+    background:var(--warn-bg); border:2px dashed var(--warning); border-radius:14px;
+    padding:10px 22px; margin:10px 0; display:flex; align-items:center; gap:16px;
+  }
+  .pause .icon{ font-size:36px; line-height:1; }
+  .pause .txt b{ color:var(--warning); font-size:21px; }
+  .pause .txt p{ font-size:18px; color:#744210; margin:3px 0 0; }
+
+  .cols{ display:flex; gap:28px; align-items:stretch; }
+  .col{ flex:1; min-width:0; }
+
+  /* 推导分步：仅互动模式隐藏，截图(autohide)模式全部可见——此规则不可删 */
+  .step{ opacity:0; transform:translateY(8px); transition:opacity .3s ease, transform .3s ease; }
+  .step.on{ opacity:1; transform:none; }
+  body.autohide .step{ opacity:1 !important; transform:none !important; }
+  .step-hint{ font-size:14px; color:var(--muted); margin-top:4px;}
+  body.autohide .step-hint{ display:none; }
+
+  /* 因果链 */
+  .chain{ margin:6px 0; }
+  .chain .link{ display:flex; align-items:center; gap:14px; margin:6px 0;}
+  .chain .no{ width:34px; height:34px; border-radius:50%; background:var(--accent); color:#fff; font-size:18px; font-weight:700; display:flex; align-items:center; justify-content:center; flex-shrink:0;}
+  .chain .txt{ font-size:21px; line-height:1.5;}
+  .chain .txt strong{ color:var(--primary); }
+
+  /* mermaid 容器：高度封顶，防止溢出 720px 舞台 */
+  .mmd{ background:var(--bg-light); border:1px solid var(--border); border-radius:12px; padding:10px 14px; display:flex; justify-content:center; align-items:center; margin:8px 0;}
+  .mmd .mermaid{ display:flex; justify-content:center; width:100%; visibility:hidden; }
+  .mmd .mermaid[data-done]{ visibility:visible; }
+  .mmd .mermaid svg{ max-width:100%; height:auto; max-height:230px; }
+  .mmd.mmd-tall .mermaid svg{ max-height:330px; }
+  .mmd.mmd-sm svg{ max-height:150px; }
+  .mmd-row{ display:flex; gap:18px; }
+  .mmd-row .mmd{ flex:1; flex-direction:column; }
+  .mmd .cap{ font-size:17px; color:var(--muted); margin-top:6px; text-align:center;}
+  .mmd .cap b{ color:var(--text); }
+
+  #footer{ position:absolute; bottom:0; left:0; right:0; height:40px; display:flex; align-items:center; justify-content:space-between; padding:0 30px; font-size:15px; color:#94a3b8; background:rgba(247,250,252,.85); border-top:1px solid var(--border); z-index:40;}
+  #footer .brand{ font-weight:600; color:var(--accent); }
+
+  .nav{ position:absolute; bottom:48px; right:40px; display:flex; gap:12px; z-index:45;}
+  .nav button{ width:54px; height:54px; border-radius:50%; border:none; background:var(--accent); color:#fff; font-size:24px; cursor:pointer; box-shadow:0 3px 10px rgba(43,108,176,.4); display:flex; align-items:center; justify-content:center;}
+  .nav button:hover{ background:var(--primary); }
+  .nav button:disabled{ background:#cbd5d0; cursor:default; box-shadow:none;}
+
+  #hint{ position:absolute; bottom:48px; left:40px; font-size:14px; color:#94a3b8; z-index:45;}
+
+  body.autohide #progress, body.autohide #footer, body.autohide .nav, body.autohide #hint{ display:none !important; }
+</style>
+</head>
+<body>
+<div id="stage">
+
+  <div id="progress"></div>
+
+  <!-- ★ 1 封面 -->
+  <section class="slide slide-cover active" data-narration="同学们好，欢迎来到编译原理第八章，代码生成。上一章给每个名字安好了家，三地址码已经是几乎的汇编，但最后一步处处是选择：一条语句选哪几条指令、值放哪个寄存器、先算哪棵子树。本章就回答一个问题：三地址码如何变成又快又省寄存器的机器指令？学完这一章，你能用最大口啃法给一条语句铺出指令序列，能手推 getReg 全流程并说清唯一那次溢出的理由，能用图着色判断几个寄存器够不够，还能用 Ershov 数排出最省寄存器的求值顺序。">
+    <div class="kicker">编译原理 · 第 8 章 · 后端与优化</div>
+    <h1>代码生成</h1>
+    <div class="sub">Code Generation —— 把三地址码落成又快又省的机器指令</div>
+    <div class="question">本章要回答：三地址码如何变成又快又省寄存器的机器指令？</div>
+    <div class="meta">
+      配套讲义：《编译原理互动讲义》第8章 · 基于 Aho/Lam/Sethi/Ullman《编译原理》（第2版）<br>
+      ← → 或空格翻页 · 推导页逐步显示
+    </div>
+  </section>
+
+  <!-- ★ 2 全书位置 -->
+  <section class="slide" data-narration="先看本章在全书的位置。前四章是前端，词法与语法分析给出语法树；第五到第七章做语义与中间代码：第五章语法制导翻译，第六章产出三地址码，第七章给名字定了帧与偏移。从本章起进入后端：第八到十一章把中间代码落成机器指令并做优化，本章是第一棒，把三地址码逐条落成目标指令，并在寄存器预算内做分配与排序；第十二章收束全书。所以本章是承上启下的关口：前端的所有成果到这儿兑现成可执行的代码，而跨基本块的活跃性分析，要交给后面的第九章。">
+    <div class="slide-head"><span class="sec">定位</span><h3>前端把三地址码备齐，本章把它落成机器指令</h3></div>
+    <div class="slide-body">
+      <div class="mmd mmd-sm">
+        <div class="mermaid">
+flowchart TB
+  A[Ch1–4 前端：词法与语法] --> B[Ch5–7 语义与中间代码]
+  B --> C[Ch8–11 后端与优化 · 本章 Ch8 代码生成]:::here
+  C --> D[Ch12 全书收束]
+  classDef here fill:#2b6cb0,color:#ffffff,stroke:#1a365d,stroke-width:3px
+        </div>
+      </div>
+      <p style="text-align:center; margin-top:10px;">本章解决「<strong>三地址码如何变成又快又省寄存器的机器指令</strong>」——第9章因此能站在数据流分析上做跨基本块的优化。</p>
+    </div>
+  </section>
+
+  <!-- ★ 3 本章主线 -->
+  <section class="slide" data-narration="本章主线是一条四环因果链。三地址码到手，第一个问题冒出来：一条语句选哪几条指令？答案是树覆盖：把语句画成表达式树，用指令瓦片来铺，最大口先啃。第二个问题：值放哪个寄存器？getReg 用两本描述符记账，无处可放就按纪律溢出；它的全局版本是冲突图着色。第三个问题：先算哪棵子树？Ershov 数标出每棵子树的寄存器胃口，规则是先啃硬骨头。链条末端是一笔冷酷的账：基本块内三选一的联合最优是 NP 难，所以三件兵器全是启发式；而跨块的活跃性分析，留给第九章。">
+    <div class="slide-head"><span class="sec">主线</span><h3>三大难题各配一件启发式兵器，合力逼近一个 NP 难</h3></div>
+    <div class="slide-body">
+      <div class="chain">
+        <div class="link"><span class="no">1</span><span class="txt">一条语句选哪几条指令 → <strong>指令选择</strong>：树覆盖 + 最大口啃法（Maximal Munch）</span></div>
+        <div class="link"><span class="no">2</span><span class="txt">值放哪个寄存器 → <strong>寄存器分配</strong>：getReg 两本账 + 纪律溢出；全局版是图着色</span></div>
+        <div class="link"><span class="no">3</span><span class="txt">先算哪棵子树 → <strong>求值顺序</strong>：Ershov 数标出硬度，先算费寄存器的子树</span></div>
+        <div class="link"><span class="no">4</span><span class="txt">收束 → 块内联合最优是 <strong>NP 难</strong>；跨块活跃性分析指向第9章</span></div>
+      </div>
+      <div class="tip">这条链就是本章目录：三大难题（8.1）→ 目标机与代价（8.2）→ 树覆盖（8.3）→ getReg 与图着色（8.4）→ Ershov 序（8.5）。</div>
+    </div>
+  </section>
+
+  <!-- 4 动机页 -->
+  <section class="slide" data-narration="为什么这一章值得单独一章？看一条最简单的语句：x 赋值为 x 加一。查表替换派会翻出三条指令：把 x 装进寄存器、加一、再存回去——体积膨胀三倍，还白占一个寄存器；而目标机上一条 INC x 就干完了。再看寄存器：只有两个寄存器却要算 a 加 b 乘上 c 减 d，值放不开就得存了再取，一次溢出多花两条访存指令，放在内层循环里被放大百万倍。理论结果同样冷酷：基本块内的最优代码生成是 NP 难。本章方案一句话：代码生成是带预算的翻译，预算是寄存器与访存，每个启发式都是一套省钱纪律。">
+    <div class="slide-head"><span class="sec">动机</span><h3>一句 x := x + 1 就能看出：机械查表替换必败</h3></div>
+    <div class="slide-body">
+      <p>三地址码 <code>x := x + 1</code> 看上去是「查表替换」，真动手才发现每一步都是选择，花的是同一笔预算：<strong>寄存器</strong>与<strong>访存次数</strong>。</p>
+      <div class="cols">
+        <div class="col"><div class="card">😇 <strong>查表替换派</strong><br><code>LD R0, x</code> ＋ <code>ADD R0, R0, #1</code> ＋ <code>ST x, R0</code>：三条指令，代码体积膨胀 3 倍，还白占一个寄存器。</div></div>
+        <div class="col"><div class="card">🙂 <strong>看清目标机</strong><br>一条 <code>INC x</code> 就干完。同一条语句在不同上下文下最优选择不同——代码生成没有脱离上下文的答案。</div></div>
+      </div>
+      <div class="tip">💡 本章方案：<strong>带预算的翻译</strong>——选哪条指令、谁住寄存器、先算谁，花的是同一笔钱；块内联合最优是 NP 难，工程上全用启发式。</div>
+    </div>
+  </section>
+
+  <!-- 5 三大难题总览 -->
+  <section class="slide" data-narration="把预算拆开看，是三个互相纠缠的难题。指令选择，英文 Instruction Selection，问一条三地址语句用哪几条指令实现，选错就是刚才的膨胀反例。寄存器分配，英文 Register Allocation，问众多名字挤几个寄存器、谁住、谁被赶到内存，选错就溢出，多花存取两条指令。求值顺序，英文 Evaluation Order，问子表达式先算谁：同一表达式，一种顺序峰值占两个寄存器，另一种要三个。麻烦在三者互相牵制：指令选择决定寄存器用量，余量反过来限制选择，顺序同时改变两者——无法独立优化。">
+    <div class="slide-head"><span class="sec">8.1</span><h3>指令选择、寄存器分配、求值顺序，花的是同一笔预算</h3></div>
+    <div class="slide-body">
+      <table>
+        <thead><tr><th>难题</th><th>问的是什么</th><th>选不好的反例</th></tr></thead>
+        <tbody>
+          <tr><td class="l"><strong>指令选择</strong>（Instruction Selection）</td><td class="l">一条三地址语句用哪几条指令实现</td><td class="l"><code>x := x + 1</code> 选 LD/ADD/ST 三条，体积膨胀 3 倍</td></tr>
+          <tr><td class="l"><strong>寄存器分配</strong>（Register Allocation）</td><td class="l">众多名字挤几个寄存器，谁住、谁去内存</td><td class="l">两个寄存器算 (a+b)×(c−d)，溢出多花 ST/LD 各一条</td></tr>
+          <tr><td class="l"><strong>求值顺序</strong>（Evaluation Order）</td><td class="l">子表达式先算谁、后算谁</td><td class="l">(a+b)×c：一种顺序峰值 2 个寄存器，另一种要 3 个</td></tr>
+        </tbody>
+      </table>
+      <div class="warn">三者互相牵制：指令选择决定寄存器用量，分配受余量约束，顺序同时改变两者——<strong>块内联合最优是 NP 难</strong>，全部用启发式。</div>
+    </div>
+  </section>
+
+  <!-- 6 目标机 -->
+  <section class="slide" data-narration="难题要有靶子。本章的目标机是一台简化的寄存器机：若干通用寄存器 R 零、R 一，指令四类。LD 把内存位置的值装进寄存器，ST 把寄存器的值存回位置，OP 做寄存器之间的运算，还有立即数版本，比如 MUL R 一逗号 R 一逗号井号四，一条就把乘四干掉。寻址模式六种，记成三对：绝对地址对寄存器，一个访存一个免费；立即数对下标，都带一份附加代价；间接寄存器对间接下标，间接就是多取一次。第七章的名字住处，就靠这些寻址模式落成指令操作数。后面所有例子都跑在这台机器上，先记住它的长相，下一页给它定价。">
+    <div class="slide-head"><span class="sec">8.2</span><h3>本章靶子：四类指令、六种寻址的简化寄存器机</h3></div>
+    <div class="slide-body">
+      <div class="cols">
+        <div class="col">
+          <table class="small">
+            <thead><tr><th>指令</th><th>含义</th></tr></thead>
+            <tbody>
+              <tr><td class="l"><code>LD R, x</code></td><td class="l">位置 x 的值装入 R</td></tr>
+              <tr><td class="l"><code>ST x, R</code></td><td class="l">R 的值存入位置 x</td></tr>
+              <tr><td class="l"><code>OP Rd, Rs, Rt</code></td><td class="l">Rd := Rs op Rt</td></tr>
+              <tr><td class="l"><code>OP Rd, Rs, #c</code></td><td class="l">立即数版：Rd := Rs op c</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="col">
+          <table class="small">
+            <thead><tr><th>寻址模式</th><th>形式</th><th>附加代价</th></tr></thead>
+            <tbody>
+              <tr><td>绝对地址</td><td><code>x</code></td><td>1</td></tr>
+              <tr><td>寄存器</td><td><code>R</code></td><td>0</td></tr>
+              <tr><td>立即数</td><td><code>#c</code></td><td>1</td></tr>
+              <tr><td>下标</td><td><code>c(R)</code></td><td>1</td></tr>
+              <tr><td>间接寄存器</td><td><code>*R</code></td><td>0</td></tr>
+              <tr><td>间接下标</td><td><code>*c(R)</code></td><td>1</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 7 代价模型手算 -->
+  <section class="slide" data-narration="给这台机器定价。指令代价等于一，加上每个源与目的操作数寻址模式的附加代价：寄存器操作免费，沾内存或常量就加钱。手算三条。第一条，LD R 零逗号 a：一加 R 零的零，再加绝对地址 a 的一，得二。第二条，ADD 三个操作数全在寄存器：一加零加零加零，得一，纯寄存器倒手最便宜。第三条，LD R 一逗号八括号 R 零：一加零，再加下标模式的一，得二。三条合计五。这张价目表就是本章的世界观：代码生成的全部优化，归根到底是少交内存税。记住，比较两段代码不许数行数，必须算代价——一条指令可能藏着一次额外访存。">
+    <div class="slide-head"><span class="sec">8.2</span><h3>寄存器倒手免费，一沾内存就收税</h3></div>
+    <div class="slide-body">
+      <div class="formula">$$\text{cost} = 1 + \sum \text{各源/目的操作数的寻址模式附加代价}$$</div>
+      <table>
+        <thead><tr><th>指令</th><th>逐项拆解</th><th>代价</th></tr></thead>
+        <tbody>
+          <tr><td class="l"><code>LD R0, a</code></td><td class="l">1 + 0（R0 寄存器）+ 1（a 绝对地址）</td><td><strong>2</strong></td></tr>
+          <tr><td class="l"><code>ADD R0, R0, R1</code></td><td class="l">1 + 0 + 0 + 0（全寄存器）</td><td><strong>1</strong></td></tr>
+          <tr><td class="l"><code>LD R1, 8(R0)</code></td><td class="l">1 + 0（R1）+ 1（下标模式）</td><td><strong>2</strong></td></tr>
+          <tr><td colspan="2" class="l">例 8.2-A 合计</td><td><strong>5</strong></td></tr>
+        </tbody>
+      </table>
+      <div class="deep">代价模型是指令的价目表：<code>LD R1, *40(R0)</code> 一条指令代价 2——比较代码用代价模型，不能数行数。</div>
+    </div>
+  </section>
+
+  <!-- 8 指令选择思想：树覆盖 -->
+  <section class="slide" data-narration="第一个难题的系统化解法分两步。第一步，把一条三地址语句画成表达式树；第二步，把每条目标指令画成一块树型瓦片，用瓦片把整棵树不重不漏地铺满——选指令的问题，就变成了铺地砖的问题。本章瓦片盒里常用的四块：T 一啃叶子，把内存名字装进寄存器；T 二啃加法内部结点，要求两个操作数已在寄存器；T 三是本章明星，啃整个下标取值，基址常量加寄存器下标，一条指令吃掉算地址和取数两件事；T 四啃根，把结果存回内存名字。铺法叫最大口啃法，英文 Maximal Munch：从根开始，在当前结点选能覆盖最多结点的瓦片，啃掉这一块，再对剩余的每棵子树递归重复。下一页完整啃一遍。">
+    <div class="slide-head"><span class="sec">8.3</span><h3>选指令就是铺地砖：用瓦片把表达式树不重不漏铺满</h3></div>
+    <div class="slide-body">
+      <table class="small">
+        <thead><tr><th>瓦片</th><th>匹配的子树</th><th>对应指令</th></tr></thead>
+        <tbody>
+          <tr><td><strong>T1</strong></td><td class="l">叶子：内存名字 x</td><td class="l"><code>LD R, x</code></td></tr>
+          <tr><td><strong>T2</strong></td><td class="l">内部结点 + ，两操作数已在寄存器</td><td class="l"><code>ADD Rd, Rs, Rt</code></td></tr>
+          <tr><td><strong>T3</strong></td><td class="l">内部结点「下标取值」：基址常量 c + 寄存器下标</td><td class="l"><code>LD R, c(Ri)</code></td></tr>
+          <tr><td><strong>T4</strong></td><td class="l">根：赋值到内存名字 a</td><td class="l"><code>ST a, R</code></td></tr>
+        </tbody>
+      </table>
+      <div class="tip"><strong>最大口啃法（Maximal Munch）</strong>：从根开始，每步选<strong>能覆盖最多结点</strong>的瓦片啃掉，再对剩余子树递归。瓦片越大，砖缝（多余访存）越少。</div>
+    </div>
+  </section>
+
+  <!-- 9 Maximal Munch 手算：例 8.3-A -->
+  <section class="slide" data-narration="完整啃一遍：a 赋值为 b 加 c 的第 i 项，设数组 c 在静态区，下标已换算成字节偏移。看左边的树：根是赋值，下面是加，加的右边挂着下标取值。从根往下最大口：T 四啃根，T 二啃加，T 三一口吃掉整个下标取值，两个叶子各由 T 一收尾。自底向上放指令：先 LD 装 i 进 R 零；第二步明星一击，LD R 一逗号 c 括号 R 零，一条指令吃掉地址计算和取数；再 LD 装 b；ADD 做加法；最后 ST 存回 a。合计代价二加二加二加一加二等于九。没有 T 三就得拆三条，多付两次访存税——瓦片越大，砖缝越少。">
+    <div class="slide-head"><span class="sec">8.3</span><h3>例 8.3-A：五口啃完 a := b + c[i]，合计代价 9</h3></div>
+    <div class="slide-body">
+      <div class="cols">
+        <div class="col">
+          <div class="mmd">
+            <div class="mermaid">
+flowchart TB
+  R[根：赋值到 a → T4] --> P[加 → T2]
+  P --> B[b → T1]
+  P --> X[下标取值 → T3]
+  X --> CB[基址 c]
+  X --> I[i → T1]
+            </div>
+          </div>
+          <p style="text-align:center; font-size:18px; color:var(--muted);">图 8.1：T3 一口啃掉整个下标取值</p>
+        </div>
+        <div class="col">
+          <table class="small">
+            <thead><tr><th>步</th><th>瓦片</th><th>生成指令</th></tr></thead>
+            <tbody>
+              <tr><td>1</td><td>T1</td><td class="l"><code>LD R0, i</code></td></tr>
+              <tr><td>2</td><td>T3</td><td class="l"><code>LD R1, c(R0)</code>　← 一条吃掉算地址＋取数</td></tr>
+              <tr><td>3</td><td>T1</td><td class="l"><code>LD R2, b</code></td></tr>
+              <tr><td>4</td><td>T2</td><td class="l"><code>ADD R1, R2, R1</code></td></tr>
+              <tr><td>5</td><td>T4</td><td class="l"><code>ST a, R1</code></td></tr>
+            </tbody>
+          </table>
+          <div class="deep">合计代价：2+2+2+1+2 = <strong>9</strong>；没有 T3 要拆成三条，多付两次访存税。</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 10 getReg 思想：两本账三条纪律 -->
+  <section class="slide" data-narration="第二个难题，寄存器分配。把条件推到极端：只有 R 零、R 一两个寄存器。工具是两本账：寄存器描述符记每个寄存器当前持有谁的值；地址描述符记每个名字的值眼下在哪，是某寄存器、内存、还是两者。分配器 getReg 的纪律三条。一，名字已在某寄存器，直接用，零代价。二，有空寄存器，LD 进来。三，无空寄存器要腾地方：优先挑值已有内存副本、或此后不再活跃的，直接腾，连 ST 都省；都不行就选下次使用最远的，先 ST 溢出再腾。记住顺序：先腾死了的，再腾有副本的，万不得已才腾活着且没副本的。溢出英文叫 Spill。">
+    <div class="slide-head"><span class="sec">8.4</span><h3>两本账记账，三条纪律决定谁被腾出寄存器</h3></div>
+    <div class="slide-body">
+      <div class="cols">
+        <div class="col"><div class="card">📒 <strong>寄存器描述符</strong>（Register Descriptor）<br>每个寄存器当前持有哪些名字的值。</div></div>
+        <div class="col"><div class="card">📗 <strong>地址描述符</strong>（Address Descriptor）<br>每个名字的值当前在哪些位置：某寄存器、内存、或两者。</div></div>
+      </div>
+      <table class="small">
+        <thead><tr><th>getReg 情形</th><th>动作</th></tr></thead>
+        <tbody>
+          <tr><td class="l">① 名字已在某寄存器</td><td class="l">直接用，零代价</td></tr>
+          <tr><td class="l">② 有空寄存器</td><td class="l">LD 进来</td></tr>
+          <tr><td class="l">③ 无空寄存器</td><td class="l">先挑「已有内存副本 / 此后不再活跃」的直接腾（免 ST）；都不行选「下次使用最远」的，先 ST 溢出（Spill）再腾</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- 11 getReg 手算（上）：例 8.4-A 步 1–2（互动停顿页） -->
+  <section class="slide" data-narration="核心例题：x 等于 a 加 b 的和，乘 c 减 d 的差，再加 e 的第 i 项；六条三地址码与活跃区间都在表里。第一步，t 一等于 a 加 b：两次情形二，装 a、装 b，加完 R 零持 t 一；a、b 已死且有内存副本，直接弃用。第二步，t 二等于 c 减 d：装 c 用情形二；可装 d 时两个寄存器都占着——R 零的 t 一第三步还要用，且只住 R 零。轮到你了：怎么办？先暂停视频自己推一遍。推出来了吗？好，对答案。按纪律三溢出 t 一：先 ST t 一逗号 R 零，再 LD 装 d，SUB 之后 R 一持 t 二。全章唯一一次溢出就在这里。">
+    <div class="slide-head"><span class="sec">8.4</span><h3>例 8.4-A 上半场：第 (2) 句逼出全章唯一一次溢出</h3></div>
+    <div class="slide-body">
+      <table class="small">
+        <thead><tr><th>编号</th><th>三地址码</th><th>活跃区间</th><th>编号</th><th>三地址码</th><th>活跃区间</th></tr></thead>
+        <tbody>
+          <tr><td>(1)</td><td class="l"><code>t1 := a + b</code></td><td>t1：(1)→(3)</td><td>(4)</td><td class="l"><code>t4 := e[i]</code></td><td>t4：(4)→(5)</td></tr>
+          <tr><td>(2)</td><td class="l"><code>t2 := c − d</code></td><td>t2：(2)→(3)</td><td>(5)</td><td class="l"><code>t5 := t3 + t4</code></td><td>t5：(5)→(6)</td></tr>
+          <tr><td>(3)</td><td class="l"><code>t3 := t1 * t2</code></td><td>t3：(3)→(5)</td><td>(6)</td><td class="l"><code>x := t5</code></td><td>x：出口仍活跃</td></tr>
+        </tbody>
+      </table>
+      <div class="step">
+        <p><strong>① 步1 (1)</strong> <code>LD R0, a</code> / <code>LD R1, b</code> / <code>ADD R0, R0, R1</code> → R0: t1，R1: ∅（a、b 已死且有内存副本，弃用）</p>
+      </div>
+      <div class="pause"><div class="icon">✍️</div><div class="txt"><b>暂停推导</b><p>装 d 时 R0、R1 都占着：自己决定腾哪个寄存器、要不要先 ST，写出第 (2) 句的完整指令序列</p></div></div>
+      <div class="step">
+        <p><strong>② 步2 (2)</strong> <code>LD R1, c</code>（情形②）→ 无空寄存器，R0 的 t1 在 (3) 还要用且只住 R0 → 情形③：<code>ST t1, R0</code> <strong>★溢出</strong> / <code>LD R0, d</code> / <code>SUB R1, R1, R0</code> → R1: t2</p>
+      </div>
+      <p class="step-hint">按空格 / → 逐步展开推演</p>
+    </div>
+  </section>
+
+  <!-- 12 getReg 手算（下）：步 3–6 -->
+  <section class="slide" data-narration="下半场。第三步，t 一现在只住内存，情形二重载回来，MUL 之后 R 零持 t 三，t 一、t 二都死了。第四步，LD 装 i，立即数 MUL 乘四换算字节偏移，下标寻址一口吃掉加基址和取数，R 一持 t 四。第五步，两个操作数都在寄存器，情形一用两次，ADD 得 t 五。第六步，x 出块仍活跃，必须 ST 写回内存。盘点：十四条指令，合计代价二十四；溢出只有一次，就是第四条那条 ST t 一，外加第八条一次重载。为什么溢 t 一？当时 R 一的 b 已死可直接腾，R 零的 t 一活着却没副本，只能配个内存副本——纪律三就是照着这个答案设计的。">
+    <div class="slide-head"><span class="sec">8.4</span><h3>例 8.4-A 下半场：14 条指令，合计代价 24</h3></div>
+    <div class="slide-body">
+      <div class="step">
+        <p><strong>① 步3 (3)</strong> t1 只在内存 → 情形②重载：<code>LD R0, t1</code> / <code>MUL R0, R0, R1</code> → R0: t3，R1: ∅（t1、t2 死亡）</p>
+      </div>
+      <div class="step">
+        <p><strong>② 步4 (4)</strong> <code>LD R1, i</code> / <code>MUL R1, R1, #4</code>（×4 换算字节偏移）/ <code>LD R1, e(R1)</code> 下标寻址一口吃掉加基址＋取数 → R1: t4</p>
+      </div>
+      <div class="step">
+        <p><strong>③ 步5 (5)</strong> 两操作数都在寄存器 → 情形①×2：<code>ADD R0, R0, R1</code> → R0: t5（t3、t4 死亡）</p>
+      </div>
+      <div class="step">
+        <p><strong>④ 步6 (6)</strong> x 出块仍活跃 → 必须 <code>ST x, R0</code> 写回内存 → x: {R0, 内存}</p>
+      </div>
+      <div class="deep">盘点：14 条指令，合计代价 <strong>24</strong>；唯一溢出 = 第 4 条 <code>ST t1, R0</code>，配套重载 = 第 8 条 <code>LD R0, t1</code>。先腾死了的，再腾有副本的——纪律③照着答案设计。</div>
+      <p class="step-hint">按空格 / → 逐步展开推演</p>
+    </div>
+  </section>
+
+  <!-- 13 图着色：例 8.4-B 冲突图 -->
+  <section class="slide" data-narration="getReg 是边走边扔的在线贪心，图着色给出全局视角。建冲突图，英文 Interference Graph：每个名字一个结点，两个名字在某个程序点同时活跃就连一条边；K 个寄存器够用，当且仅当图可 K 着色，因为同色的结点永不同时活着。看例 8.4-B：第二句后 t 一、t 二同时活跃，连边；第三句后 t 一 t 二 t 三两两同时在场，连成三角形；t 四挂在 t 三上。三角形要三色，两个寄存器不可着色，必须溢出。溢谁？t 一、t 二各用两次，t 三只用一次：溢 t 三，一句 ST 加一句 LD，重载最便宜。溢完图退化成一条链，两色足够。">
+    <div class="slide-head"><span class="sec">8.4</span><h3>同时活跃就连边：一个三角形宣判 2 个寄存器死刑</h3></div>
+    <div class="slide-body">
+      <div class="cols">
+        <div class="col">
+          <table class="small">
+            <thead><tr><th>编号</th><th>三地址码</th><th>该点后仍活跃</th></tr></thead>
+            <tbody>
+              <tr><td>(1)</td><td class="l"><code>t1 := a + b</code></td><td class="l">t1</td></tr>
+              <tr><td>(2)</td><td class="l"><code>t2 := c − d</code></td><td class="l">t1, t2 → 连边 t1—t2</td></tr>
+              <tr><td>(3)</td><td class="l"><code>t3 := t1 + t2</code></td><td class="l">t1, t2, t3 → 连边 t1—t3、t2—t3</td></tr>
+              <tr><td>(4)</td><td class="l"><code>t4 := t1 * t2</code></td><td class="l">t3, t4 → 连边 t3—t4</td></tr>
+              <tr><td>(5)</td><td class="l"><code>x := t3 + t4</code></td><td class="l">x</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="col">
+          <div class="mmd">
+            <div class="mermaid">
+flowchart TB
+  T1[t1] --- T2[t2]
+  T1 --- T3[t3]
+  T2 --- T3
+  T3 --- T4[t4]
+            </div>
+          </div>
+          <p style="text-align:center; font-size:18px; color:var(--muted);">图 8.2：t1、t2、t3 两两相连成三角形，t4 挂在 t3 上</p>
+        </div>
+      </div>
+      <div class="deep"><strong>图着色（Graph Coloring）</strong>：可 K 着色 ⟺ K 个寄存器够分。三角形需 3 色 → 2 个寄存器必须溢出；溢<strong>使用最少</strong>的 t3（仅 1 次：ST＋LD 各一条），图退化为链，2 色够。</div>
+    </div>
+  </section>
+
+  <!-- 14 Ershov 数定义 -->
+  <section class="slide" data-narration="第三个难题，求值顺序。八点四的第二步是被迫溢出的，可有些溢出，换个子表达式计算顺序根本不会发生。Ershov 数把这件事量化成一个可手算的标号：叶子标一；内部结点两个孩子的标号不等就取大的，相等就加一。它的含义是：不溢出时，算这棵子树所需的最少寄存器数。配套规则只有一句：先算标号大的子树。拿 a 加 b 乘 c 练手：a、b 都是一，加号两子相等标二；c 标一；根结点取二和一的最大值，标二。也就是说，两个寄存器就能无溢出算完——但前提是顺序要对。下一页看顺序错了会怎样。">
+    <div class="slide-head"><span class="sec">8.5</span><h3>Ershov 数是每棵子树的「硬度表」：先啃硬骨头</h3></div>
+    <div class="slide-body">
+      <div class="formula">$$\text{label}(\text{叶子})=1;\quad \text{label}(n)=\max(l,r)\ \ (l\ne r);\quad \text{label}(n)=l+1\ \ (l=r)$$</div>
+      <div class="cols">
+        <div class="col">
+          <div class="mmd mmd-sm">
+            <div class="mermaid">
+flowchart TB
+  RT[乘 · 标号 2] --> PL[加 · 标号 2]
+  RT --> C[c · 1]
+  PL --> A[a · 1]
+  PL --> B[b · 1]
+            </div>
+          </div>
+          <p style="text-align:center; font-size:18px; color:var(--muted);">(a+b)×c：根标号 2 → 两个寄存器可无溢出算完</p>
+        </div>
+        <div class="col">
+          <div class="card">📏 <strong>标号的含义</strong><br>不溢出时计算该子树所需的<strong>最少寄存器数</strong>。</div>
+          <div class="deep">求值规则只有一句：<strong>先算标号大的子树</strong>。先啃硬骨头，算完只剩一个值占位，再算简单的手头宽松。</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 15 Ershov 手算对比：例 8.5-A -->
+  <section class="slide" data-narration="同一表达式，两种顺序，完整对比。顺序 A 守规矩，先算标号大的 a 加 b：装 a、装 b、相加，R 零占位；再装 c、相乘，峰值两个寄存器，五条指令，无溢出。顺序 B 先算标号小的 c：c 先占住 R 零不动，算 a 加 b 时手头只剩 R 一，必须再借 R 二，峰值涨到三个寄存器。若机器只有两个寄存器，B 被迫先把 c 存出去，算完再取回来——七条指令对五条，多付一整次溢出。原因一句话：先算出来的值要一直占着寄存器，等另一个操作数。先啃硬骨头，算完只剩一个值占位，再腾出手算简单的，占压时间最短；Ershov 数就是每块骨头的硬度表。">
+    <div class="slide-head"><span class="sec">8.5</span><h3>例 8.5-A：同一表达式，峰值 2 对 3，5 条对 7 条</h3></div>
+    <div class="slide-body">
+      <div class="cols">
+        <div class="col">
+          <table class="small">
+            <thead><tr><th>顺序 A：先算 (a+b)（标号大）</th><th>寄存器占用</th></tr></thead>
+            <tbody>
+              <tr><td class="l"><code>LD R0, a</code></td><td>R0</td></tr>
+              <tr><td class="l"><code>LD R1, b</code></td><td>R0, R1</td></tr>
+              <tr><td class="l"><code>ADD R0, R0, R1</code></td><td>R0（R1 释放）</td></tr>
+              <tr><td class="l"><code>LD R1, c</code></td><td>R0, R1</td></tr>
+              <tr><td class="l"><code>MUL R0, R0, R1</code></td><td>R0</td></tr>
+              <tr><td colspan="2"><strong>峰值 2 个寄存器 · 5 条 · 无溢出</strong></td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="col">
+          <table class="small">
+            <thead><tr><th>顺序 B：先算 c（标号小）</th><th>寄存器占用</th></tr></thead>
+            <tbody>
+              <tr><td class="l"><code>LD R0, c</code></td><td>R0</td></tr>
+              <tr><td class="l"><code>LD R1, a</code></td><td>R0, R1</td></tr>
+              <tr><td class="l"><code>LD R2, b</code></td><td>R0, R1, R2　★第三个登场</td></tr>
+              <tr><td class="l"><code>ADD R1, R1, R2</code></td><td>R0, R1</td></tr>
+              <tr><td class="l"><code>MUL R0, R1, R0</code></td><td>R0</td></tr>
+              <tr><td colspan="2"><strong>峰值 3；仅 2 寄存器时被迫溢出：7 条 vs 5 条</strong></td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+      <div class="deep">先算出的值要<strong>一直占着寄存器等另一个操作数</strong>——占压时间决定峰值；先啃硬骨头，占压最短。</div>
+    </div>
+  </section>
+
+  <!-- ★ 16 误区页 -->
+  <section class="slide" data-narration="扫三个雷。第一，以为指令选择是机械查表，一条三地址码对应一条标准指令。错——同一条语句在不同上下文下最优选择不同：还剩几个寄存器、操作数在不在寄存器、下一句还用不用，都改变答案。第二，以为最大口啃法给出最优覆盖。它是贪心：瓦片重叠时，当前啃最大口可能逼得剩余子树只能用贵瓦片；保底靠动态规划，工程上贪心加一套好瓦片已足够好。第三，以为溢出随便扔一个就行。扔错了等于白溢出还多付两条指令；纪律是先扔已死或有内存副本的，再扔下次使用最远、使用次数最少的——例 8.4-B 溢 t 一而非 t 三，就得多付一次重载。">
+    <div class="slide-head"><span class="sec">避坑</span><h3>查表派、贪心即最优、乱溢出——三个坑都别踩</h3></div>
+    <div class="slide-body">
+      <div class="trap">❌ <strong>指令选择是机械查表：一条三地址码对应一条「标准」指令</strong><br>✅ 最优选择依赖上下文（寄存器余量、操作数是否已在寄存器、后面还用不用）——没有脱离上下文的答案。</div>
+      <div class="trap">❌ <strong>最大口啃法给出最优覆盖</strong><br>✅ 它是贪心：瓦片重叠时，啃最大口可能逼剩余子树用贵瓦片；保底靠动态规划，工程上贪心＋好瓦片已足够好。</div>
+      <div class="trap">❌ <strong>寄存器不够时随便溢出一个就行</strong><br>✅ 先溢「已死 / 有内存副本」的（免 ST），再溢「下次使用最远、使用最少」的；例 8.4-B 溢 t1 而非 t3 会多一次重载。</div>
+    </div>
+  </section>
+
+  <!-- 17 接口页：与第6/9章分工 -->
+  <section class="slide" data-narration="理清分工。第六、七章是本台的供料方：一个产出三地址码，一个给名字定址，帧指针加偏移那种；本章把成品逐条落成目标指令，顺便用寻址模式把偏移兑现成真实地址。第九章是下家：本章所有例子里，谁还活着这句话只在基本块内成立；一旦跨出基本块，活跃性不再是局部信息，要靠全程序的数据流分析供料，图着色才能在全函数范围排座次。所以本章是后端的第一棒，只管基本块这个安全区；第九章接过活跃变量分析，把优化做到基本块之外。钩子就一句：块内最优已是 NP 难，跨块的故事只会更精彩。">
+    <div class="slide-head"><span class="sec">接口</span><h3>第6、7章供料，本章施工，第9章做跨块优化</h3></div>
+    <div class="slide-body">
+      <table>
+        <thead><tr><th></th><th>第6、7章</th><th>本章（第8章）</th><th>第9章</th></tr></thead>
+        <tbody>
+          <tr><td class="l"><strong>干什么</strong></td><td class="l">产三地址码；给名字定帧与偏移</td><td class="l">逐条落成目标指令，寻址模式兑现偏移</td><td class="l">站在数据流分析上做跨基本块优化</td></tr>
+          <tr><td class="l"><strong>「谁还活着」</strong></td><td class="l">——</td><td class="l">基本块内，局部可知</td><td class="l">全程序，活跃变量分析供料</td></tr>
+          <tr><td class="l"><strong>最优性</strong></td><td class="l">——</td><td class="l">块内联合最优 NP 难 → 启发式</td><td class="l">把图着色等武器推广到全函数</td></tr>
+        </tbody>
+      </table>
+      <div class="tip">钩子：本章只在基本块这个「安全区」里周转；一出基本块，「谁还活着」要靠第9章的活跃变量分析。</div>
+    </div>
+  </section>
+
+  <!-- ★ 18 小结页 -->
+  <section class="slide" data-narration="三句话讲完本章。一，解决什么：把三地址码翻译成又快又省寄存器的机器指令，同时回答选哪条指令、值放哪、先算谁。二，核心机制：代价模型给指令定价；指令选择用瓦片铺表达式树，最大口先啃；寄存器分配靠两本账记账的 getReg，无处可放按纪律溢出，全局版是冲突图着色；求值顺序用 Ershov 数，先算费寄存器的子树。三，承上启下：块内联合最优是 NP 难，跨块的活跃性分析交给第九章。主线问题的答案你已经有了；必背就两条：指令代价等于一加寻址附加代价之和；K 个寄存器够用，当且仅当冲突图可 K 着色。合上书也要能默写。">
+    <div class="slide-head"><span class="sec">小结</span><h3>三句话讲完第8章</h3></div>
+    <div class="slide-body">
+      <div class="chain">
+        <div class="link"><span class="no">1</span><span class="txt"><strong>解决什么</strong>：三地址码 → 又快又省寄存器的机器指令；同答选哪条指令、值放哪、先算谁。</span></div>
+        <div class="link"><span class="no">2</span><span class="txt"><strong>核心机制</strong>：代价模型定价；树覆盖＋最大口啃法；getReg 两本账＋纪律溢出，全局版图着色；Ershov 数定顺序。</span></div>
+        <div class="link"><span class="no">3</span><span class="txt"><strong>承上启下</strong>：块内联合最优 NP 难；跨块活跃性分析 → 第9章机器无关优化。</span></div>
+      </div>
+      <div class="formula formula-concl">$$\boldsymbol{\text{cost}=1+\sum\text{寻址附加代价}}\qquad \boldsymbol{K\text{ 寄存器够用}\Longleftrightarrow\text{冲突图可 }K\text{ 着色}}\quad\text{——合上书也要能默写}$$</div>
+    </div>
+  </section>
+
+  <!-- ★ 19 结束页 -->
+  <section class="slide slide-cover" data-narration="本章结束，金句送你：大瓦片砖缝少，硬骨头先啃。毕业挑战，合上书拿一张纸：一，写出代码生成三大难题，各配一个选不好会怎样的反例；二，默写四类指令、六种寻址模式与代价公式，算出 LD R 一逗号星号八括号 R 零的代价；三，重做 a 赋值为 b 加 c 的第 i 项的瓦片覆盖五步，标出每步瓦片与合计代价；四，重做例 8.4-A，从六条三地址码到十四条目标指令，指出唯一溢出点与理由；五，画出例 8.4-B 的冲突图，说清两个寄存器为什么不够、该溢谁。下一章，第九章机器无关优化：站在数据流分析上，做跨基本块的优化。">
+    <div class="kicker">本 章 结 束</div>
+    <h1>大瓦片砖缝少，硬骨头先啃</h1>
+    <div class="sub">毕业挑战：合上书，拿一张纸</div>
+    <div class="divider"></div>
+    <div class="meta">
+      ☑ 写三大难题并各配一个反例　　☑ 默写代价公式并算 LD R1, *8(R0) 的代价<br>
+      ☑ 重做 a := b + c[i] 的瓦片覆盖五步　　☑ 重做例 8.4-A 全程并指出唯一溢出点<br>
+      ☑ 画例 8.4-B 冲突图并说明该溢出谁　　☑ 用 (a+b)×c 两种顺序说明 Ershov 为何省寄存器<br><br>
+      下一章 · 第9章 机器无关优化：站在数据流分析上，做跨基本块的优化
+    </div>
+  </section>
+
+  <!-- 页脚 -->
+  <div id="footer">
+    <span class="brand">第8章 代码生成 · 编译原理课件</span>
+    <span id="pagenum">1 / 19</span>
+  </div>
+
+  <!-- 导航 -->
+  <div class="nav">
+    <button id="prev" title="上一页 (←)">‹</button>
+    <button id="next" title="下一页 (→ / 空格)">›</button>
+  </div>
+  <div id="hint">← → 翻页 · 空格下一页 · 推导页逐步显示 · 点击左右半屏翻页</div>
+
+</div>
+
+<!-- mermaid 本地引用，保证离线可用；初始化参数全套课件统一，勿改 -->
+<script src="/lectures-assets/mermaid.min.js"></script>
+<script>
+mermaid.initialize({
+  startOnLoad: false,   // 必须为 false：display:none 的隐藏页渲染会得到 0 宽高的退化 SVG，
+                        // 改为页面激活时懒渲染（见 renderMermaid）
+  theme: 'base',
+  themeVariables: {
+    primaryColor: '#ebf8ff',
+    primaryBorderColor: '#2b6cb0',
+    primaryTextColor: '#1a365d',
+    lineColor: '#718096',
+    fontFamily: '-apple-system, PingFang SC, sans-serif',
+    fontSize: '15px'
+  },
+  flowchart: { curve: 'linear', htmlLabels: false }
+});
+</script>
+<script>
+(function(){
+  const slides = Array.from(document.querySelectorAll('.slide'));
+  const total = slides.length;
+  let idx = 0;
+
+  const params = new URLSearchParams(location.search);
+  const startSlide = parseInt(params.get('slide'), 10);
+  if (params.get('autohide') === '1') document.body.classList.add('autohide');
+  if (!isNaN(startSlide) && startSlide >= 1 && startSlide <= total) idx = startSlide - 1;
+
+  const progress = document.getElementById('progress');
+  const pagenum = document.getElementById('pagenum');
+  const prevBtn = document.getElementById('prev');
+  const nextBtn = document.getElementById('next');
+
+  // 推导分步：每页记住已展开的步数；autohide（截图）模式下 CSS 强制全显
+  const stepState = new Map();
+  function stepsOf(i){ return Array.from(slides[i].querySelectorAll('.step')); }
+  function applySteps(){
+    stepsOf(idx).forEach((el, k)=> el.classList.toggle('on', k < (stepState.get(idx) || 0)));
+  }
+  // 前进一步：先展开本页下一步，全部展开后才翻页
+  function forward(){
+    const steps = stepsOf(idx);
+    const shown = stepState.get(idx) || 0;
+    if (shown < steps.length){ stepState.set(idx, shown + 1); applySteps(); return; }
+    go(idx + 1);
+  }
+  // 后退一步：先收起本页最后一步，收完才回上一页
+  function backward(){
+    const steps = stepsOf(idx);
+    const shown = stepState.get(idx) || 0;
+    if (shown > 0){ stepState.set(idx, shown - 1); applySteps(); return; }
+    go(idx - 1);
+  }
+
+  // mermaid 懒渲染：只在页面激活（有真实宽高）时渲染该页的图，渲染后打 data-done 防重复
+  function renderMermaid(slide){
+    if (typeof mermaid === 'undefined') return;
+    const nodes = Array.from(slide.querySelectorAll('.mermaid:not([data-done])'));
+    if (!nodes.length) return;
+    nodes.forEach(n => n.setAttribute('data-done', ''));
+    mermaid.run({ nodes }).catch(err => {
+      nodes.forEach(n => n.removeAttribute('data-done'));
+      console.error('mermaid 渲染失败：', err);
+    });
+  }
+
+  function render(){
+    slides.forEach((s,i)=> s.classList.toggle('active', i===idx));
+    progress.style.width = ((idx+1)/total*100) + '%';
+    pagenum.textContent = (idx+1) + ' / ' + total;
+    prevBtn.disabled = (idx===0);
+    nextBtn.disabled = (idx===total-1);
+    applySteps();
+    renderMermaid(slides[idx]);
+  }
+  function go(n){ idx = Math.max(0, Math.min(total-1, n)); render(); }
+
+  prevBtn.addEventListener('click', e=>{ e.stopPropagation(); backward(); });
+  nextBtn.addEventListener('click', e=>{ e.stopPropagation(); forward(); });
+
+  document.addEventListener('keydown', e=>{
+    if(e.key==='ArrowRight'||e.key===' '||e.key==='PageDown'){ e.preventDefault(); forward(); }
+    else if(e.key==='ArrowLeft'||e.key==='PageUp'){ e.preventDefault(); backward(); }
+    else if(e.key==='Home'){ stepState.set(idx, 0); go(0); }
+    else if(e.key==='End'){ go(total-1); }
+  });
+
+  document.getElementById('stage').addEventListener('click', e=>{
+    if(e.target.closest('.nav')) return;
+    const x = e.clientX;
+    if(x < window.innerWidth*0.5) backward(); else forward();
+  });
+
+  function fit(){
+    const s = Math.min(window.innerWidth/1280, window.innerHeight/720);
+    document.getElementById('stage').style.transform = 'translate(-50%,-50%) scale(' + s + ')';
+  }
+  window.addEventListener('resize', fit);
+  fit();
+  render();
+})();
+</script>
+</body>
+</html>

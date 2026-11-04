@@ -1,0 +1,947 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第3章 概率与信息论 · 深度学习互动讲义</title>
+<link rel="stylesheet" href="/lectures-assets/style.css">
+</head>
+<body>
+
+<nav class="topbar">
+  <div class="topbar-inner">
+    <span class="brand"><a href="index.html" style="color:inherit">← 学习地图</a></span>
+    <span class="crumb">第一部分 · 数学与机器学习基础 / 第3章</span>
+  </div>
+</nav>
+
+<div class="wrap">
+
+  <div class="lecture-head">
+    <span class="ch-label">CHAPTER 03 · 数学与机器学习基础</span>
+    <h1>概率与信息论</h1>
+    <p class="lead">本章回答一个核心问题：怎样给"不确定"和"信息量"各造一把可计算的尺子？</p>
+  </div>
+
+  <!-- ===== 章首四件套之 1：全书定位 ===== -->
+  <div class="position-bar">
+    <strong>本章在主线上的位置：</strong>线性代数给了我们描述"向量与变换"的语言 → <u>概率与信息论给我们描述"不确定与信息量"的语言</u> → 第 5 章才能用这套语言定义"从数据中学习"。<br>
+    第3章回答主线上的第 3 个问题：<strong>怎样给"不确定"和"信息量"各造一把可计算的尺子？</strong>
+    <div class="map-inline">
+      <span class="node">① 数学与机器学习基础（Ch1–5）</span><span class="arrow">→</span>
+      <span class="node">② 现代深度网络（Ch6–11）</span><span class="arrow">→</span>
+      <span class="node">③ 表示与推断（Ch12–16）</span><span class="arrow">→</span>
+      <span class="node">④ 生成模型与前沿（Ch17–20）</span>
+    </div>
+    <div class="map-inline">
+      <span class="node">Ch1 引言</span><span class="arrow">→</span>
+      <span class="node">Ch2 线性代数</span><span class="arrow">→</span>
+      <span class="node here">Ch3 概率与信息论</span><span class="arrow">→</span>
+      <span class="node">Ch4 数值计算</span><span class="arrow">→</span>
+      <span class="node">Ch5 机器学习基础</span>
+    </div>
+  </div>
+
+  <!-- ===== 章首四件套之 2：学习目标 ===== -->
+  <div class="objectives">
+    <h4>🎯 学完本章，合上书你应该能：</h4>
+    <ol>
+      <li>说出不确定性的三个来源，并用一句话对照频率派与贝叶斯派。</li>
+      <li>写出加法规则、乘法规则、条件概率与贝叶斯定理，并手算医疗检测问题（含全概率公式）。</li>
+      <li>区分 PMF 与 PDF，说出伯努利、categorical、高斯分布各自的适用场合。</li>
+      <li>手算离散随机变量的期望与方差（骰子、伯努利各一例），并用 E[X²]−(E[X])² 验证。</li>
+      <li>手算自信息、熵、KL 散度与交叉熵（给定具体分布，逐项写出每一步）。</li>
+      <li>解释为什么"最小化交叉熵损失 = 让模型分布逼近标签分布"，并说明 KL 散度为什么不对称。</li>
+    </ol>
+  </div>
+
+  <div class="lecture">
+
+    <!-- ===== 章首四件套之 3：推导主线图 ===== -->
+    <div class="figure">
+      <div class="mermaid">
+flowchart TB
+  A["现实充满不确定：AI 如何推理"] --> B["用概率给不确定造尺子：0 到 1 的数"]
+  B --> C["已知结果反推原因：贝叶斯定理"]
+  C --> D["用随机变量与分布压缩描述世界"]
+  D --> E["用熵与 KL 散度给信息量造尺子"]
+  E --> F["交叉熵成为训练模型的损失函数"]
+  F --> G["代价：概率在浮点机上会溢出与病态，通往第 4 章；如何从数据估计分布，通往第 5 章"]
+  classDef hot fill:#fbeedd,stroke:#c4651f,stroke-width:2.5px,color:#c4651f;
+  classDef danger fill:#fae9e7,stroke:#b03a2e,stroke-width:2.5px,color:#b03a2e;
+  class F hot;
+  class G danger;
+      </div>
+      <div class="caption">本章推导主线：每一步都回答"为什么需要下一步"。末端红色节点是本章的两个遗留代价——浮点溢出（第 4 章）与分布估计（第 5 章）。</div>
+    </div>
+
+    <!-- ================= 3.1 ================= -->
+    <h2><span class="sec-no">3.1</span>为什么需要概率：因为世界不给确定的答案</h2>
+
+    <p>第 2 章的线性代数是确定性的语言：矩阵乘向量，答案唯一。但机器学习面对的现实不是这样——摄像头画面有噪点、用户行为难以预料、训练数据永远只是世界的样本。<strong>我们需要一门"承认不确定"的数学语言</strong>，这就是概率论。</p>
+
+    <p>花书把不确定性的来源归为三类，记住它们，你就知道什么时候该怪数据、什么时候该怪模型：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>来源</th><th>含义</th><th>例子</th><th>能不能消除</th></tr>
+        <tr><td>系统内在随机</td><td>过程本身就是随机的</td><td>掷骰子、放射性衰变</td><td>不能，只能建模</td></tr>
+        <tr><td>观察不完全</td><td>该看的没看全</td><td>扑克牌里看不见对手的牌；监控盲区</td><td>加传感器可部分缓解</td></tr>
+        <tr><td>模型不完全</td><td>我们主动丢弃了信息</td><td>用低分辨率图识别物体，丢掉细节</td><td>换更强模型可部分缓解</td></tr>
+      </table>
+    </div>
+
+    <p>同一个"概率"，两派人有两种读法：</p>
+
+    <ul>
+      <li><span class="term">频率派</span>（Frequentist）：概率 = 事件在无限次重复试验中出现的频率。骰子掷出 6 的概率是 1/6，因为掷一百万次约有六分之一是 6。</li>
+      <li><span class="term">贝叶斯派</span>（Bayesian）：概率 = 对事件的<strong>相信程度</strong>（degree of belief）。"明天下雨的概率 70%"不是重复试验，而是我对这件事的信心可以被量化、被新证据更新。</li>
+    </ul>
+
+    <p>一句话对照：<strong>频率派说"世界本来如此"，贝叶斯派说"我目前相信到这种程度"</strong>。深度学习两派都用：数据分布按频率派理解，模型参数的不确定性按贝叶斯派理解。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>概率不是"放弃精确"，而是<strong>给不确定本身造了一把可计算的尺子</strong>：每个命题赋一个 0 到 1 的数，配上几条运算规则，不确定就可以像数字一样加减乘除、代入公式。这就是它能成为 AI 推理语言的原因。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>"概率 0.5 就是我不知道"——错。概率 0.5 是一个<strong>最强的断言</strong>：两种结果完全等可能。真正的"不知道"是无法给出一个分布，那恰恰无法用概率论处理。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 3.1-1</div>
+              <div class="q-text">不确定性的三个来源分别是什么？各举一个例子。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              ① 系统内在随机（骰子）；② 观察不完全（对手的手牌）；③ 模型不完全（低分辨率图像丢细节）。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 3.1-2</div>
+              <div class="q-text">用一句话对照频率派与贝叶斯派对"概率"的不同解释。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              频率派：概率是无限次重复试验的频率；贝叶斯派：概率是可被证据更新的相信程度。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ================= 3.2 ================= -->
+    <h2><span class="sec-no">3.2</span>概率规则与贝叶斯定理：从"阳性"反推"患病"</h2>
+
+    <p>上一节说概率是一把尺子，这一节给它配上刻度与运算规则。先立四条基本规则（都以"事件"或"随机变量取值"为对象）：</p>
+
+    <ul>
+      <li><strong>加法规则</strong>（边缘化）：P(<span class="var">x</span>) = ∑<sub><span class="var">y</span></sub> P(<span class="var">x</span>, <span class="var">y</span>)——把不关心的变量求和消掉。</li>
+      <li><strong>乘法规则</strong>：P(<span class="var">x</span>, <span class="var">y</span>) = P(<span class="var">y</span> | <span class="var">x</span>) · P(<span class="var">x</span>)。</li>
+      <li><strong>条件概率</strong>（Conditional Probability）：P(<span class="var">y</span> | <span class="var">x</span>) = P(<span class="var">x</span>, <span class="var">y</span>) / P(<span class="var">x</span>)，前提是 P(<span class="var">x</span>) &gt; 0。</li>
+      <li><strong>独立性</strong>：<span class="var">x</span> ⊥ <span class="var">y</span> ⟺ P(<span class="var">x</span>, <span class="var">y</span>) = P(<span class="var">x</span>) · P(<span class="var">y</span>)。</li>
+    </ul>
+
+    <p>把乘法规则的两个写法联立：P(<span class="var">x</span>, <span class="var">y</span>) = P(<span class="var">y</span>|<span class="var">x</span>)·P(<span class="var">x</span>) = P(<span class="var">x</span>|<span class="var">y</span>)·P(<span class="var">y</span>)，移项即得<span class="term">贝叶斯定理</span>（Bayes' Theorem）：</p>
+
+    <div class="formula">P(<span class="var">x</span> | <span class="var">y</span>) = <span class="frac"><span class="num-part">P(<span class="var">y</span> | <span class="var">x</span>) · P(<span class="var">x</span>)</span><span class="den-part">P(<span class="var">y</span>)</span></span></div>
+
+    <p>它的用途是<strong>方向反转</strong>：我们知道"原因 → 结果"（P(结果|原因)），想反推"结果 → 原因"（P(原因|结果)）。分母 P(<span class="var">y</span>) 通常用全概率公式展开：P(<span class="var">y</span>) = P(<span class="var">y</span>|<span class="var">x</span>)P(<span class="var">x</span>) + P(<span class="var">y</span>|¬<span class="var">x</span>)P(¬<span class="var">x</span>)。</p>
+
+    <h3>完整手算：医疗检测问题</h3>
+
+    <p>某种病的患病率 P(病) = 0.01；检测的敏感度 P(阳|病) = 0.95；特异度 P(阴|健康) = 0.95（即假阳性率 P(阳|健康) = 0.05）。现在一个人检出阳性，他真患病的概率是多少？</p>
+
+    <p><strong>第一步：用全概率公式算 P(阳)。</strong>阳性有两条来路——"真病人检出阳"和"健康人误报阳"：</p>
+
+    <div class="formula">P(阳) = P(阳|病)·P(病) + P(阳|健康)·P(健康) = 0.95 × 0.01 + 0.05 × 0.99 = 0.0095 + 0.0495 = 0.059</div>
+
+    <p><strong>第二步：代入贝叶斯定理。</strong>分子是"真阳性"那一条路 0.0095：</p>
+
+    <div class="formula">P(病|阳) = <span class="frac"><span class="num-part">0.95 × 0.01</span><span class="den-part">0.059</span></span> = <span class="frac"><span class="num-part">0.0095</span><span class="den-part">0.059</span></span> ≈ 0.161</div>
+
+    <p><strong>第三步：解读。</strong>检出阳性，真患病的概率不到 17%！直觉上"95% 准确的检测"应该很可靠，为什么反差这么大？因为分母里的假阳性 0.0495 是真阳性 0.0095 的 5 倍多——健康人基数（0.99）远大于病人基数（0.01）。忽视先验患病率、只看检测准确率，就是著名的<span class="term">基础率谬误</span>（Base Rate Fallacy）。</p>
+
+    <div class="figure">
+      <div class="mermaid">
+flowchart TB
+  A["人群：患病 0.01，健康 0.99"] --> B["患病者检出阳性 0.0095"]
+  A --> C["健康者误报阳性 0.0495"]
+  B --> D["全部阳性 0.059"]
+  C --> D
+  D --> E["阳性中真患病 0.0095 除 0.059 约 0.161"]
+  classDef danger fill:#fae9e7,stroke:#b03a2e,stroke-width:2.5px,color:#b03a2e;
+  class E danger;
+      </div>
+      <div class="caption">图 3.1 贝叶斯定理的变量关系：阳性由两条来路汇成，健康人基数大使误报占主导——看红色节点之前，先想两条支流各占多少。</div>
+    </div>
+
+    <div class="box insight">
+      <span class="box-tag">✅ 判定规则</span>
+      <p>贝叶斯定理三件套：<strong>先验</strong> P(原因)、<strong>似然</strong> P(结果|原因)、<strong>证据</strong> P(结果)。后验 = 似然 × 先验 ÷ 证据。以后看到任何"检测""诊断""垃圾邮件过滤"问题，先找这三个数。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>"P(阳|病) = 0.95 所以 P(病|阳) = 0.95"——错。条件概率不能随意换方向，两者差一个先验的权重。本例中一个是 0.95，另一个只有 0.161。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 3.2-1</div>
+              <div class="q-text">默写贝叶斯定理，并指出先验、似然、证据各是哪一项。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              P(x|y) = P(y|x)·P(x) / P(y)。P(x) 是先验，P(y|x) 是似然，P(y) 是证据（常用全概率展开）。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 3.2-2</div>
+              <div class="q-text">医疗检测中，敏感度 95% 的检测查出阳性，为什么真患病概率可能远低于 95%？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              因为健康人基数巨大，假阳性总数可能超过真阳性（基础率谬误）；必须乘上先验患病率再比较两条来路。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ================= 3.3 ================= -->
+    <h2><span class="sec-no">3.3</span>随机变量与常见分布：给"不确定"一个变量名</h2>
+
+    <p>有了规则，还缺一个操作对象。<span class="term">随机变量</span>（Random Variable）是一个"取值随试验结果而定的变量"——它本身不是数，而是<strong>从试验结果到数的映射</strong>。用大写 X 记变量，小写 x 记它取到的具体值。</p>
+
+    <p>随机变量分两类，描述工具不同：</p>
+
+    <ul>
+      <li><strong>离散型</strong>：用<span class="term">概率质量函数</span>（PMF, Probability Mass Function）P(X = x)，每个取值一个概率，全部加起来等于 1。例：骰子。</li>
+      <li><strong>连续型</strong>：用<span class="term">概率密度函数</span>（PDF, Probability Density Function）p(x)。注意：<strong>p(x) 本身不是概率</strong>，某点的概率恒为 0；只有区间 [a, b] 上的积分 ∫<sub>a</sub><sup>b</sup> p(x)dx 才是概率，且全空间积分为 1。</li>
+    </ul>
+
+    <h3>三个最常用的分布</h3>
+
+    <ul>
+      <li><span class="term">伯努利分布</span>（Bernoulli Distribution）：一次是非试验，P(X=1) = p，P(X=0) = 1−p。例：一枚不均匀的硬币。</li>
+      <li><span class="term">categorical 分布</span>（Categorical Distribution）：伯努利的多类别版，k 个类别各有概率 p₁…pₖ，∑ p<sub>i</sub> = 1。分类模型的输出就是它。</li>
+      <li><span class="term">正态分布</span>（Normal Distribution）：连续型，钟形曲线，由均值 μ 与方差 σ² 完全决定。3.4 节会专门讲它为什么无处不在。</li>
+    </ul>
+
+    <h3>期望与方差：分布的"重心"与"胖瘦"</h3>
+
+    <p><span class="term">期望</span>（Expectation）E[X] = ∑<sub>x</sub> x·P(x)，是所有取值的概率加权平均；<span class="term">方差</span>（Variance）Var(X) = E[(X − E[X])²]，衡量取值偏离期望的程度。实战中常用等价公式 Var(X) = E[X²] − (E[X])²。</p>
+
+    <p><strong>实算一：均匀骰子。</strong>X 等概率取 1 到 6，每个 P = 1/6。</p>
+
+    <div class="formula">E[X] = <span class="frac"><span class="num-part">1</span><span class="den-part">6</span></span>(1+2+3+4+5+6) = <span class="frac"><span class="num-part">21</span><span class="den-part">6</span></span> = 3.5</div>
+
+    <p>E[X²] 逐项列出：1²=1，2²=4，3²=9，4²=16，5²=25，6²=36：</p>
+
+    <div class="formula">E[X²] = <span class="frac"><span class="num-part">1</span><span class="den-part">6</span></span>(1+4+9+16+25+36) = <span class="frac"><span class="num-part">91</span><span class="den-part">6</span></span></div>
+
+    <div class="formula">Var(X) = E[X²] − (E[X])² = <span class="frac"><span class="num-part">91</span><span class="den-part">6</span></span> − 12.25 = <span class="frac"><span class="num-part">35</span><span class="den-part">12</span></span> ≈ 2.92</div>
+
+    <p><strong>实算二：伯努利 p = 0.3。</strong>P(X=1) = 0.3，P(X=0) = 0.7。</p>
+
+    <div class="formula">E[X] = 1 × 0.3 + 0 × 0.7 = 0.3</div>
+    <div class="formula">E[X²] = 1² × 0.3 + 0² × 0.7 = 0.3</div>
+    <div class="formula">Var(X) = E[X²] − (E[X])² = 0.3 − 0.09 = 0.21</div>
+
+    <p>这正是伯努利方差的通用结论 Var(X) = p(1−p) = 0.3 × 0.7 的验证。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>期望是分布的<strong>重心</strong>：把 PMF 想成一根杆上各点挂的砝码，E[X] 就是让它平衡的那个支点。方差是砝码分布的<strong>胖瘦</strong>：离支点越远，杆越难平衡。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>"连续变量的 PDF 值 p(0.5) = 1.8 说明概率超过 1，不可能"——错。PDF 是<strong>密度</strong>不是概率，可以大于 1；只有区间积分才必须是 ≤ 1 的概率。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 3.3-1</div>
+              <div class="q-text">PMF 和 PDF 的区别是什么？PDF 在某点的值能直接读作概率吗？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              PMF 直接给出离散取值的概率；PDF 是密度，单点概率为 0，只有区间积分才是概率，密度值本身可以大于 1。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 3.3-2</div>
+              <div class="q-text">写出方差的计算式 Var(X) = E[X²] − (E[X])²，并背出伯努利分布的期望与方差。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              Var(X) = E[X²] − (E[X])²。伯努利：E[X] = p，Var(X) = p(1−p)。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ================= 3.4 ================= -->
+    <h2><span class="sec-no">3.4</span>深度学习最爱的分布：高斯、指数、Laplace 与 Dirac</h2>
+
+    <p>上一节给了分布的概念，这一节选型：深度学习反复使用的就这几个。</p>
+
+    <p><strong>高斯分布</strong>（Gaussian Distribution，即正态分布）：密度由 μ 与 σ² 决定，p(x) 与 exp(−(x−μ)²/(2σ²)) 成正比。为什么它无处不在？<span class="term">中心极限定理</span>（Central Limit Theorem）的直觉：当许多个独立的小噪声叠加在一起，无论每个噪声各自长什么样，总和都趋向高斯。测量误差、像素噪点、参数初始化——都是"许多小因素之和"，所以默认假设高斯往往是对的。</p>
+
+    <p><strong>指数分布与 Laplace 分布</strong>：</p>
+
+    <ul>
+      <li><span class="term">指数分布</span>（Exponential Distribution）：p(x) = λ·e^(−λx)（x ≥ 0），在 0 处有一个尖峰，向右指数衰减——建模"等待时间"或"非负且偏向 0"的量。</li>
+      <li><span class="term">拉普拉斯分布</span>（Laplace Distribution）：把指数分布镜像到负半轴，在 μ 处形成尖峰，p(x) 与 e^(−|x−μ|/b) 成正比。</li>
+    </ul>
+
+    <p>现在先埋一个钩子：对参数加"Laplace 先验"等价于 L1 正则（绝对值惩罚），加"高斯先验"等价于 L2 正则（平方惩罚）——第 5 章讲贝叶斯推断、第 7 章讲正则化时会把这个钩子拉满。</p>
+
+    <p><strong>Dirac 分布与经验分布</strong>：<span class="term">Dirac 分布</span>（Dirac Distribution）把全部概率质量压在一个点上（密度是无穷窄无穷高的"尖刺" δ(x−μ)）。把训练集里每个样本放一个 Dirac 尖刺、各分 1/m 的质量，就得到<span class="term">经验分布</span>（Empirical Distribution）——"从数据估计分布"的最原始形式，第 5 章的最大似然估计就建立在它之上。</p>
+
+    <p><strong>混合分布</strong>：把几个分布按比例混合，P(x) = ∑<sub>k</sub> P(c=k)·P(x|c=k)，其中 c 是看不见的<span class="term">潜变量</span>（Latent Variable）——"数据由几个隐藏类别各自生成"的建模思想，后面的混合模型与生成模型全靠它。</p>
+
+    <div class="box insight">
+      <span class="box-tag">✅ 判定规则</span>
+      <p>选分布三问：取值离散还是连续？连续的话有没有尖峰/长尾/对称性？是不是"许多小因素之和"？答案分别指向 categorical、Laplace/指数、高斯。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 3.4-1</div>
+              <div class="q-text">为什么高斯分布在实践中如此常见？用一句话说出中心极限定理的直觉。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              许多独立小噪声之和趋向高斯，与各自原本的分布无关；现实中的误差大多是多因素叠加，所以默认高斯常常成立。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 3.4-2</div>
+              <div class="q-text">Laplace 先验与高斯先验分别对应哪种正则化？什么是经验分布？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              Laplace 先验 ↔ L1 正则，高斯先验 ↔ L2 正则。经验分布 = 在每个训练样本上放一个质量 1/m 的 Dirac 尖刺。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ================= 3.5 ================= -->
+    <h2><span class="sec-no">3.5</span>信息论：给"信息量"造第二把尺子</h2>
+
+    <p>概率量化了"不确定"，<span class="term">信息论</span>（Information Theory）进一步量化"一个消息带来多少信息"。基本单位是比特（bit）。</p>
+
+    <h3>自信息：越罕见，越惊人</h3>
+
+    <p>事件 x 的<span class="term">自信息</span>（Self-information）：</p>
+
+    <div class="formula">I(x) = −log₂ P(x)</div>
+
+    <p>"太阳从东边升起"信息量约等于 0（P ≈ 1）；罕见事件信息量大（P 小，−log₂P 大）。概率减半，信息量多 1 bit。</p>
+
+    <h3>熵：分布的平均不确定性</h3>
+
+    <p><span class="term">熵</span>（Entropy）是整个分布的自信息期望：H(X) = E[−log₂ P(x)] = −∑<sub>x</sub> P(x)·log₂ P(x)。它回答："这个分布平均有多难预测？"</p>
+
+    <p><strong>实算：p = (1/2, 1/4, 1/8, 1/8)。</strong>逐项写：log₂(1/2) = −1，log₂(1/4) = −2，log₂(1/8) = −3：</p>
+
+    <div class="formula">H = −[ ½·(−1) + ¼·(−2) + ⅛·(−3) + ⅛·(−3) ] = ½·1 + ¼·2 + ⅛·3 + ⅛·3 = 0.5 + 0.5 + 0.375 + 0.375 = 1.75 bit</div>
+
+    <p>对照：4 个结果若均匀分布，熵是 log₂4 = 2 bit。1.75 &lt; 2，分布越不均匀越好预测，熵越低。</p>
+
+    <h3>KL 散度：两个分布差多少</h3>
+
+    <p><span class="term">KL 散度</span>（KL Divergence，Kullback–Leibler Divergence）度量"用 q 近似 p 时多付的代价"：</p>
+
+    <div class="formula">D<sub>KL</sub>(p ‖ q) = ∑<sub>x</sub> p(x) · log₂ <span class="frac"><span class="num-part">p(x)</span><span class="den-part">q(x)</span></span></div>
+
+    <p><strong>实算：p = (0.5, 0.5)，q = (0.25, 0.75)。</strong>逐项写：</p>
+
+    <div class="formula">x₁ 项：0.5 · log₂<span class="frac"><span class="num-part">0.5</span><span class="den-part">0.25</span></span> = 0.5 · log₂ 2 = 0.5 · 1 = 0.5</div>
+    <div class="formula">x₂ 项：0.5 · log₂<span class="frac"><span class="num-part">0.5</span><span class="den-part">0.75</span></span> = 0.5 · log₂<span class="frac"><span class="num-part">2</span><span class="den-part">3</span></span> = 0.5 · (−0.5850) = −0.2925</div>
+    <div class="formula">D<sub>KL</sub>(p ‖ q) = 0.5 − 0.2925 ≈ 0.2075 bit</div>
+
+    <p>注意：D<sub>KL</sub>(p‖q) ≠ D<sub>KL</sub>(q‖p)，<strong>KL 散度不对称</strong>，所以它叫"散度"而不叫"距离"。它永远 ≥ 0，当且仅当 p = q 时等于 0。</p>
+
+    <h3>交叉熵：深度学习的损失函数从这里来</h3>
+
+    <p><span class="term">交叉熵</span>（Cross-Entropy）H(p, q) = −∑<sub>x</sub> p(x)·log₂ q(x)，它与熵、KL 散度满足：</p>
+
+    <div class="formula">H(p, q) = H(p) + D<sub>KL</sub>(p ‖ q)</div>
+
+    <p>用上面同一组数字验证：H(p) = 1 bit（p 是两个 0.5），所以 H(p, q) = 1 + 0.2075 ≈ 1.2075 bit。</p>
+
+    <p><strong>结论（本章最重要的一句话）</strong>：训练分类器时，标签分布 p 是固定的，H(p) 是常数。于是<strong>最小化交叉熵 H(p, q) ⟺ 最小化 D<sub>KL</sub>(p‖q) ⟺ 让模型输出分布 q 逼近标签分布 p</strong>。这就是第 5、6 章交叉熵损失的全部来历。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>交叉熵 = 熵 + KL 散度，可以读作"编码代价 = 不可消除的本底 + 用错分布的浪费"。训练能消掉的只有后者，所以优化交叉熵就是在消除"用错分布"的部分。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>"D<sub>KL</sub>(p‖q) = 0.2075 那 D<sub>KL</sub>(q‖p) 也一样"——错。换方向重算：0.25·log₂(0.25/0.5) + 0.75·log₂(0.75/0.5) = 0.25·(−1) + 0.75·log₂(1.5) = −0.25 + 0.75 × 0.5850 ≈ 0.1887，确实不相等。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 3.5-1</div>
+              <div class="q-text">默写自信息、熵、KL 散度、交叉熵四个公式，并说出 H(p,q) = H(p) + D_KL(p‖q) 的含义。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              I(x)=−log₂P(x)；H(X)=−∑p·log₂p；D_KL(p‖q)=∑p·log₂(p/q)；H(p,q)=−∑p·log₂q。交叉熵等于本底熵加近似误差。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 3.5-2</div>
+              <div class="q-text">为什么训练分类器时"最小化交叉熵"等价于"让模型分布逼近标签分布"？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              因为标签分布 p 固定，H(p) 是常数；最小化 H(p,q) 就是在最小化 D_KL(p‖q)，即让 q 逼近 p。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ================= 3.6 ================= -->
+    <h2><span class="sec-no">3.6</span>独立与条件独立：对抗联合分布的指数爆炸</h2>
+
+    <p>本章一直在单变量上演算，现实却是成百上千个变量。麻烦来了：n 个二值变量的联合分布需要 2ⁿ 个概率项——n = 100 时是 2¹⁰⁰，宇宙原子总数都装不下。这叫<strong>联合分布的指数爆炸</strong>。</p>
+
+    <p>出路是用结构性假设把大分布拆成小分布的乘积：</p>
+
+    <ul>
+      <li><strong>独立性</strong>：若 x ⊥ y，则 P(x, y) = P(x)·P(y)。n 个相互独立的二值变量，只需 n 个参数而不是 2ⁿ 个。</li>
+      <li><strong>条件独立性</strong>：给定 z 时 x ⊥ y，即 P(x, y | z) = P(x|z)·P(y|z)。例：知道"是否感冒"之后，"发烧"与"咳嗽"近似条件独立。</li>
+    </ul>
+
+    <p>一个变量的"绝对独立"很少见，但"给定某些变量后的条件独立"处处存在。把变量画成节点、把（条件）依赖画成边，联合分布就能按图结构分解——这就是图模型（结构化概率模型）的思想，第 16 章会展开，这里只需记住：<strong>独立性假设是把指数问题降回多项式问题的唯一杠杆</strong>。</p>
+
+    <div class="box insight">
+      <span class="box-tag">✅ 判定规则</span>
+      <p>看到联合分布先数参数：没有独立性假设时二值变量要 2ⁿ 项；每发现一条（条件）独立关系，就把一个大因子拆成几个小因子，参数量随之骤降。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 3.6-1</div>
+              <div class="q-text">n 个二值变量的联合分布需要多少项？独立性假设如何改变这个数字？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              2ⁿ 项（指数爆炸）。若全部相互独立，P 分解为 n 个单变量分布的乘积，只需 n 个参数。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 3.6-2</div>
+              <div class="q-text">写出条件独立的定义式，并举一个现实中的例子。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              P(x,y|z) = P(x|z)·P(y|z)。例：给定"感冒"后，"发烧"与"咳嗽"近似条件独立。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===== 概念卡 ===== -->
+    <h2><span class="sec-no">🃏</span>概念卡：本章概念的一分钟画像</h2>
+    <p>翻面前先自问：这个概念我能用一句话讲清楚吗？</p>
+    <div class="flip-grid">
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 1</div>
+            <div class="q-text">随机变量（Random Variable）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">从试验结果到数值的映射，大写记变量、小写记取值。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">把"不确定的事件"变成可以代数运算的对象。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">一个"还没开奖"的变量：取值范围与概率事先写好。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">把它当成一个普通数值变量，忘了它带一个分布。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">本章全部；第 5 章把数据与参数都建模为随机变量。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 2</div>
+            <div class="q-text">条件概率（Conditional Probability）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">P(y|x) = P(x,y)/P(x)：已知 x 发生后 y 的概率。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">让"新证据"能更新原有判断。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">把样本空间缩小到"x 已发生"的那一块重新算比例。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为 P(y|x) 与 P(x|y) 可以互换——方向不能乱换。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">贝叶斯定理、条件独立、链式法则都靠它。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 3</div>
+            <div class="q-text">贝叶斯定理（Bayes' Theorem）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">P(x|y) = P(y|x)·P(x)/P(y)，分母用全概率展开。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">把"原因→结果"翻转为"结果→原因"的诊断。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">后验 = 似然 × 先验 ÷ 证据：证据越稀罕，越要怀疑常见解释。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">忽视先验（基础率谬误），把检测准确率当成确诊率。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">第 5 章最大后验估计、贝叶斯推断；一切诊断类问题。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 4</div>
+            <div class="q-text">期望与方差（Expectation &amp; Variance）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">E[X]=∑x·P(x)；Var(X)=E[X²]−(E[X])²。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">用两个数概括分布的重心与离散程度。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">期望是杆的支点，方差是砝码摊开的胖瘦。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为 E[XY]=E[X]E[Y] 总成立——只有独立时才成立。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">第 4 章梯度期望、第 8 章优化中的噪声分析。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 5</div>
+            <div class="q-text">高斯分布（Gaussian Distribution）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">由 μ、σ² 决定的钟形连续分布，密度与 exp(−(x−μ)²/2σ²) 成正比。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">为"连续噪声"提供一个只有两个参数的默认模型。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">许多独立小噪声之和必然长成钟形（中心极限定理）。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为它"总是对的"——重尾现象（极端值多）时失效。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">参数初始化、噪声建模、VAE（第 20 章）先验。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 6</div>
+            <div class="q-text">熵（Entropy）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">H(X) = −∑ p(x)·log₂ p(x)，分布的平均自信息。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">给"一个分布有多难预测"一个比特数。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">平均要猜多少次才猜中；越均匀越难猜，熵越大。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">把熵当成单个事件的属性——它是整个分布的属性。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">交叉熵损失的本底；决策树的信息增益。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 7</div>
+            <div class="q-text">KL 散度（KL Divergence）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">D_KL(p‖q) = ∑ p·log₂(p/q)，用 q 近似 p 多付的比特。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">量化"两个分布差多少"，且 ≥ 0、相等时为 0。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">按 p 的真实频率发牌，却用 q 的策略编码，多花的成本。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为它对称、是"距离"——D_KL(p‖q) ≠ D_KL(q‖p)。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">交叉熵损失、变分推断（第 19、20 章）的核心度量。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 8</div>
+            <div class="q-text">交叉熵（Cross-Entropy）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">H(p,q) = −∑ p·log₂ q = H(p) + D_KL(p‖q)。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">给一个可直接对模型输出 q 求导的训练目标。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">本底熵消不掉，能优化的只有"用错分布"的那部分。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为交叉熵就是熵——它涉及两个分布，不是单一分布的属性。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">第 5、6 章起所有分类器的默认损失函数。</span></div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- ===== 分层习题 ===== -->
+    <h2><span class="sec-no">📝</span>分层习题</h2>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>
+        <p>判断对错并说明理由：① "连续随机变量的 PDF 满足 p(x) ≤ 1"。② "若 P(A) = 0.9，P(B) = 0.9，则 P(A∩B) = 0.81"。</p>
+      </div>
+      <details>
+        <summary>提示</summary>
+        <p>① 回想 PDF 是密度还是概率；② 回想乘法规则在什么前提下才能直接相乘。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p>① 错。PDF 是密度，可以大于 1（例如区间 [0, 0.5] 上的均匀分布密度恒为 2）；只有区间积分才必须 ≤ 1。</p>
+          <p>② 错。P(A∩B) = P(A)·P(B) = 0.81 仅在 A 与 B <strong>独立</strong>时成立；题中未给独立性，无法计算（范围在 0.8 到 0.9 之间）。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>
+        <p>选择：下列哪个量一定非负？（a）自信息 I(x)（b）熵 H(X)（c）KL 散度 D_KL(p‖q)（d）交叉熵 H(p,q)。</p>
+      </div>
+      <details>
+        <summary>提示</summary>
+        <p>逐个检查定义式中每一项的符号；KL 散度的非负性是一条定理（Gibbs 不等式）。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p>全部非负。I(x) = −log₂p，p ≤ 1 故 log₂p ≤ 0，I ≥ 0；H 是非负量的加权和；D_KL ≥ 0 由 Gibbs 不等式保证，当且仅当 p = q 时取 0；H(p,q) = H(p) + D_KL ≥ 0。易错点：以为 KL 散度可以取负——它不行，但组成它的单项 p·log₂(p/q) 可以为负（见 3.5 实算中的 −0.2925）。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>
+        <p>换一组数字重做贝叶斯：某病患病率 P(病) = 0.005，敏感度 P(阳|病) = 0.99，特异度 P(阴|健康) = 0.98。求全概率 P(阳) 与后验 P(病|阳)，保留三位小数。</p>
+      </div>
+      <details>
+        <summary>提示</summary>
+        <p>先写假阳性率 P(阳|健康) = 1 − 0.98；再套全概率公式；最后代入贝叶斯定理。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p>P(阳|健康) = 0.02。</p>
+          <p>P(阳) = 0.99 × 0.005 + 0.02 × 0.995 = 0.00495 + 0.0199 = 0.02485。</p>
+          <p>P(病|阳) = 0.00495 / 0.02485 ≈ 0.199。</p>
+          <p>解读：即使敏感度高达 99%，由于患病率只有 0.5%，阳性者真患病的概率也只有约 20%——基础率仍然主导。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>
+        <p>换一组分布手算熵与 KL：p = (1/4, 1/4, 1/4, 1/4)，q = (1/2, 1/4, 1/8, 1/8)。求 H(p)、H(q)、D_KL(p‖q)，并验证 H(p,q) = H(p) + D_KL(p‖q)。（log₂(1/2) = −1，log₂(1/4) = −2，log₂(1/8) = −3）</p>
+      </details>
+      <details>
+        <summary>提示</summary>
+        <p>H(p) 是均匀分布的熵；D_KL(p‖q) 逐项写 p<sub>i</sub>·log₂(p<sub>i</sub>/q<sub>i</sub>)，共四项。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p>H(p) = −4 × (1/4)·log₂(1/4) = 2 bit。</p>
+          <p>H(q) = ½·1 + ¼·2 + ⅛·3 + ⅛·3 = 1.75 bit（同 3.5 节）。</p>
+          <p>D_KL(p‖q) 逐项：</p>
+          <p>项1：¼·log₂(¼/½) = ¼·(−1) = −0.25；项2：¼·log₂(¼/¼) = 0；项3：¼·log₂(¼/⅛) = ¼·1 = 0.25；项4 同项3 = 0.25。</p>
+          <p>D_KL(p‖q) = −0.25 + 0 + 0.25 + 0.25 = 0.25 bit。</p>
+          <p>验证：H(p,q) = −[¼·log₂½ + ¼·log₂¼ + ¼·log₂⅛ + ¼·log₂⅛] = ¼·(1+2+3+3) = 2.25 bit = 2 + 0.25 ✓。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l3">L3 建模应用</span>
+        <p>某工厂用两个传感器 A、B 监测同一台机器是否故障（F）。给定 F 时，A 与 B 的报警近似独立。已知 P(F) = 0.02，P(A报警|F) = 0.9，P(B报警|F) = 0.8，且健康时误报率均为 0.05。① 用条件独立写出 P(A报警, B报警 | F) 的分解；② 求 F 发生时双报警的概率；③ 说明如果错误地假设 A、B 无条件独立，建模会丢掉什么。</p>
+      </div>
+      <details>
+        <summary>提示</summary>
+        <p>① 套条件独立定义；② 直接相乘；③ 想想"无条件独立"与"给定 F 条件独立"的差别——不条件化时 A、B 其实相关吗？</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p>① 条件独立给出 P(A,B|F) = P(A|F)·P(B|F)，联合分布由 2² 项分解为两个单传感器条件分布的乘积。</p>
+          <p>② P(A报警, B报警 | F) = 0.9 × 0.8 = 0.72。</p>
+          <p>③ 若不条件化，A 与 B 通过共同的 F 而相关（机器故障时两者一起报警），无条件独立假设是错的，会丢掉"双报警强烈提示故障"这一关键信息，导致诊断模型严重低估双报警时的故障概率。这正是 3.6 节"条件独立比绝对独立更常见、更有用"的实例，也是图模型按结构分解联合分布的动机。</p>
+        </div>
+      </details>
+    </div>
+
+    <!-- ===== 本章自测 ===== -->
+    <h2><span class="sec-no">✍️</span>本章自测</h2>
+    <p class="quiz-hint">点击选项判分，答错会给出原因。</p>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 1</div>
+      <div class="q-stem">关于 PMF 与 PDF，下列说法正确的是？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. PDF 在某点的值就是该点的概率</li>
+        <li data-opt="b">B. PMF 直接给出概率，PDF 只有区间积分才是概率</li>
+        <li data-opt="c">C. PDF 的值一定不超过 1</li>
+        <li data-opt="d">D. 连续随机变量在某点的概率由 PDF 直接给出且大于 0</li>
+      </ul>
+      <div class="quiz-explain">B 对：PMF 是概率本身，PDF 是密度。A 错：密度的单点值不是概率。C 错：密度可以大于 1（如区间 [0,0.5] 上均匀分布密度为 2）。D 错：连续变量在任何单点的概率恒为 0。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="c">
+      <div class="q-no">自测 2</div>
+      <div class="q-stem">某病患病率 0.02，敏感度 P(阳|病) = 0.9，假阳性率 P(阳|健康) = 0.1。检出阳性者真患病的概率最接近？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 0.90</li>
+        <li data-opt="b">B. 0.50</li>
+        <li data-opt="c">C. 0.16</li>
+        <li data-opt="d">D. 0.02</li>
+      </ul>
+      <div class="quiz-explain">C 对：P(阳) = 0.9×0.02 + 0.1×0.98 = 0.018 + 0.098 = 0.116；P(病|阳) = 0.018/0.116 ≈ 0.155 ≈ 0.16。A 错：把敏感度当后验，忽视先验（基础率谬误）。B 错：无计算依据的折中直觉。D 错：那是先验患病率，阳性结果必然要上调它。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="a">
+      <div class="q-no">自测 3</div>
+      <div class="q-stem">关于期望，下列说法正确的是？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. E[X + Y] = E[X] + E[Y] 恒成立，不要求独立</li>
+        <li data-opt="b">B. E[XY] = E[X]·E[Y] 恒成立，不要求独立</li>
+        <li data-opt="c">C. E[X²] = (E[X])² 恒成立</li>
+        <li data-opt="d">D. 期望一定是 X 的某个可能取值</li>
+      </ul>
+      <div class="quiz-explain">A 对：期望的线性性不需要独立性。B 错：乘积期望等于期望乘积需要独立（或不相关）。C 错：E[X²] − (E[X])² = Var(X) ≥ 0，等号仅在无随机性时成立——骰子一例 91/6 ≈ 15.17 ≠ 12.25。D 错：骰子期望 3.5 不是任何一面。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="d">
+      <div class="q-no">自测 4</div>
+      <div class="q-stem">关于 KL 散度，下列说法正确的是？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. D_KL(p‖q) = D_KL(q‖p)，是对称距离</li>
+        <li data-opt="b">B. D_KL 可以取负值</li>
+        <li data-opt="c">C. 只要 p ≠ q，组成 KL 的每一项 p·log₂(p/q) 都为正</li>
+        <li data-opt="d">D. D_KL ≥ 0，当且仅当 p = q 时为 0，且一般不对称</li>
+      </ul>
+      <div class="quiz-explain">D 对：非负性由 Gibbs 不等式保证，方向敏感。A 错：3.5 节算出 D_KL(p‖q) ≈ 0.2075 而反方向 ≈ 0.1887，不对称，故不能叫距离。B 错：总和不可能为负。C 错：单项可以为负（3.5 节第二项 −0.2925），只是总和 ≥ 0。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 5</div>
+      <div class="q-stem">训练分类器时，最小化交叉熵 H(p, q) 之所以有效，根本原因是？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 交叉熵就是标签分布的熵，越小说明数据越整齐</li>
+        <li data-opt="b">B. 标签分布 p 固定，H(p) 是常数，最小化交叉熵等价于最小化 D_KL(p‖q)、让 q 逼近 p</li>
+        <li data-opt="c">C. 交叉熵是对称度量，优化方向无所谓</li>
+        <li data-opt="d">D. 交叉熵能直接增大模型的参数数量</li>
+      </ul>
+      <div class="quiz-explain">B 对：H(p,q) = H(p) + D_KL(p‖q)，p 固定时前者只剩第二项可优化。A 错：交叉熵涉及两个分布，不是单一标签分布的熵。C 错：它不对称，p、q 角色不能互换。D 错：交叉熵与参数量无关，它是分布逼近的度量。</div>
+    </div>
+
+    <!-- ===== 三句话复述 ===== -->
+    <div class="retell">
+      <h3>🗣️ 用自己的话，三句话讲完本章</h3>
+      <p>对着空气（或室友）说出这三句。说卡壳的那句，回去重读对应小节。</p>
+      <details>
+        <summary>句1：这章解决什么问题？——</summary>
+        <div class="retell-answer">参考答案：世界充满不确定，AI 需要两把可计算的尺子——概率给"不确定"赋值（0 到 1），信息论给"信息量"赋值（bit），让不确定能像数字一样参与运算与优化。</div>
+      </details>
+      <details>
+        <summary>句2：核心机制是什么？——</summary>
+        <div class="retell-answer">参考答案：用加法/乘法/条件概率与贝叶斯定理在"原因↔结果"之间双向推理；用随机变量与分布压缩描述世界；用熵、KL 散度、交叉熵量化信息量与分布差距，使"让模型分布逼近真实分布"成为可优化的目标。</div>
+      </details>
+      <details>
+        <summary>句3：它和前后章怎么分工？——</summary>
+        <div class="retell-answer">参考答案：第 2 章给确定的向量语言，本章给不确定的概率语言；本章留下的两个坑——概率在浮点机上会溢出/病态（第 4 章数值计算）、分布如何从数据估计（第 5 章机器学习基础），由后两章填。</div>
+      </details>
+    </div>
+
+    <!-- ===== 复习计划 ===== -->
+    <div class="review-plan">
+      <h3>🔁 间隔复习计划</h3>
+      <p>回忆本身比重读有效 10 倍。到点只做一件事：翻卡 + 重做标记题。</p>
+      <table>
+        <tr><th>时间点</th><th>复习内容</th><th>预计用时</th></tr>
+        <tr><td>第 1 天</td><td>全部 8 张概念卡 + 回忆卡 3.2-1、3.5-1、3.5-2</td><td>10 分钟</td></tr>
+        <tr><td>第 3 天</td><td>概念卡 3、7、8（贝叶斯/KL/交叉熵）+ 重做 L2 两道手算 + 自测错题</td><td>10 分钟</td></tr>
+        <tr><td>第 7 天</td><td>三句话复述 + 默写四个信息论公式 + 回忆卡 3.4-2、3.6-1</td><td>10 分钟</td></tr>
+        <tr><td>第 15 天</td><td>只重做合上书挑战；能全过就毕业</td><td>15 分钟</td></tr>
+      </table>
+    </div>
+
+    <!-- ===== 合上书挑战 ===== -->
+    <div class="final-challenge">
+      <h3>📕 合上书挑战</h3>
+      <p class="fc-sub">现在关掉这个页面，拿一张纸，凭记忆完成以下任务。全部做完再回来核对——这是本章真正的毕业考试。</p>
+      <ol id="challenge-list">
+        <li><span class="fc-check"></span>写出不确定性的三个来源，并各举一个例子。</li>
+        <li><span class="fc-check"></span>默写贝叶斯定理与全概率公式，用患病率 0.01、敏感度 0.95、特异度 0.95 完整算出 P(病|阳) ≈ 0.161，并解释基础率谬误。</li>
+        <li><span class="fc-check"></span>手算均匀骰子的 E[X] = 3.5 与 Var(X) = 35/12 ≈ 2.92（E[X²] 逐项列出）。</li>
+        <li><span class="fc-check"></span>手算 p = (½, ¼, ⅛, ⅛) 的熵 H = 1.75 bit，以及 p = (0.5, 0.5)、q = (0.25, 0.75) 的 D_KL(p‖q) ≈ 0.2075 bit。</li>
+        <li><span class="fc-check"></span>写出 H(p,q) = H(p) + D_KL(p‖q)，并用它解释"最小化交叉熵 = 让模型分布逼近标签分布"。</li>
+        <li><span class="fc-check"></span>解释 n 个二值变量联合分布为什么有 2ⁿ 项，独立性假设如何把它降到 n 个参数。</li>
+        <li><span class="fc-check"></span>一句话回答本章主线问题：怎样给"不确定"和"信息量"各造一把可计算的尺子？</li>
+      </ol>
+    </div>
+
+    <div class="complete-zone">
+      <button class="btn-complete" id="btn-complete" onclick="markDone()">✓ 我已完成本章（含合上书挑战）</button>
+    </div>
+
+    <div class="chapter-nav">
+      <a href="chapter-02.html"><span class="nav-dir">← 上一章</span>第2章 线性代数</a>
+      <a href="chapter-04.html" class="next"><span class="nav-dir">下一章 →</span>第4章 数值计算</a>
+    </div>
+
+  </div>
+</div>
+
+<footer class="footer">
+  <div class="wrap">第3章 概率与信息论 · 深度学习互动讲义 · 基于 Goodfellow, Bengio &amp; Courville (2016)</div>
+</footer>
+
+<script src="/lectures-assets/mermaid.min.js"></script>
+<script>
+mermaid.initialize({
+  startOnLoad: true,
+  theme: "base",
+  themeVariables: {
+    primaryColor: "#e3edf7",
+    primaryBorderColor: "#1d5f9e",
+    primaryTextColor: "#1d5f9e",
+    lineColor: "#5c554b",
+    secondaryColor: "#fbeedd",
+    tertiaryColor: "#f5f1e8",
+    fontFamily: "-apple-system, PingFang SC, sans-serif",
+    fontSize: "14px"
+  },
+  flowchart: { curve: "linear", htmlLabels: false }
+});
+</script>
+<script>
+// 自测题判分（原样复用，勿改）
+document.querySelectorAll(".quiz-block").forEach(block => {
+  const answer = block.dataset.answer;
+  const explain = block.querySelector(".quiz-explain");
+  block.querySelectorAll(".quiz-opts li").forEach(li => {
+    li.addEventListener("click", () => {
+      const opts = block.querySelectorAll(".quiz-opts li");
+      opts.forEach(o => o.classList.add("disabled"));
+      if (li.dataset.opt === answer) {
+        li.classList.add("correct");
+      } else {
+        li.classList.add("wrong");
+        block.querySelector(`[data-opt="${answer}"]`).classList.add("correct");
+      }
+      explain.classList.add("show");
+    });
+  });
+});
+
+// 合上书清单打勾（原样复用，勿改）
+document.querySelectorAll("#challenge-list li").forEach(li => {
+  li.addEventListener("click", () => li.classList.toggle("checked"));
+});
+
+// 完成标记 → localStorage
+const KEY = "dl_progress_v1";
+function loadProgress() {
+  try { return JSON.parse(localStorage.getItem(KEY)) || {}; } catch (e) { return {}; }
+}
+const progress = loadProgress();
+const btn = document.getElementById("btn-complete");
+if (progress[3] && progress[3].done) {
+  btn.textContent = "✓ 已完成 · 再次点击重置";
+  btn.classList.add("done");
+}
+function markDone() {
+  const p = loadProgress();
+  if (p[3] && p[3].done) {
+    delete p[3];
+    btn.textContent = "✓ 我已完成本章（含合上书挑战）";
+    btn.classList.remove("done");
+  } else {
+    p[3] = { done: true, completedAt: Date.now(), reviewsDone: 0 };
+    btn.textContent = "✓ 已完成 · 复习提醒已开启";
+    btn.classList.add("done");
+  }
+  localStorage.setItem(KEY, JSON.stringify(p));
+}
+</script>
+
+</body>
+</html>

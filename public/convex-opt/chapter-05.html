@@ -1,0 +1,949 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第5章 对偶 · 凸优化互动讲义</title>
+<link rel="stylesheet" href="/lectures-assets/style.css">
+</head>
+<body>
+
+<nav class="topbar">
+  <div class="topbar-inner">
+    <span class="brand"><a href="index.html" style="color:inherit">← 学习地图</a></span>
+    <span class="crumb">阶段② · 问题与对偶 / 第5章</span>
+  </div>
+</nav>
+
+<div class="wrap">
+
+  <div class="lecture-head">
+    <span class="ch-label">CHAPTER 05 · 问题与对偶</span>
+    <h1>对偶</h1>
+    <p class="lead">一个难求解的原问题，怎样系统性地得到它的下界、最优性证书与求解入口？本章造一台"下界机器"：拉格朗日函数 → 对偶函数 → 弱对偶 → 强对偶 → KKT 条件。</p>
+  </div>
+
+  <!-- ===== 章首四件套之 1：全书定位 ===== -->
+  <div class="position-bar">
+    <strong>本章在主线上的位置：</strong>第4章把现实问题组装成标准形式的凸问题、并证明了"局部最优 = 全局最优" → <u>本章给出"如何求下界、如何验证一个点最优"的对偶机器</u> → 第9–11章用这些工具设计真正算出数值解的迭代算法。<br>
+    第5章回答主线上的第5个问题：<strong>一个难求解的原问题，怎样系统性地得到它的下界、最优性证书与求解入口？</strong>
+    <div class="map-inline">
+      ① 基础与几何：
+      <span class="node">Ch1 引言</span><span class="arrow">→</span>
+      <span class="node">Ch2 凸集</span><span class="arrow">→</span>
+      <span class="node">Ch3 凸函数</span><br>
+      ② 问题与对偶：
+      <span class="node">Ch4 凸优化问题</span><span class="arrow">→</span>
+      <span class="node here">Ch5 对偶</span><br>
+      ③ 应用建模：
+      <span class="node">Ch6 逼近与拟合</span><span class="arrow">→</span>
+      <span class="node">Ch7 统计估计</span><span class="arrow">→</span>
+      <span class="node">Ch8 几何问题</span><br>
+      ④ 算法：
+      <span class="node">Ch9 无约束优化</span><span class="arrow">→</span>
+      <span class="node">Ch10 等式约束优化</span><span class="arrow">→</span>
+      <span class="node">Ch11 内点法</span>
+    </div>
+  </div>
+
+  <!-- ===== 章首四件套之 2：学习目标 ===== -->
+  <div class="objectives">
+    <h4>🎯 学完本章，合上书你应该能：</h4>
+    <ol>
+      <li>写出标准形式问题的拉格朗日函数与对偶函数定义，并说明为什么 λ 必须 ≥ 0；</li>
+      <li>手算一维问题的对偶函数 g(λ)，并逐数字验证 g(λ) ≤ p*；</li>
+      <li>对一个两变量 LP 完整推出对偶问题，并验证 p* = d*；</li>
+      <li>说出弱对偶与强对偶的差别，并用一个非凸反例演示正对偶间隙；</li>
+      <li>默写 KKT 四条件，并在给定小问题上求出或验证 KKT 点；</li>
+      <li>用影子价格解释 λ*ᵢ 的经济含义，说清符号规则 λ*ᵢ = −∂p*/∂uᵢ。</li>
+    </ol>
+  </div>
+
+  <div class="lecture">
+
+    <!-- ===== 章首四件套之 3：推导主线图 ===== -->
+    <div class="figure">
+      <div class="mermaid">
+flowchart TB
+  A["原问题难求解、最优性难验证"] --> B["把约束折进目标：拉格朗日函数 L"]
+  B --> C["对 x 取下确界：对偶函数 g"]
+  C --> D["两条白送的性质：g 恒凹，且 g 不超过 p星"]
+  D --> E["把下界推到最高：对偶问题 max g"]
+  E --> F["弱对偶：d星 不超过 p星，恒成立"]
+  F --> G{"何时取等号"}
+  G -->|凸问题且有严格可行点| H["Slater 条件推出强对偶 d星 = p星"]
+  G -->|非凸或约束不自洽| I["正对偶间隙：下界够不到天花板"]
+  H --> J["KKT 四条件：最优解的完整刻画"]
+  J --> K["λ星 是影子价格：约束值多少钱"]
+  K --> L["遗留：KKT 只给验证不给搜索，如何迭代逼近解"]
+  classDef hot fill:#fbeedd,stroke:#c4651f,stroke-width:2.5px,color:#c4651f;
+  classDef danger fill:#fae9e7,stroke:#b03a2e,stroke-width:2.5px,color:#b03a2e;
+  class H hot;
+  class J hot;
+  class L danger;
+      </div>
+      <div class="caption">本章推导主线：从"难验证"出发，每步回答"为什么还需要下一步"；终点落在代价上——对偶给证书，不给搜索（那是 Ch9–11 的事）。</div>
+    </div>
+
+    <!-- ================= 5.1 ================= -->
+    <h2><span class="sec-no">5.1</span>拉格朗日函数：把约束"折进"目标</h2>
+
+    <p>第4章把问题写成了标准形式：min f₀(<span class="var">x</span>)，约束 fᵢ(<span class="var">x</span>) ≤ 0（<span class="var">i</span> = 1,…,<span class="var">m</span>）、hᵢ(<span class="var">x</span>) = 0（<span class="var">i</span> = 1,…,<span class="var">p</span>），最优值记 p*。但它带出一个问题：<strong>约束让搜索变得束手束脚——能不能把约束"消掉"，变成一个无约束问题？</strong></p>
+
+    <p>想法朴素得像菜市场砍价：违反约束不被直接禁止，而是要<strong>交罚款</strong>。给第 <span class="var">i</span> 个不等式约束定一个单价 λᵢ ≥ 0，违反多少（fᵢ(<span class="var">x</span>) 超出 0 多少）就付多少；等式约束 hᵢ(<span class="var">x</span>) 偏离 0 也要付费，但正负两个方向都可能偏，所以单价 νᵢ 可正可负。总账单就是<span class="term">拉格朗日函数</span>（Lagrangian）：</p>
+
+    <div class="formula"><span class="var">L</span>(<span class="var">x</span>, λ, ν) = f₀(<span class="var">x</span>) + ∑<sub>i=1..m</sub> λᵢ fᵢ(<span class="var">x</span>) + ∑<sub>i=1..p</sub> νᵢ hᵢ(<span class="var">x</span>)，λ ⪰ 0</div>
+
+    <p>λ 与 ν 叫<span class="term">拉格朗日乘子</span>（Lagrange Multiplier），也叫<span class="term">对偶变量</span>（Dual Variable）。<strong>λᵢ ≥ 0 这个限制是方向性的关键</strong>：我们只想惩罚"违反"（fᵢ &gt; 0），不想奖励"宽松"（fᵢ &lt; 0）——若允许 λᵢ &lt; 0，最小化 L 时会故意把 fᵢ 压得很负来赚奖金，下界就失效了。</p>
+
+    <p><strong>最小例子。</strong>min <span class="var">x</span>²，约束 <span class="var">x</span> ≥ 1。先写成标准形：1 − <span class="var">x</span> ≤ 0。于是</p>
+
+    <div class="formula"><span class="var">L</span>(<span class="var">x</span>, λ) = <span class="var">x</span>² + λ(1 − <span class="var">x</span>)，λ ≥ 0</div>
+
+    <p>直观检查：若取 <span class="var">x</span> = 0（违反约束 1 个单位），L = 0 + λ·1 = λ——比不罚的 f₀ = 0 贵了 λ；λ 越大，违反越不划算。而可行点 <span class="var">x</span> = 2 处 L = 4 + λ·(−1) = 4 − λ ≤ 4：<strong>可行点上 L 永远不超过 f₀</strong>，因为罚款项 ≤ 0。这个不对称性正是下一节"下界机器"的燃料。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>拉格朗日函数把"禁止违规"换成"违规计价"：λ 是每条约束的影子单价。原问题 = 商家在"价格最狠"时也得付的账；对偶问题 = 定价者把价格调到最狠。两人算的是同一笔账的两个方向。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>忘了先把约束化成标准形 fᵢ(<span class="var">x</span>) ≤ 0 就套公式。<span class="var">x</span> ≥ 1 必须写成 1 − <span class="var">x</span> ≤ 0，L 里才是 +λ(1−<span class="var">x</span>)。方向写反（写成 λ(<span class="var">x</span>−1)）会让 λ ≥ 0 变成奖励违规，整个对偶理论当场报废。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 5.1-1</div>
+              <div class="q-text">写出拉格朗日函数的定义，并说明 λ 与 ν 的符号限制各是什么、为什么不同。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              L(x,λ,ν) = f₀(x) + ∑λᵢfᵢ(x) + ∑νᵢhᵢ(x)。不等式乘子 λᵢ ≥ 0（只罚违规方向）；等式乘子 νᵢ 无符号限制（hᵢ 可正可负地偏离 0）。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 5.1-2</div>
+              <div class="q-text">为什么在可行点上恒有 L(x̃,λ,ν) ≤ f₀(x̃)（λ ⪰ 0）？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              可行点满足 fᵢ(x̃) ≤ 0 且 hᵢ(x̃) = 0，故 ∑λᵢfᵢ(x̃) ≤ 0、∑νᵢhᵢ(x̃) = 0，L 至多等于 f₀。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ================= 5.2 ================= -->
+    <h2><span class="sec-no">5.2</span>对偶函数：一台白送的下界机器</h2>
+
+    <p>上一节把约束折成了价格，但它带出一个问题：<strong>价格给定后，这笔账最低能低到多少？</strong>把 L 对 <span class="var">x</span> 取最小，消去原变量，剩下的只是 (λ, ν) 的函数——<span class="term">对偶函数</span>（Dual Function）：</p>
+
+    <div class="formula"><span class="var">g</span>(λ, ν) = inf<sub><span class="var">x</span></sub> <span class="var">L</span>(<span class="var">x</span>, λ, ν) = inf<sub><span class="var">x</span></sub> ( f₀(<span class="var">x</span>) + ∑ λᵢ fᵢ(<span class="var">x</span>) + ∑ νᵢ hᵢ(<span class="var">x</span>) )</div>
+
+    <p>它有两条<strong>白送的性质</strong>——不需要任何凸性假设：</p>
+
+    <div class="box insight">
+      <span class="box-tag">✅ 两条白送的性质</span>
+      <p>① <strong>g 恒为凹函数</strong>：固定 <span class="var">x</span> 时 L 是 (λ,ν) 的仿射函数；一族仿射函数逐点取下确界，结果必凹（回忆 Ch3：仿射函数既凸又凹，逐点 inf 保凹）。<br>
+      ② <strong>g(λ,ν) ≤ p* 对一切 λ ⪰ 0 成立</strong>：任取可行点 <span class="var">x̃</span>，由 5.1 知 L(<span class="var">x̃</span>,λ,ν) ≤ f₀(<span class="var">x̃</span>)；左边对 <span class="var">x</span> 取 inf 只会更小，右边对可行 <span class="var">x̃</span> 取 min 得 p*。链条：g(λ,ν) ≤ L(<span class="var">x̃</span>,λ,ν) ≤ f₀(<span class="var">x̃</span>) → 取下确界与最小值 → g ≤ p*。</p>
+    </div>
+
+    <p><strong>完整手算（接 5.1 的例子）。</strong>min <span class="var">x</span>² s.t. 1−<span class="var">x</span> ≤ 0，L = <span class="var">x</span>² + λ(1−<span class="var">x</span>)。固定 λ ≥ 0，L 是关于 <span class="var">x</span> 的开口向上抛物线，最小点在导数为零处：</p>
+
+    <div class="formula">∂<span class="var">L</span>/∂<span class="var">x</span> = 2<span class="var">x</span> − λ = 0 ⟹ <span class="var">x</span> = λ/2</div>
+
+    <p>代回：</p>
+
+    <div class="formula"><span class="var">g</span>(λ) = (λ/2)² + λ(1 − λ/2) = λ²/4 + λ − λ²/2 = λ − λ²/4</div>
+
+    <p>逐数字验证下界性质：λ = 1 时 g(1) = 1 − 1/4 = <strong>0.75 ≤ p* = 1</strong> ✓；λ = 2 时 g(2) = 2 − 1 = <strong>1 = p*</strong>——这个下界竟然顶到了天花板（强对偶的预告）；λ = 3 时 g(3) = 3 − 9/4 = 0.75 ≤ 1 ✓；λ = 10 时 g(10) = 10 − 25 = −15 ≤ 1 ✓（下界可以很差，但永远不越界）。</p>
+
+    <div class="figure">
+      <svg viewBox="0 0 520 330" width="100%" style="max-width:640px" role="img" aria-label="对偶函数曲线示意图">
+        <!-- 坐标轴 -->
+        <line x1="40" y1="20" x2="40" y2="286" stroke="#5c554b" stroke-width="1.5"/>
+        <line x1="40" y1="246" x2="500" y2="246" stroke="#5c554b" stroke-width="1.5"/>
+        <text x="505" y="250" font-size="14" fill="#5c554b">λ</text>
+        <text x="12" y="30" font-size="14" fill="#5c554b">g</text>
+        <!-- p* 线 -->
+        <line x1="40" y1="86" x2="500" y2="86" stroke="#33735a" stroke-width="2" stroke-dasharray="7 5"/>
+        <text x="430" y="76" font-size="14" fill="#33735a">p* = 1</text>
+        <!-- g 曲线：g(λ)=λ−λ²/4，采样间隔 0.4 -->
+        <polyline points="40,246 80,188.4 120,143.6 160,111.6 200,92.4 240,86 280,92.4 320,111.6 360,143.6 400,188.4 440,246 460,279.6"
+          fill="none" stroke="#1d5f9e" stroke-width="2.5"/>
+        <!-- 顶点 -->
+        <circle cx="240" cy="86" r="5" fill="#c4651f"/>
+        <text x="150" y="66" font-size="14" fill="#c4651f">d* = g(2) = 1：下界顶到天花板</text>
+        <!-- 刻度标注 -->
+        <text x="232" y="262" font-size="13" fill="#5c554b">2</text>
+        <text x="432" y="262" font-size="13" fill="#5c554b">4</text>
+        <text x="8" y="250" font-size="13" fill="#5c554b">0</text>
+        <text x="52" y="300" font-size="13" fill="#8a8175">整条曲线都在 p* 下方：g(λ) ≤ p* 对所有 λ ≥ 0 成立</text>
+      </svg>
+      <div class="caption">图 5.1 例 min x² s.t. x≥1 的对偶函数 g(λ) = λ − λ²/4：处处不超过 p*，顶点处取到 d* = 1 = p*。</div>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>以为"g 是凹函数"需要原问题凸。<strong>不需要</strong>：g 是 (λ,ν) 的仿射函数族的逐点下确界，无论 f₀、fᵢ 长什么样都凹。这意味着"最大化 g"永远是一个凸优化问题——哪怕原问题不是。这是对偶最有用的副产品之一。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 5.2-1</div>
+              <div class="q-text">对偶函数为什么一定是凹的？需要原问题凸吗？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              g 是 (λ,ν) 的一族仿射函数（每个 x 贡献一个）的逐点下确界，逐点 inf 保凹。不需要原问题凸。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 5.2-2</div>
+              <div class="q-text">例 min x² s.t. x≥1 中，g(λ) 的表达式是什么？λ=1 与 λ=2 时各给 p*=1 的什么下界？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              g(λ) = λ − λ²/4。g(1) = 0.75（松下界）；g(2) = 1（紧贴，即 d* = p*）。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ================= 5.3 ================= -->
+    <h2><span class="sec-no">5.3</span>对偶问题与弱对偶：把下界推到最高</h2>
+
+    <p>上一节说每个 λ ⪰ 0 都给一张"下界证书"，但它带出一个问题：<strong>哪张证书最硬？</strong>自然把 g 推到最大——这就是<span class="term">对偶问题</span>（Dual Problem）：</p>
+
+    <div class="formula">max <span class="var">g</span>(λ, ν)　s.t.　λ ⪰ 0</div>
+
+    <p>最优值记 d*。由 5.2 的性质②，每个可行的 (λ,ν) 都满足 g ≤ p*，取 max 后依然成立——这就是<span class="term">弱对偶</span>（Weak Duality）：</p>
+
+    <div class="formula"><span class="var">d</span>* ≤ <span class="var">p</span>*　<strong>恒成立</strong>（不需要凸性）</div>
+
+    <p>差值 p* − d* 叫<span class="term">对偶间隙</span>（Duality Gap）。弱对偶的一个重要推论：<strong>若对偶问题无界（d* = +∞），原问题必不可行（p* = +∞）</strong>——否则 d* ≤ p* 矛盾。</p>
+
+    <p><strong>LP 完整手算例。</strong>min <span class="var">x</span>₁ + 2<span class="var">x</span>₂，约束 <span class="var">x</span>₁ + <span class="var">x</span>₂ ≥ 1，<span class="var">x</span>₁, <span class="var">x</span>₂ ≥ 0。</p>
+
+    <p><strong>第 1 步：化标准形。</strong>三个不等式：1 − <span class="var">x</span>₁ − <span class="var">x</span>₂ ≤ 0，−<span class="var">x</span>₁ ≤ 0，−<span class="var">x</span>₂ ≤ 0。</p>
+    <p><strong>第 2 步：写拉格朗日函数</strong>（乘子 λ, μ₁, μ₂ ≥ 0）：</p>
+
+    <div class="formula"><span class="var">L</span> = <span class="var">x</span>₁ + 2<span class="var">x</span>₂ + λ(1 − <span class="var">x</span>₁ − <span class="var">x</span>₂) − μ₁<span class="var">x</span>₁ − μ₂<span class="var">x</span>₂ = (1 − λ − μ₁)<span class="var">x</span>₁ + (2 − λ − μ₂)<span class="var">x</span>₂ + λ</div>
+
+    <p><strong>第 3 步：对自由的 x₁、x₂ 取 inf。</strong>线性函数 c·<span class="var">x</span> 在 <span class="var">x</span> 自由时：系数 ≠ 0 则 inf = −∞；系数 = 0 则贡献为 0。故 g 有限 ⟺</p>
+
+    <div class="formula">1 − λ − μ₁ = 0 且 2 − λ − μ₂ = 0，此时 <span class="var">g</span> = λ</div>
+
+    <p><strong>第 4 步：写出对偶可行域。</strong>μ₁ = 1 − λ ≥ 0 ⟹ λ ≤ 1；μ₂ = 2 − λ ≥ 0 ⟹ λ ≤ 2；连同 λ ≥ 0，对偶问题是：</p>
+
+    <div class="formula">max λ　s.t.　0 ≤ λ ≤ 1　⟹　<span class="var">d</span>* = 1</div>
+
+    <p><strong>第 5 步：对照原问题。</strong>可行域里 <span class="var">x</span>₁+<span class="var">x</span>₂ ≥ 1 且非负，目标 <span class="var">x</span>₁+2<span class="var">x</span>₂ 的最小值在 <span class="var">x</span>* = (1, 0) 处取得（用便宜的 <span class="var">x</span>₁ 扛下全部需求），p* = 1。于是 <strong>p* = d* = 1</strong>，间隙为 0——LP 上强对偶成立，5.4 会解释这不是巧合。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>对偶问题的每个可行解都是原问题的一张"下限发票"：你不必解原问题，只要随便给个合法的 (λ,ν) 算出 g，就能理直气壮地说"最优值不会低于这个数"。优化器来回报价（下界升、上界降）夹逼 p*，是第 11 章内点法的工作方式。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>对自由变量取 inf 时漏看"系数必须为零"这一约束，直接把 g 当成处处有限的函数。本例里若写 g(λ,μ) = λ 而不附带 1−λ−μ₁ = 0、2−λ−μ₂ = 0，等于把 −∞ 的区域藏了起来，对偶问题的可行域就错了。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 5.3-1</div>
+              <div class="q-text">弱对偶不等式是什么？它的证明需要原问题凸吗？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              d* ≤ p*。不需要凸性：只用"可行点上 L ≤ f₀"与 inf/min 的单调性两步。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 5.3-2</div>
+              <div class="q-text">LP 例 min x₁+2x₂ s.t. x₁+x₂≥1, x≥0 中，对偶可行域与 d* 各是什么？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              对偶 max λ s.t. 0 ≤ λ ≤ 1（由 μ₁=1−λ≥0、μ₂=2−λ≥0 挤出），d* = 1 = p*。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ================= 5.4 ================= -->
+    <h2><span class="sec-no">5.4</span>强对偶与 Slater 条件：何时下界顶到天花板</h2>
+
+    <p>上一节 LP 例子里 p* = d*，但它带出一个问题：<strong>这是常态还是运气？</strong>d* = p* 叫<span class="term">强对偶</span>（Strong Duality）。先看一个可以逐行验算的反例：它<strong>不</strong>恒成立。</p>
+
+    <p><strong>正对偶间隙反例（完整验算）。</strong>min f(<span class="var">x</span>) = <span class="var">x</span>³ − 3<span class="var">x</span>，约束 <span class="var">x</span> ≤ −1（标准形：<span class="var">x</span> + 1 ≤ 0）。</p>
+
+    <p><strong>原问题：</strong>f′(<span class="var">x</span>) = 3<span class="var">x</span>² − 3。当 <span class="var">x</span> ≤ −1 时 <span class="var">x</span>² ≥ 1，故 f′(<span class="var">x</span>) ≥ 0——f 在 (−∞, −1] 上单调递增，最小值在右端点取得：<span class="var">x</span>* = −1，p* = f(−1) = −1 + 3 = <strong>2</strong>。</p>
+
+    <p><strong>对偶：</strong>L(<span class="var">x</span>,λ) = <span class="var">x</span>³ − 3<span class="var">x</span> + λ(<span class="var">x</span> + 1)。固定任意 λ ≥ 0，令 <span class="var">x</span> → −∞，<span class="var">x</span>³ 项主导一切，L → −∞。于是 g(λ) = −∞ 对所有 λ ≥ 0 成立，d* = −∞。</p>
+
+    <div class="formula"><span class="var">p</span>* = 2，<span class="var">d</span>* = −∞　⟹　对偶间隙 = +∞</div>
+
+    <p>病因是<strong>非凸</strong>：f 的三次曲线在约束边界附近的形状，让任何线性"罚款"都压不住左侧的深渊。要补一句实话：<strong>凸问题也可能有间隙</strong>（当约束互相打架、可行域结构病态时），所以"凸" alone 还不够，还差一个技术性补丁——</p>
+
+    <div class="box insight">
+      <span class="box-tag">✅ Slater 条件（Slater's Condition）</span>
+      <p>对凸问题（f₀ 与诸 fᵢ 凸、hᵢ 仿射）：若存在<strong>严格可行点</strong> <span class="var">x̃</span>，使所有不等式约束严格成立 fᵢ(<span class="var">x̃</span>) &lt; 0（等式照常 hᵢ(<span class="var">x̃</span>) = 0），则强对偶 d* = p* 成立。<br>
+      特例：LP 只要可行（不必严格），强对偶就成立。</p>
+    </div>
+
+    <p><strong>"严格"二字不能省。</strong>fᵢ(<span class="var">x̃</span>) ≤ 0 只叫可行；Slater 要的是可行域有"内点"——每条不等式都留出正余量。直觉：贴着墙走的可行域，下界机器可能够不到天花板；留一条缝，价格机制才有调节空间。</p>
+
+    <p><strong>验证 5.3 的 LP。</strong>取 <span class="var">x̃</span> = (0.6, 0.6)：1 − 0.6 − 0.6 = −0.2 &lt; 0 ✓；−0.6 &lt; 0 ✓；−0.6 &lt; 0 ✓。三个约束全部严格成立，Slater 条件满足，解释了 5.3 里 p* = d* = 1 不是巧合。（其实对 LP 只要有任意可行点就够，这里是双重保险。）</p>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>把强对偶当成默认性质。正确的心智模型是：<strong>弱对偶免费，强对偶有门票</strong>——门票 = 凸性 + Slater（或 LP 可行性）。做题时先验门票再引用 d* = p*，否则结论没有依据。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 5.4-1</div>
+              <div class="q-text">反例 min x³−3x s.t. x≤−1 中，p* 与 d* 各是多少？间隙为什么是无穷大？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              p* = 2（x* = −1）；任意 λ≥0 时 x→−∞ 使 L→−∞，g ≡ −∞，d* = −∞。病因：目标非凸。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 5.4-2</div>
+              <div class="q-text">Slater 条件的内容是什么？"严格"体现在哪里？LP 的特例呢？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              凸问题存在严格可行点（所有 fᵢ(x̃) &lt; 0 严格成立）⟹ 强对偶。严格 = 不等式留正余量。LP 可行即强对偶。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ================= 5.5 ================= -->
+    <h2><span class="sec-no">5.5</span>KKT 条件：最优解的"四件套"</h2>
+
+    <p>上一节搞定了"下界何时等于最优值"，但它带出一个问题：<strong>怎么认出（或求出）那个取到 p* 的点 x* 本身？</strong>答案是把"原始"与"对偶"两边的最优性要求列成一张清单——<span class="term">KKT 条件</span>（Karush–Kuhn–Tucker Conditions）：</p>
+
+    <div class="box insight">
+      <span class="box-tag">✅ KKT 四条件</span>
+      <p>① <strong>原始可行</strong>：fᵢ(<span class="var">x</span>*) ≤ 0，hᵢ(<span class="var">x</span>*) = 0；<br>
+      ② <strong>对偶可行</strong>：λ* ⪰ 0；<br>
+      ③ <strong>互补松弛</strong>（Complementary Slackness）：λ*ᵢ fᵢ(<span class="var">x</span>*) = 0 对每个 <span class="var">i</span>；<br>
+      ④ <strong>驻点</strong>：∇f₀(<span class="var">x</span>*) + ∑ λ*ᵢ ∇fᵢ(<span class="var">x</span>*) + ∑ ν*ᵢ ∇hᵢ(<span class="var">x</span>*) = 0。<br>
+      对凸问题，KKT 是<strong>最优的充分必要条件</strong>：x* 最优 ⟺ 存在 (λ*,ν*) 使四条同成立。</p>
+    </div>
+
+    <p><strong>互补松弛在说什么？</strong>λ*ᵢ fᵢ(<span class="var">x</span>*) = 0 意味着每个约束二选一：要么贴紧（fᵢ = 0，称<span class="term">激活</span>/active），要么价格为零（λ*ᵢ = 0）。<strong>闲置的约束不值钱，值钱的约束必须贴紧</strong>——这条把经济直觉变成了代数筛子。</p>
+
+    <p><strong>手算验证 1（回看 5.1 的例）。</strong>min <span class="var">x</span>² s.t. 1−<span class="var">x</span> ≤ 0。驻点：2<span class="var">x</span> − λ = 0；互补松弛：λ(1−<span class="var">x</span>) = 0。分两种情形：</p>
+    <ul>
+      <li><strong>情形 λ* = 0：</strong>驻点给 <span class="var">x</span> = 0，但原始可行要求 <span class="var">x</span> ≥ 1，矛盾——排除。</li>
+      <li><strong>情形 1 − <span class="var">x</span> = 0：</strong><span class="var">x</span>* = 1，代入驻点 λ* = 2 ≥ 0 ✓。四条件全过。</li>
+    </ul>
+    <p>故 <span class="var">x</span>* = 1，λ* = 2，p* = 1——与 5.2 里 g(2) = 1 完全对上：λ* = 2 正是对偶函数取最大值的点。<strong> primal 与 dual 在最优点会师。</strong></p>
+
+    <p><strong>手算验证 2（等式约束最小范数）。</strong>min (1/2)(<span class="var">x</span>₁² + <span class="var">x</span>₂²) s.t. <span class="var">x</span>₁ + <span class="var">x</span>₂ = 2。L = (1/2)(<span class="var">x</span>₁² + <span class="var">x</span>₂²) + ν(<span class="var">x</span>₁ + <span class="var">x</span>₂ − 2)。等式约束没有互补松弛（恒等于 0），只需驻点 + 可行：</p>
+    <ul>
+      <li>驻点：∂L/∂<span class="var">x</span>₁ = <span class="var">x</span>₁ + ν = 0；∂L/∂<span class="var">x</span>₂ = <span class="var">x</span>₂ + ν = 0 ⟹ <span class="var">x</span>₁ = <span class="var">x</span>₂ = −ν。</li>
+      <li>代入约束：−2ν = 2 ⟹ ν* = −1。</li>
+      <li>故 <span class="var">x</span>* = (1, 1)，p* = (1/2)(1+1) = <strong>1</strong>。几何直觉：原点到直线 <span class="var">x</span>₁+<span class="var">x</span>₂=2 的垂足正是 (1,1)，距离的平方的一半为 1 ✓。</li>
+    </ul>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>KKT 是一张"最优性证书"的验收单：任何人给你一个 x*，你不必重做优化，只需逐项打勾四条。凸问题里勾满即最优——验证比求解便宜得多，这正是对偶机器的核心红利。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>只解驻点方程（④）就宣布最优。驻点是无约束最优的条件；有约束时必须四件套齐查。少了互补松弛，无法排除"约束贴着但价格为零"或"价格挂着但约束闲着"的假点；少了原始可行，λ=0 的驻点解（如本例 x=0）会混进来。另外：非凸问题上 KKT 只是必要条件，勾满不保证最优。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 5.5-1</div>
+              <div class="q-text">默写 KKT 四条件，并各用四个字以内概括。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              ① fᵢ(x*)≤0、hᵢ(x*)=0（原始可行）；② λ*⪰0（对偶可行）；③ λ*ᵢfᵢ(x*)=0（互补松弛）；④ ∇f₀+∑λ*ᵢ∇fᵢ+∑ν*ᵢ∇hᵢ=0（驻点）。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 5.5-2</div>
+              <div class="q-text">互补松弛排除了哪两类"假最优点"？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              ① 约束未贴紧（fᵢ &lt; 0）却挂着正价格（λᵢ &gt; 0）；② 价格非零的约束却不激活。它强制"闲置约束免费、紧缺约束贴紧"。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ================= 5.6 ================= -->
+    <h2><span class="sec-no">5.6</span>对偶变量是影子价格：灵敏度解释</h2>
+
+    <p>上一节把 λ* 当成代数学里的乘子，但它带出一个问题：<strong>λ* 的大小有没有现实含义？</strong>有——它是约束的"价格"。把约束右端扰动，定义<span class="term">扰动问题</span>（Perturbed Problem）的最优值函数：</p>
+
+    <div class="formula"><span class="var">p</span>*(<span class="var">u</span>, <span class="var">v</span>) = min f₀(<span class="var">x</span>)　s.t.　fᵢ(<span class="var">x</span>) ≤ <span class="var">u</span>ᵢ，hᵢ(<span class="var">x</span>) = <span class="var">v</span>ᵢ</div>
+
+    <div class="box insight">
+      <span class="box-tag">✅ 灵敏度定理（强对偶下）</span>
+      <p>λ*ᵢ = −∂<span class="var">p</span>*/∂<span class="var">u</span>ᵢ，ν*ᵢ = −∂<span class="var">p</span>*/∂<span class="var">v</span>ᵢ。<br>
+      即：把第 <span class="var">i</span> 条约束放松一单位（uᵢ 加 1），最优值的<strong>改善率</strong>恰为 λ*ᵢ。负号是方向约定：放松（u 变大）时 p* 下降，而 λ* 取正值。</p>
+    </div>
+
+    <p><strong>数字验证（接 5.5 的例）。</strong>min <span class="var">x</span>² s.t. <span class="var">x</span> ≥ <span class="var">u</span>（<span class="var">u</span> &gt; 0），标准形 <span class="var">u</span> − <span class="var">x</span> ≤ 0。显然 <span class="var">x</span>* = <span class="var">u</span>，故 <span class="var">p</span>*(<span class="var">u</span>) = <span class="var">u</span>²，d<span class="var">p</span>*/d<span class="var">u</span> = 2<span class="var">u</span>。<span class="var">u</span> = 1 时：−∂p*/∂u = −2·1 = −2，加符号约定得 λ* = 2——与 5.5 手算的 λ* = 2 分毫不差 ✓。</p>
+
+    <p>翻译成操作语言：把约束从 <span class="var">x</span> ≥ 1 放松到 <span class="var">x</span> ≥ 0.99（Δu = −0.01），最优值约改善 λ*·0.01 = 0.02——精确值 p*(0.99) = 0.9801，确实降了 0.0199 ≈ 0.02（差 0.0001 是二阶项）。</p>
+
+    <p><strong>为什么叫"价格"：</strong>若约束是"预算 ≤ B"、目标是利润最大化类问题（符号翻转后同理），λ* 就是<strong>再多 1 元预算能换多少利润</strong>——边际价值。互补松弛此时读作：预算没花完（约束闲置）时边际价值为零；λ* &gt; 0 时预算必然花光。5.5 例中 λ* = 2：约束 <span class="var">x</span> ≥ 1 是激活的（x* = 1 贴紧），放松它有正收益，完全自洽。</p>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>符号记反：以为 λ*ᵢ = +∂p*/∂uᵢ。记住"放松约束，最优值只降不升（对 min 问题）"：uᵢ 增大 ⟹ 可行域变大 ⟹ p* 减小 ⟹ ∂p*/∂uᵢ ≤ 0；而 λ*ᵢ ≥ 0，所以中间必须有个负号。另外此结论是<strong>局部</strong>的（一阶近似），大步扰动要重解问题。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 5.6-1</div>
+              <div class="q-text">影子价格公式 λ*ᵢ = −∂p*/∂uᵢ 里负号怎么记？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              min 问题放松约束（uᵢ 增大）→ p* 下降 → 导数 ≤ 0；λ*ᵢ ≥ 0，故公式带负号。λ*ᵢ = 放松一单位带来的最优值改善率。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 5.6-2</div>
+              <div class="q-text">例 min x² s.t. x≥u 中，p*(u) 是什么？u=1 时用影子价格预测 u→0.99 的改善量，与精确值对比。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              p*(u) = u²。λ* = 2，预测改善 2×0.01 = 0.02；精确 1 − 0.9801 = 0.0199（差 0.0001 为二阶项）。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ================= 5.7 ================= -->
+    <h2><span class="sec-no">5.7</span>本章总结与遗留：从下界到算法</h2>
+
+    <p>回看整条链：约束折进目标（L）→ 对 <span class="var">x</span> 取 inf（g）→ 推高下界（对偶问题）→ 弱对偶免费、强对偶要门票（Slater）→ KKT 四条件给证书 → λ* 读出价格。<strong>对偶机器一共交付三样东西：</strong></p>
+    <ul>
+      <li><strong>下界证书：</strong>任何 λ ⪰ 0 都给 g(λ,ν) ≤ p*，无需解原问题（5.2 里 λ=1 就白捡 0.75）；</li>
+      <li><strong>最优性判据：</strong>KKT 四条件，验证一个点比求一个点便宜得多（5.5 两个手算）；</li>
+      <li><strong>算法入口：</strong>对偶问题恒为凹最大化（凸优化），可以在 λ 空间做上升；原始-对偶成对推进能夹逼间隙。</li>
+    </ul>
+
+    <p><strong>遗留问题：</strong>KKT 告诉你"怎么验收"，没告诉你"怎么搜索"——四条方程一般是非线性的，没有求根公式。<strong>怎么迭代逼近解？</strong>这是阶段④的全部内容：Ch9 先解决无约束问题的迭代下降（梯度法、牛顿法），Ch10 把等式约束并入牛顿步，Ch11 内点法用对偶间隙作进度条，把不等式约束问题化回一串等式约束问题。本章的 d*、p* 与间隙，正是那条进度条的刻度。</p>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 5.7-1</div>
+              <div class="q-text">对偶机器交付的三样东西是什么？各对应哪一节？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              下界证书（5.2–5.3，g ≤ p*）；最优性判据（5.5，KKT）；算法入口（对偶上升 / 原始-对偶，通向 Ch9–11）。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 5.7-2</div>
+              <div class="q-text">本章留给 Ch9–11 的核心问题是什么？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              KKT 只给"验证"不给"搜索"：如何设计迭代算法数值逼近解（无约束下降 → 等式约束牛顿 → 内点法化不等式为等式序列）。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===== 章末五件套之 1：概念卡 ===== -->
+    <h2><span class="sec-no">🃏</span>概念卡：本章概念的一分钟画像</h2>
+    <p>翻面前先自问：这个概念我能用一句话讲清楚吗？</p>
+    <div class="flip-grid">
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 1</div>
+            <div class="q-text">拉格朗日函数（Lagrangian）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">L(x,λ,ν) = f₀(x) + ∑λᵢfᵢ(x) + ∑νᵢhᵢ(x)，λ ⪰ 0。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">把约束折进目标，让"带约束的难问题"变成"无约束的逐点最小化"。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">违规计价：约束不再是墙，而是按 λ 计费的罚款单。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">约束方向不化标准形就套公式，或让 λ 取负（等于奖励违规）。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">一切对偶推导的起点；Ch11 内点法把它藏进障碍函数。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 2</div>
+            <div class="q-text">对偶函数（Dual Function）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">g(λ,ν) = infₓ L(x,λ,ν)，消去原变量后只剩价格的函数。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">每个 λ ⪰ 0 免费给出 p* 的下界证书，无需解原问题。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">报价单：随便报个价，就能担保"最优值不低于此"。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为凹性要原问题凸——仿射族逐点 inf 恒凹，无条件成立。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">下界证明、算法停止准则（对偶间隙）；Ch9–11 的进度条。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 3</div>
+            <div class="q-text">弱对偶（Weak Duality）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">d* ≤ p* 恒成立；差 p* − d* 叫对偶间隙。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">保证"推高下界"这件事永远安全，不会报出超过真值的数。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">最低价永远不会高于成交价——下界机器的出厂保险。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为需要凸性；证明只用 inf 性质，非凸问题照样成立。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">推论：对偶无界 ⟹ 原问题不可行；算法里间隙=0 即停机。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 4</div>
+            <div class="q-text">强对偶与 Slater 条件（Strong Duality &amp; Slater's Condition）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">d* = p* 称强对偶；凸问题存在严格可行点（fᵢ(x̃) &lt; 0 全严格）即可保证。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">回答"下界何时能顶到天花板"——KKT 与影子价格都依赖它。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">可行域留一条缝，价格机制才有施展空间，下界才够得着顶。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">把强对偶当默认：非凸可有无穷间隙（5.4 例 d* = −∞）。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">引用 d* = p* 前先验门票；LP 可行即免票入场。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 5</div>
+            <div class="q-text">KKT 条件（KKT Conditions）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">原始可行 + 对偶可行 + 互补松弛 + 驻点，四条联立。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">凸问题中最优解的充分必要刻画：勾满四条即最优。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">最优性证书的验收单：验证一个点远比求一个点便宜。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">只解驻点方程；非凸问题上 KKT 仅必要不充分。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">手算小问题的解析解；Ch10/11 把 KKT 方程组当求根目标。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 6</div>
+            <div class="q-text">互补松弛（Complementary Slackness）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">λ*ᵢfᵢ(x*) = 0 对每个不等式约束成立。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">把"约束激活"与"乘子非零"互锁，筛掉 KKT 的假点。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">闲置的约束不值钱，值钱的约束必贴紧——不能既闲着又贵。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为λᵢ &gt; 0 与 fᵢ &lt; 0 可共存；等式约束无此条（恒为零）。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">分情形讨论求解 KKT（λ=0 还是 fᵢ=0）；LP 互补松弛定理。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 7</div>
+            <div class="q-text">影子价格 / 灵敏度（Shadow Price / Sensitivity）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">强对偶下 λ*ᵢ = −∂p*/∂uᵢ：放松约束一单位的最优值改善率。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">给对偶变量以经济含义：这条约束值多少钱。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">预算的边际价值；λ* = 0 的资源多给也无用。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">符号记反（漏负号）；把局部一阶近似当全局精确值。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">经济解释、资源分配汇报；L3 电厂调度里 ν* = 8 的读法。</span></div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- ===== 章末五件套之 2：分层习题 ===== -->
+    <h2><span class="sec-no">📝</span>分层习题</h2>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>判断：对任意优化问题（包括非凸问题），弱对偶 d* ≤ p* 都成立。这个说法对吗？</div>
+      <details>
+        <summary>提示</summary>
+        <p>回看弱对偶证明的两步：可行点上 L(x̃,λ,ν) ≤ f₀(x̃)；对 x 取 inf、对可行 x̃ 取 min。这两步哪一步用到了凸性？</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer"><strong>对。</strong>证明只用两件事：① 可行点上罚款项 ∑λᵢfᵢ(x̃) ≤ 0（靠 λ ⪰ 0 与可行性）；② inf 与 min 的单调性。全程没有凸性登场。凸性只在<strong>强</strong>对偶（d* = p*）中才需要——5.4 的非凸反例里弱对偶照样成立（−∞ ≤ 2）。易错点：把"对偶理论"整体贴上"凸优化专属"标签，混淆弱与强的前提。</div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>判断：若某问题的对偶问题无界（d* = +∞），则原问题不可行。对吗？</div>
+      <details>
+        <summary>提示</summary>
+        <p>用反证法 + 弱对偶：假设原问题可行，p* 会怎样？</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer"><strong>对。</strong>若原问题可行，则 p* &lt; +∞（某可行点给出有限目标值）。弱对偶要求 d* ≤ p*，与 d* = +∞ 矛盾。故原问题不可行（约定不可行时 p* = +∞）。易错点：方向记反——是"对偶无界 ⟹ 原始不可行"，对偶"无界"指的是最大化 g 可以到 +∞，不是可行域大。</div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>求 min <span class="var">x</span>₁ + <span class="var">x</span>₂ s.t. <span class="var">x</span>₁² + <span class="var">x</span>₂² ≤ 2 的对偶问题，解出 d*，并验证强对偶。</div>
+      <details>
+        <summary>提示</summary>
+        <p>标准形：<span class="var">x</span>₁² + <span class="var">x</span>₂² − 2 ≤ 0，乘子 λ ≥ 0。固定 λ &gt; 0 后 L 关于每个 xᵢ 是开口向上的抛物线，分别求导取极小，代回得 g(λ)，再对 λ 求极大。原问题用对称性直接看。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <strong>第 1 步</strong>：L = <span class="var">x</span>₁ + <span class="var">x</span>₂ + λ(<span class="var">x</span>₁² + <span class="var">x</span>₂² − 2)，λ ≥ 0。<br>
+          <strong>第 2 步</strong>：∂L/∂xᵢ = 1 + 2λxᵢ = 0 ⟹ xᵢ = −1/(2λ)（λ = 0 时 L 线性无下界，g = −∞，只考虑 λ &gt; 0）。<br>
+          <strong>第 3 步</strong>：代回。x₁ + x₂ = −1/λ；x₁² + x₂² = 2·(1/(2λ))² = 1/(2λ²)。<br>
+          g(λ) = −1/λ + λ(1/(2λ²) − 2) = −1/λ + 1/(2λ) − 2λ = <strong>−1/(2λ) − 2λ</strong>。<br>
+          <strong>第 4 步</strong>：极大化 g。g′(λ) = 1/(2λ²) − 2 = 0 ⟹ λ*² = 1/4 ⟹ λ* = 1/2（取正）。<br>
+          d* = g(1/2) = −1/(2·(1/2)) − 2·(1/2) = −1 − 1 = <strong>−2</strong>。<br>
+          <strong>第 5 步</strong>：原问题。目标等值线是斜率 −1 的直线，向 (−1,−1) 方向推到贴圆：对称点 x* = (−1, −1)，检验 (−1)² + (−1)² = 2 ≤ 2 ✓（贴紧）。p* = −2。<br>
+          <strong>结论</strong>：p* = d* = −2，强对偶成立 ✓（问题是凸的且原点即严格可行点，Slater 门票在手）。
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>用 KKT 条件求 min <span class="var">x</span>₁² + <span class="var">x</span>₂² s.t. <span class="var">x</span>₁ + <span class="var">x</span>₂ ≥ 2 的最优解，并逐条验证四条件。</div>
+      <details>
+        <summary>提示</summary>
+        <p>标准形 2 − <span class="var">x</span>₁ − <span class="var">x</span>₂ ≤ 0。写驻点方程后按互补松弛分两种情形：λ = 0 或约束贴紧。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <strong>第 1 步</strong>：L = <span class="var">x</span>₁² + <span class="var">x</span>₂² + λ(2 − <span class="var">x</span>₁ − <span class="var">x</span>₂)，λ ≥ 0。<br>
+          <strong>第 2 步</strong>：驻点 ∂L/∂x₁ = 2x₁ − λ = 0，∂L/∂x₂ = 2x₂ − λ = 0 ⟹ x₁ = x₂ = λ/2。<br>
+          <strong>第 3 步</strong>：互补松弛 λ(2 − x₁ − x₂) = 0，分情形：<br>
+          ・情形 λ = 0：x₁ = x₂ = 0，但 0 + 0 ≥ 2 不成立，违反原始可行，排除。<br>
+          ・情形约束贴紧：x₁ + x₂ = 2，代入 λ/2 + λ/2 = 2 ⟹ λ = 2。<br>
+          <strong>第 4 步</strong>：x* = (1, 1)，λ* = 2。验证四条件：① 1+1 ≥ 2 ✓；② λ* = 2 ≥ 0 ✓；③ 2·(2−1−1) = 0 ✓；④ 2·1 − 2 = 0（两个分量均成立）✓。<br>
+          <strong>结论</strong>：凸问题 + KKT 全过 ⟹ x* = (1,1) 最优，p* = 2。几何上：原点到直线 x₁+x₂=2 的垂足恰为 (1,1)，距离平方 = 2 ✓。
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l3">L3 建模应用</span>一座电厂有两台机组，发电 q₁、q₂（单位：百兆瓦）的每小时成本分别为 C₁ = q₁²、C₂ = 2q₂²（元）。电网要求总供电 q₁ + q₂ = 6。用 KKT 条件求最小成本调度，并解释对偶乘子的经济含义。</div>
+      <details>
+        <summary>提示</summary>
+        <p>等式约束问题：L = q₁² + 2q₂² + ν(6 − q₁ − q₂)。只有驻点 + 可行两条（等式约束无互补松弛）。解出 ν 后想想：多要 1 单位电，成本涨多少？</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <strong>建模</strong>：min q₁² + 2q₂² s.t. q₁ + q₂ = 6（目标凸、约束仿射，KKT 充分必要）。<br>
+          <strong>驻点</strong>：∂L/∂q₁ = 2q₁ − ν = 0 ⟹ q₁ = ν/2；∂L/∂q₂ = 4q₂ − ν = 0 ⟹ q₂ = ν/4。<br>
+          <strong>代入约束</strong>：ν/2 + ν/4 = 6 ⟹ 3ν/4 = 6 ⟹ ν* = 8。<br>
+          <strong>最优调度</strong>：q₁* = 4，q₂* = 2。最小成本 = 4² + 2·2² = 16 + 8 = <strong>24 元/小时</strong>。<br>
+          <strong>检验直觉</strong>：最优处两机组边际成本相等——2q₁* = 8，4q₂* = 8，都等于 ν*（等边际原理）。<br>
+          <strong>ν* = 8 的含义</strong>：供电需求的影子价格。若电网多要 1 百兆瓦（6 → 7），最小成本约上涨 8 元/小时（精确值：(16/3)² + 2(4/3)² = 256/9 + 32/9 = 32，涨 8 元整——二次成本下恰为线性外推值+二阶修正的巧合对上）。报价、扩容决策都以这个数字为锚。
+        </div>
+      </details>
+    </div>
+
+    <!-- ===== 章末五件套之 3：自测 ===== -->
+    <h2><span class="sec-no">✍️</span>本章自测</h2>
+    <p class="quiz-hint">点击选项判分，答错会给出原因。</p>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 1</div>
+      <div class="q-stem">关于对偶函数 g(λ,ν) = infₓ L(x,λ,ν)，正确的是？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 仅当原问题是凸优化问题时，g 才是凹函数</li>
+        <li data-opt="b">B. 对任意问题（包括非凸），g 关于 (λ,ν) 恒为凹函数</li>
+        <li data-opt="c">C. g 恒为凸函数，因为取的是下确界</li>
+        <li data-opt="d">D. g 的凹性取决于 Slater 条件是否成立</li>
+      </ul>
+      <div class="quiz-explain">解析：B 对——固定 x 时 L 是 (λ,ν) 的仿射函数，仿射函数族的逐点下确界恒凹，与 f₀、fᵢ 的凸性无关。A 错——凸性不是必要条件，5.4 的非凸反例里 g ≡ −∞ 依然是（广义的）凹函数；C 错——逐点 inf 保凹不保凸，方向记反；D 错——Slater 管的是"强对偶是否成立"，与 g 的形状无关。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="c">
+      <div class="q-no">自测 2</div>
+      <div class="q-stem">弱对偶不等式 d* ≤ p* 成立需要的前提是？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 原问题是凸问题</li>
+        <li data-opt="b">B. 原问题满足 Slater 条件</li>
+        <li data-opt="c">C. 不需要任何前提，任意优化问题都成立</li>
+        <li data-opt="d">D. 原问题是 LP</li>
+      </ul>
+      <div class="quiz-explain">解析：C 对——证明只用"可行点上 L ≤ f₀"（靠 λ ⪰ 0）与 inf/min 单调性，凸性全程未登场。A 错——把强对偶的前提错安到弱对偶头上；B 错——Slater 是强对偶的门票，与弱对偶无关；D 错——LP 是强对偶"免票"的特例，不是弱对偶的前提。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="a">
+      <div class="q-no">自测 3</div>
+      <div class="q-stem">Slater 条件对凸问题保证强对偶，其关键要求是存在点 x̃ 使得？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 所有不等式约束严格成立：fᵢ(x̃) &lt; 0（等式约束照常 hᵢ(x̃) = 0）</li>
+        <li data-opt="b">B. 所有不等式约束满足 fᵢ(x̃) ≤ 0 即可</li>
+        <li data-opt="c">C. x̃ 是原问题的最优解</li>
+        <li data-opt="d">D. 所有约束（含等式）都严格成立</li>
+      </ul>
+      <div class="quiz-explain">解析：A 对——"严格"二字是 Slater 的命门：不等式要留正余量（&lt; 0 而非 ≤ 0）。B 错——那只是普通可行性，约束全贴边的可行域不满足 Slater；C 错——因果倒置，Slater 是论证最优性结构的工具，不要求预先知道最优解；D 错——等式约束 hᵢ(x̃) = 0 不存在"严格"版本，仿射等式照原样满足即可。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="d">
+      <div class="q-no">自测 4</div>
+      <div class="q-stem">关于互补松弛条件 λ*ᵢfᵢ(x*) = 0，正确的理解是？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 它要求所有乘子 λ*ᵢ = 0</li>
+        <li data-opt="b">B. 它要求所有约束都激活：fᵢ(x*) = 0</li>
+        <li data-opt="c">C. 等式约束也必须满足对应的互补松弛</li>
+        <li data-opt="d">D. 每条不等式约束二选一：要么贴紧（fᵢ=0），要么免费（λ*ᵢ=0）；缺了它，KKT 会放进"约束闲着却挂着正价格"的假点</li>
+      </ul>
+      <div class="quiz-explain">解析：D 对——互补松弛把"激活"与"有价"互锁，是 KKT 里最会筛假点的一条。A 错——只说了 λf=0 的一种情形，激活约束允许 λ &gt; 0（5.5 例 λ* = 2）；B 错——未激活约束可以存在，只要其乘子为零；C 错——等式约束 hᵢ(x*) = 0 恒成立，νᵢ 无符号限制，谈不上互补松弛。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 5</div>
+      <div class="q-stem">min x² s.t. x ≥ u（u &gt; 0）中 p*(u) = u²，u = 1 时 λ* = 2。这 2 的正确读法是？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 把约束收紧到 x ≥ 1.01，最优值约改善 0.02</li>
+        <li data-opt="b">B. 把约束放松到 x ≥ 0.99，最优值约下降 0.02；λ*ᵢ = −∂p*/∂uᵢ 的负号正来自"放松使 p* 下降"</li>
+        <li data-opt="c">C. λ* = 2 表示最优解 x* = 2</li>
+        <li data-opt="d">D. λ* = 2 表示对偶问题的最优值 d* = 2</li>
+      </ul>
+      <div class="quiz-explain">解析：B 对——放松（u 减 0.01）预测 p* 降 λ*·0.01 = 0.02，精确降 0.0199，一阶吻合；负号因 min 问题放松约束时 p* 下降而 λ* 取正。A 错——方向反了：收紧约束（u 增）只会让 p* 上升（变差），谈不上"改善"；C 错——λ 是乘子不是解，本例 x* = 1；D 错——d* = p* = 1，λ* = 2 是取到 d* 的乘子取值，不是对偶最优值本身。</div>
+    </div>
+
+    <!-- ===== 章末五件套之 4：三句话复述 ===== -->
+    <div class="retell">
+      <h3>🗣️ 用自己的话，三句话讲完本章</h3>
+      <p>对着空气（或室友）说出这三句。说卡壳的那句，回去重读对应小节。</p>
+      <details>
+        <summary>句1：这章解决什么问题？——</summary>
+        <div class="retell-answer">参考答案：难解、难验证的约束优化问题，可以不直接求解它，而是系统性地构造它的下界与最优性证书——任意合法价格 λ 都给出下界，四条 KKT 条件验收最优点。</div>
+      </details>
+      <details>
+        <summary>句2：核心机制是什么？——</summary>
+        <div class="retell-answer">参考答案：把约束按价格折进目标（拉格朗日函数），对 x 取下确界消去原变量得到恒凹的对偶函数 g；把 g 推到最大构成对偶问题，弱对偶 d* ≤ p* 免费，凸问题加 Slater 严格可行点升级为强对偶，此时 KKT 四条件（原始可行、对偶可行、互补松弛、驻点）充分必要，λ* 读出约束的影子价格。</div>
+      </details>
+      <details>
+        <summary>句3：它和前后章怎么分工？——</summary>
+        <div class="retell-answer">参考答案：Ch4 负责把问题写成标准凸形式并保证"局部=全局"；本章负责"不求解也能给下界、给证书、给价格"；Ch9–11 负责真正动手算——无约束下降、等式约束牛顿、内点法用对偶间隙作进度条迭代逼近解。</div>
+      </details>
+    </div>
+
+    <!-- ===== 章末五件套之 5：间隔复习计划 ===== -->
+    <div class="review-plan">
+      <h3>🔁 间隔复习计划</h3>
+      <p>回忆本身比重读有效 10 倍。到点只做一件事：翻卡 + 重做标记题。</p>
+      <table>
+        <tr><th>时间点</th><th>复习内容</th><th>预计用时</th></tr>
+        <tr><td>第 1 天</td><td>概念卡 1–7 + 回忆卡 5.2-2、5.3-2、5.4-2、5.5-1</td><td>12 分钟</td></tr>
+        <tr><td>第 3 天</td><td>概念卡（重点翻错的）+ 重做 L2-1（圆约束对偶）+ 自测错题</td><td>10 分钟</td></tr>
+        <tr><td>第 7 天</td><td>三句话复述 + 手推 5.3 LP 例的对偶（不看书写出 g 与可行域）</td><td>12 分钟</td></tr>
+        <tr><td>第 15 天</td><td>只做合上书挑战；能全过就毕业</td><td>15 分钟</td></tr>
+      </table>
+    </div>
+
+    <!-- ===== 合上书挑战 ===== -->
+    <div class="final-challenge">
+      <h3>📕 合上书挑战</h3>
+      <p class="fc-sub">现在关掉这个页面，拿一张纸，凭记忆完成以下任务。全部做完再回来核对——这是本章真正的毕业考试。</p>
+      <ol id="challenge-list">
+        <li><span class="fc-check"></span>写出拉格朗日函数与对偶函数的定义，并证明 g(λ,ν) ≤ p*（提示：可行点上 L ≤ f₀）</li>
+        <li><span class="fc-check"></span>手算 min x² s.t. x≥1 的 g(λ) = λ − λ²/4，指出 d* 在哪个 λ 处取到</li>
+        <li><span class="fc-check"></span>对 LP：min x₁+2x₂ s.t. x₁+x₂≥1, x≥0，完整推出对偶 max λ s.t. 0≤λ≤1</li>
+        <li><span class="fc-check"></span>用 min x³−3x s.t. x≤−1 演示正无穷对偶间隙（p*=2，d*=−∞），并说明 Slater 条件如何为凸问题兜底</li>
+        <li><span class="fc-check"></span>默写 KKT 四条件，并求 min x₁²+x₂² s.t. x₁+x₂≥2 的 KKT 点（x*=(1,1)，λ*=2）</li>
+        <li><span class="fc-check"></span>写出影子价格公式 λ*ᵢ = −∂p*/∂uᵢ 并解释负号</li>
+        <li><span class="fc-check"></span>回答本章的主线问题：一个难求解的原问题，怎样系统性地得到它的下界、最优性证书与求解入口？（一句话）</li>
+      </ol>
+    </div>
+
+    <div class="complete-zone">
+      <button class="btn-complete" id="btn-complete" onclick="markDone()">✓ 我已完成本章（含合上书挑战）</button>
+    </div>
+
+    <div class="chapter-nav">
+      <a href="chapter-04.html"><span class="nav-dir">← 上一章</span>第4章 凸优化问题</a>
+      <a href="index.html" class="next"><span class="nav-dir">下一章 →</span>第6章 逼近与拟合（待生成）</a>
+    </div>
+
+  </div>
+</div>
+
+<footer class="footer">
+  <div class="wrap">第5章 对偶 · 凸优化互动讲义 · 基于 Boyd &amp; Vandenberghe (2004)</div>
+</footer>
+
+<script src="/lectures-assets/mermaid.min.js"></script>
+<script>
+mermaid.initialize({
+  startOnLoad: true,
+  theme: "base",
+  themeVariables: {
+    primaryColor: "#e3edf7",
+    primaryBorderColor: "#1d5f9e",
+    primaryTextColor: "#1d5f9e",
+    lineColor: "#5c554b",
+    secondaryColor: "#fbeedd",
+    tertiaryColor: "#f5f1e8",
+    fontFamily: "-apple-system, PingFang SC, sans-serif",
+    fontSize: "14px"
+  },
+  flowchart: { curve: "linear", htmlLabels: false }
+});
+</script>
+<script>
+// 自测题判分（原样复用，勿改）
+document.querySelectorAll(".quiz-block").forEach(block => {
+  const answer = block.dataset.answer;
+  const explain = block.querySelector(".quiz-explain");
+  block.querySelectorAll(".quiz-opts li").forEach(li => {
+    li.addEventListener("click", () => {
+      const opts = block.querySelectorAll(".quiz-opts li");
+      opts.forEach(o => o.classList.add("disabled"));
+      if (li.dataset.opt === answer) {
+        li.classList.add("correct");
+      } else {
+        li.classList.add("wrong");
+        block.querySelector(`[data-opt="${answer}"]`).classList.add("correct");
+      }
+      explain.classList.add("show");
+    });
+  });
+});
+
+// 合上书清单打勾（原样复用，勿改）
+document.querySelectorAll("#challenge-list li").forEach(li => {
+  li.addEventListener("click", () => li.classList.toggle("checked"));
+});
+
+// 完成标记 → localStorage（章号 5，key 为凸优化讲义专用）
+const KEY = "cvx_progress_v1";
+function loadProgress() {
+  try { return JSON.parse(localStorage.getItem(KEY)) || {}; } catch (e) { return {}; }
+}
+const progress = loadProgress();
+const btn = document.getElementById("btn-complete");
+if (progress[5] && progress[5].done) {
+  btn.textContent = "✓ 已完成 · 再次点击重置";
+  btn.classList.add("done");
+}
+function markDone() {
+  const p = loadProgress();
+  if (p[5] && p[5].done) {
+    delete p[5];
+    btn.textContent = "✓ 我已完成本章（含合上书挑战）";
+    btn.classList.remove("done");
+  } else {
+    p[5] = { done: true, completedAt: Date.now(), reviewsDone: 0 };
+    btn.textContent = "✓ 已完成 · 复习提醒已开启";
+    btn.classList.add("done");
+  }
+  localStorage.setItem(KEY, JSON.stringify(p));
+}
+</script>
+
+</body>
+</html>

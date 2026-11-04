@@ -1,0 +1,1003 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第6章 中间代码生成 · 编译原理互动讲义</title>
+<link rel="stylesheet" href="/lectures-assets/style.css">
+</head>
+<body>
+
+<nav class="topbar">
+  <div class="topbar-inner">
+    <span class="brand"><a href="index.html" style="color:inherit">← 学习地图</a></span>
+    <span class="crumb">阶段二 · 语义与中间代码 / 第6章</span>
+  </div>
+</nav>
+
+<div class="wrap">
+
+  <div class="lecture-head">
+    <span class="ch-label">CHAPTER 06 · 语义与中间代码</span>
+    <h1>中间代码生成</h1>
+    <p class="lead">语法树读懂了程序结构，机器码还远在千里之外——中间这段路怎么走？本章给出编译器的"世界语"三地址码，以及让跳转地址"先留空、后补票"的回填技术。</p>
+  </div>
+
+  <!-- ===== 章首四件套之 1：全书定位 ===== -->
+  <div class="position-bar">
+    <strong>本章在主线上的位置：</strong>第5章给了 SDT 机制（规则怎么挂、何时算）→ <u>本章用它产出与机器无关的三地址码</u> → 第8章把它变成目标代码、第9章优化它。<br>
+    第6章回答主线上的第3个问题：<strong>前端与后端之间需要什么样的中间语言——控制流语句的跳转地址如何在地址未知时先生成、事后回填？</strong>
+    <div class="map-inline">
+      <span class="node">Ch1–4 前端与词法语法</span><span class="arrow">→</span>
+      <span class="node here">Ch5–7 语义与中间代码 ← 本章</span><span class="arrow">→</span>
+      <span class="node">Ch8–11 后端与优化</span><span class="arrow">→</span>
+      <span class="node">Ch12 全书收束</span>
+    </div>
+  </div>
+
+  <!-- ===== 章首四件套之 2：学习目标 ===== -->
+  <div class="objectives">
+    <h4>🎯 学完本章，合上书你应该能：</h4>
+    <ol>
+      <li>说出三地址码的形式约束与三种地址，并把任意算术表达式写成三地址码。</li>
+      <li>把一段三地址码列成四元式表（op / arg1 / arg2 / result 四字段不错位）。</li>
+      <li>用增量翻译方案（E.addr、gen()、new Temp()）对给定赋值语句手算出指令序列。</li>
+      <li>对含 or / and 的布尔表达式手算回填全过程，写出每条指令的最终跳转地址。</li>
+      <li>写出 if / if-else / while 的翻译方案，并对 while 循环逐条生成指令、逐个写出 backpatch 调用。</li>
+    </ol>
+  </div>
+
+  <div class="lecture">
+
+    <!-- ===== 章首四件套之 3：推导主线图（9 个节点，按约定用 TB）===== -->
+    <div class="figure">
+      <div class="mermaid">
+flowchart TB
+  A["语法树直接生成机器码：又痛又难移植"] --> B["中间表示 IR"]
+  B --> C["三地址码 加 四元式"]
+  C --> D["表达式好办：gen 临时变量"]
+  D --> E["布尔表达式短路 等于 跳转"]
+  E --> F["跳转目标地址此刻未知"]
+  F --> G["回填 backpatching：先留空 后补票"]
+  G --> H["控制流语句统一翻译方案"]
+  H --> I["遗留：类型检查 数组寻址 声明处理 通向第7章运行时环境与第8章代码生成"]
+  classDef hot fill:#fbeedd,stroke:#c4651f,stroke-width:2.5px,color:#c4651f;
+  classDef danger fill:#fae9e7,stroke:#b03a2e,stroke-width:2.5px,color:#b03a2e;
+  class I danger;
+      </div>
+      <div class="caption">本章推导主线：从"为什么需要 IR"到"回填如何补地址"，每一步都回答"为什么需要下一步"；末节点是本章不展开、交给后续章节的代价。</div>
+    </div>
+
+    <!-- ============================================================
+      6.1 为什么需要中间代码
+    ============================================================ -->
+    <h2><span class="sec-no">6.1</span>为什么需要中间代码：语法树和机器码之间隔着什么</h2>
+
+    <p>第5章给了我们 SDT 这把"扳手"：翻译规则挂在产生式上，随分析过程自动触发。但它留下一个问题——<strong>触发的动作到底产出什么？</strong>假设直接产出目标机器码，麻烦立刻上门：x86 有寄存器分配和寻址模式，ARM 有另一套；想换一个目标机，整个后端推翻重写；想在生成前做优化，面对的是机器细节的海洋。m 种源语言配 n 种目标机，就要写 m×n 个编译器。</p>
+
+    <p>出路是在语法树与机器码之间插一层<span class="term">中间表示</span>（Intermediate Representation, IR）：前端只负责产出 IR，后端只负责把 IR 变成目标码，优化器在 IR 上做文章。m 个前端加 n 个后端，就覆盖了 m×n 种组合。本章使用一种低层 IR——<span class="term">三地址码</span>（Three-Address Code）。</p>
+
+    <p><strong>三地址码的形式约束只有一条：每条指令至多有一个运算符。</strong>典型形态是 x = y op z。指令里的"地址"只有三种：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>地址种类</th><th>说明</th><th>例子</th></tr>
+        <tr><td>名字（Name）</td><td>源程序中的变量名，经符号表指向其存储位置</td><td>a、b、position</td></tr>
+        <tr><td>常量（Constant）</td><td>源程序中直接出现的字面量</td><td>60、3.14</td></tr>
+        <tr><td>编译器临时变量（Temporary）</td><td>编译器为暂存中间结果而新造的名字</td><td>t1、t2、t3</td></tr>
+      </table>
+    </div>
+
+    <p>常见三地址指令一览（后两类本章只露脸，不展开）：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>指令形式</th><th>含义</th></tr>
+        <tr><td>x = y op z</td><td>双目运算赋值（op 为 +、-、*、/ 等）</td></tr>
+        <tr><td>x = op y</td><td>单目运算赋值（如 x = minus y）</td></tr>
+        <tr><td>x = y</td><td>复制指令</td></tr>
+        <tr><td>goto L</td><td>无条件跳转到标号 L</td></tr>
+        <tr><td>if x relop y goto L</td><td>条件跳转（relop 为 &lt;、&gt;、== 等）</td></tr>
+        <tr><td>x = y[i]　/　x[i] = y</td><td>数组读 / 写（寻址细节在 6.5 方向，本书后文展开）</td></tr>
+        <tr><td>param x / call p, n / return y</td><td>过程调用三件套（第7章运行时环境展开）</td></tr>
+      </table>
+    </div>
+
+    <p>三地址码是"文本"，落到编译器内部要变成可操作的数据结构。最常用的实现是<span class="term">四元式</span>（Quadruple）：每条指令一条记录，固定四个字段——<strong>op（运算符）、arg1（第一操作数）、arg2（第二操作数）、result（结果）</strong>。字段用不上就留空。</p>
+
+    <p><strong>完整例：x = a + b * c。</strong>运算符优先级决定先乘后加，三地址码把一个运算符拆一条：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>地址</th><th>指令</th></tr>
+        <tr><td>1</td><td>t1 = b * c</td></tr>
+        <tr><td>2</td><td>t2 = a + t1</td></tr>
+        <tr><td>3</td><td>x = t2</td></tr>
+      </table>
+    </div>
+
+    <p>对应的四元式表（赋值指令不用 arg2，留空）：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>地址</th><th>op</th><th>arg1</th><th>arg2</th><th>result</th></tr>
+        <tr><td>1</td><td>*</td><td>b</td><td>c</td><td>t1</td></tr>
+        <tr><td>2</td><td>+</td><td>a</td><td>t1</td><td>t2</td></tr>
+        <tr><td>3</td><td>=</td><td>t2</td><td></td><td>x</td></tr>
+      </table>
+    </div>
+
+    <p><strong>呼应第1章。</strong>第1章开场那个例子 position = initial + rate * 60，当时我们说"编译器会把它翻译成一组机器指令"。现在你可以写出它的三地址码版本：t1 = rate * 60；t2 = initial + t1；position = t2。从"隐约知道"到"随手写出"，就是本章的距离。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>三地址码是把语法树<strong>拍平</strong>成线性指令序列：每个临时变量名，恰好对应原树的一个内部节点。树没了，但求值顺序被显式固定下来——这正是后端需要的形态。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>两个误区。其一，"三地址"不是指三个内存地址——名字、常量、临时变量都算作"地址"，它是"操作数位置"的统称。其二，三地址码不唯一：t1 = b*c 与 t2 = a+t1 谁先谁后都可以，只要不破坏数据依赖；教科书给的是与语法树后序遍历一致的那种。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 6.1-1</div>
+              <div class="q-text">三地址码的唯一形式约束是什么？"地址"有哪三种？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              每条指令至多一个运算符（典型形态 x = y op z）。地址三种：名字（源程序变量）、常量、编译器临时变量。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 6.1-2</div>
+              <div class="q-text">四元式有哪四个字段？写出 x = a + b * c 的三元四元式。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              op、arg1、arg2、result。三条：(*, b, c, t1)；(+, a, t1, t2)；(=, t2, , x)——赋值四元式 arg2 留空。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============================================================
+      6.2 表达式的翻译
+    ============================================================ -->
+    <h2><span class="sec-no">6.2</span>表达式的翻译：E.addr、gen() 与临时变量怎么接力</h2>
+
+    <p>上一节说清了"产什么"——三地址码。这一节回答"怎么产"：能不能不先建语法树、在语法分析的过程中直接把指令吐出来？可以，这叫<span class="term">增量翻译</span>（Incremental Translation）：每条产生式归约时，顺手把对应的三地址指令追加到输出流里。</p>
+
+    <p>机制只有三个零件：</p>
+
+    <ul>
+      <li>属性 <strong>E.addr</strong>：表达式 E 的值<strong>存放在哪个地址</strong>（名字或临时变量）。注意不是值本身。</li>
+      <li>函数 <strong>gen()</strong>：向输出流追加一条三地址指令。</li>
+      <li>函数 <strong>new Temp()</strong>：分配一个从未用过的临时变量名（t1、t2……）。配合 <strong>top.get(id.lexeme)</strong> 从符号表取变量的存储位置。</li>
+    </ul>
+
+    <p>把这三个零件挂到表达式文法上，得到如下 SDD 片段（用第5章的记法，语义规则在归约时执行）：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>产生式</th><th>语义规则</th><th>说明</th></tr>
+        <tr><td>S → id = E</td><td>gen(top.get(id.lexeme) '=' E.addr)</td><td>把 E 的结果复制给变量</td></tr>
+        <tr><td>E → E₁ + E₂</td><td>E.addr := new Temp()；gen(E.addr '=' E₁.addr '+' E₂.addr)</td><td>先开新临时变量，再生成加法指令</td></tr>
+        <tr><td>E → -E₁</td><td>E.addr := new Temp()；gen(E.addr '=' 'minus' E₁.addr)</td><td>单目减</td></tr>
+        <tr><td>E → ( E₁ )</td><td>E.addr := E₁.addr</td><td>括号不生成指令，地址直接传递</td></tr>
+        <tr><td>E → id</td><td>E.addr := top.get(id.lexeme)</td><td>叶子：地址就是变量本身，不生成指令</td></tr>
+      </table>
+    </div>
+
+    <p><strong>完整手算例：a = b + -c + d。</strong>设指令从地址 100 开始。加法左结合，LR 分析的归约顺序是：先归约 -c，再归约 b + (-c)，再归约 (b + -c) + d，最后归约赋值。逐产生式走一遍：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>步骤</th><th>归约所用产生式</th><th>动作</th><th>生成的指令</th></tr>
+        <tr><td>1</td><td>E → -E₁（E₁.addr = c）</td><td>E.addr := t1；gen</td><td>100: t1 = minus c</td></tr>
+        <tr><td>2</td><td>E → E₁ + E₂（b 加 t1）</td><td>E.addr := t2；gen</td><td>101: t2 = b + t1</td></tr>
+        <tr><td>3</td><td>E → E₁ + E₂（t2 加 d）</td><td>E.addr := t3；gen</td><td>102: t3 = t2 + d</td></tr>
+        <tr><td>4</td><td>S → id = E（a 接 t3）</td><td>gen</td><td>103: a = t3</td></tr>
+      </table>
+    </div>
+
+    <p>最终四元式表（地址 100–103）：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>地址</th><th>op</th><th>arg1</th><th>arg2</th><th>result</th></tr>
+        <tr><td>100</td><td>minus</td><td>c</td><td></td><td>t1</td></tr>
+        <tr><td>101</td><td>+</td><td>b</td><td>t1</td><td>t2</td></tr>
+        <tr><td>102</td><td>+</td><td>t2</td><td>d</td><td>t3</td></tr>
+        <tr><td>103</td><td>=</td><td>t3</td><td></td><td>a</td></tr>
+      </table>
+    </div>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>E.addr 是一根<strong>接力棒</strong>：每个子表达式算完，把"结果存在哪"交给父节点；父节点拿着两个孩子的地址，开一个新临时变量，生成一条指令。指令生成的顺序 = 归约的顺序，恰好就是安全的求值顺序。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>两个误区。其一，E.addr 存的是<strong>地址不是值</strong>——写"E.addr := E₁.addr + E₂.addr"是把两个地址拼成指令文本，不是把两个数相加。其二，叶子 E → id <strong>不生成指令</strong>，只传递地址；给 id 也开临时变量是浪费，会凭空多出一堆复制指令。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 6.2-1</div>
+              <div class="q-text">E.addr 存什么？new Temp() 在哪几条产生式的语义规则里被调用？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              E.addr 存"E 的值所在的地址"（名字或临时变量），不是值本身。new Temp() 只在真正产生新值的产生式里调用：E → E₁ + E₂ 和 E → -E₁；括号与 id 只是传递地址，不调用。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 6.2-2</div>
+              <div class="q-text">对 a = b + -c + d，按归约顺序背出四条 gen 出来的指令。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              t1 = minus c；t2 = b + t1；t3 = t2 + d；a = t3。顺序来自归约顺序：-c 最先，赋值最后。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============================================================
+      6.3 布尔表达式与短路：回填
+    ============================================================ -->
+    <h2><span class="sec-no">6.3</span>布尔表达式与短路：跳转地址还不知道，怎么生成跳转指令</h2>
+
+    <p>表达式的翻译解决了，但程序里另一类式子更棘手：<strong>控制流条件</strong>。if (x != 0 &amp;&amp; y/x &gt; 1) 里的布尔表达式，你以为它要算出一个 0 或 1 存起来？其实绝大多数语言采用<span class="term">短路求值</span>（Short-Circuit Evaluation）：or 左边为真就不再算右边，and 左边为假就不再算右边。这不只是省时间——x != 0 先挡一道，y/x 才不会除零，短路是<strong>语义</strong>的一部分。</p>
+
+    <p>短路求值告诉我们：控制流语境里的布尔表达式，本质不是"算出一个布尔值"，而是<strong>一段跳转代码</strong>——条件成立跳到"真出口"，不成立跳到"假出口"。翻译 B → E₁ rel E₂ 时生成两条指令：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>指令形态</th><th>去向</th></tr>
+        <tr><td>if E₁.addr relop E₂.addr goto _</td><td>真出口</td></tr>
+        <tr><td>goto _</td><td>假出口</td></tr>
+      </table>
+    </div>
+
+    <p>问题来了：生成这两条指令的那一刻，<strong>真出口和假出口的地址根本不存在</strong>——它们落在后面还没翻译的语句里。难道要为此再扫描一趟源程序？不必。答案是<span class="term">回填</span>（Backpatching）：<strong>先把目标留空，把这条指令的地址记在链表里随身带着；等目标地址确定了，回头统一补填。</strong></p>
+
+    <p>回填机制的三个操作，签名与作用：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>操作</th><th>作用</th></tr>
+        <tr><td>makelist(i)</td><td>造一个只含指令号 i 的新链表，返回表指针</td></tr>
+        <tr><td>merge(p₁, p₂)</td><td>把 p₁、p₂ 两条链表合并，返回合并后的表指针</td></tr>
+        <tr><td>backpatch(p, i)</td><td>把链表 p 里<strong>每一条</strong>指令的跳转目标补填为 i</td></tr>
+      </table>
+    </div>
+
+    <p>配套的两个属性与一个标记：布尔表达式 B 挂两条链——<span class="term">真链</span>（truelist，所有"该跳真出口但还没填"的指令号）和<span class="term">假链</span>（falselist，同理）。标记非终结符 M → ε 的唯一作用是<strong>记下当前位置</strong>：M.instr := nextinstr（下一条待生成指令的地址）。</p>
+
+    <p>复合布尔表达式的翻译方案（本章最重要的一张表）：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>产生式</th><th>语义规则</th></tr>
+        <tr><td>B → B₁ or M B₂</td><td>backpatch(B₁.falselist, M.instr)；B.truelist := merge(B₁.truelist, B₂.truelist)；B.falselist := B₂.falselist</td></tr>
+        <tr><td>B → B₁ and M B₂</td><td>backpatch(B₁.truelist, M.instr)；B.truelist := B₂.truelist；B.falselist := merge(B₁.falselist, B₂.falselist)</td></tr>
+        <tr><td>B → not B₁</td><td>B.truelist := B₁.falselist；B.falselist := B₁.truelist</td></tr>
+        <tr><td>B → ( B₁ )</td><td>B.truelist := B₁.truelist；B.falselist := B₁.falselist</td></tr>
+        <tr><td>B → E₁ rel E₂</td><td>B.truelist := makelist(nextinstr)；B.falselist := makelist(nextinstr + 1)；gen('if' E₁.addr relop E₂.addr 'goto _')；gen('goto _')</td></tr>
+        <tr><td>M → ε</td><td>M.instr := nextinstr</td></tr>
+      </table>
+    </div>
+
+    <p>直觉先建立：<strong>or 是"左边为假才去算右边"</strong>，所以归约 or 时回填的是 B₁ 的<strong>假链</strong>（填上 B₂ 的入口 M.instr）；<strong>and 是"左边为真才去算右边"</strong>，回填的是 B₁ 的<strong>真链</strong>。记反是本章头号错误。</p>
+
+    <p><strong>核心完整手算例：a &lt; b or c &lt; d and e &lt; f。</strong>and 优先级高于 or，设指令从地址 100 开始。先把整个过程的控制流画出来：</p>
+
+    <div class="figure">
+      <div class="mermaid">
+flowchart LR
+  A["a 小于 b？"] -- 真 --> T["B 为真出口"]
+  A -- 假 --> C["c 小于 d？"]
+  C -- 真 --> D["e 小于 f？"]
+  C -- 假 --> F["B 为假出口"]
+  D -- 真 --> T
+  D -- 假 --> F
+  classDef hot fill:#fbeedd,stroke:#c4651f,stroke-width:2.5px,color:#c4651f;
+  classDef danger fill:#fae9e7,stroke:#b03a2e,stroke-width:2.5px,color:#b03a2e;
+  class T hot;
+  class F danger;
+      </div>
+      <div class="caption">图 6.1 短路控制流：a&lt;b 为假才去测 c&lt;d（or 语义）；c&lt;d 为真才去测 e&lt;f（and 语义）。六条指令恰好实现这张图。</div>
+    </div>
+
+    <p>逐步生成（每步写出链表状态）：</p>
+
+    <ol>
+      <li><strong>翻译 B₁ = a&lt;b</strong>（B → E₁ rel E₂）：B₁.truelist = makelist(100) = {100}，B₁.falselist = makelist(101) = {101}。<br>
+        生成　100: if a&lt;b goto _　／　101: goto _</li>
+      <li><strong>M₁ → ε</strong>：M₁.instr = nextinstr = 102（这是 B₂ 的入口，先记下）。</li>
+      <li><strong>翻译 B₂ = c&lt;d</strong>：B₂.truelist = {102}，B₂.falselist = {103}。<br>
+        生成　102: if c&lt;d goto _　／　103: goto _</li>
+      <li><strong>M₂ → ε</strong>：M₂.instr = 104。</li>
+      <li><strong>翻译 B₃ = e&lt;f</strong>：B₃.truelist = {104}，B₃.falselist = {105}。<br>
+        生成　104: if e&lt;f goto _　／　105: goto _</li>
+      <li><strong>归约 and（B₂ and M₂ B₃）</strong>：
+        <ul>
+          <li>backpatch(B₂.truelist = {102}, M₂.instr = 104)　⇒　指令 102 补填为 <strong>if c&lt;d goto 104</strong>；</li>
+          <li>B′.truelist := B₃.truelist = {104}；</li>
+          <li>B′.falselist := merge({103}, {105}) = {103, 105}。</li>
+        </ul>
+      </li>
+      <li><strong>归约 or（B₁ or M₁ B′）</strong>：
+        <ul>
+          <li>backpatch(B₁.falselist = {101}, M₁.instr = 102)　⇒　指令 101 补填为 <strong>goto 102</strong>；</li>
+          <li>B.truelist := merge({100}, {104}) = <strong>{100, 104}</strong>；</li>
+          <li>B.falselist := B′.falselist = <strong>{103, 105}</strong>。</li>
+        </ul>
+      </li>
+    </ol>
+
+    <p>对照表——每条指令"生成时长什么样 / 回填后长什么样"：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>地址</th><th>生成时指令</th><th>链表归属</th><th>回填后指令</th></tr>
+        <tr><td>100</td><td>if a&lt;b goto _</td><td>B₁.tl={100} → B.tl</td><td>if a&lt;b goto _（真出口，留给上层回填）</td></tr>
+        <tr><td>101</td><td>goto _</td><td>B₁.fl={101}</td><td>goto 102</td></tr>
+        <tr><td>102</td><td>if c&lt;d goto _</td><td>B₂.tl={102}</td><td>if c&lt;d goto 104</td></tr>
+        <tr><td>103</td><td>goto _</td><td>B₂.fl={103} → B.fl</td><td>goto _（假出口，留给上层回填）</td></tr>
+        <tr><td>104</td><td>if e&lt;f goto _</td><td>B₃.tl={104} → B.tl</td><td>if e&lt;f goto _（真出口，留给上层回填）</td></tr>
+        <tr><td>105</td><td>goto _</td><td>B₃.fl={105} → B.fl</td><td>goto _（假出口，留给上层回填）</td></tr>
+      </table>
+    </div>
+
+    <p>最终上交的"欠条"：B.truelist = {100, 104}，B.falselist = {103, 105}。它们要等 6.4 的控制流语句（if / while）来抵债。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>回填就是<strong>先上车、后补票</strong>：跳转指令照常生成，目标栏留空；留空不是遗忘，而是把指令号记进 truelist / falselist 这两本账里，一路带到归约出目标地址的那一刻，用一次 backpatch 统一还清。一趟扫描就够，不用回头重读源程序。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>三个误区。其一，or 回填 B₁.<strong>falselist</strong>、and 回填 B₁.<strong>truelist</strong>——记反整题崩盘，用"or 假才继续、and 真才继续"自查。其二，truelist 里存的是<strong>指令号</strong>（100、104），不是指令内容。其三，M.instr 必须在 B₂ 生成<strong>之前</strong>取值——这就是为什么 M 要插在 or / and 与 B₂ 之间。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 6.3-1</div>
+              <div class="q-text">makelist / merge / backpatch 三个操作的签名与一句话作用。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              makelist(i)：造只含指令号 i 的链表；merge(p₁, p₂)：合并两条链表；backpatch(p, i)：把链表 p 中每条指令的跳转目标补填为 i。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 6.3-2</div>
+              <div class="q-text">写出 B → B₁ or M B₂ 的三条语义规则，并解释为什么回填的是 B₁ 的假链。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              backpatch(B₁.falselist, M.instr)；B.truelist := merge(B₁.truelist, B₂.truelist)；B.falselist := B₂.falselist。因为 or 的语义是"B₁ 为假才需要算 B₂"，所以 B₁ 的假出口恰好落在 B₂ 的入口 M.instr 上。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============================================================
+      6.4 控制流语句的翻译
+    ============================================================ -->
+    <h2><span class="sec-no">6.4</span>控制流语句的翻译：if / if-else / while 共用一副骨架</h2>
+
+    <p>上一节结束在"布尔表达式交出两本欠条：truelist 和 falselist"。谁来还债？<strong>使用这个布尔表达式的语句</strong>。控制流语句的翻译方案只做两件事：把 B.truelist 回填到语句体的入口，把 B.falselist（连同语句自己的未决跳转）打包成 <strong>S.nextlist</strong> 交给上层——nextlist 与真链假链是同一种思想，只是从布尔表达式搬到了语句上："我执行完之后该跳去哪，由我的上下文决定"。</p>
+
+    <p>三种语句的翻译方案：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>语句</th><th>产生式与语义规则</th><th>要点</th></tr>
+        <tr>
+          <td>if-then</td>
+          <td>S → if M B then S₁：backpatch(B.truelist, M.instr)；S.nextlist := merge(B.falselist, S₁.nextlist)</td>
+          <td>真链落语句体入口；假链与语句体的未决跳转一起上交</td>
+        </tr>
+        <tr>
+          <td>if-then-else</td>
+          <td>S → if B then M₁ S₁ N else M₂ S₂：backpatch(B.truelist, M₁.instr)；backpatch(B.falselist, M₂.instr)；S.nextlist := merge(merge(S₁.nextlist, N.nextlist), S₂.nextlist)；其中 N → ε { N.nextlist := makelist(nextinstr)；gen('goto _') }</td>
+          <td>N 负责生成"跳过 else 分支"的那条 goto，它的指令号也是一张欠条</td>
+        </tr>
+        <tr>
+          <td>while</td>
+          <td>S → while M₁ B do M₂ S₁：backpatch(S₁.nextlist, M₁.instr)；backpatch(B.truelist, M₂.instr)；S.nextlist := B.falselist；gen('goto' M₁.instr)</td>
+          <td>循环体尾接回条件入口；唯一的出口是 B 的假链</td>
+        </tr>
+      </table>
+    </div>
+
+    <p>为什么 while 需要两个标记 M₁、M₂？因为要记住<strong>两个</strong>地址：M₁.instr 是条件 B 的入口（循环体执行完要跳回去），M₂.instr 是循环体 S₁ 的入口（B 为真时落进来）。if 只用记住一个，所以一个 M 就够。</p>
+
+    <p><strong>完整手算例：while a &lt; b do x = x + 1</strong>，设起始地址 100。逐步执行 while 方案，每次 backpatch 调用都写出来：</p>
+
+    <ol>
+      <li><strong>M₁ → ε</strong>：M₁.instr = nextinstr = <strong>100</strong>（条件入口，先记下）。</li>
+      <li><strong>翻译 B = a&lt;b</strong>（6.3 的方案）：B.truelist = {100}，B.falselist = {101}。<br>
+        生成　100: if a&lt;b goto _　／　101: goto _</li>
+      <li><strong>M₂ → ε</strong>：M₂.instr = <strong>102</strong>（循环体入口）。</li>
+      <li><strong>翻译 S₁ = x = x + 1</strong>（6.2 的方案）：<br>
+        生成　102: t1 = x + 1　／　103: x = t1。<br>
+        赋值语句没有未决跳转：<strong>S₁.nextlist = {}（空表）</strong>。</li>
+      <li><strong>归约 while</strong>，四个语义动作逐个执行：
+        <ul>
+          <li>backpatch(S₁.nextlist = {}, M₁.instr = 100)：空表，无指令可改（注意：不是这一步生成 goto 100）；</li>
+          <li>backpatch(B.truelist = {100}, M₂.instr = 102)　⇒　指令 100 补填为 <strong>if a&lt;b goto 102</strong>；</li>
+          <li>S.nextlist := B.falselist = <strong>{101}</strong>——循环唯一出口，留给上层；</li>
+          <li>gen('goto' M₁.instr)　⇒　生成 <strong>104: goto 100</strong>（此时 M₁.instr 已知，目标直接写入，无需回填）。</li>
+        </ul>
+      </li>
+      <li><strong>上层回填</strong>：当包含本 while 的外层结构（例如顺序语句 S → S₁ M S₂）翻译到循环之后的第一条指令 105 时，执行 backpatch(S.nextlist = {101}, 105)　⇒　指令 101 补填为 <strong>goto 105</strong>。</li>
+    </ol>
+
+    <p>最终指令序列：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>地址</th><th>指令</th><th>来源 / 回填经过</th></tr>
+        <tr><td>100</td><td>if a&lt;b goto 102</td><td>B 的条件跳转；truelist={100} 被 backpatch 到 M₂.instr=102</td></tr>
+        <tr><td>101</td><td>goto 105</td><td>B 的假链={101}=S.nextlist；由上层回填到循环外第一条 105</td></tr>
+        <tr><td>102</td><td>t1 = x + 1</td><td>循环体（M₂.instr=102）</td></tr>
+        <tr><td>103</td><td>x = t1</td><td>循环体</td></tr>
+        <tr><td>104</td><td>goto 100</td><td>while 方案的 gen('goto' M₁.instr)，目标 100 生成时已知</td></tr>
+        <tr><td>105</td><td>…（循环外第一条指令）</td><td>101 的跳转目标</td></tr>
+      </table>
+    </div>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>整个控制流翻译就是三种"接线"：<strong>真链</strong>接到语句体入口，<strong>假链</strong>接到下一条语句，<strong>循环体尾部</strong>接回条件入口。if、if-else、while 长得不同，但骨架完全一样——接线规则写在产生式的语义动作里，分析器走完，线就接好了。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>三个误区。其一，104 那条 goto 100 <strong>不是回填出来的</strong>——gen('goto' M₁.instr) 执行时 M₁.instr=100 早已记下，目标直接写入。其二，赋值语句的 nextlist 是<strong>空表</strong>，不要以为每条语句都带欠条。其三，S.nextlist 里的指令<strong>不是 S 自己回填的</strong>，是由包含 S 的上层结构负责——101 的 goto 105 就是上层补的。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 6.4-1</div>
+              <div class="q-text">S.nextlist 里存的是什么？谁负责回填它？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              存的是"S 执行完之后该跳走、但目标还没填"的指令号链表（可能来自 B 的假链、语句体的未决跳转、或 N 生成的 goto）。它不由 S 自己回填，而由包含 S 的上层结构在目标地址确定时回填。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 6.4-2</div>
+              <div class="q-text">按顺序背出 while 翻译方案的四个语义动作。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              ① backpatch(S₁.nextlist, M₁.instr)；② backpatch(B.truelist, M₂.instr)；③ S.nextlist := B.falselist；④ gen('goto' M₁.instr)。两个 M 分别记条件入口与循环体入口。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===== 章末五件套之 1：概念卡 ===== -->
+    <h2><span class="sec-no">🃏</span>概念卡：本章概念的一分钟画像</h2>
+    <p>翻面前先自问：这个概念我能用一句话讲清楚吗？</p>
+    <div class="flip-grid">
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 1</div>
+            <div class="q-text">中间表示（Intermediate Representation）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">介于源语言与目标机之间的抽象程序表示，本章用低层 IR：三地址码。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">前端直接产机器码会机器相关、难优化、难移植；有 IR，m 种语言 n 种机器只需 m 个前端加 n 个后端。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">编译器内部的"世界语"：所有人先翻译成它，再由它翻译出去。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为 IR 只有一种形态——语法树、三地址码、SSA 是不同层次的 IR。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">第8章代码生成的输入，第9–10章优化的操作对象。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 2</div>
+            <div class="q-text">三地址码（Three-Address Code）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">每条指令至多一个运算符、形如 x = y op z 的线性指令序列。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">把树形表达式的求值顺序显式化，又抽象掉寄存器、寻址模式等机器细节。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">把语法树拍平：临时变量名就是原来树的内部节点。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">"三个地址"不是三个内存地址——名字、常量、临时变量都算地址。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">本章全部翻译方案的目标语言；第8章指令选择前的最后形态。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 3</div>
+            <div class="q-text">四元式（Quadruple）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">三地址码的记录式实现：op、arg1、arg2、result 四个字段，一条指令一行。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">让指令成为可存放、可重排的数据结构——优化器要移动和删除指令。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">一张四列表格，编译器后端在这张表上"打算盘"。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">result 字段放的是名字不是值；赋值指令的 arg2 留空。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">第9章数据流分析与机器无关优化直接操作四元式序列。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 4</div>
+            <div class="q-text">短路求值（Short-Circuit Evaluation）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">or 左真即真、and 左假即假，右侧不再求值的布尔求值策略。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">既是语义要求（x≠0 and y/x&gt;1 防除零），又让布尔表达式天然变成跳转代码。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">闯关游戏：or 是第一关过了就通关，and 是第一关挂了就出局。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为布尔表达式总要算出 0/1 存起来——控制流语境下根本不需要这个值。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">6.3 跳转代码与回填的语义基础。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 5</div>
+            <div class="q-text">回填（Backpatching）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">跳转目标未知时先生成留空指令并记录指令号，目标确定后统一补填的技术。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">一趟扫描生成跳转代码时"目标在未来"的矛盾，免去第二趟扫描。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">先上车后补票：指令号是欠条，backpatch 是还账。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为需要两趟扫描——欠条随身携带，一趟就够。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">6.3、6.4 全部布尔与控制流翻译；第8章生成汇编时以"标号"形式再见。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 6</div>
+            <div class="q-text">真链 / 假链（truelist / falselist）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">挂在布尔表达式 B 上的两条指令号链表：所有"该跳真 / 假出口但还没填"的指令。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">跳转目标在 B 的上下文（if / while）里才确定，B 自己翻译时不知道。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">两本账："我欠真出口的钱""我欠假出口的钱"，交给上层抵债。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为链表存指令内容——只存指令号；nextlist 是同款思想搬到语句上。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">6.3 布尔归约、6.4 控制流语句；习题与考试必考。</span></div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- ===== 章末五件套之 2：分层习题 ===== -->
+    <h2><span class="sec-no">📝</span>分层习题</h2>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>
+        <p>判断正误并说明理由：① "x = a + b * c" 是一条合法的三地址码指令。② 四元式 (op, arg1, arg2, result) 中 result 字段存放运算结果的值。</p>
+      </div>
+      <details>
+        <summary>提示</summary>
+        <p>① 回顾三地址码唯一的形式约束，数数运算符个数。② 区分"名字"与"值"——编译时刻有值吗？</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p>① <strong>错</strong>。该指令含两个运算符（+ 与 *），违反"每条指令至多一个运算符"。必须拆成两条：t1 = b * c；x = a + t1。</p>
+          <p>② <strong>错</strong>。result 存的是<strong>名字</strong>（变量名或临时变量名），即结果存放在哪个地址。中间代码生成发生在运行之前，此时根本不存在"值"。把字段理解成值，会导致无法理解"指令可以被重排"——重排的是记录，值是运行时才有的。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>
+        <p>下列关于回填的说法，哪一个是正确的？<br>
+        A. 回填需要对源程序做两趟扫描，第一趟生成指令，第二趟补填地址。<br>
+        B. truelist 里存放的是跳转到真出口的指令内容。<br>
+        C. 归约 B → B₁ and M B₂ 时，执行 backpatch(B₁.truelist, M.instr)。<br>
+        D. M → ε 的语义动作是 backpatch(nextinstr)。</p>
+      </div>
+      <details>
+        <summary>提示</summary>
+        <p>回忆"and 真才继续"的口诀；M 的唯一职责是什么；链表里存的到底是什么。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p><strong>C 正确</strong>：and 的语义是"B₁ 为真才需要算 B₂"，所以 B₁ 的真链应回填到 B₂ 的入口 M.instr。</p>
+          <p>A 错：回填一趟扫描即可，指令号记在链表里随身携带，地址确定时回头补填已生成的指令，不需要重读源程序。B 错：truelist 存的是<strong>指令号</strong>（如 100、104），不是指令文本。D 错：M → ε 的语义动作是 M.instr := nextinstr——只是<strong>记下</strong>下一条指令的地址，不做任何回填。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>
+        <p>把 x = a * b + a * c 翻译成三地址码（从地址 200 开始），列出四元式表；再指出：如果后续优化要省掉一条乘法，它可以从哪两个角度入手？</p>
+      </div>
+      <details>
+        <summary>提示</summary>
+        <p>先乘后加，两个乘法谁先都可以。优化角度：一个看"重复出现的计算"，一个看"代数恒等式"。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p>三地址码（a*b 与 a*c 次序可互换，这里从左到右）：</p>
+          <div class="tbl-wrap">
+            <table>
+              <tr><th>地址</th><th>指令</th></tr>
+              <tr><td>200</td><td>t1 = a * b</td></tr>
+              <tr><td>201</td><td>t2 = a * c</td></tr>
+              <tr><td>202</td><td>t3 = t1 + t2</td></tr>
+              <tr><td>203</td><td>x = t3</td></tr>
+            </table>
+          </div>
+          <p>四元式表：</p>
+          <div class="tbl-wrap">
+            <table>
+              <tr><th>地址</th><th>op</th><th>arg1</th><th>arg2</th><th>result</th></tr>
+              <tr><td>200</td><td>*</td><td>a</td><td>b</td><td>t1</td></tr>
+              <tr><td>201</td><td>*</td><td>a</td><td>c</td><td>t2</td></tr>
+              <tr><td>202</td><td>+</td><td>t1</td><td>t2</td><td>t3</td></tr>
+              <tr><td>203</td><td>=</td><td>t3</td><td></td><td>x</td></tr>
+            </table>
+          </div>
+          <p>省一条乘法的两个角度：</p>
+          <p>① <strong>公共子表达式消除</strong>：若程序中 a*b（或 a*c）在别处已被算过且 a、b 未变（例如后文还有 y = a * b + 1），则 t1 可直接复用，那次乘法不必重算——若表达式写成 x = a*b + a*b，则 200 与 201 完全重复，t2 := t1，直接省一条。</p>
+          <p>② <strong>代数恒等式</strong>：a*b + a*c = a*(b+c)，可改写为 t1 = b + c；x = a * t1，两条乘法变一条。</p>
+          <p>两者都属于<strong>第9章机器无关优化</strong>的范畴——本章的翻译器只管忠实翻译，"看出来能省"是优化器的事。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>
+        <p>用回填方案翻译 if a &lt; b then x = 1 else x = 2（起始地址 100），写出完整指令序列，并逐个写出每次 backpatch 调用及其参数。</p>
+      </div>
+      <details>
+        <summary>提示</summary>
+        <p>产生式骨架 S → if B then M₁ S₁ N else M₂ S₂。别漏掉 N → ε 生成的"跳过 else"那条 goto——它也是一张欠条。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p>逐步生成：</p>
+          <ol>
+            <li>翻译 B = a&lt;b：B.truelist={100}，B.falselist={101}。生成 100: if a&lt;b goto _　／　101: goto _。</li>
+            <li>M₁ → ε：M₁.instr = 102。</li>
+            <li>翻译 S₁ = x = 1：生成 102: x = 1。S₁.nextlist = {}。</li>
+            <li>N → ε：N.nextlist = makelist(103) = {103}；gen('goto _') ⇒ 生成 103: goto _（跳过 else 分支的欠条）。</li>
+            <li>M₂ → ε：M₂.instr = 104。</li>
+            <li>翻译 S₂ = x = 2：生成 104: x = 2。S₂.nextlist = {}。</li>
+            <li>归约 if-then-else：
+              <br>· backpatch(B.truelist={100}, M₁.instr=102) ⇒ 100 改为 <strong>if a&lt;b goto 102</strong>；
+              <br>· backpatch(B.falselist={101}, M₂.instr=104) ⇒ 101 改为 <strong>goto 104</strong>；
+              <br>· S.nextlist := merge(merge({}, {103}), {}) = <strong>{103}</strong>。</li>
+            <li>上层在翻译到下一条语句（地址 105）时：backpatch(S.nextlist={103}, 105) ⇒ 103 改为 <strong>goto 105</strong>。</li>
+          </ol>
+          <p>最终指令序列：</p>
+          <div class="tbl-wrap">
+            <table>
+              <tr><th>地址</th><th>指令</th></tr>
+              <tr><td>100</td><td>if a&lt;b goto 102</td></tr>
+              <tr><td>101</td><td>goto 104</td></tr>
+              <tr><td>102</td><td>x = 1</td></tr>
+              <tr><td>103</td><td>goto 105</td></tr>
+              <tr><td>104</td><td>x = 2</td></tr>
+              <tr><td>105</td><td>…（if 之后的第一条指令）</td></tr>
+            </table>
+          </div>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l3">L3 建模应用</span>
+        <p>把下面这段"找数组前 n 项最大值"的程序翻译成完整三地址码（自己编排地址，数组元素按 8 字节寻址），并标出所有 truelist / falselist / nextlist 的最终去向：</p>
+        <p><strong>while i &lt; n do if a[i] &gt; m then m = a[i]</strong></p>
+      </div>
+      <details>
+        <summary>提示</summary>
+        <p>外层套 while 方案、内层套 if-then 方案。数组读 a[i] 拆两条：t = i * 8；t' = a[t]。注意内层 if 的 nextlist 会变成 while 循环体的 S₁.nextlist，最终被回填到循环条件入口。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p>设起始地址 100。逐层生成：</p>
+          <ol>
+            <li>M₁ → ε：M₁.instr = 100。翻译外层条件 B₁ = i&lt;n：生成 100: if i&lt;n goto _（B₁.tl={100}）／101: goto _（B₁.fl={101}）。</li>
+            <li>M₂ → ε：M₂.instr = 102。</li>
+            <li>翻译内层条件 B₂ = a[i]&gt;m：先数组寻址，102: t1 = i * 8；103: t2 = a[t1]；再比较，104: if t2&gt;m goto _（B₂.tl={104}）／105: goto _（B₂.fl={105}）。</li>
+            <li>M₃ → ε：M₃.instr = 106。翻译内层语句体 m = a[i]（朴素翻译，重新寻址一次）：106: t3 = i * 8；107: t4 = a[t3]；108: m = t4。S.nextlist={}。</li>
+            <li>归约内层 if-then：backpatch(B₂.tl={104}, M₃.instr=106) ⇒ 104 改为 <strong>if t2&gt;m goto 106</strong>；内层 if 的 nextlist := merge(B₂.fl={105}, {}) = {105}。</li>
+            <li>归约外层 while（S₁ 即内层 if，S₁.nextlist={105}）：
+              <br>· backpatch(S₁.nextlist={105}, M₁.instr=100) ⇒ 105 改为 <strong>goto 100</strong>；
+              <br>· backpatch(B₁.truelist={100}, M₂.instr=102) ⇒ 100 改为 <strong>if i&lt;n goto 102</strong>；
+              <br>· S.nextlist := B₁.falselist = {101}；
+              <br>· gen('goto' M₁.instr) ⇒ 109: <strong>goto 100</strong>。</li>
+            <li>上层把 {101} 回填到循环外第一条指令 110：101 改为 <strong>goto 110</strong>。</li>
+          </ol>
+          <p>最终指令序列：</p>
+          <div class="tbl-wrap">
+            <table>
+              <tr><th>地址</th><th>指令</th><th>备注</th></tr>
+              <tr><td>100</td><td>if i&lt;n goto 102</td><td>B₁.tl={100} → 回填到循环体入口 102</td></tr>
+              <tr><td>101</td><td>goto 110</td><td>B₁.fl={101}=while 的 S.nextlist → 回填到循环外 110</td></tr>
+              <tr><td>102</td><td>t1 = i * 8</td><td>循环体入口（M₂.instr=102）</td></tr>
+              <tr><td>103</td><td>t2 = a[t1]</td><td>取 a[i]</td></tr>
+              <tr><td>104</td><td>if t2&gt;m goto 106</td><td>B₂.tl={104} → 回填到 if 语句体入口 106</td></tr>
+              <tr><td>105</td><td>goto 100</td><td>B₂.fl={105} → 内层 if nextlist → while 回填到条件入口 100</td></tr>
+              <tr><td>106</td><td>t3 = i * 8</td><td>if 语句体：重新寻址 a[i]</td></tr>
+              <tr><td>107</td><td>t4 = a[t3]</td><td></td></tr>
+              <tr><td>108</td><td>m = t4</td><td></td></tr>
+              <tr><td>109</td><td>goto 100</td><td>while 方案 gen('goto' M₁.instr)，目标已知直接写入</td></tr>
+              <tr><td>110</td><td>…（循环外第一条）</td><td>101 的跳转目标</td></tr>
+            </table>
+          </div>
+          <p><strong>链表最终去向汇总</strong>：B₁.truelist={100}→102；B₁.falselist={101}→110（经 S.nextlist 上交）；B₂.truelist={104}→106；B₂.falselist={105}→100（经内层 if 的 nextlist 上交为循环体 S₁.nextlist，被 while 回填到 M₁.instr）。</p>
+          <p>顺带观察：102–103 与 106–107 重复计算了 a[i]——这正是第9章公共子表达式消除要清理的东西，本章只负责"翻译对"。</p>
+        </div>
+      </details>
+    </div>
+
+    <!-- ===== 章末五件套之 3：自测 ===== -->
+    <h2><span class="sec-no">✍️</span>本章自测</h2>
+    <p class="quiz-hint">点击选项判分，答错会给出原因。</p>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 1</div>
+      <div class="q-stem">下列哪一条是合法的三地址码指令？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. x = a + b * c</li>
+        <li data-opt="b">B. t1 = a + b</li>
+        <li data-opt="c">C. x = a + b + c</li>
+        <li data-opt="d">D. a + b = t1</li>
+      </ul>
+      <div class="quiz-explain">解析：B 对——形如 x = y op z，恰一个运算符。A 错：含 + 与 * 两个运算符，必须拆成 t1 = b*c 与 x = a+t1 两条。C 错：同样两个运算符，左结合的源语言习惯对应 t1 = a+b；x = t1+c 两条。D 错：赋值号左边必须是单个名字（结果地址），不能是表达式。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="c">
+      <div class="q-no">自测 2</div>
+      <div class="q-stem">指令 t2 = a + t1 写成四元式，正确的是？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. (t2, a, t1, +)</li>
+        <li data-opt="b">B. (+, t2, a, t1)</li>
+        <li data-opt="c">C. (+, a, t1, t2)</li>
+        <li data-opt="d">D. (a, +, t1, t2)</li>
+      </ul>
+      <div class="quiz-explain">解析：C 对——四元式字段顺序固定为 (op, arg1, arg2, result)，即 (+, a, t1, t2)。A 错：把 result 放到了第一位，字段错位会让后端把 t2 当成运算符。B 错：result 跑到 arg1 位置。D 错：运算符必须在 op 位，这是四元式能被统一处理的根基。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 3</div>
+      <div class="q-stem">归约 B → B₁ or M B₂ 时，应该执行哪个 backpatch？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. backpatch(B₁.truelist, M.instr)</li>
+        <li data-opt="b">B. backpatch(B₁.falselist, M.instr)</li>
+        <li data-opt="c">C. backpatch(B₂.truelist, M.instr)</li>
+        <li data-opt="d">D. backpatch(B₁.truelist 与 B₁.falselist, M.instr)</li>
+      </ul>
+      <div class="quiz-explain">解析：B 对——or 的语义是"B₁ 为假才去算 B₂"，所以 B₁ 的<strong>假出口</strong>落在 B₂ 的入口 M.instr。A 错：那是 and 的规则（B₁ 为真才算 B₂），记反是本章头号错误。C 错：B₂ 的代码在 M 之后才生成，回填 B₂ 的链不属于本次归约。D 错：真链假链去向不同，绝不可能填同一个地址。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="a">
+      <div class="q-no">自测 4</div>
+      <div class="q-stem">对 a &lt; b or c &lt; d and e &lt; f 完成 6.3 的翻译后，最终上交的 B.truelist 是？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. {100, 104}</li>
+        <li data-opt="b">B. {100, 102, 104}</li>
+        <li data-opt="c">C. {100}</li>
+        <li data-opt="d">D. {104}</li>
+      </ul>
+      <div class="quiz-explain">解析：A 对——or 归约时 B.truelist := merge(B₁.truelist, and 结果的 truelist) = merge({100}, {104}) = {100, 104}。B 错：102 已经在 and 归约时被 backpatch 填上 104 了，它不再欠任何地址，不该留在链上。C 错：漏掉了 e&lt;f 为真也是整体为真。D 错：漏掉了 a&lt;b 为真的短路口。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="d">
+      <div class="q-no">自测 5</div>
+      <div class="q-stem">在 S → while M₁ B do M₂ S₁ 的翻译方案中，S.nextlist 被赋值为？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. B.truelist</li>
+        <li data-opt="b">B. S₁.nextlist</li>
+        <li data-opt="c">C. merge(B.falselist, S₁.nextlist)</li>
+        <li data-opt="d">D. B.falselist</li>
+      </ul>
+      <div class="quiz-explain">解析：D 对——while 唯一的出口是"条件为假"，所以 S.nextlist := B.falselist。A 错：B.truelist 已被 backpatch 到循环体入口 M₂.instr，不再是未决跳转。B 错：S₁.nextlist 已被 backpatch 到循环条件入口 M₁.instr（循环体执行完要回去再测条件）。C 错：这是 if-then 的公式，搬到 while 上会把已还清的 S₁.nextlist 又当成欠条上交。</div>
+    </div>
+
+    <!-- ===== 章末五件套之 4：三句话复述 ===== -->
+    <div class="retell">
+      <h3>🗣️ 用自己的话，三句话讲完本章</h3>
+      <p>对着空气（或室友）说出这三句。说卡壳的那句，回去重读对应小节。</p>
+      <details>
+        <summary>句1：这章解决什么问题？——</summary>
+        <div class="retell-answer">参考答案：前端的语法树与后端的目标机器码之间，需要一种与机器无关、又足够低层的中间语言；而且控制流语句的跳转目标在生成指令那一刻还不知道，必须能先生成、事后回填。</div>
+      </details>
+      <details>
+        <summary>句2：核心机制是什么？——</summary>
+        <div class="retell-answer">参考答案：三地址码加四元式充当 IR；表达式靠 E.addr、gen()、new Temp() 增量翻译；布尔表达式按短路语义翻成跳转代码，未决的跳转目标记入 truelist / falselist，用 makelist / merge / backpatch 三操作在归约时统一补填；if、if-else、while 共用这一副接线骨架。</div>
+      </details>
+      <details>
+        <summary>句3：它和前后章怎么分工？——</summary>
+        <div class="retell-answer">参考答案：第5章给了 SDT 这把"规则怎么挂、何时触发"的扳手，本章用它产出三地址码；第7章解决运行时环境（栈、活动记录），第8章把三地址码变成目标代码，第9章在四元式上做优化。</div>
+      </details>
+    </div>
+
+    <!-- ===== 章末五件套之 5：间隔复习计划 ===== -->
+    <div class="review-plan">
+      <h3>🔁 间隔复习计划</h3>
+      <p>回忆本身比重读有效 10 倍。到点只做一件事：翻卡 + 重做标记题。</p>
+      <table>
+        <tr><th>时间点</th><th>复习内容</th><th>预计用时</th></tr>
+        <tr><td>第 1 天</td><td>概念卡 1–6 全部 + 回忆卡 6.1-1 至 6.4-2 全部</td><td>12 分钟</td></tr>
+        <tr><td>第 3 天</td><td>概念卡 3、5、6 + 回忆 6.3-1、6.3-2、6.4-2 + 自测错题重做</td><td>10 分钟</td></tr>
+        <tr><td>第 7 天</td><td>三句话复述 + 重做 L2 两题（a*b+a*c、if-else 回填）+ L3 的链表去向汇总</td><td>15 分钟</td></tr>
+        <tr><td>第 15 天</td><td>只重做合上书挑战；能全过就毕业，重点核对第 4、5 条</td><td>15 分钟</td></tr>
+      </table>
+    </div>
+
+    <!-- 合上书挑战 -->
+    <div class="final-challenge">
+      <h3>📕 合上书挑战</h3>
+      <p class="fc-sub">现在关掉这个页面，拿一张纸，凭记忆完成以下任务。全部做完再回来核对——这是本章真正的毕业考试。</p>
+      <ol id="challenge-list">
+        <li><span class="fc-check"></span>写出三地址码的形式约束与三种地址；把 x = a + b * c 写成三地址码并列出四元式表。</li>
+        <li><span class="fc-check"></span>默写表达式翻译的 SDD 片段（S→id=E、E→E₁+E₂、E→-E₁、E→id），并对 a = b + -c + d 逐产生式写出 gen 序列。</li>
+        <li><span class="fc-check"></span>默写 makelist / merge / backpatch 三操作的签名与作用，以及 M → ε 为什么必须插在 or / and 与 B₂ 之间。</li>
+        <li><span class="fc-check"></span>对 a &lt; b or c &lt; d and e &lt; f 从零执行回填：写出六条指令、每次 backpatch 调用、最终的 B.truelist 与 B.falselist。</li>
+        <li><span class="fc-check"></span>默写 while 翻译方案的四个语义动作，并对 while a &lt; b do x = x + 1 生成地址 100–105 的完整指令序列（说清 104 为什么不需要回填、101 由谁回填）。</li>
+        <li><span class="fc-check"></span>一句话回答本章主线问题：前端与后端之间需要什么样的中间语言——控制流语句的跳转地址如何在地址未知时先生成、事后回填？</li>
+      </ol>
+    </div>
+
+    <div class="complete-zone">
+      <button class="btn-complete" id="btn-complete" onclick="markDone()">✓ 我已完成本章（含合上书挑战）</button>
+    </div>
+
+    <div class="chapter-nav">
+      <a href="chapter-05.html"><span class="nav-dir">← 上一章</span>第5章 语法制导翻译</a>
+      <a href="chapter-07.html" class="next"><span class="nav-dir">下一章 →</span>第7章 运行环境</a>
+    </div>
+
+  </div>
+</div>
+
+<footer class="footer">
+  <div class="wrap">第6章 中间代码生成 · 编译原理互动讲义 · 基于 Aho/Lam/Sethi/Ullman《编译原理》（第 2 版）</div>
+</footer>
+
+<script src="/lectures-assets/mermaid.min.js"></script>
+<script>
+mermaid.initialize({
+  startOnLoad: true,
+  theme: "base",
+  themeVariables: {
+    primaryColor: "#e3edf7",
+    primaryBorderColor: "#1d5f9e",
+    primaryTextColor: "#1d5f9e",
+    lineColor: "#5c554b",
+    secondaryColor: "#fbeedd",
+    tertiaryColor: "#f5f1e8",
+    fontFamily: "-apple-system, PingFang SC, sans-serif",
+    fontSize: "14px"
+  },
+  flowchart: { curve: "linear", htmlLabels: false }
+});
+</script>
+<script>
+// 自测题判分（原样复用，勿改）
+document.querySelectorAll(".quiz-block").forEach(block => {
+  const answer = block.dataset.answer;
+  const explain = block.querySelector(".quiz-explain");
+  block.querySelectorAll(".quiz-opts li").forEach(li => {
+    li.addEventListener("click", () => {
+      const opts = block.querySelectorAll(".quiz-opts li");
+      opts.forEach(o => o.classList.add("disabled"));
+      if (li.dataset.opt === answer) {
+        li.classList.add("correct");
+      } else {
+        li.classList.add("wrong");
+        block.querySelector(`[data-opt="${answer}"]`).classList.add("correct");
+      }
+      explain.classList.add("show");
+    });
+  });
+});
+
+// 合上书清单打勾（原样复用，勿改）
+document.querySelectorAll("#challenge-list li").forEach(li => {
+  li.addEventListener("click", () => li.classList.toggle("checked"));
+});
+
+// 完成标记 → localStorage（章号：6）
+const KEY = "comp_progress_v1";
+function loadProgress() {
+  try { return JSON.parse(localStorage.getItem(KEY)) || {}; } catch (e) { return {}; }
+}
+const progress = loadProgress();
+const btn = document.getElementById("btn-complete");
+if (progress[6] && progress[6].done) {
+  btn.textContent = "✓ 已完成 · 再次点击重置";
+  btn.classList.add("done");
+}
+function markDone() {
+  const p = loadProgress();
+  if (p[6] && p[6].done) {
+    delete p[6];
+    btn.textContent = "✓ 我已完成本章（含合上书挑战）";
+    btn.classList.remove("done");
+  } else {
+    p[6] = { done: true, completedAt: Date.now(), reviewsDone: 0 };
+    btn.textContent = "✓ 已完成 · 复习提醒已开启";
+    btn.classList.add("done");
+  }
+  localStorage.setItem(KEY, JSON.stringify(p));
+}
+</script>
+
+</body>
+</html>

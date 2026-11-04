@@ -1,0 +1,775 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第10章 降维与度量学习 · 机器学习互动讲义</title>
+<link rel="stylesheet" href="/lectures-assets/style.css">
+</head>
+<body>
+
+<nav class="topbar">
+  <div class="topbar-inner">
+    <span class="brand"><a href="index.html" style="color:inherit">← 学习地图</a></span>
+    <span class="crumb">阶段③ · 无监督与理论 / 第10章</span>
+  </div>
+</nav>
+
+<div class="wrap">
+
+  <div class="lecture-head">
+    <span class="ch-label">CHAPTER 10 · 无监督与理论</span>
+    <h1>降维与度量学习</h1>
+    <p class="lead">高维空间里"距离"会失效：本章学会扔掉冗余维度而保住数据的本质结构，以及反过来——不降维，直接学出一个"合适的距离"。</p>
+  </div>
+
+  <div class="position-bar">
+    <strong>本章在主线上的位置：</strong>第 9 章聚类把"距离"当作天经地义的前提，用距离把样本分组；本章追问这个前提本身——高维下距离会失效，于是要么降维（把数据压回低维）要么改距离（度量学习）→ 第 11 章再用另一条思路减维：不变换空间，直接删掉无关特征。<br>
+    第10章回答主线上的第10个问题：<strong>维数灾难让距离与密度在高维失效——怎样扔掉冗余维度而保住数据的本质结构？以及反过来：怎样学出一个"合适的距离"？</strong>
+    <div class="map-inline">
+      <span class="node">① 基础与评估<br>Ch1 绪论 · Ch2 模型评估与选择</span><span class="arrow">→</span>
+      <span class="node">② 经典模型<br>Ch3 线性模型 · Ch4 决策树 · Ch5 神经网络 · Ch6 支持向量机 · Ch7 贝叶斯分类器 · Ch8 集成学习</span><span class="arrow">→</span>
+      <span class="node here">③ 无监督与理论<br>Ch9 聚类 · <strong>Ch10 降维与度量学习</strong> · Ch11 特征选择与稀疏学习 · Ch12 计算学习理论</span><span class="arrow">→</span>
+      <span class="node">④ 进阶专题<br>Ch13 半监督学习 · Ch14 概率图模型 · Ch15 规则学习 · Ch16 强化学习</span>
+    </div>
+  </div>
+
+  <div class="objectives">
+    <h4>🎯 学完本章，合上书你应该能：</h4>
+    <ol>
+      <li>说出维数灾难的两个表现（采样稀疏、距离失效），并用 ℓ = 0.1<sup>1/d</sup> 算出任意维度的 10% 邻域边长；</li>
+      <li>给定一张小距离矩阵，完整手算经典 MDS：平方 → 双中心化 → 特征分解 → 写出低维坐标并验证距离；</li>
+      <li>给定二维小数据集，完整手算 PCA：中心化、协方差矩阵、特征方程、单位特征向量、投影坐标与方差占比；</li>
+      <li>画出"原始流形 → 近邻图 → 低维嵌入"的示意图，说出 Isomap 与 LLE 各自保住什么；</li>
+      <li>写出马氏距离公式，解释 M = W Wᵀ 为何等价于"先线性变换再算欧氏距离"，并说清度量学习为什么需要监督信号。</li>
+    </ol>
+  </div>
+
+  <div class="lecture">
+
+    <div class="figure">
+      <div class="mermaid">
+flowchart TB
+  A["维数灾难：采样变稀 距离失效"] --> B{"降维：要保住什么"}
+  B -->|"保距离"| C["MDS：从距离矩阵反推坐标"]
+  B -->|"保方差"| D["PCA：方差最大的方向"]
+  C --> E{"线性假设不够用"}
+  D --> E
+  E --> F["核化 KPCA：先非线性映射再 PCA"]
+  E --> G["流形学习：Isomap 与 LLE"]
+  H["换个思路：不降维 直接学距离"] --> I["度量学习：马氏距离 M"]
+  F --> J["代价：线性丢结构 流形要稠密采样 度量要监督信号"]
+  G --> J
+  I --> J
+  classDef hot fill:#fbeedd,stroke:#c4651f,stroke-width:2.5px,color:#c4651f;
+  classDef danger fill:#fae9e7,stroke:#b03a2e,stroke-width:2.5px,color:#b03a2e;
+  class J danger;
+      </div>
+      <div class="caption">本章推导主线：维数灾难逼出"保距离"与"保方差"两条降维路线；线性不够就核化或上流形；也可以不降维、直接学距离；所有路线都留下代价。</div>
+    </div>
+
+    <!-- ================= 10.1 ================= -->
+    <h2><span class="sec-no">10.1</span>为什么高维空间里"最近邻"不再可信：维数灾难</h2>
+
+    <p>第 9 章聚类从头到尾都在用距离：k-means 找最近的中心、层次聚类合并最近的簇、DBSCAN 数邻域里的点数。那一章默认了一件事——"距离是可信的"。本章第一节就来拆这个默认：当维度 d 变大，"近"和"远"的区分会整个垮掉。这个现象叫<span class="term">维数灾难</span>（Curse of Dimensionality）。</p>
+
+    <p>灾难有两个互相纠缠的表现：<strong>采样变稀</strong>与<strong>距离失效</strong>。先看采样：数据量不变时，维度每加一维，单位体积里的样本密度就稀释一个数量级。再看距离——用一个能纸笔算完的小实验把它钉死。</p>
+
+    <h3>一个数值直觉：10% 邻域要占多长的边</h3>
+    <p>在 d 维单位超立方体 [0, 1]<sup>d</sup> 里均匀采样。想用一个边长为 ℓ 的小超立方体罩住 10% 的样本，由于采样均匀，小立方体体积必须等于总体积的 10%：</p>
+    <div class="formula">ℓ<sup>d</sup> = 0.1 ⟹ ℓ = 0.1<sup>1/d</sup></div>
+    <p>逐维算出来（这些数字已用 python3 核算）：</p>
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>维度 d</th><th>ℓ = 0.1<sup>1/d</sup> 的精确式</th><th>数值</th><th>解读</th></tr>
+        <tr><td>1</td><td>0.1</td><td>0.100</td><td>取十分之一的边就够，"局部"名副其实</td></tr>
+        <tr><td>2</td><td>√0.1</td><td>0.316</td><td>每条边要取约三成</td></tr>
+        <tr><td>10</td><td>0.1<sup>0.1</sup></td><td>0.794</td><td>每条边要取约八成，"邻域"已名不副实</td></tr>
+        <tr><td>50</td><td>0.1<sup>0.02</sup></td><td>0.955</td><td>几乎整条边</td></tr>
+        <tr><td>100</td><td>0.1<sup>0.01</sup></td><td>0.977</td><td>取 97.7% 的边长才罩住 10% 的样本</td></tr>
+      </table>
+    </div>
+    <p>d = 100 时，所谓"10% 邻域"在每个坐标轴上都要铺开 97.7%——这和"全局"还有什么区别？连带地，任意两点的距离会挤在一个很窄的范围里（距离集中现象），最近邻与最远邻几乎一样远。kNN、密度估计、以及第 9 章所有基于距离的聚类，地基都在这里松动。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>"局部"是低维借给我们的直觉，高维里它是奢侈品。维度升高时，所有点都在互相远离、且远离得一样多——"最近邻"这个词随之失去意义。</p>
+    </div>
+
+    <p>既然高维这么糟，降维凭什么可能是正当的？因为现实数据几乎从不充满整个高维空间。人脸照片有几十万像素，但所有可能的人脸只由姿态、光照、表情等少数几个自由度量出——数据点躺在高维空间里的一个低维<span class="term">流形</span>（Manifold）附近。<strong>内在维度低，观察维度高</strong>，这正是降维能把冗余维度扔掉而不丢本质的原因。</p>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>"特征多才几十个，谈不上维数灾难"——错。灾难在 d = 10 就已经显形（ℓ ≈ 0.794）。是否受灾不看你感觉维度高不高，而看样本量相对维度的比值：10 维空间里 100 个样本，密度已稀得可怜。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 10.1-1</div><div class="q-text">单位超立方体均匀采样，d = 10 时罩住 10% 样本需要多长边长？这个数字说明什么？</div><span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back"><div class="a-tag">参考答案</div>ℓ = 0.1<sup>1/10</sup> ≈ 0.794。要取约八成的边长才罩住一成样本，"局部邻域"在高维名存实亡，最近邻与远邻几乎一样远。</div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 10.1-2</div><div class="q-text">降维为什么可能是正当的（不丢本质）？</div><span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back"><div class="a-tag">参考答案</div>流形假设：现实数据的内在维度远低于观察维度，样本躺在高维空间中的低维流形附近，冗余维度本就不含本质信息。</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ================= 10.2 ================= -->
+    <h2><span class="sec-no">10.2</span>MDS：保住距离就是保住结构</h2>
+
+    <p>上一节说高维里"距离"不可信。那干脆退一步：如果我们手里本来就只有一张可信的距离表（比如心理实验中人对刺激两两相似度的评分），能不能不从坐标出发、反而从距离反推坐标？<span class="term">多维缩放</span>（Multiple Dimensional Scaling, MDS）做的正是这件事。</p>
+
+    <p>形式化：m 个样本，已知距离矩阵 D，其中 d<sub>ij</sub> 是样本 i、j 的距离。要求找一组低维坐标 z<sub>1</sub>, …, z<sub>m</sub> ∈ ℝ<sup>d′</sup>，使任意两点的欧氏距离恰好等于 d<sub>ij</sub>。直接对距离下手很难，转机是把距离翻译成内积：令 B = Z Zᵀ（b<sub>ij</sub> = z<sub>i</sub>ᵀz<sub>j</sub>），在"坐标已中心化（各维均值为 0）"的约定下，B 可以由 D 唯一算出来：</p>
+    <div class="formula">B = −<span class="frac"><span class="num-part">1</span><span class="den-part">2</span></span> H D<sup>(2)</sup> H，其中 H = I − <span class="frac"><span class="num-part">1</span><span class="den-part">m</span></span> 𝟏𝟏ᵀ 为<span class="term">中心化矩阵</span>（Centering Matrix），D<sup>(2)</sup> 表示把 D 逐元素平方</div>
+    <p>逐元素写出来更直白（d²<sub>i·</sub> 是 D<sup>(2)</sup> 第 i 行均值，d²<sub>·j</sub> 第 j 列均值，d²<sub>··</sub> 总均值）：</p>
+    <div class="formula">b<sub>ij</sub> = −<span class="frac"><span class="num-part">1</span><span class="den-part">2</span></span> ( d²<sub>ij</sub> − d²<sub>i·</sub> − d²<sub>·j</sub> + d²<sub>··</sub> )</div>
+    <p>得到 B 后做<span class="term">特征值分解</span>（Eigenvalue Decomposition）B = V Λ Vᵀ，取前 d′ 个最大特征值 λ<sub>1</sub> ≥ … ≥ λ<sub>d′</sub> 与对应特征向量，坐标矩阵就是 Z = Λ<sub>+</sub><sup>1/2</sup> V<sub>+</sub>ᵀ——第 i 个样本的第 k 维坐标 = √λ<sub>k</sub> ×（第 k 个特征向量的第 i 个分量）。</p>
+
+    <h3>完整手算：边长为 1 的等边三角形</h3>
+    <p>取平面等边三角形 A、B、C，边长均为 1（真实坐标可以是 A(0,0)、B(1,0)、C(1/2, √3/2)，但假装不知道，只有距离表）。m = 3。</p>
+    <p><strong>第 1 步：写出 D 并逐元素平方。</strong>距离都是 0 或 1，平方后不变：</p>
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>D（= D<sup>(2)</sup>）</th><th>A</th><th>B</th><th>C</th></tr>
+        <tr><th>A</th><td>0</td><td>1</td><td>1</td></tr>
+        <tr><th>B</th><td>1</td><td>0</td><td>1</td></tr>
+        <tr><th>C</th><td>1</td><td>1</td><td>0</td></tr>
+      </table>
+    </div>
+    <p><strong>第 2 步：算三个均值。</strong>每行（列）和都是 2，故 d²<sub>i·</sub> = d²<sub>·j</sub> = 2/3；全部 9 项和为 6，故 d²<sub>··</sub> = 6/9 = 2/3。</p>
+    <p><strong>第 3 步：逐元素双中心化得 B。</strong>以两个元素为例：</p>
+    <div class="formula">b<sub>11</sub> = −<span class="frac"><span class="num-part">1</span><span class="den-part">2</span></span>(0 − <span class="frac"><span class="num-part">2</span><span class="den-part">3</span></span> − <span class="frac"><span class="num-part">2</span><span class="den-part">3</span></span> + <span class="frac"><span class="num-part">2</span><span class="den-part">3</span></span>) = <span class="frac"><span class="num-part">1</span><span class="den-part">3</span></span>；b<sub>12</sub> = −<span class="frac"><span class="num-part">1</span><span class="den-part">2</span></span>(1 − <span class="frac"><span class="num-part">2</span><span class="den-part">3</span></span> − <span class="frac"><span class="num-part">2</span><span class="den-part">3</span></span> + <span class="frac"><span class="num-part">2</span><span class="den-part">3</span></span>) = −<span class="frac"><span class="num-part">1</span><span class="den-part">6</span></span></div>
+    <p>同理填满整张表（对角全是 1/3，非对角全是 −1/6）：</p>
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>B</th><th>A</th><th>B</th><th>C</th></tr>
+        <tr><th>A</th><td>1/3</td><td>−1/6</td><td>−1/6</td></tr>
+        <tr><th>B</th><td>−1/6</td><td>1/3</td><td>−1/6</td></tr>
+        <tr><th>C</th><td>−1/6</td><td>−1/6</td><td>1/3</td></tr>
+      </table>
+    </div>
+    <p><strong>第 4 步：特征分解 B。</strong>注意 B = (1/2) I − (1/6) 𝟏𝟏ᵀ。对任何与 𝟏 正交的向量 v，有 Bv = (1/2) v；对 𝟏 本身，B𝟏 = (1/2 − 3/6)𝟏 = 0。所以特征值为 λ<sub>1</sub> = λ<sub>2</sub> = 1/2，λ<sub>3</sub> = 0。要降到的维数 d′ = 2，恰好两个非零特征值——距离确实来自一个二维结构。在平面 x + y + z = 0 里取两个正交单位向量：</p>
+    <div class="formula">v<sub>1</sub> = <span class="frac"><span class="num-part">1</span><span class="den-part">√2</span></span>(1, −1, 0)ᵀ，v<sub>2</sub> = <span class="frac"><span class="num-part">1</span><span class="den-part">√6</span></span>(1, 1, −2)ᵀ</div>
+    <p>验证 v<sub>2</sub> 是特征向量：它三分量之和为 0，与 𝟏 正交，故 Bv<sub>2</sub> = (1/2) v<sub>2</sub> ✓；且 v<sub>1</sub>ᵀv<sub>2</sub> = (1 − 1 + 0)/√12 = 0 ✓。</p>
+    <p><strong>第 5 步：取坐标。</strong>z<sub>i</sub> 的第 k 维 = √λ<sub>k</sub> · v<sub>k</sub>[i]，λ<sub>1</sub> = λ<sub>2</sub> = 1/2，√λ<sub>k</sub> = 1/√2：</p>
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>点</th><th>第 1 维 = (1/√2)·v<sub>1</sub>[i]</th><th>第 2 维 = (1/√2)·v<sub>2</sub>[i]</th><th>坐标</th></tr>
+        <tr><td>A</td><td>(1/√2)(1/√2) = 1/2</td><td>(1/√2)(1/√6) = √3/6</td><td>(1/2, √3/6) ≈ (0.500, 0.289)</td></tr>
+        <tr><td>B</td><td>(1/√2)(−1/√2) = −1/2</td><td>(1/√2)(1/√6) = √3/6</td><td>(−1/2, √3/6) ≈ (−0.500, 0.289)</td></tr>
+        <tr><td>C</td><td>0</td><td>(1/√2)(−2/√6) = −√3/3</td><td>(0, −√3/3) ≈ (0, −0.577)</td></tr>
+      </table>
+    </div>
+    <p><strong>第 6 步：验证距离。</strong>‖z<sub>A</sub> − z<sub>B</sub>‖ = |(1, 0)| = 1 ✓；‖z<sub>A</sub> − z<sub>C</sub>‖ = √((1/2)² + (√3/6 + √3/3)²) = √(1/4 + (√3/2)²) = √(1/4 + 3/4) = 1 ✓；B–C 同理为 1 ✓。三条边全部复现。</p>
+    <p>注意：算出的坐标与"真实"的 A(0,0)、B(1,0)、C(1/2, √3/2) 并不重合——它们差一个旋转与平移。这不是错误，而是必然：距离表本身不含方向与原点信息，MDS 只能把结构复现到"刚体运动"为止。</p>
+
+    <div class="box insight">
+      <span class="box-tag">✅ 判定规则</span>
+      <p>对 MDS 而言，<strong>距离表就是结构的全部</strong>。只要 B 的非零特征值只有 d′ 个，数据就真能放进 d′ 维欧氏空间；非零特征值越多，说明结构本质上越高维，硬压就会失真。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>"MDS 算出的坐标和原坐标对不上，是不是算错了"——没错。MDS 的解在旋转、镜像、平移下不唯一，因为输入的距离对这些变换天然不敏感。比较两次 MDS 结果时，先对齐再比。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 10.2-1</div><div class="q-text">MDS 的输入和输出各是什么？</div><span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back"><div class="a-tag">参考答案</div>输入：m×m 的距离矩阵 D（不需要原始坐标）；输出：m 个样本在 d′ 维空间的坐标，使两两欧氏距离尽量等于 d<sub>ij</sub>。</div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 10.2-2</div><div class="q-text">经典 MDS 从距离矩阵到坐标的三步是什么？</div><span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back"><div class="a-tag">参考答案</div>① 逐元素平方得 D<sup>(2)</sup>；② 双中心化 B = −½ H D<sup>(2)</sup> H 得内积矩阵；③ 对 B 特征分解，取前 d′ 个特征值开方乘对应特征向量。</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ================= 10.3 ================= -->
+    <h2><span class="sec-no">10.3</span>PCA：方差最大的方向才是主方向</h2>
+
+    <p>MDS 保住了距离，但它要一张完整的距离表，且每个新点都得重算一次。换一个更积极、也更常用的准则：与其"保距离"，不如让<strong>扔掉的方向损失最小</strong>——数据在某个方向上的投影方差越大，说明这个方向携带的区分度越高，越该留下。这就是<span class="term">主成分分析</span>（Principal Component Analysis, PCA）。</p>
+
+    <p>PCA 有两个等价视角：<strong>最近重构性</strong>——样本到投影超平面的距离之和最小（投影后还能尽量还原）；<strong>最大可分性</strong>——投影后方差最大（点在低维里尽量散开）。数学上两者导向同一个解。推导只需一行拉格朗日：设数据已中心化（各维均值减为 0），<span class="term">协方差矩阵</span>（Covariance Matrix）为 C，要找单位方向 w 使投影方差 wᵀCw 最大：</p>
+    <div class="formula">C = <span class="frac"><span class="num-part">1</span><span class="den-part">m</span></span> ∑<sub>i=1</sub><sup>m</sup> <span class="var">x</span><sub>i</sub> <span class="var">x</span><sub>i</sub>ᵀ；max<sub>w</sub> wᵀ C w，约束 wᵀw = 1 ⟹ C w = λ w</div>
+    <p>结论：<strong>主成分方向就是协方差矩阵的特征向量，按特征值从大到小取</strong>；第 k 个主成分上的投影方差恰好等于 λ<sub>k</sub>。降到 d′ 维就是取前 d′ 个特征向量排成矩阵 W，z<sub>i</sub> = Wᵀx<sub>i</sub>。</p>
+
+    <h3>完整手算：4 个二维点降到一维</h3>
+    <p>数据：P<sub>1</sub>(1, 2)、P<sub>2</sub>(2, 1)、P<sub>3</sub>(3, 4)、P<sub>4</sub>(4, 3)。目标：降到 1 维。以下每个中间量都已用 python3 复核。</p>
+    <p><strong>第 1 步：中心化。</strong>均值 x̄ = ((1+2+3+4)/4, (2+1+4+3)/4) = (2.5, 2.5)。各点减去均值：</p>
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>点</th><th>原坐标</th><th>中心化后 x′</th></tr>
+        <tr><td>P<sub>1</sub></td><td>(1, 2)</td><td>(−1.5, −0.5)</td></tr>
+        <tr><td>P<sub>2</sub></td><td>(2, 1)</td><td>(−0.5, −1.5)</td></tr>
+        <tr><td>P<sub>3</sub></td><td>(3, 4)</td><td>(0.5, 1.5)</td></tr>
+        <tr><td>P<sub>4</sub></td><td>(4, 3)</td><td>(1.5, 0.5)</td></tr>
+      </table>
+    </div>
+    <p><strong>第 2 步：协方差矩阵</strong>（m = 4，按 1/m 计）：</p>
+    <div class="formula">C<sub>11</sub> = <span class="frac"><span class="num-part">2.25 + 0.25 + 0.25 + 2.25</span><span class="den-part">4</span></span> = <span class="frac"><span class="num-part">5</span><span class="den-part">4</span></span>；C<sub>12</sub> = C<sub>21</sub> = <span class="frac"><span class="num-part">0.75 + 0.75 + 0.75 + 0.75</span><span class="den-part">4</span></span> = <span class="frac"><span class="num-part">3</span><span class="den-part">4</span></span>；C<sub>22</sub> = <span class="frac"><span class="num-part">0.25 + 2.25 + 2.25 + 0.25</span><span class="den-part">4</span></span> = <span class="frac"><span class="num-part">5</span><span class="den-part">4</span></span></div>
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>C</th><th>第 1 维</th><th>第 2 维</th></tr>
+        <tr><th>第 1 维</th><td>5/4 = 1.25</td><td>3/4 = 0.75</td></tr>
+        <tr><th>第 2 维</th><td>3/4 = 0.75</td><td>5/4 = 1.25</td></tr>
+      </table>
+    </div>
+    <p><strong>第 3 步：特征方程解 λ。</strong></p>
+    <div class="formula">det(C − λI) = (<span class="frac"><span class="num-part">5</span><span class="den-part">4</span></span> − λ)² − (<span class="frac"><span class="num-part">3</span><span class="den-part">4</span></span>)² = 0 ⟹ <span class="frac"><span class="num-part">5</span><span class="den-part">4</span></span> − λ = ±<span class="frac"><span class="num-part">3</span><span class="den-part">4</span></span> ⟹ λ<sub>1</sub> = 2，λ<sub>2</sub> = <span class="frac"><span class="num-part">1</span><span class="den-part">2</span></span></div>
+    <p><strong>第 4 步：逐个代回解特征向量并单位化。</strong></p>
+    <p>λ<sub>1</sub> = 2：C − 2I 的两行都是 (±(−3/4), ±(3/4)) 型，方程 −(3/4) w<sub>x</sub> + (3/4) w<sub>y</sub> = 0 ⟹ w<sub>x</sub> = w<sub>y</sub>。取 (1, 1)，模长 √2，单位化：</p>
+    <div class="formula">w<sub>1</sub> = (<span class="frac"><span class="num-part">1</span><span class="den-part">√2</span></span>, <span class="frac"><span class="num-part">1</span><span class="den-part">√2</span></span>) ≈ (0.707, 0.707)——第一主成分方向：对角线"↗"</div>
+    <p>λ<sub>2</sub> = 1/2：方程 (3/4) w<sub>x</sub> + (3/4) w<sub>y</sub> = 0 ⟹ w<sub>x</sub> = −w<sub>y</sub>。单位化得 w<sub>2</sub> = (1/√2, −1/√2)——与 w<sub>1</sub> 正交，方向"↘"。</p>
+    <p><strong>第 5 步：方差占比。</strong></p>
+    <div class="formula"><span class="frac"><span class="num-part">λ<sub>1</sub></span><span class="den-part">λ<sub>1</sub> + λ<sub>2</sub></span></span> = <span class="frac"><span class="num-part">2</span><span class="den-part">2.5</span></span> = 80%——降到 1 维只损失 20% 的方差</div>
+    <p><strong>第 6 步：每个点的一维投影坐标</strong> z<sub>i</sub> = x′<sub>i</sub> · w<sub>1</sub> = (x′ + y′)/√2：</p>
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>点</th><th>计算</th><th>z<sub>i</sub></th></tr>
+        <tr><td>P<sub>1</sub></td><td>(−1.5 − 0.5)/√2 = −2/√2</td><td>−√2 ≈ −1.414</td></tr>
+        <tr><td>P<sub>2</sub></td><td>(−0.5 − 1.5)/√2 = −2/√2</td><td>−√2 ≈ −1.414</td></tr>
+        <tr><td>P<sub>3</sub></td><td>(0.5 + 1.5)/√2 = 2/√2</td><td>√2 ≈ 1.414</td></tr>
+        <tr><td>P<sub>4</sub></td><td>(1.5 + 0.5)/√2 = 2/√2</td><td>√2 ≈ 1.414</td></tr>
+      </table>
+    </div>
+    <p><strong>第 7 步：验证。</strong>投影方差 = (2 + 2 + 2 + 2)/4 = 2 = λ<sub>1</sub> ✓；沿 w<sub>2</sub> 的投影坐标为 (∓√2/2 交替)，方差 = 1/2 = λ<sub>2</sub> ✓。四个点在新轴上两两重叠成 ±√2——一维投影把"↗ 方向靠前的点"与"靠后的点"分开，这正是数据的主要变化方向。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>PCA 把"方差"当作"信息量"的代理：一个方向上点散得越开，这个方向越值得保留。所谓降维，就是按特征值从大到小认领方向，剩下的整个扔掉。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>两个。其一：忘了中心化就直接算 x<sub>i</sub>x<sub>i</sub>ᵀ——那样第一主成分会被均值方向绑架，算的是"绕原点的二阶矩"而不是"绕均值的方差"。其二：以为方差最大的方向对分类最有利——不一定，PCA 是无监督的，类别可分性要看第 3 章的线性判别分析（LDA）。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 10.3-1</div><div class="q-text">PCA 的两个等价视角分别是什么？它们统一到什么解上？</div><span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back"><div class="a-tag">参考答案</div>最近重构性（投影误差最小）与最大可分性（投影方差最大）；都归结为协方差矩阵的特征分解：主成分 = 按特征值降序排列的单位特征向量。</div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 10.3-2</div><div class="q-text">PCA 前为什么必须中心化？</div><span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back"><div class="a-tag">参考答案</div>方差是"绕均值"的二阶矩。不中心化时算的是绕原点的二阶矩，第一主成分会指向均值方向而非数据真正的散布方向。</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ================= 10.4 ================= -->
+    <h2><span class="sec-no">10.4</span>线性不够怎么办：核化 PCA 与流形学习</h2>
+
+    <p>MDS 和 PCA 共享一个沉默的假设：本质结构是<strong>线性</strong>的——数据躺在高维空间的一张"平面"上。可如果数据躺在一张弯曲的"纸"上呢？经典例子是<span class="term">瑞士卷</span>（Swiss Roll）：三维空间里卷成螺旋的二维平面。两点直线距离很近，可能其实在纸的两层上，沿纸面走得绕很远。这时线性方法会把卷压扁、把两层粘在一起。本节给两条出路。</p>
+
+    <h3>出路一：核化 PCA</h3>
+    <p><span class="term">核化主成分分析</span>（Kernel PCA, KPCA）的想法和第 6 章支持向量机一脉相承：先想象一个非线性映射 φ，把数据映到更高维的特征空间——在那里弯曲的结构可能被"捋直"，然后做普通线性 PCA。妙处在于不需要真的算出 φ：PCA 的全部计算（协方差、投影）只涉及样本间的<strong>内积</strong> φ(x<sub>i</sub>)ᵀφ(x<sub>j</sub>)，而内积可以用核函数 κ(x<sub>i</sub>, x<sub>j</sub>) 直接替代。骨架就三步：</p>
+    <div class="formula">① 算核矩阵 K<sub>ij</sub> = κ(x<sub>i</sub>, x<sub>j</sub>)；② 对 K 做双中心化得 K̃（特征空间里隐式中心化）；③ 对 K̃ 特征分解，取前 d′ 个特征值与特征向量得到低维坐标</div>
+    <p>对比 10.2 会发现：KPCA 是"在核内积上做 MDS/PCA"，一旦接受"一切只需内积"，整个线性工具箱都能核化。</p>
+
+    <h3>出路二：流形学习</h3>
+    <p><span class="term">流形学习</span>（Manifold Learning）更直接地利用流形假设：流形在<strong>局部</strong>近似是平的，所以只要近距离的关系是对的，就能把整张弯曲的纸摊开。两个代表：</p>
+    <p><span class="term">等度量映射</span>（Isometric Mapping, Isomap）＝ 近邻图 ＋ MDS。先建<span class="term">近邻图</span>（k-Nearest Neighbor Graph）：每个点只和最近的 k 个点连边，边长为欧氏距离；再把任意两点距离换成图上最短路径——这是对<span class="term">测地距离</span>（Geodesic Distance，沿纸面走的距离）的近似；最后把这张"测地距离表"喂给 MDS。瑞士卷于是被展开成一张平面：</p>
+    <div class="figure">
+      <div class="mermaid">
+flowchart TB
+  A["原始数据：三维空间中的瑞士卷"] --> B["建近邻图：每点只连 k 个近邻"]
+  B --> C["欧氏直线距离：穿过卷层 失真"]
+  B --> D["图上最短路：沿纸面的测地距离"]
+  C --> E["MDS：按测地距离摊成二维平面"]
+  D --> E
+  classDef hot fill:#fbeedd,stroke:#c4651f,stroke-width:2.5px,color:#c4651f;
+  classDef danger fill:#fae9e7,stroke:#b03a2e,stroke-width:2.5px,color:#b03a2e;
+  class C danger;
+  class E hot;
+      </div>
+      <div class="caption">图 10.1 Isomap 三步：近邻图把"直线距离"换成"沿流形的距离"，MDS 负责摊开。关键看第 2、3 步之间距离的替换。</div>
+    </div>
+    <p><span class="term">局部线性嵌入</span>（Locally Linear Embedding, LLE）的思路不同：不保距离，保<strong>局部线性结构</strong>。分两步——第一步，每个点用它近邻的线性组合来重构自己，求出权重 w<sub>ij</sub>（使 ‖x<sub>i</sub> − ∑<sub>j</sub> w<sub>ij</sub> x<sub>j</sub>‖ 最小）；第二步，在低维空间找坐标 y<sub>i</sub>，让<strong>同一组权重</strong>依然成立（使 ∑<sub>i</sub> ‖y<sub>i</sub> − ∑<sub>j</sub> w<sub>ij</sub> y<sub>j</sub>‖² 最小）。权重是局部几何的"指纹"，保住指纹就保住了形状。</p>
+    <p>一个两点小例感受权重：点 x = (1, 1) 的两个近邻是 (2, 0) 与 (0, 2)，恰好 x = ½(2,0) + ½(0,2)，权重就是 (½, ½)。LLE 要求：低维里 y 的像也必须位于两个邻居像的 ½+½ 组合处（即中点）。每个点都留下这样一条"局部指纹"，整张纸在低维被重新拼出。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>Isomap 保的是<strong>全局</strong>的测地距离（整张纸摊开不变形）；LLE 保的是<strong>局部</strong>的重构关系（每个小补丁的形状不变，再拼起来）。一个是"世界地图要保距"，一个是"每块地砖形状不变"。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>"流形学习这么强，为什么不是默认选择"——它有两个硬前提：<strong>采样足够稠密</strong>（近邻图才能近似流形，稀疏时近邻其实很远）且<strong>噪声小</strong>（一个噪声点可能在纸的两层间搭出"短路"边，测地距离瞬间失真）。样本量不够时，老老实实用 PCA。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 10.4-1</div><div class="q-text">KPCA 为什么可以只凭核矩阵 K 完成全部计算？</div><span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back"><div class="a-tag">参考答案</div>因为 PCA 的所有计算只涉及样本内积 φ(x<sub>i</sub>)ᵀφ(x<sub>j</sub>)，而核函数 κ(x<sub>i</sub>, x<sub>j</sub>) 恰好等于这个内积；于是只需算 K、双中心化、特征分解三步。</div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 10.4-2</div><div class="q-text">Isomap 与 LLE 各自保住什么？各用什么机制？</div><span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back"><div class="a-tag">参考答案</div>Isomap 保全局测地距离：近邻图最短路 + MDS。LLE 保局部线性结构：先学每点的近邻重构权重，再在低维中让同一组权重继续成立。</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ================= 10.5 ================= -->
+    <h2><span class="sec-no">10.5</span>度量学习：不学降维，直接学"距离"</h2>
+
+    <p>前面四节都在改"表示"：把点搬到低维去。但如果问题的根源是<strong>距离本身不对</strong>（比如 kNN 用错了尺子），还有一条更直接的路：表示不动，改尺子。这就是<span class="term">度量学习</span>（Metric Learning）。它学的尺子是<span class="term">马氏距离</span>（Mahalanobis Distance）：</p>
+    <div class="formula">d²(<span class="var">x</span>, <span class="var">z</span>) = (<span class="var">x</span> − <span class="var">z</span>)ᵀ M (<span class="var">x</span> − <span class="var">z</span>)，其中 M 必须<span class="term">半正定</span>（Positive Semidefinite，M ⪰ 0）</div>
+    <p>半正定带来一个漂亮的事实：任何 M ⪰ 0 都可分解为 M = W Wᵀ，于是</p>
+    <div class="formula">d²(x, z) = (x − z)ᵀ W Wᵀ (x − z) = ‖ W x − W z ‖²</div>
+    <p>即：<strong>马氏距离 = 先做一次线性变换 W，再算普通欧氏距离</strong>。学 M 就是学 W——度量学习在骨子里仍是"学一个线性变换"，只是不拿它降维，而拿它当尺子。M 的对角线元素大 = 该维度被拉长（差异被放大），小 = 被压扁（差异被忽略）。</p>
+    <p>怎么学？需要监督信号：同类点应当近、异类点应当远。<span class="term">近邻成分分析</span>（Neighbourhood Component Analysis, NCA）的直觉一句话：学一个 W，使"随机挑一个近邻、它恰好和我是同类"的（软）概率最大。</p>
+
+    <h3>一个小例：学出的尺子如何改写最近邻判决</h3>
+    <p>二维两类。类 ＋：(0, 0)、(0, 4)（沿 y 方向排开）；类 −：(1, 1)、(1, 3)。测试点 t = (0, 2)，真实类别 ＋。看 1NN 在两把尺子下的判决（数字已用 python3 复核）：</p>
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>t 到各点</th><th>欧氏距离</th><th>马氏距离（M = diag(16, 1)）</th></tr>
+        <tr><td>＋ (0, 0)</td><td>2</td><td>2</td></tr>
+        <tr><td>＋ (0, 4)</td><td>2</td><td>2</td></tr>
+        <tr><td>− (1, 1)</td><td>√2 ≈ 1.414（最近！）</td><td>√(16·1² + 1²) = √17 ≈ 4.123</td></tr>
+        <tr><td>− (1, 3)</td><td>√2 ≈ 1.414（并列）</td><td>√17 ≈ 4.123</td></tr>
+      </table>
+    </div>
+    <p>欧氏尺子下 t 的最近邻是 − 类的 (1, 1) 与 (1, 3)，1NN 误判为 −。学出 M = diag(16, 1) 后：x 方向（类间方向）被拉长 4 倍，y 方向（类内方向）相对压扁，− 类点被推到 √17 ≈ 4.12 之外，＋ 类点仍是 2——判决翻转为 ＋。用 M = W Wᵀ 看更直观：W = diag(4, 1)，点 (1, 1) 被映成 (4, 1)，t 仍是 (0, 2)，欧氏距离自然拉开。这也呼应了上一章：第 9 章聚类用的距离、本章学的度量，归根结底都是"相似性"这一个问题——第 11 章将换第三条路：不改坐标、不改距离，直接删掉无关特征。</p>
+
+    <div class="box insight">
+      <span class="box-tag">✅ 判定规则</span>
+      <p>什么时候该想到度量学习：下游算法以"距离/内积"为核心（kNN、k-means、检索），且你手里有标签或"必连/勿连"成对约束。学出的 M 把类间方向拉长、类内方向压扁，等价于给 kNN 换了一把为任务定制的尺子。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>"M 只要对称就能当距离"——错。对称但不半正定的 M 会让 d²(x, z) 出现负值，"距离"不再是距离（非负性、三角不等式全垮）。半正定既保证非负，又保证能分解成 W Wᵀ 变回欧氏距离。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 10.5-1</div><div class="q-text">马氏距离中的 M 为什么必须半正定？M = W Wᵀ 说明它和欧氏距离什么关系？</div><span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back"><div class="a-tag">参考答案</div>半正定保证 d² ≥ 0 且三角不等式成立；M = W Wᵀ 说明马氏距离等价于"先用 W 做线性变换、再算欧氏距离"，学 M 即学 W。</div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 10.5-2</div><div class="q-text">度量学习和降维的目标差异是什么？它为什么需要监督信号？</div><span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back"><div class="a-tag">参考答案</div>降维改"表示"（坐标搬到低维），度量学习改"尺子"（距离本身）。"同类近、异类远"的标准来自标签或成对约束，没有监督就无从定义"合适的距离"。</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ================= 概念卡 ================= -->
+    <h2><span class="sec-no">🃏</span>概念卡：本章概念的一分钟画像</h2>
+    <p>翻面前先自问：这个概念我能用一句话讲清楚吗？</p>
+    <div class="flip-grid">
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 1</div><div class="q-text">维数灾难（Curse of Dimensionality）</div><span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">维度升高时采样密度骤降、两两距离趋于相等，"局部"与"最近邻"失去意义的现象。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">它是本章的问题源：解释了为什么高维下基于距离的算法会失效，逼出降维与度量学习。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">d = 100 时，要取 97.7% 的边长才能罩住 10% 的样本——"邻域"铺满了整个空间。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为几十维才谈得上灾难——d = 10 时 10% 邻域边长已达 0.794。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">判断"是否该降维/特征选择"的第一问；第 11 章特征选择的动机同样来自它。</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 2</div><div class="q-text">多维缩放 MDS（Multiple Dimensional Scaling）</div><span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">从距离矩阵 D 出发，经双中心化 B = −½HD<sup>(2)</sup>H 与特征分解，恢复出保距离的低维坐标。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">只有距离/相似度、没有坐标时，如何获得可计算、可画图的表示。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">只看一张城市间里程表，反推出一张地图（方向与原点任意）。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为输出坐标唯一——解在旋转、镜像、平移下不唯一。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">心理测量、可视化；也是 Isomap 的最后一步、KPCA 的对照物。</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 3</div><div class="q-text">主成分分析 PCA（Principal Component Analysis）</div><span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">中心化后对协方差矩阵特征分解，取前 d′ 个特征向量为投影方向的线性降维。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">在"投影后方差最大 = 重构误差最小"的意义下，最优的线性压缩。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">给一团点云找"影子最散开"的投影角度，逐个方向认领。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">忘中心化；以为方差最大方向对分类最有利（那是 LDA，见第 3 章）。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">压缩、去噪、可视化第一选择；KPCA 与流形方法的基线。</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 4</div><div class="q-text">核化 PCA（Kernel PCA, KPCA）</div><span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">用核函数替代内积，在隐式的高维特征空间里做 PCA：算 K → 双中心化 → 特征分解。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">本质结构非线性、线性 PCA 压不动时，用核 trick 把它"捋直"再降维。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">与 SVM 同源：一切计算只需内积，内积皆可核化。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为要显式算 φ(x)——从头到尾只碰核矩阵 K。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">非线性结构但不想建近邻图时；第 6 章核方法的直接延伸。</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 5</div><div class="q-text">流形学习（Manifold Learning：Isomap / LLE）</div><span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">利用"流形局部近似平坦"，Isomap 保近邻图上的测地距离，LLE 保局部线性重构权重。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">数据躺在弯曲流形（如瑞士卷）上时，把它摊开而不撕裂。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">沿纸面量距离（Isomap）；每块小补丁形状不变再拼回去（LLE）。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">忽视前提：采样要稠密、噪声要小，否则近邻图短路、距离全失真。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">可视化高维数据（t-SNE、UMAP 是它的现代亲戚）。</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 6</div><div class="q-text">度量学习（Metric Learning：马氏距离 M）</div><span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">学半正定矩阵 M，使 d²(x,z) = (x−z)ᵀM(x−z) 下同类近、异类远。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">降维改的是表示；当问题出在"尺子不对"时，直接改尺子。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">M = W Wᵀ：先线性变换再欧氏距离——把类间方向拉长、类内压扁。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为对称就够——不半正定会出现负的"平方距离"。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">kNN、检索、人脸验证等以距离为核心的任务；需要标签或成对约束。</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ================= 分层习题 ================= -->
+    <h2><span class="sec-no">📝</span>分层习题</h2>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>判断并说理由：① "PCA 保方差、MDS 保距离，两者是完全不同的方法"；② "只要维度超过 100，降维就一定能无损进行"。</div>
+      <details>
+        <summary>提示</summary>
+        <p>① 想想 MDS 的中间产物 B 是什么矩阵，PCA 又在做什么分解；② 回到 10.1 降维正当性的前提。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p>① <strong>错</strong>。当距离矩阵来自欧氏空间时，经典 MDS 双中心化得到的 B 正是中心化数据的内积矩阵 Z Zᵀ，而 PCA 对协方差矩阵 ZᵀZ 做特征分解——两者共享同一组非零特征值，坐标只差一个旋转/缩放约定。可以说：PCA 是 MDS 在"欧氏距离"下的特例视角，保留全部主成分时两者等价，截断时准则不同（保方差 vs 保内积）。</p>
+          <p>② <strong>错</strong>。无损降维的前提是数据真有低维内在结构（流形假设）。若数据本就充满高维空间（如纯噪声、加密后的比特流），任何降维都必然丢失信息。维度高只是降维的动机，不是降维可行性的保证。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>为什么 Isomap、LLE 这类流形学习方法要求采样"足够稠密"？采样稀疏时会发生什么？</div>
+      <details>
+        <summary>提示</summary>
+        <p>近邻图在两种方法里各自扮演什么角色？"近邻"二字依赖什么？</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p>流形方法的立身之本是"流形局部近似平坦"，这只有在<strong>近邻真的近</strong>时成立。Isomap 用近邻图上的最短路近似测地距离：采样稀疏时，图上相邻点其实沿流形相隔很远，最短路会"抄近道"跨过纸的两层（短路），测地距离被严重低估。LLE 用近邻做线性重构：近邻远了，"局部线性"假设崩坏，权重不再刻画局部几何。一句话：稠密采样是近邻图 ≈ 流形的前提，稀疏时整个方法的地基抽空——这正是它让位于 PCA 的场景。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>新数据集：Q<sub>1</sub>(0, 1)、Q<sub>2</sub>(2, 0)、Q<sub>3</sub>(3, 3)、Q<sub>4</sub>(1, 2)。完整手算第一主成分：中心化、协方差矩阵、特征方程、两个特征值、第一主成分单位方向与方差占比。</div>
+      <details>
+        <summary>提示</summary>
+        <p>均值是 (1.5, 1.5)。中心化后仿照 10.3 的七步：C 的对角元 5/4、非对角元 1/2，特征方程 (5/4 − λ)² = (1/2)²。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p><strong>第 1 步 中心化</strong>：x̄ = ((0+2+3+1)/4, (1+0+3+2)/4) = (1.5, 1.5)。中心化后：Q<sub>1</sub>(−1.5, −0.5)、Q<sub>2</sub>(0.5, −1.5)、Q<sub>3</sub>(1.5, 1.5)、Q<sub>4</sub>(−0.5, 0.5)。</p>
+          <p><strong>第 2 步 协方差矩阵</strong>（1/m，m = 4）：C<sub>11</sub> = (2.25+0.25+2.25+0.25)/4 = 5/4；C<sub>12</sub> = C<sub>21</sub> = (0.75−0.75+2.25−0.25)/4 = 2/4 = 1/2；C<sub>22</sub> = (0.25+2.25+2.25+0.25)/4 = 5/4。即 C = [[5/4, 1/2], [1/2, 5/4]]。</p>
+          <p><strong>第 3 步 特征方程</strong>：det(C − λI) = (5/4 − λ)² − (1/2)² = 0 ⟹ 5/4 − λ = ±1/2 ⟹ λ<sub>1</sub> = 7/4 = 1.75，λ<sub>2</sub> = 3/4 = 0.75。</p>
+          <p><strong>第 4 步 特征向量</strong>：λ<sub>1</sub> = 7/4 时，(5/4 − 7/4)w<sub>x</sub> + (1/2)w<sub>y</sub> = 0 ⟹ −(1/2)w<sub>x</sub> + (1/2)w<sub>y</sub> = 0 ⟹ w<sub>x</sub> = w<sub>y</sub>，单位化得 w<sub>1</sub> = (1/√2, 1/√2) ≈ (0.707, 0.707)。（λ<sub>2</sub> 对应 w<sub>2</sub> = (1/√2, −1/√2)。）</p>
+          <p><strong>第 5 步 结论</strong>：第一主成分方向 w<sub>1</sub> = (1, 1)/√2（对角线 ↗ 方向），方差占比 = λ<sub>1</sub>/(λ<sub>1</sub>+λ<sub>2</sub>) = 1.75/2.5 = 70%。全部数字已用 python3 复核。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>单位超立方体均匀采样，d = 50。计算罩住 10% 样本所需的邻域边长 ℓ（保留三位小数），并解释这个数字对"用 kNN 做分类"意味着什么。</div>
+      <details>
+        <summary>提示</summary>
+        <p>ℓ = 0.1<sup>1/d</sup>。取对数：ln ℓ = (ln 0.1)/d = −2.3026/50 ≈ −0.04605，再取指数。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p><strong>第 1 步</strong>：ℓ = 0.1<sup>1/50</sup>。</p>
+          <p><strong>第 2 步</strong>：ln ℓ = (1/50)·ln 0.1 = −2.3026/50 ≈ −0.04605。</p>
+          <p><strong>第 3 步</strong>：ℓ = e<sup>−0.04605</sup> ≈ 1 − 0.04605 + 0.04605²/2 ≈ 0.955。（python3 精确值 0.95499。）</p>
+          <p><strong>第 4 步 解释</strong>：在 50 维空间里，要罩住 10% 的样本，每个坐标轴都要铺开 95.5%——"邻域"几乎就是整个空间。对 kNN 意味着：所谓 k 个"最近"的邻居其实散布在全空间，距离失去区分度，近邻投票近乎随机猜。要么先降维/选特征（本章与第 11 章），要么换一把为任务学出来的尺子（10.5 度量学习），否则 kNN 在高维不可信。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l3">L3 建模应用</span>医学场景：200 名病人的基因表达谱，每人 d = 5000 个基因。两个任务：① 把数据降到 2 维画图，看病人是否自然分成几群；② 降维或改造后的表示要服务于 kNN 分类（有诊断标签）。请为两个任务各选一个本章方法并说理由；指出各自最怕的坑。</div>
+      <details>
+        <summary>提示</summary>
+        <p>任务① 无标签，目标是"看结构"：线性基线先试，结构卷曲再上流形。任务② 有标签、下游是 kNN：问题出在"尺子"还是"维度"？</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p><strong>任务①（可视化）</strong>：先用 PCA 做基线——200 个样本在 5000 维里极其稀疏，PCA 只需一次特征分解，稳健、可解释（每个主成分是基因的组合，方差占比可报告）。若 PCA 图显示结构卷曲/呈条带缠绕，再试 Isomap 或 LLE；但要警惕：n = 200 相对流形学习"稠密采样"的要求偏少，近邻图可能短路，结论须与 PCA 图互相印证才敢采信。</p>
+          <p><strong>任务②（服务 kNN）</strong>：选度量学习（如 NCA 思路）。理由：有诊断标签，而 kNN 的唯一输入是距离——与其盲目降维（可能把对分类最关键的基因方向当噪声扔掉，PCA 保方差不保类别），不如直接用标签学一个 M = W Wᵀ，把区分病型的方向拉长、无关方向压扁；W 本身的列数也顺带完成了降维。最怕的坑：n = 200、类内样本更少，M 的参数多（即使用低秩 W 也要 5000×d′ 个），容易过拟合——必须用第 2 章的交叉验证选 d′，并报告留出集上的 kNN 错误率。</p>
+          <p><strong>对比收尾</strong>：① 是无监督"看形状"，宁可保守（PCA）；② 是有监督"改尺子"，度量学习正对靶心。若连标签都没有却要做聚类，就回到第 9 章的方法并接受距离的局限。</p>
+        </div>
+      </details>
+    </div>
+
+    <!-- ================= 自测 ================= -->
+    <h2><span class="sec-no">✍️</span>本章自测</h2>
+    <p class="quiz-hint">点击选项判分，答错会给出原因。</p>
+
+    <div class="quiz-block" data-answer="c">
+      <div class="q-no">自测 1</div>
+      <div class="q-stem">单位超立方体均匀采样，d = 100 时，罩住 10% 样本所需的邻域边长 ℓ = 0.1<sup>1/100</sup> 约为？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 0.100</li>
+        <li data-opt="b">B. 0.316</li>
+        <li data-opt="c">C. 0.977</li>
+        <li data-opt="d">D. 0.010</li>
+      </ul>
+      <div class="quiz-explain">解析：C 对——0.1<sup>0.01</sup> = e<sup>−0.023</sup> ≈ 0.977，几乎整条边。A 错：0.1 是 d = 1 的答案。B 错：0.316 是 d = 2 的答案。D 错：0.01 = 0.1² 是把指数搞反了的凑数项。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 2</div>
+      <div class="q-stem">经典 MDS 的输入是什么？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 样本的原始特征矩阵 X</li>
+        <li data-opt="b">B. 样本两两之间的距离矩阵 D</li>
+        <li data-opt="c">C. 样本的类别标签向量</li>
+        <li data-opt="d">D. 协方差矩阵的逆矩阵</li>
+      </ul>
+      <div class="quiz-explain">解析：B 对——MDS 的全部输入就是距离表，输出是复现这些距离的低维坐标。A 错：有原始坐标时直接用 PCA 即可，MDS 的价值恰在于不需要坐标。C 错：MDS 是无监督方法，不需要标签。D 错：协方差矩阵的逆出现在马氏距离的原始定义里，与 MDS 的输入无关。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="d">
+      <div class="q-no">自测 3</div>
+      <div class="q-stem">PCA 的第一主成分方向是？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 各维均值最大的坐标轴方向</li>
+        <li data-opt="b">B. 类间散度最大的方向</li>
+        <li data-opt="c">C. 投影误差最大的方向</li>
+        <li data-opt="d">D. 中心化后协方差矩阵最大特征值对应的单位特征向量</li>
+      </ul>
+      <div class="quiz-explain">解析：D 对——最大化投影方差 wᵀCw 的解即 Cw = λw 的最大特征值特征向量。A 错：PCA 先中心化，均值被减掉了，不起任何作用。B 错：类间散度需要标签，那是第 3 章 LDA 的目标，PCA 是无监督的。C 错：恰好说反——第一主成分是投影（重构）误差<strong>最小</strong>的方向。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="a">
+      <div class="q-no">自测 4</div>
+      <div class="q-stem">Isomap 相对经典 MDS 的关键改动是？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 用近邻图上最短路径（测地距离的近似）替换欧氏直线距离，再交给 MDS</li>
+        <li data-opt="b">B. 用核函数把内积替换掉</li>
+        <li data-opt="c">C. 利用类别标签约束同类点距离</li>
+        <li data-opt="d">D. 规定只能降到 2 维</li>
+      </ul>
+      <div class="quiz-explain">解析：A 对——近邻图 + 最短路是 Isomap 的全部新意，最后一步仍是 MDS。B 错：用核函数的是 KPCA。C 错：Isomap 是无监督的流形方法，不用标签；用标签改距离的是度量学习。D 错：降到几维由你定，2 维只是可视化时的常见选择。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 5</div>
+      <div class="q-stem">度量学习为什么要求马氏距离的矩阵 M 半正定？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 保证 M 可逆，方便求解</li>
+        <li data-opt="b">B. 保证 d²(x, z) ≥ 0，且 M 可分解为 W Wᵀ，等价于先线性变换再算欧氏距离</li>
+        <li data-opt="c">C. 只需要对称就够了，半正定是多此一举</li>
+        <li data-opt="d">D. 为了让计算更快</li>
+      </ul>
+      <div class="quiz-explain">解析：B 对——半正定既保证"平方距离"非负（距离三公理的底线），又保证能写成 M = W Wᵀ，把度量学习变成"学一个线性变换 W"。A 错：低秩的 M（如 diag(16, 0)）不可逆却完全合法，可逆从来不是要求。C 错：对称不半正定会产生负的 d²，"距离"直接崩塌。D 错：半正定是合法性问题，与计算速度无关。</div>
+    </div>
+
+    <!-- ================= 复述 ================= -->
+    <div class="retell">
+      <h3>🗣️ 用自己的话，三句话讲完本章</h3>
+      <p>对着空气（或室友）说出这三句。说卡壳的那句，回去重读对应小节。</p>
+      <details>
+        <summary>句1：这章解决什么问题？——</summary>
+        <div class="retell-answer">参考答案：维数灾难让高维空间里"距离"与"密度"失效（d = 100 时 10% 邻域要占 97.7% 的边长），第 9 章以来基于距离的一切算法地基松动；本章要么降维——把躺在低维流形上的数据压回低维，要么反过来学一个"合适的距离"。</div>
+      </details>
+      <details>
+        <summary>句2：核心机制是什么？——</summary>
+        <div class="retell-answer">参考答案：降维分两路——MDS 保距离（距离矩阵双中心化后特征分解），PCA 保方差（协方差矩阵特征分解）；线性不够就核化（KPCA 只用核矩阵）或上流形（Isomap 保测地距离、LLE 保局部重构权重）；度量学习不降维，直接学半正定矩阵 M = W Wᵀ，把类间方向拉长、类内压扁。</div>
+      </details>
+      <details>
+        <summary>句3：它和前后章怎么分工？——</summary>
+        <div class="retell-answer">参考答案：第 9 章默认"距离可信"做聚类，本章追问并修复这个前提；第 11 章用另一条路线减维——不变换空间，直接删特征、做稀疏；本章的核 trick 与特征分解也将在第 12 章理论分析与后续章节反复出现。</div>
+      </details>
+    </div>
+
+    <!-- ================= 复习计划 ================= -->
+    <div class="review-plan">
+      <h3>🔁 间隔复习计划</h3>
+      <p>回忆本身比重读有效 10 倍。到点只做一件事：翻卡 + 重做标记题。</p>
+      <table>
+        <tr><th>时间点</th><th>复习内容</th><th>预计用时</th></tr>
+        <tr><td>第 1 天</td><td>概念卡 1–6 全翻一遍 + 回忆卡 10.1-1 至 10.5-2</td><td>10 分钟</td></tr>
+        <tr><td>第 3 天</td><td>概念卡 2、3、5（MDS / PCA / 流形学习）+ 重做 L2 两题</td><td>10 分钟</td></tr>
+        <tr><td>第 7 天</td><td>三句话复述 + 自测错题 + 纸上重算 10.3 的 PCA 例子</td><td>12 分钟</td></tr>
+        <tr><td>第 15 天</td><td>只做合上书挑战；能全过就毕业</td><td>15 分钟</td></tr>
+      </table>
+    </div>
+
+    <!-- ================= 合上书挑战 ================= -->
+    <div class="final-challenge">
+      <h3>📕 合上书挑战</h3>
+      <p class="fc-sub">现在关掉这个页面，拿一张纸，凭记忆完成以下任务。全部做完再回来核对——这是本章真正的毕业考试。</p>
+      <ol id="challenge-list">
+        <li><span class="fc-check"></span>写出 ℓ = 0.1<sup>1/d</sup> 的推导，算出 d = 2、10、100 的边长，并用一句话解释它为何宣告"最近邻"失效</li>
+        <li><span class="fc-check"></span>默写经典 MDS 三步（平方 → 双中心化 B = −½HD<sup>(2)</sup>H → 特征分解取前 d′），并重算边长 1 的等边三角形例子，验证三条边距离都是 1</li>
+        <li><span class="fc-check"></span>完整重算 10.3 的 PCA 例子：中心化 → C = [[5/4, 3/4], [3/4, 5/4]] → λ<sub>1</sub> = 2、λ<sub>2</sub> = 1/2 → w<sub>1</sub> = (1,1)/√2 → 四个投影坐标 ±√2 → 占比 80%</li>
+        <li><span class="fc-check"></span>画出"原始流形 → 近邻图 → 低维嵌入"的示意图，各用一句话说清 Isomap 保什么、LLE 保什么、KPCA 的三步骨架</li>
+        <li><span class="fc-check"></span>写出马氏距离公式，解释 M = W Wᵀ 的等价含义，并复述 10.5 例子中 √2 误判与 √17 纠正的对比</li>
+        <li><span class="fc-check"></span>一句话回答本章的主线问题：维数灾难让距离与密度在高维失效——怎样扔掉冗余维度而保住数据的本质结构？以及反过来：怎样学出一个"合适的距离"？</li>
+      </ol>
+    </div>
+
+    <div class="complete-zone">
+      <button class="btn-complete" id="btn-complete" onclick="markDone()">✓ 我已完成本章（含合上书挑战）</button>
+    </div>
+
+    <div class="chapter-nav">
+      <a href="chapter-09.html"><span class="nav-dir">← 上一章</span>第9章 聚类</a>
+      <a href="chapter-11.html" class="next"><span class="nav-dir">下一章 →</span>第11章 特征选择与稀疏学习</a>
+    </div>
+
+  </div>
+</div>
+
+<footer class="footer">
+  <div class="wrap">第10章 降维与度量学习 · 机器学习互动讲义 · 基于周志华《机器学习》</div>
+</footer>
+
+<script src="/lectures-assets/mermaid.min.js"></script>
+<script>
+mermaid.initialize({
+  startOnLoad: true,
+  theme: "base",
+  themeVariables: {
+    primaryColor: "#e3edf7",
+    primaryBorderColor: "#1d5f9e",
+    primaryTextColor: "#1d5f9e",
+    lineColor: "#5c554b",
+    secondaryColor: "#fbeedd",
+    tertiaryColor: "#f5f1e8",
+    fontFamily: "-apple-system, PingFang SC, sans-serif",
+    fontSize: "14px"
+  },
+  flowchart: { curve: "linear", htmlLabels: false }
+});
+</script>
+<script>
+// 自测题判分（原样复用，勿改）
+document.querySelectorAll(".quiz-block").forEach(block => {
+  const answer = block.dataset.answer;
+  const explain = block.querySelector(".quiz-explain");
+  block.querySelectorAll(".quiz-opts li").forEach(li => {
+    li.addEventListener("click", () => {
+      const opts = block.querySelectorAll(".quiz-opts li");
+      opts.forEach(o => o.classList.add("disabled"));
+      if (li.dataset.opt === answer) {
+        li.classList.add("correct");
+      } else {
+        li.classList.add("wrong");
+        block.querySelector(`[data-opt="${answer}"]`).classList.add("correct");
+      }
+      explain.classList.add("show");
+    });
+  });
+});
+// 合上书清单打勾（原样复用，勿改）
+document.querySelectorAll("#challenge-list li").forEach(li => {
+  li.addEventListener("click", () => li.classList.toggle("checked"));
+});
+// 完成标记 → localStorage（章号 "10"）
+const KEY = "ml_progress_v1";
+function loadProgress() {
+  try { return JSON.parse(localStorage.getItem(KEY)) || {}; } catch (e) { return {}; }
+}
+const progress = loadProgress();
+const btn = document.getElementById("btn-complete");
+if (progress["10"] && progress["10"].done) {
+  btn.textContent = "✓ 已完成 · 再次点击重置";
+  btn.classList.add("done");
+}
+function markDone() {
+  const p = loadProgress();
+  if (p["10"] && p["10"].done) {
+    delete p["10"];
+    btn.textContent = "✓ 我已完成本章（含合上书挑战）";
+    btn.classList.remove("done");
+  } else {
+    p["10"] = { done: true, completedAt: Date.now(), reviewsDone: 0 };
+    btn.textContent = "✓ 已完成 · 复习提醒已开启";
+    btn.classList.add("done");
+  }
+  localStorage.setItem(KEY, JSON.stringify(p));
+}
+</script>
+
+</body>
+</html>

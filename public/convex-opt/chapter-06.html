@@ -1,0 +1,707 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第6章 近似与拟合 · 凸优化互动讲义</title>
+<link rel="stylesheet" href="/lectures-assets/style.css">
+</head>
+<body>
+
+<nav class="topbar">
+  <div class="topbar-inner">
+    <span class="brand"><a href="index.html" style="color:inherit">← 学习地图</a></span>
+    <span class="crumb">阶段③ · 应用建模 / 第6章</span>
+  </div>
+</nav>
+
+<div class="wrap">
+
+  <div class="lecture-head">
+    <span class="ch-label">CHAPTER 06 · 应用建模</span>
+    <h1>近似与拟合</h1>
+    <p class="lead">给定一堆带噪声的数据和一族候选模型，「拟合得好」怎么写成一个能解的凸问题？</p>
+  </div>
+
+  <div class="position-bar">
+    <strong>本章在主线上的位置：</strong>Ch4–5 给了「什么是凸问题」和「KKT 最优性条件」，但从真实数据到凸问题之间还缺一步——<u>建模</u>。本章把最常见的建模动作「拟合」讲透：残差怎么量、范数怎么选、正则怎么加。<br>
+    第6章回答主线上的第6个问题：<strong>「拟合得好」如何变成一个凸优化问题？</strong>
+    <div class="map-inline">
+      <span class="node">Ch5 对偶理论（给了最优性的语言）</span><span class="arrow">→</span>
+      <span class="node here">Ch6 近似与拟合</span><span class="arrow">→</span>
+      <span class="node">Ch7 统计估计（拟合的概率解释）</span><span class="arrow">→</span>
+      <span class="node">Ch11 内点法（log 罚函数的算法归宿）</span>
+    </div>
+  </div>
+
+  <div class="objectives">
+    <h4>🎯 学完本章，合上书你应该能：</h4>
+    <ol>
+      <li>说出范数逼近问题 min ‖Ax−b‖ 的三要素（参数、残差、范数），并判断常见罚函数是否凸。</li>
+      <li>写出最小二乘的正规方程 AᵀAx̂ = Aᵀb，并对 3 个数据点的直线拟合手算出解与残差。</li>
+      <li>解释 Tikhonov 正则化为什么让 AᵀA+λI 一定可逆，手算一维岭回归 x̂ = 2/(1+λ)。</li>
+      <li>解释 ℓ1 正则为什么会产生精确的零（软阈值），并与 ℓ2 正则对比。</li>
+      <li>把 min ‖Ax−b‖∞ 改写成 LP，并对手算小例子求出最优 t。</li>
+      <li>画出权衡曲线（trade-off curve）并说明它如何帮助选 λ。</li>
+    </ol>
+  </div>
+
+  <div class="lecture">
+
+    <div class="figure">
+      <div class="mermaid">
+flowchart LR
+  A["数据含噪声 模型待拟合"] --> B["构造残差 r 等于 Ax 减 b"]
+  B --> C["选范数量化误差大小"]
+  C --> D["ℓ2 最小二乘 有闭式解"]
+  C --> E["ℓ1 抗离群 可稀疏"]
+  C --> F["ℓ∞ 控制最坏情形"]
+  D --> G["过拟合与矩阵病态"]
+  G --> H["正则化 用罚项换稳健"]
+  H --> I["代价 λ 难选 需权衡曲线"]
+  classDef hot fill:#fbeedd,stroke:#c4651f,stroke-width:2.5px,color:#c4651f;
+  classDef danger fill:#fae9e7,stroke:#b03a2e,stroke-width:2.5px,color:#b03a2e;
+  class I danger;
+      </div>
+      <div class="caption">图 6.0 本章推导主线：从「数据要拟合」到「范数逼近」，再到「正则化」，最后落在一个代价——正则参数 λ 没有免费的最优值。</div>
+    </div>
+
+    <h2><span class="sec-no">6.1</span>为什么需要范数逼近：从「拟合一条直线」说起</h2>
+
+    <p>第4、5章给了你一台判定机：拿来一个问题，判断它是不是凸的；是凸的，就有 KKT 条件刻画最优解。但真实世界递到你手上的从来不是标准形，而是 <strong>一堆数据</strong> 和一句模糊的要求：「帮我找个规律」。把这句模糊的话翻译成凸问题，就是建模，也是第6–8章的主题。</p>
+
+    <p>最古老的拟合任务：观测到 m 组数据 (tᵢ, yᵢ)，怀疑 y 大约是 t 的线性函数 y = c·t + d。参数是 <span class="var">x</span> = (c, d)ᵀ。每个数据点给出一个<strong>残差</strong>（Residual）：r<sub>i</sub> = c·tᵢ + d − yᵢ，即「模型预测 − 实测」。全体残差写成矩阵形式：</p>
+
+    <div class="formula"><span class="var">r</span> = A<span class="var">x</span> − <span class="var">b</span>，&nbsp;&nbsp;<span class="term">范数逼近问题</span>（Norm Approximation）：minimize ‖A<span class="var">x</span> − <span class="var">b</span>‖</div>
+
+    <p>三要素：<strong>参数</strong> x（要调的东西）、<strong>残差</strong> Ax−b（误差的载体，仿射于参数）、<strong>范数</strong>（把误差向量压成一个数的规则）。范数是凸的，残差仿射于 x，复合仍凸——所以<strong>无论选哪种范数，范数逼近问题都是凸问题</strong>。这是本章一切结论的地基。</p>
+
+    <p>选 ℓ2 范数就是<span class="term">最小二乘</span>（Least Squares）：min ‖Ax−b‖₂²。它是光滑凸函数，梯度置零得：</p>
+
+    <div class="formula">∇<sub>x</sub> ‖Ax−b‖₂² = 2Aᵀ(Ax−b) = 0 &nbsp;⟹&nbsp; <span class="term">正规方程</span>（Normal Equations）：AᵀAx̂ = Aᵀb</div>
+
+    <h3>完整手算例：3 个点的最小二乘直线</h3>
+    <p>数据 (t, y)： (0, 1)、(1, 2)、(2, 2)，拟合 y = c·t + d。</p>
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>步骤</th><th>计算</th><th>结果</th></tr>
+        <tr><td>① 写出 A 与 b</td><td>A 每行 = (tᵢ, 1)，b = (y₁,y₂,y₃)ᵀ</td><td>A = [[0,1],[1,1],[2,1]]，b = (1,2,2)ᵀ</td></tr>
+        <tr><td>② 算 AᵀA</td><td>第一列平方和 0+1+4=5；列内积 0+1+2=3；第二列平方和 3</td><td>AᵀA = [[5,3],[3,3]]</td></tr>
+        <tr><td>③ 算 Aᵀb</td><td>(0·1+1·2+2·2, 1+2+2)</td><td>Aᵀb = (6, 5)ᵀ</td></tr>
+        <tr><td>④ 解方程组</td><td>5c+3d=6，3c+3d=5，两式相减 2c=1</td><td>c = 1/2，代入得 d = 7/6</td></tr>
+        <tr><td>⑤ 验残差</td><td>r = Ax̂−b = (7/6−1, 5/3−2, 13/6−2)</td><td>r = (1/6, −1/3, 1/6)</td></tr>
+        <tr><td>⑥ 验正交</td><td>Aᵀr 第一分量 0·(1/6)+1·(−1/3)+2·(1/6)=0；第二分量 1/6−1/3+1/6=0</td><td>Aᵀr = 0 ✓</td></tr>
+      </table>
+    </div>
+    <p>平方误差 ‖r‖₂² = 1/36 + 4/36 + 1/36 = 1/6 ≈ 0.167。任何别的 (c, d) 都不会更小——凸问题的梯度零点就是全局最优。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>最小二乘 = 把观测向量 b <strong>正交投影</strong> 到 A 的列空间上。Ax̂ 是列空间里离 b 最近的点，残差 r 与列空间垂直（Aᵀr=0 正是垂直的代数写法）。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>「‖r‖₂ 最小意味着每个残差都很小」——错。ℓ2 只惩罚<strong>平方和</strong>：一个残差为 3 和九个残差为 1 的平方和相同（9），但 ℓ2 会「 prefer 」后者吗？恰恰相反：平方把大残差放得更大，所以 ℓ2 会拼命压低最大残差——这正是它<strong>怕离群点</strong>的原因：一个坏数据点会绑架整条拟合曲线。6.4 节的 Huber 罚就是为此而生。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 6.1-1</div>
+              <div class="q-text">范数逼近问题 min‖Ax−b‖ 为什么对任何范数都是凸问题？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              残差 Ax−b 是 x 的仿射函数；范数是凸函数；凸函数复合仿射映射仍是凸函数。所以目标凸，约束为空，是凸问题。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 6.1-2</div>
+              <div class="q-text">正规方程 AᵀAx̂ = Aᵀb 的几何含义是什么？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              移项得 Aᵀ(Ax̂−b) = Aᵀr = 0：最优残差与 A 的列空间正交，即 Ax̂ 是 b 在列空间上的正交投影。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <h2><span class="sec-no">6.2</span>为什么要正则化：过拟合与病态是一对双胞胎</h2>
+
+    <p>上一节给了一个干净利落的闭式解，但它有两个软肋。其一：当 A 的列接近线性相关时，AᵀA 接近奇异，正规方程的解会剧烈抖动——数据动一点，参数飞出去很远（<strong>病态</strong>）。其二：参数个数逼近数据个数时，模型能把噪声也一并「学」下来（<strong>过拟合</strong>）。这两个问题的药方是同一个：在目标里加一项<span class="term">正则化</span>（Regularization）罚项，惩罚参数的「不安分」。</p>
+
+    <div class="formula"><span class="term">Tikhonov 正则化</span>（岭回归 Ridge）：minimize ‖Ax−b‖₂² + λ‖x‖₂²，λ &gt; 0</div>
+
+    <p>两个凸的二次函数相加仍凸，梯度置零：</p>
+
+    <div class="formula">2Aᵀ(Ax−b) + 2λx = 0 &nbsp;⟹&nbsp; (AᵀA + λI)x̂ = Aᵀb</div>
+
+    <p>AᵀA 只是半正定，可能奇异；但加上 λI 之后，所有特征值至少抬升 λ，所以 <strong>AᵀA+λI 对任意 λ&gt;0 一定对称正定、一定可逆</strong>——病态被治好了。</p>
+
+    <h3>完整手算例：一维岭回归</h3>
+    <p>只有一个参数、一个方程：A = [1]，b = [2]，即 min (x−2)² + λx²。求导：2(x−2) + 2λx = 0，得：</p>
+    <div class="formula">x̂ = <span class="frac"><span class="num-part">2</span><span class="den-part">1+λ</span></span></div>
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>λ</th><th>x̂</th><th>拟合项 (x̂−2)²</th><th>罚项 λx̂²</th></tr>
+        <tr><td>0（不正则）</td><td>2</td><td>0</td><td>0</td></tr>
+        <tr><td>1</td><td>1</td><td>1</td><td>1</td></tr>
+        <tr><td>3</td><td>1/2</td><td>2.25</td><td>0.75</td></tr>
+        <tr><td>→∞</td><td>→0</td><td>→4</td><td>→0</td></tr>
+      </table>
+    </div>
+    <p>λ 越大，解越被「拉回」原点（<strong>收缩</strong> shrinkage），拟合越差但参数越温和。把两个目标 J_fit = ‖Ax−b‖² 与 J_reg = ‖x‖² 的取值对画出来，扫一遍 λ 就得到<span class="term">权衡曲线</span>（Trade-off Curve）——它是两个目标的 Pareto 前沿，每个 λ 对应曲线上一点。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>正则化就是多目标优化的「加权求和」标量化：J_fit + λ·J_reg。λ 是汇率——「我愿用多少个单位的拟合误差，换一个单位的参数温和」。权衡曲线告诉你所有不亏本的兑换率，选哪一点是工程判断，不是数学结论。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>「λ 越大越稳健，所以宁大勿小」——错。λ→∞ 时 x̂→0，模型什么都不拟合，稳健到无用。λ 必须在权衡曲线上选：常用做法是留出一部分数据做交叉验证，选验证误差最小的 λ。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 6.2-1</div>
+              <div class="q-text">为什么 AᵀA + λI（λ&gt;0）一定可逆，即使 A 的列线性相关？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              AᵀA 半正定，特征值 ≥0；加 λI 后特征值全部 ≥λ&gt;0，故对称正定，必可逆。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 6.2-2</div>
+              <div class="q-text">权衡曲线的两个坐标轴是什么？它为什么是 Pareto 前沿？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              横轴 J_fit = ‖Ax−b‖²，纵轴 J_reg = ‖x‖²（或反之）。曲线上的点满足：想再降一个目标就必须升另一个——这正是 Pareto 最优的定义。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <h2><span class="sec-no">6.3</span>为什么 ℓ1 正则能给出「真正的零」：LASSO 与稀疏</h2>
+
+    <p>上一节的罚项 ‖x‖₂² 把参数往原点拉，但永远不会恰好拉到 0——看一维例 x̂=2/(1+λ)，只要 λ 有限，x̂ 就不是零。可很多场景我们想要的恰恰是<strong>零</strong>：从 1000 个候选特征里挑出真正有用的 10 个（特征选择），从一堆基函数里挑出一小组来表达信号（基追踪）。把罚项换成 ℓ1 范数：</p>
+
+    <div class="formula"><span class="term">LASSO</span>（Least Absolute Shrinkage and Selection Operator）：minimize ‖Ax−b‖₂² + λ‖x‖₁</div>
+
+    <p>ℓ1 范数凸而不可微（在 0 处有棱角），没有闭式解，但仍是凸问题，第9–11章的算法能解。为什么它会产生精确的零？看一维就全明白了。</p>
+
+    <h3>完整手算例：一维软阈值</h3>
+    <p>min ½(x−2)² + λ|x|。分段讨论（|x| 在 0 处不可微，用次梯度）：</p>
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>区域</th><th>导数/次梯度条件</th><th>结论</th></tr>
+        <tr><td>x &gt; 0</td><td>(x−2) + λ = 0 → x = 2−λ，仅当 λ&lt;2 时合法</td><td>λ&lt;2 时 x̂ = 2−λ</td></tr>
+        <tr><td>x &lt; 0</td><td>(x−2) − λ = 0 → x = 2+λ &gt; 0，矛盾</td><td>无解</td></tr>
+        <tr><td>x = 0</td><td>次梯度 (0−2) + λ·[−1,1] = [−2−λ, −2+λ] 需含 0</td><td>λ ≥ 2 时 x̂ = 0</td></tr>
+      </table>
+    </div>
+    <div class="formula">x̂ = sign(2)·max(|2|−λ, 0) —— 这就是<span class="term">软阈值</span>（Soft Thresholding）算子</div>
+    <p>对比：λ=1 时岭回归给 x̂=1、LASSO 也给 x̂=1；λ=3 时岭回归给 x̂=0.5（小但非零），LASSO 给 x̂=<strong>0</strong>（精确为零）。差别在于：ℓ1 在 0 处的次梯度是一整个区间 [−λ, λ]，只要数据的「拉力」(−2) 落在这个区间内，最优解就钉死在 0；而 x² 在 0 处导数恰为 0，没有「容差区间」，任何拉力都能把解拉离原点。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>几何版本：ℓ2 球是圆的，等高线与它相切于任意方向；ℓ1 球是带尖角的菱形，尖角全在坐标轴上，等高线大概率先碰到尖角——于是解落在坐标轴上，其余分量为零。<strong>棱角制造稀疏。</strong></p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>「ℓ1 是 ℓ0（数非零个数）的精确等价」——错。ℓ0 非凸、组合爆炸；ℓ1 只是它的<strong>凸放松</strong>，在相当广泛的条件下（RIP、不相干性）恰好恢复出 ℓ0 的解，但并不总是。把放松当等价，会在反例上栽跟头。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 6.3-1</div>
+              <div class="q-text">一句话说明为什么 ℓ1 正则产生稀疏解而 ℓ2 不产生。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              |x| 在 0 处不可微，次梯度是区间 [−1,1]，数据拉力落进区间时最优解被钉在 0；x² 在 0 处导数为 0，没有容差区间，解永远不会精确为 0。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 6.3-2</div>
+              <div class="q-text">写出软阈值算子，并算出 min ½(x−5)²+3|x| 的解。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              x̂ = sign(v)·max(|v|−λ, 0)。代入 v=5、λ=3：x̂ = sign(5)·max(5−3,0) = 2。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <h2><span class="sec-no">6.4</span>换一支尺子：稳健罚函数与控制最坏情形</h2>
+
+    <p>前三节一直在问「残差怎么罚」。更一般的写法是<span class="term">罚函数逼近</span>（Penalty Function Approximation）：min ∑ᵢ φ(rᵢ)，φ 是对称凸函数、φ(0)=0。选不同的 φ，就是在回答「你最在乎哪种误差」。</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>罚函数 φ(u)</th><th>形式</th><th>在乎什么</th><th>问题类型</th></tr>
+        <tr><td>二次 u²</td><td>u²</td><td>平均表现，怕大残差</td><td>最小二乘（闭式解）</td></tr>
+        <tr><td>绝对值 |u|</td><td>|u|</td><td>抗离群（大残差只线性增长）</td><td>可化 LP</td></tr>
+        <tr><td>Huber</td><td>|u|≤M: u²；|u|&gt;M: 2M|u|−M²</td><td>小残差精修、大残差不绑架</td><td>光滑凸，QP 可解</td></tr>
+        <tr><td>死区 deadzone</td><td>max(|u|−a, 0)</td><td>a 以内的误差免费</td><td>可化 LP</td></tr>
+        <tr><td>log-barrier</td><td>−log(1−u²/a²)（|u|&lt;a）</td><td>残差绝不允许碰 ±a</td><td>光滑凸 → 第11章内点法</td></tr>
+      </table>
+    </div>
+
+    <p><span class="term">Huber 罚</span>（Huber Penalty）是最实用的稳健选择：小残差用平方（保持光滑与精修能力），大残差改线性（导数被钳在 ±2M，单个离群点的拉力有上限）。而「控制最坏情形」对应 ℓ∞：</p>
+
+    <div class="formula"><span class="term">Chebyshev 逼近</span>：minimize ‖Ax−b‖∞ &nbsp;⟺&nbsp; LP：minimize t，s.t. −t ≤ aᵢᵀx−bᵢ ≤ t，i=1,…,m</div>
+
+    <h3>完整手算例：同样 3 个点，换 ℓ∞ 尺子</h3>
+    <p>数据还是 (0,1)、(1,2)、(2,2)，拟合 y = c·t + d，目标 min max{|d−1|, |c+d−2|, |2c+d−2|}。最优时三个残差必然「等幅振荡」（若不满足，把直线平移/旋转还能再压 t），即残差形如 (+t, −t, +t)：</p>
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>步骤</th><th>方程</th><th>结果</th></tr>
+        <tr><td>① 设残差模式</td><td>d−1 = t；c+d−2 = −t；2c+d−2 = t</td><td>三个方程三个未知数 (c,d,t)</td></tr>
+        <tr><td>② 由 ① 得</td><td>d = 1+t</td><td></td></tr>
+        <tr><td>③ 由 ② 得</td><td>c = 2−t−d = 1−2t</td><td></td></tr>
+        <tr><td>④ 代入 ③ 式</td><td>2(1−2t) + (1+t) − 2 = t → 1−3t = t</td><td>t = 1/4</td></tr>
+        <tr><td>⑤ 回代</td><td>d = 5/4，c = 1/2</td><td>直线 y = ½t + 5/4，最坏误差 1/4</td></tr>
+      </table>
+    </div>
+    <p>对比 6.1 的最小二乘解（同一条斜率 c=½，但 d=7/6）：最小二乘的最大残差是 1/3 ≈ 0.333，Chebyshev 把它压到 1/4 = 0.25，代价是平方误差从 1/6 升到 1/16+1/16+1/16=3/16。<strong>选范数就是选偏好：ℓ2 在乎总账，ℓ∞ 在乎最惨的那一个。</strong></p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>注意表里最后一行：log-barrier 罚把「|残差| 不许超过 a」这条硬约束软化成目标里的一堵对数墙。这正是第11章内点法的胚胎——今天它是拟合里的一支尺子，到时候它会成为处理一切不等式约束的通用机制。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>「ℓ∞ 控制最坏情形，所以它最稳健」——恰恰相反。ℓ∞ 把全部注意力押在最差数据点上，如果那一点本身是离群点，整个解被它拖走。<strong>抗离群的是 ℓ1/Huber（对大残差反应迟钝），不是 ℓ∞（对大残差反应过敏）。</strong></p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 6.4-1</div>
+              <div class="q-text">Huber 罚的两段各是什么？为什么它能抗离群点？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              |u|≤M 时 φ=u²（精修小误差），|u|&gt;M 时 φ=2M|u|−M²（线性）。大残差处导数被钳在 ±2M，单个离群点对解的拉力有上限，所以不绑架拟合。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 6.4-2</div>
+              <div class="q-text">min‖Ax−b‖∞ 怎么化成 LP？引入了什么变量、加了几组约束？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              引入标量 t 代表「最大残差上界」，目标 min t，约束 −t ≤ aᵢᵀx−bᵢ ≤ t（每个数据点两条，共 2m 条线性不等式）。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <h2><span class="sec-no">🃏</span>概念卡：本章概念的一分钟画像</h2>
+    <p>翻面前先自问：这个概念我能用一句话讲清楚吗？</p>
+    <div class="flip-grid">
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 1</div>
+            <div class="q-text">残差（Residual）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">r = Ax−b：模型预测与实测之差，是参数 x 的仿射函数。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">把「拟合好坏」从形容词变成向量，才能用范数压缩成一个可优化的数。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">每个数据点对模型的一记「抱怨」，拟合就是让大家总体抱怨最小。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为残差越小模型越「真」——残差为零往往只是噪声被背下来了（过拟合）。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">一切拟合/估计问题的起点；Ch7 里残差平方和会获得「高斯噪声下的对数似然」身份。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 2</div>
+            <div class="q-text">正规方程（Normal Equations）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">AᵀAx̂ = Aᵀb，最小二乘解的充要条件。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">把最小二乘从「优化」降格为「解线性方程组」，一步出答案。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">Aᵀr=0：残差垂直于列空间——b 被正交投影到 A 能表达的空间上。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为必须 A 可逆。只需 A 列满秩使 AᵀA 可逆；不满秩时加 Tikhonov 正则或用伪逆。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">Ch9 的 Newton 步本质是反复解加权正规方程；Ch10 的 KKT 系统是它的带约束版。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 3</div>
+            <div class="q-text">Tikhonov 正则化 / 岭回归（Ridge）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">min ‖Ax−b‖₂² + λ‖x‖₂²，解 (AᵀA+λI)⁻¹Aᵀb。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">治两个病：AᵀA 病态（加 λI 必可逆）与过拟合（把参数往原点收缩）。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">给参数拴一根弹性绳，数据往外拉、绳子往原点拽，λ 是绳的劲度。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为 λ 越大越好。λ→∞ 解全零，模型废掉；λ 要在权衡曲线/交叉验证上选。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">病态矩阵的标配；Ch7 中它等价于高斯先验下的 MAP 估计。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 4</div>
+            <div class="q-text">ℓ1 正则 / LASSO</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">min ‖Ax−b‖₂² + λ‖x‖₁，用绝对值之和做罚项。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">特征选择/基追踪：需要解「恰好有很多零」时，ℓ2 做不到，ℓ1 能。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">ℓ1 球是带棱角的菱形，尖角在坐标轴上，等高线先碰尖角 → 稀疏解。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">ℓ1 ≠ ℓ0。它只是 ℓ0 的凸放松，恢复稀疏解需要条件，不是恒等式。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">稀疏建模；压缩感知；作为不可微凸问题，是 Ch9 次梯度法/近端法的典型客户。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 5</div>
+            <div class="q-text">Huber 罚（Huber Penalty）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">|u|≤M 取 u²，|u|&gt;M 取 2M|u|−M²；一次连续可微的凸罚。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">数据里混着离群点时，既要 ℓ2 的精修能力，又要 ℓ1 的抗绑架能力。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">对残差「限量供应愤怒」：误差在 M 以内认真计较，超过 M 就只剩固定力度的反对。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为稳健 = 不在乎大误差。Huber 仍线性增长地惩罚大误差，只是不再平方放大。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">带野值的回归/标定；Ch7 中对应一类重尾噪声分布的 ML 估计。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 6</div>
+            <div class="q-text">Chebyshev 逼近（ℓ∞ / Minimax）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">min ‖Ax−b‖∞，最小化最大残差；等价 LP：min t, −t≤r≤t。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">最坏情形比平均表现更要紧的场合（安全裕度、最坏保证）。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">只盯最惨的那个数据点，把它伺候好了，其他人自动达标。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为它「稳健」。它对最差单点过敏，一个离群点就能拖走整个解——稳健请用 Huber/ℓ1。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">鲁棒设计、最坏情况分析；也是「把 min-max 目标 epigraph 化成 LP」的标准范例。</span></div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+    <h2><span class="sec-no">📝</span>分层习题</h2>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>判断对错并说明理由：「只要数据量足够大，最小二乘拟合就不需要正则化。」</div>
+      <details>
+        <summary>提示</summary>
+        <p>正则化治的两个病——病态与过拟合——分别随数据量增大而消失吗？想一想 A 的列相关结构是不是数据量能改变的。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">错（说得绝对了）。数据量增大能压住过拟合（参数个数远小于样本数时，噪声平均掉了），但<strong>治不了病态</strong>：如果 A 的两列本身就接近平行（如两个几乎相同的传感器），增大数据量不改变列空间的退化方向，AᵀA 依旧接近奇异，正则化仍然必要。正则化的两个动机要分开看。</div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>选择：min‖Ax−b‖₁ 和 min‖Ax−b‖₂² 分别属于哪类问题？A. 都是 QP；B. 前者 LP、后者 QP；C. 前者可化 LP、后者是 QP；D. 都不可解。</div>
+      <details>
+        <summary>提示</summary>
+        <p>|rᵢ| 本身不是线性的，但可以用辅助变量 sᵢ ≥ ±rᵢ 把它「epigraph 化」。平方和是二次凸函数。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">C。min‖r‖₁ 引入 sᵢ ≥ rᵢ、sᵢ ≥ −rᵢ，化 min∑sᵢ 的 LP；min‖r‖₂² 目标含二次项，是 QP（且无约束时闭式解）。A 错在把 ℓ1 也当二次；B 错在「前者就是 LP」——严格说需要改写一步；D 显然错，两者都是凸问题。这个「引入辅助变量把范数撑成约束」的手法在 Ch4 已经见过，本章反复用。</div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>用正规方程手算过原点直线 y = c·t 对数据 (1, 2)、(2, 3)、(3, 3) 的最小二乘拟合，并验证残差与 A 的列正交。</div>
+      <details>
+        <summary>提示</summary>
+        <p>此时参数只有 c 一个，A 是一列 (1,2,3)ᵀ。正规方程退化为一个一元方程：c = ∑tᵢyᵢ / ∑tᵢ²。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">① A = (1,2,3)ᵀ，b = (2,3,3)ᵀ。② AᵀA = 1+4+9 = 14；Aᵀb = 2+6+9 = 17。③ c = 17/14 ≈ 1.214。④ 残差 r = cA − b = (17/14−2, 34/14−3, 51/14−3) = (−11/14, −8/14, 9/14)。⑤ 正交验证：Aᵀr = 1·(−11/14) + 2·(−8/14) + 3·(9/14) = (−11−16+27)/14 = 0 ✓。平方误差 = (121+64+81)/196 = 266/196 ≈ 1.36。</div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>手算 min ½(x+3)² + 2|x| 的最优解，要求分 x&gt;0、x&lt;0、x=0 三段讨论（不许直接套软阈值公式）。</div>
+      <details>
+        <summary>提示</summary>
+        <p>x&gt;0 和 x&lt;0 时函数光滑可直接求导；x=0 处用次梯度：∂|x| = [−1, 1]，最优性条件是 0 ∈ 次梯度集。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">① x&gt;0：f' = (x+3)+2 = x+5 &gt; 0，函数递增，无极小点。② x&lt;0：f' = (x+3)−2 = x+1 = 0 → x = −1，合法（在 x&lt;0 区域内），f(−1) = ½·4 + 2 = 4。③ x=0：次梯度 (0+3) + 2·[−1,1] = [1, 5]，不含 0，故 0 不是最优点。④ 比较：唯一候选 x̂ = −1。验证软阈值公式：v=−3, λ=2 → sign(−3)·max(3−2,0) = −1 ✓。</div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l3">L3 建模应用</span>某工厂用 50 个标定数据点拟合温度传感器的响应曲线（参数 20 个）。已知其中约 3 个点因记录事故严重失真；同时工程师相信 20 个参数里真正起作用的只有少数几个。请写出完整的优化模型（变量、目标、每一项的理由），并说明为什么不能只用纯最小二乘。</div>
+      <details>
+        <summary>提示</summary>
+        <p>两种「不干净」分别对应本章哪两件工具？残差里混离群点 → 哪种罚？参数要稀疏 → 哪种正则？两者能不能同时出现在一个凸目标里？</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">模型：minimize ∑ᵢ φ_Huber(aᵢᵀx − bᵢ) + λ‖x‖₁。① 拟合项用 Huber 罚：3 个失真点是大残差，ℓ2 会把它们平方放大、绑架整条曲线，Huber 对大残差只线性惩罚，压得住野值。② 正则项用 ℓ1：要「少数参数起作用」即要稀疏解，ℓ1 的棱角把无关参数钉在精确的 0（ℓ2 只能缩小不能清零）。③ 两项都是凸的，和仍凸，问题可解。④ 纯最小二乘两个毛病都犯：被 3 个野值拖偏，且 20 个参数全非零无法做特征筛选。M 与 λ 用交叉验证在权衡曲线上选。</div>
+      </details>
+    </div>
+
+    <h2><span class="sec-no">✍️</span>本章自测</h2>
+    <p class="quiz-hint">点击选项判分，答错会给出原因。</p>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 1</div>
+      <div class="q-stem">正规方程 AᵀAx̂ = Aᵀb 的几何含义是：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 最优解处残差为零</li>
+        <li data-opt="b">B. 最优残差与 A 的列空间正交</li>
+        <li data-opt="c">C. A 必须是方阵且可逆</li>
+        <li data-opt="d">D. 残差与观测向量 b 正交</li>
+      </ul>
+      <div class="quiz-explain">解析：B 对——Aᵀr=0 逐字读就是「r 与 A 的每一列垂直」，即 Ax̂ 是 b 在列空间上的正交投影。A 错：只有 b 恰好落在列空间里（可插值）时残差才为零，一般数据做不到。C 错：只需 A 列满秩使 AᵀA 可逆，A 自身是 m×n 长矩阵，根本谈不上可逆。D 错：残差垂直于列空间，不垂直于 b；若 r⊥b 则投影长度为零，几乎不可能。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="c">
+      <div class="q-no">自测 2</div>
+      <div class="q-stem">Tikhonov 正则化中，AᵀA + λI（λ&gt;0）为什么一定可逆？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 因为 λI 自身可逆，两个矩阵之和跟着可逆</li>
+        <li data-opt="b">B. 因为 A 列满秩</li>
+        <li data-opt="c">C. 因为 AᵀA 半正定，加 λI 后特征值全部 ≥ λ &gt; 0</li>
+        <li data-opt="d">D. 因为 λ 可以任意大</li>
+      </ul>
+      <div class="quiz-explain">解析：C 对——半正定矩阵的特征值 ≥0，同时加 λI 把谱整体平移 λ，全部特征值 ≥λ&gt;0，对称正定必可逆。A 错：可逆矩阵加奇异矩阵不一定可逆（如 I + (−I) = 0），关键是「半正定 + 正倍单位阵」这个结构。B 错：列满秩是充分非必要，本题恰恰要在列相关时也成立。D 错：λ 的大小不影响可逆性的成立，只影响解的收缩程度。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="a">
+      <div class="q-no">自测 3</div>
+      <div class="q-stem">LASSO（ℓ1 正则）能产生精确为零的解分量，根本原因是：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. |x| 在 0 处不可微，次梯度是一个区间，数据拉力落进区间时解被钉在 0</li>
+        <li data-opt="b">B. ℓ1 范数与 ℓ0「非零个数」精确等价</li>
+        <li data-opt="c">C. 只要 λ 取得足够大，任何正则化都能给出精确的零</li>
+        <li data-opt="d">D. ℓ1 目标有闭式解，恰好常取到零</li>
+      </ul>
+      <div class="quiz-explain">解析：A 对——软阈值推导显示 λ 超过 |v| 时最优解恰好为 0，本质是 0 处次梯度区间 [−λ,λ] 提供了「容差带」。B 错：ℓ1 只是 ℓ0 的凸放松，在 RIP 等条件下才恰好恢复，不是恒等。C 错：岭回归 λ→∞ 时 x̂=2/(1+λ)→0 但永不为 0——「趋向零」与「精确为零」是 ℓ2 与 ℓ1 的本质区别。D 错：LASSO 一般没有闭式解（一维才有软阈值公式），要靠迭代算法。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="d">
+      <div class="q-no">自测 4</div>
+      <div class="q-stem">Huber 罚 φ(u) 在大残差区域（|u|&gt;M）的增长方式是：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 平方增长，比 ℓ2 惩罚更重</li>
+        <li data-opt="b">B. 保持不变，大误差不再受罚</li>
+        <li data-opt="c">C. 指数增长，彻底排除大误差</li>
+        <li data-opt="d">D. 线性增长，导数被钳在 ±2M</li>
+      </ul>
+      <div class="quiz-explain">解析：D 对——|u|&gt;M 时 φ=2M|u|−M²，斜率恒为 ±2M，离群点的拉力有上限，所以稳健。A 错：平方增长正是 ℓ2 怕离群点的原因，Huber 的设计目的恰是摆脱它。B 错：罚函数取常数则不凸（且不惩罚大误差），Huber 只是「限量」不是「免责」。C 错：指数增长比平方更激进，与稳健目标南辕北辙；那更接近 log-barrier 的「禁止」逻辑（第11章）。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 5</div>
+      <div class="q-stem">min ‖Ax−b‖∞ 化为 LP 的标准手法是：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 对目标开平方，转化为 QP</li>
+        <li data-opt="b">B. 引入标量 t，约束 −t ≤ aᵢᵀx−bᵢ ≤ t，最小化 t</li>
+        <li data-opt="c">C. 枚举残差绝对值取到最大的那个数据点</li>
+        <li data-opt="d">D. 对 ‖·‖∞ 取对数后用梯度法</li>
+      </ul>
+      <div class="quiz-explain">解析：B 对——这是 epigraph 变换：t 是 max|rᵢ| 的上界，2m 条线性约束把「所有 |rᵢ|≤t」写全，目标 min t，标准 LP。A 错：ℓ∞ 与平方无关，开平方不改变 max 结构也化不成 QP。C 错：最优点由谁取到 max 事先未知，枚举是组合爆炸；LP 一步搞定正是凸优化的威力。D 错：取对数既无必要（已能精确化 LP）也破坏结构。</div>
+    </div>
+
+    <div class="retell">
+      <h3>🗣️ 用自己的话，三句话讲完本章</h3>
+      <p>对着空气（或室友）说出这三句。说卡壳的那句，回去重读对应小节。</p>
+      <details>
+        <summary>句1：这章解决什么问题？——</summary>
+        <div class="retell-answer">参考答案：把「用一族模型拟合带噪数据」这件模糊的事，翻译成范数逼近问题 min‖Ax−b‖ 及其正则化版本，并证明它们是凸问题。</div>
+      </details>
+      <details>
+        <summary>句2：核心机制是什么？——</summary>
+        <div class="retell-answer">参考答案：残差是参数的仿射函数、范数是凸函数，复合仍凸；选 ℓ2 得闭式解（正规方程），选 ℓ1 得稀疏与稳健，选 ℓ∞ 控制最坏情形；加正则罚项在拟合与温和之间做 Pareto 权衡。</div>
+      </details>
+      <details>
+        <summary>句3：它和前后章怎么分工？——</summary>
+        <div class="retell-answer">参考答案：Ch4–5 给了凸问题的语言与最优性条件，本章负责「造出」凸问题；Ch7 给拟合一个概率解释（最小二乘=高斯噪声下的 ML），Ch8 把同样的语言用到几何对象上，Ch9–11 负责把本章造出的问题算出来。</div>
+      </details>
+    </div>
+
+    <div class="review-plan">
+      <h3>🔁 间隔复习计划</h3>
+      <p>回忆本身比重读有效 10 倍。到点只做一件事：翻卡 + 重做标记题。</p>
+      <table>
+        <tr><th>时间点</th><th>复习内容</th><th>预计用时</th></tr>
+        <tr><td>第 1 天</td><td>概念卡 1–6 全部 + 回忆卡 6.1-1、6.2-1、6.3-1、6.4-1</td><td>10 分钟</td></tr>
+        <tr><td>第 3 天</td><td>概念卡 3、4、6（正则三兄弟）+ 重做错题 + L2 两道手算</td><td>10 分钟</td></tr>
+        <tr><td>第 7 天</td><td>三句话复述 + 重推软阈值（回忆 6.3-2）+ 自测全部重答</td><td>12 分钟</td></tr>
+        <tr><td>第 15 天</td><td>只做合上书挑战；能全过就毕业，卡哪条回去重读哪节</td><td>15 分钟</td></tr>
+      </table>
+    </div>
+
+    <div class="final-challenge">
+      <h3>📕 合上书挑战</h3>
+      <p class="fc-sub">现在关掉这个页面，拿一张纸，凭记忆完成以下任务。全部做完再回来核对——这是本章真正的毕业考试。</p>
+      <ol id="challenge-list">
+        <li><span class="fc-check"></span>写出范数逼近问题的三要素，并说明为什么它对任何范数都是凸问题。</li>
+        <li><span class="fc-check"></span>默写正规方程，并解释 Aᵀr=0 的几何含义（投影）。</li>
+        <li><span class="fc-check"></span>手算：数据 (0,1)、(1,2)、(2,2) 的最小二乘直线（答案 y = ½t + 7/6）。</li>
+        <li><span class="fc-check"></span>手算一维软阈值 min ½(x−2)²+λ|x|：λ=1 与 λ=3 的解各是多少？并解释 ℓ2 正则为何永远做不到后者。</li>
+        <li><span class="fc-check"></span>把 min‖Ax−b‖∞ 改写成 LP，并对比 ℓ2 与 ℓ∞ 在「怕哪种数据点」上的差异。</li>
+        <li><span class="fc-check"></span>一句话回答本章主线问题：「拟合得好」怎么变成一个能解的凸问题？</li>
+      </ol>
+    </div>
+
+    <div class="complete-zone">
+      <button class="btn-complete" id="btn-complete" onclick="markDone()">✓ 我已完成本章（含合上书挑战）</button>
+    </div>
+
+    <div class="chapter-nav">
+      <a href="chapter-05.html"><span class="nav-dir">← 上一章</span>第5章 对偶</a>
+      <a href="chapter-07.html" class="next"><span class="nav-dir">下一章 →</span>第7章 统计估计</a>
+    </div>
+
+  </div>
+</div>
+
+<footer class="footer">
+  <div class="wrap">第6章 近似与拟合 · 凸优化互动讲义 · 基于 Boyd &amp; Vandenberghe (2004)</div>
+</footer>
+
+<script src="/lectures-assets/mermaid.min.js"></script>
+<script>
+mermaid.initialize({
+  startOnLoad: true,
+  theme: "base",
+  themeVariables: {
+    primaryColor: "#e3edf7",
+    primaryBorderColor: "#1d5f9e",
+    primaryTextColor: "#1d5f9e",
+    lineColor: "#5c554b",
+    secondaryColor: "#fbeedd",
+    tertiaryColor: "#f5f1e8",
+    fontFamily: "-apple-system, PingFang SC, sans-serif",
+    fontSize: "14px"
+  },
+  flowchart: { curve: "linear", htmlLabels: false }
+});
+</script>
+<script>
+// 自测题判分
+document.querySelectorAll(".quiz-block").forEach(block => {
+  const answer = block.dataset.answer;
+  const explain = block.querySelector(".quiz-explain");
+  block.querySelectorAll(".quiz-opts li").forEach(li => {
+    li.addEventListener("click", () => {
+      const opts = block.querySelectorAll(".quiz-opts li");
+      opts.forEach(o => o.classList.add("disabled"));
+      if (li.dataset.opt === answer) {
+        li.classList.add("correct");
+      } else {
+        li.classList.add("wrong");
+        block.querySelector(`[data-opt="${answer}"]`).classList.add("correct");
+      }
+      explain.classList.add("show");
+    });
+  });
+});
+
+// 合上书清单打勾
+document.querySelectorAll("#challenge-list li").forEach(li => {
+  li.addEventListener("click", () => li.classList.toggle("checked"));
+});
+
+// 完成标记 → localStorage
+const KEY = "cvx_progress_v1";
+function loadProgress() {
+  try { return JSON.parse(localStorage.getItem(KEY)) || {}; } catch (e) { return {}; }
+}
+const progress = loadProgress();
+const btn = document.getElementById("btn-complete");
+if (progress[6] && progress[6].done) {
+  btn.textContent = "✓ 已完成 · 再次点击重置";
+  btn.classList.add("done");
+}
+function markDone() {
+  const p = loadProgress();
+  if (p[6] && p[6].done) {
+    delete p[6];
+    btn.textContent = "✓ 我已完成本章（含合上书挑战）";
+    btn.classList.remove("done");
+  } else {
+    p[6] = { done: true, completedAt: Date.now(), reviewsDone: 0 };
+    btn.textContent = "✓ 已完成 · 复习提醒已开启";
+    btn.classList.add("done");
+  }
+  localStorage.setItem(KEY, JSON.stringify(p));
+}
+</script>
+
+</body>
+</html>

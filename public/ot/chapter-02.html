@@ -1,0 +1,700 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第2章 Monge 与 Kantorovich 问题 · 最优传输互动讲义</title>
+<link rel="stylesheet" href="/lectures-assets/style.css">
+</head>
+<body>
+
+<nav class="topbar">
+  <div class="topbar-inner">
+    <span class="brand"><a href="index.html" style="color:inherit">← 学习地图</a></span>
+    <span class="crumb">① 问题与几何 / 第2章</span>
+  </div>
+</nav>
+
+<div class="wrap">
+
+  <div class="lecture-head">
+    <span class="ch-label">CHAPTER 02 · 问题与几何</span>
+    <h1>Monge 与 Kantorovich 问题</h1>
+    <p class="lead">本章回答的核心问题：第1章说的"最小搬运代价"到底怎样严格定义？为什么 Monge 的原始定义会无解，而 Kantorovich 的松弛既永远有解、又能手算、还自带对偶？</p>
+  </div>
+
+  <div class="position-bar">
+    <strong>本章在主线上的位置：</strong>第1章给了动机（Wasserstein = 最小搬运代价） → <u>本章把这个代价严格定义为耦合上的线性优化</u> → 第3章才能用 LP 算法算它。<br>
+    第2章回答主线上的第2个问题：<strong>"最小搬运代价"的严格数学对象是什么？</strong>
+    <div class="map-inline">
+      <span class="node">① Ch1 引言（为什么需要新距离）</span><span class="arrow">→</span>
+      <span class="node here">② Ch2 Monge 与 Kantorovich（把距离定义严格化）</span><span class="arrow">→</span>
+      <span class="node">② Ch3 离散 OT 与线性规划（怎么算）</span><span class="arrow">→</span>
+      <span class="node">② Ch4 熵正则与 Sinkhorn（怎么算得快）</span><span class="arrow">→</span>
+      <span class="node">③ Ch5–6 连续与扩展</span><span class="arrow">→</span>
+      <span class="node">④ Ch7–8 应用与前沿</span>
+    </div>
+  </div>
+
+  <div class="objectives">
+    <h4>🎯 学完本章，合上书你应该能：</h4>
+    <ol>
+      <li>写出 Monge 问题 min ∫c(x,T(x))dμ 与推前约束 T#μ = ν 的含义；</li>
+      <li>给出一个 Monge 无解而 Kantorovich 有解的具体例子（δ₀ → 0.5δ₋₁+0.5δ₁）；</li>
+      <li>写出耦合集合 Π(μ,ν) 的两条边际约束，并在 2×2 情形参数化全部耦合；</li>
+      <li>用分位数函数手算一维离散分布的 W₁ 与 W₂²；</li>
+      <li>写出 Kantorovich 对偶，并在 2×2 例上验证强对偶（原始值 = 对偶值）。</li>
+    </ol>
+  </div>
+
+  <div class="lecture">
+
+    <div class="figure">
+      <div class="mermaid">
+flowchart TB
+  A["要严格化最小搬运代价"] --> B["Monge：找映射 T，c 的积分最小"]
+  B --> C["问题：质量劈不开，映射可能不存在"]
+  C --> D["Kantorovich：允许劈分，优化对象换成耦合 pi"]
+  D --> E["凸集上的线性优化，永远有解"]
+  E --> F["一维特例：分位数重排给出闭式解"]
+  E --> G["对偶：最大势差问题，给出证书与直觉"]
+  G --> H["遗留问题：一般情形怎么高效求解"]
+  classDef hot fill:#fbeedd,stroke:#c4651f,stroke-width:2.5px,color:#c4651f;
+  classDef danger fill:#fae9e7,stroke:#b03a2e,stroke-width:2.5px,color:#b03a2e;
+  class E hot;
+  class H danger;
+      </div>
+      <div class="caption">本章推导主线：Monge 定义太刚（无解）→ Kantorovich 松弛（有解且凸）→ 一维闭式解与对偶两个"可算"支点 → 一般情形的计算留给第3–4章。</div>
+    </div>
+
+    <h2><span class="sec-no">2.1</span>Monge 的原始定义：为什么"每堆土整体搬"会无解</h2>
+
+    <p>第1章把分布比作土堆，说距离是"最小搬运代价"。Monge 1781 年的原始想法是：给每一点 x 处的土指定一个去向 T(x)，整个搬运由一张<span class="term">传输映射</span>（Transport Map）T 完成。它要满足两件事：</p>
+
+    <p>第一，土都搬对了地方——这就是<span class="term">推前测度</span>（Push-forward Measure）约束：</p>
+
+    <div class="formula">T#μ = ν，&nbsp;&nbsp;即对任意集合 B：&nbsp; ν(B) = μ( T⁻¹(B) )</div>
+
+    <p>读法：目标区域 B 收到的土，恰好等于所有"被 T 送进 B"的出发点的土。第二，总代价最小：</p>
+
+    <div class="formula">min<sub>T : T#μ = ν</sub> ∫ c( x, T(x) ) dμ(x)</div>
+
+    <p>这个定义干净利落，但藏着一个致命刚性：<strong>每个 x 处的质量必须整体去同一个地方 T(x)</strong>，不许劈开。下面的例子让它当场翻车。</p>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 无解反例（必须记住）</span>
+      <p>μ = δ₀（1 单位土全在 0），ν = 0.5δ₋₁ + 0.5δ₁（左右各要 0.5）。任何映射 T 只能把 0 送到一个点：T(0)=−1 则右边收不到土，T(0)=1 则左边收不到土。<strong>不存在满足 T#μ = ν 的映射</strong>。可直觉上"把土劈成两半"明明可行——Monge 的定义把可行解挡在了门外。</p>
+    </div>
+
+    <p>即使映射存在，Monge 问题的约束集 {T : T#μ = ν} 也非凸：两个合法映射的平均一般不再是映射（平均后一个 x 被送到两个地方）。非凸约束 + 可能为空，这个定义无法作为计算起点。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>修 bug 的思路只有一个：<strong>允许质量劈分</strong>。不再问"x 去哪儿"，改问"x 的质量里有多大比例去 y"。优化对象从"映射"换成"一张从出发地到目的地的流量表"。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 2.1-1</div>
+              <div class="q-text">写出 Monge 问题的目标函数与约束，并解释推前约束 T#μ = ν 中 ν(B) = μ(T⁻¹B) 的含义。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              min_T ∫c(x,T(x))dμ，约束 T#μ=ν。含义：目的地 B 收到的质量 = 被 T 映进 B 的所有出发点质量之和——收支必须平衡。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 2.1-2</div>
+              <div class="q-text">为什么 μ=δ₀、ν=0.5δ₋₁+0.5δ₁ 之间不存在 Monge 映射？病根是什么？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              0 点的全部质量只能去一个目的地 T(0)，无法满足两边各 0.5。病根：映射禁止劈分质量。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <h2><span class="sec-no">2.2</span>Kantorovich 的松弛：把映射换成耦合，问题永远有解</h2>
+
+    <p>上一节说 Monge 死在"不许劈分"。Kantorovich 1942 年的松弛只用一步就盘活全局：引入<span class="term">耦合</span>（Coupling）π(x,y)——"从 x 搬到 y 的质量"。它只需要满足两条<span class="term">边际约束</span>（Marginal Constraints）：</p>
+
+    <div class="formula">Π(μ,ν) = { π ≥ 0 : ∫π(x,y)dy = μ(x)，∫π(x,y)dx = ν(y) }</div>
+
+    <p>第一行说"从 x 运出的总量恰好是 x 的土"，第二行说"运进 y 的总量恰好是 y 的需求"。离散情形下 π 就是一张非负矩阵 P，行和等于 μ 的权重向量 a，列和等于 ν 的权重向量 b。Kantorovich 问题：</p>
+
+    <div class="formula">min<sub>π ∈ Π(μ,ν)</sub> ∫ c(x,y) dπ(x,y)</div>
+
+    <p>注意三点：Π(μ,ν) 是<strong>凸集</strong>（两个耦合的凸组合仍是耦合）；它<strong>永远非空</strong>（独立耦合 π = μ⊗ν 总在里头）；目标函数对 π 是<strong>线性</strong>的。凸集上线性函数的最小值——这是一个标准线性规划，第3章的全部算法都建立在这一步上。</p>
+
+    <div class="box insight">
+      <span class="box-tag">✅ 手算示例：2×2 成本矩阵上的最优耦合</span>
+      <p>μ = 0.4δ₀ + 0.6δ₁（在 {0,1} 上），ν = 0.7δ₀ + 0.3δ₂（在 {0,2} 上），c(x,y) = |x−y|²。成本矩阵 C：</p>
+      <div class="tbl-wrap">
+        <table>
+          <tr><th>c = |x−y|²</th><th>y=0</th><th>y=2</th><th>行和</th></tr>
+          <tr><td>x=0</td><td>0</td><td>4</td><td>0.4</td></tr>
+          <tr><td>x=1</td><td>1</td><td>1</td><td>0.6</td></tr>
+          <tr><td>列和</td><td>0.7</td><td>0.3</td><td>1</td></tr>
+        </table>
+      </div>
+      <p>参数化：设 π₁₁ = t，由行和 π₁₂ = 0.4−t；由第一列列和 π₂₁ = 0.7−t；由第二列列和 π₂₂ = 0.3−(0.4−t) = t−0.1。非负要求 t ∈ [0.1, 0.4]。</p>
+      <p>总代价 = 0·t + 4(0.4−t) + 1(0.7−t) + 1(t−0.1) = 1.6 − 4t + 0.7 − t + t − 0.1 = <strong>2.2 − 4t</strong>，随 t 递减，故取最大 t = 0.4：</p>
+      <p>π* = [[0.4, 0], [0.3, 0.3]]，最小代价 = 2.2 − 1.6 = <strong>0.6</strong>。读法：x=0 的 0.4 全部留在 y=0（免费），x=1 的 0.6 拆成 0.3 去 y=0、0.3 去 y=2（每单位代价都是 1）。</p>
+    </div>
+
+    <p>回头看 2.1 的无解例：耦合 π 允许 δ₀ 的质量劈成 0.5 去 −1、0.5 去 1，Kantorovich 问题立刻有解，代价 = 0.5×1 + 0.5×1 = 1。松弛把"不可能的搬运"变成"一张合法的流量表"。</p>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>以为耦合 π(x,y) 是"x 和 y 的联合分布"就完事了。它确实是联合分布，但<strong>边际被钉死</strong>：行和列和必须分别等于 μ 和 ν。随便一个联合分布不行——独立耦合 μ⊗ν 是合法但几乎从不最优的极端。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 2.2-1</div>
+              <div class="q-text">写出耦合集合 Π(μ,ν) 的两条边际约束，并说明为什么它非空且凸。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              ∫πdy=μ、∫πdx=ν，π≥0。非空：独立耦合 μ⊗ν 总满足；凸：两个可行耦合的凸组合仍满足线性边际约束。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 2.2-2</div>
+              <div class="q-text">上面 2×2 例中，为什么最优解把 t 推到区间端点 0.4？这反映了线性规划的什么性质？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              代价 2.2−4t 是 t 的线性函数，最优点必在可行域边界。LP 的最优解总在多面体顶点上——这正是第3章"基本可行解"的雏形。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <h2><span class="sec-no">2.3</span>一维闭式解：分位数函数把最优耦合直接写出来</h2>
+
+    <p>上一节把问题化成 LP，但 LP 要留给第3章。一维情形有个奢侈的例外：不用解 LP，最优耦合有<span class="term">闭式解</span>（Closed-form Solution）。工具是<span class="term">分位数函数</span>（Quantile Function）——累积分布函数（CDF）的广义逆：</p>
+
+    <div class="formula">F⁻¹(t) = inf{ x : F(x) ≥ t }，&nbsp;&nbsp;t ∈ [0,1]</div>
+
+    <p>直觉：把 μ 和 ν 各自看成一条 [0,1] 上的"质量传送带"，F⁻¹(t) 是 μ 带上 t 处的位置，G⁻¹(t) 是 ν 带上 t 处的位置。<strong>最优方案 = 同刻度对齐</strong>：μ 带上 t 处的质量搬去 ν 带上 t 处。这叫单调重排（Monotone Rearrangement）——两堆土都从最左端开始配对，绝不交叉。</p>
+
+    <div class="formula">W<sub>p</sub>(μ,ν)<sup>p</sup> = ∫₀¹ | F⁻¹(t) − G⁻¹(t) |ᵖ dt</div>
+
+    <div class="box insight">
+      <span class="box-tag">✅ 手算示例：两个三原子分布的分位数积分</span>
+      <p>μ = 0.3δ₁ + 0.3δ₂ + 0.4δ₅，ν = 0.5δ₀ + 0.5δ₄。先把分位数函数分段写出来：</p>
+      <div class="tbl-wrap">
+        <table>
+          <tr><th>t 区间</th><th>[0, 0.3)</th><th>[0.3, 0.5)</th><th>[0.5, 0.6)</th><th>[0.6, 1]</th></tr>
+          <tr><td>F⁻¹(t)（μ）</td><td>1</td><td>2</td><td>2</td><td>5</td></tr>
+          <tr><td>G⁻¹(t)（ν）</td><td>0</td><td>0</td><td>4</td><td>4</td></tr>
+          <tr><td>|F⁻¹−G⁻¹|</td><td>1</td><td>2</td><td>2</td><td>1</td></tr>
+        </table>
+      </div>
+      <p>W₁ = 0.3×1 + 0.2×2 + 0.1×2 + 0.4×1 = 0.3 + 0.4 + 0.2 + 0.4 = <strong>1.3</strong>。</p>
+      <p>W₂² = 0.3×1² + 0.2×2² + 0.1×2² + 0.4×1² = 0.3 + 0.8 + 0.4 + 0.4 = <strong>1.9</strong>（W₂ ≈ 1.38）。</p>
+      <p>最优耦合顺带读出：μ 的 0.3（在1）→ ν 的 0.3（在0）；μ 的 0.2（在2）→ ν 的 0.2（在0）；μ 的 0.1（在2）→ ν 的 0.1（在4）；μ 的 0.4（在5）→ ν 的 0.4（在4）。</p>
+    </div>
+
+    <p>为什么单调重排最优？交叉必可改进：若 x₁ &lt; x₂ 却配成 x₁→y₂、x₂→y₁（y₁ &lt; y₂），交换成 x₁→y₁、x₂→y₂ 后代价不增（对 c(x,y)=|x−y|ᵖ、p≥1 逐一验证不等式即可）。于是任何最优方案都可"梳"成单调的。</p>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>把分位数闭式解当成普遍规律。它只在<strong>一维</strong>成立；二维以上没有单调性的天然替代品，闭式解一般不存在（c = 二次型且 μ 高斯时是著名特例，第5章会见）。高维老老实实回到 LP（第3章）或 Sinkhorn（第4章）。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 2.3-1</div>
+              <div class="q-text">写出一维 Wasserstein 的分位数公式，并用一句话说明"单调重排"在做什么。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              W_p^p = ∫₀¹|F⁻¹(t)−G⁻¹(t)|ᵖ dt。单调重排：两条 [0,1] 质量带同刻度对齐，左边配左边、右边配右边，不交叉。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 2.3-2</div>
+              <div class="q-text">为什么一维时"交叉配对"一定不优于"顺序配对"？这个论证在高维为什么失效？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              一维有全序，交换交叉对后由 |x−y|ᵖ 的不等式代价不增。高维没有天然全序，"谁和谁交叉"无法定义，论证失效。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <h2><span class="sec-no">2.4</span>Kantorovich 对偶：用"定价"重新讲述同一个问题</h2>
+
+    <p>LP 必有对偶，Kantorovich 问题的对偶是全书最有经济学直觉的对象。引入两端的<span class="term">对偶势</span>（Dual Potentials）φ(x)、ψ(y)，对偶问题是：</p>
+
+    <div class="formula">max<sub>φ, ψ</sub> ∫ φ(x)dμ + ∫ ψ(y)dν，&nbsp;&nbsp;s.t.&nbsp; φ(x) + ψ(y) ≤ c(x,y)</div>
+
+    <p>经济读法：你把搬运外包给一家公司。公司在出发地 x 按 φ(x) 向你收"装车费"，在目的地 y 按 ψ(y) 给你"卸货补贴"；它要保证自己报价有竞争力——任何地方的组合报价 φ(x)+ψ(y) 都不能超过你自己搬的市价 c(x,y)。公司利润最大化（∫φdμ + ∫ψdν）时，<strong>它的最高报价恰好等于你自己搬的最小代价</strong>——这就是强对偶。</p>
+
+    <div class="box insight">
+      <span class="box-tag">✅ 手算验证：2×2 例的强对偶</span>
+      <p>沿用 2.2 的例子：μ=(0.4,0.6) 在 {0,1}，ν=(0.7,0.3) 在 {0,2}，C=[[0,4],[1,1]]，原始最优值 = 0.6。</p>
+      <p>取对偶势 φ = (0, 1)（即 φ(0)=0, φ(1)=1），ψ = (0, 0)。验证四条约束：</p>
+      <div class="tbl-wrap">
+        <table>
+          <tr><th>(x,y)</th><th>φ(x)+ψ(y)</th><th>c(x,y)</th><th>≤ 成立？</th></tr>
+          <tr><td>(0,0)</td><td>0</td><td>0</td><td>✓（取等）</td></tr>
+          <tr><td>(0,2)</td><td>0</td><td>4</td><td>✓</td></tr>
+          <tr><td>(1,0)</td><td>1</td><td>1</td><td>✓（取等）</td></tr>
+          <tr><td>(1,2)</td><td>1</td><td>1</td><td>✓（取等）</td></tr>
+        </table>
+      </div>
+      <p>对偶值 = 0.4×0 + 0.6×1 + 0.7×0 + 0.3×0 = <strong>0.6 = 原始值</strong>，强对偶验证完毕。再看取等的位置 (0,0)、(1,0)、(1,2)——恰好是最优耦合 π* 的三个非零元！这不是巧合：互补松弛（Complementary Slackness）说 πᵢⱼ &gt; 0 的位置必有 φᵢ+ψⱼ = cᵢⱼ。</p>
+    </div>
+
+    <p>一个重要的特例：当 c(x,y) = |x−y|（底距离本身）时，可以证明最优处 ψ = −φ 且 φ 是 1-Lipschitz 的，对偶坍缩成 <span class="term">Kantorovich–Rubinstein 公式</span>（Kantorovich–Rubinstein Duality）：</p>
+
+    <div class="formula">W₁(μ,ν) = max<sub>‖φ‖<sub>Lip</sub> ≤ 1</sub> ∫ φ dμ − ∫ φ dν</div>
+
+    <p>这个"对 Lipschitz 函数取最大期望差"的形式，就是第8章 WGAN 判别器的数学原型。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 一句话记住对偶</span>
+      <p>原始问题算"最小搬运费"，对偶问题算"外包公司敢报的最高价"，两者相等。对偶势 φ、ψ 不只是数学工具——它给每条运输路线发了"是否最省"的证书（互补松弛）。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 2.4-1</div>
+              <div class="q-text">写出 Kantorovich 对偶的目标与约束，并用外包公司定价的语言解释每个符号。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              max ∫φdμ+∫ψdν，s.t. φ(x)+ψ(y)≤c(x,y)。φ=装车费、ψ=卸货补贴；约束=报价不超过自搬市价；最大值=公司最高利润=你的最小代价。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 2.4-2</div>
+              <div class="q-text">互补松弛条件把对偶势与最优耦合的什么信息绑在一起？2×2 例里它在哪三个位置取等？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              πᵢⱼ&gt;0 ⟹ φᵢ+ψⱼ=cᵢⱼ（在用的路线报价顶格）。例中取等位置：(0,0)、(1,0)、(1,2)——正是 π* 的非零元。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <h2><span class="sec-no">🃏</span>概念卡：本章概念的一分钟画像</h2>
+    <p>翻面前先自问：这个概念我能用一句话讲清楚吗？</p>
+    <div class="flip-grid">
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 1</div>
+            <div class="q-text">传输映射（Transport Map）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">把 μ 每点 x 的质量整体送到 T(x) 的映射，须满足 T#μ = ν。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">Monge 问题的决策变量；描述"确定性"搬运。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">每堆土贴上唯一目的地标签，不许拆包。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为它总存在——单原子劈向多目标时无解。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">第5章 Brenier 定理（连续情形的存在性）与重采样应用。</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 2</div>
+            <div class="q-text">推前测度（Push-forward Measure）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">T#μ(B) = μ(T⁻¹(B))：集合 B 的新质量 = 其原像的旧质量。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">严格表达"映射后分布变成谁"。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">查户口：B 区的居民都从哪里来。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">写成 μ(T(B))——方向反了，是原像不是像。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">生成模型（生成器即推前）、第5–8章反复出现。</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 3</div>
+            <div class="q-text">耦合（Coupling）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">π(x,y) ≥ 0 且两个边际分别等于 μ 和 ν 的联合测度。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">替代映射，允许质量劈分，使问题永远有解且凸。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">一张出发地×目的地的流量表。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">忘了边际被钉死，把任意联合分布当耦合。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">全书计算的核心对象；第3章它就是 LP 的变量矩阵 P。</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 4</div>
+            <div class="q-text">边际约束（Marginal Constraints）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">∫πdy=μ、∫πdx=ν；离散情形即 P1=a、Pᵀ1=b。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">保证搬运收支平衡：土不增不减。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">流量表每行每列的合计必须对上账面。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为独立耦合之外的约束很难满足；其实它们只是线性等式。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">第3章 LP 的约束、第4章 Sinkhorn 迭代的唯一目标。</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 5</div>
+            <div class="q-text">分位数函数（Quantile Function）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">F⁻¹(t) = inf{x : F(x) ≥ t}，CDF 的广义逆。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">一维 OT 的闭式钥匙：W_p^p = ∫₀¹|F⁻¹−G⁻¹|ᵖdt。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">把分布摊平成 [0,1] 传送带，同刻度对齐即最优。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为高维也有类似闭式解；没有，高维只有数值算法。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">一维手算与理论分析；第3章一维 O(n log n) 算法的依据。</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 6</div>
+            <div class="q-text">Kantorovich 势（Dual Potentials）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">对偶变量 φ(x)、ψ(y)，满足 φ(x)+ψ(y)≤c(x,y) 并最大化 ∫φdμ+∫ψdν。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">给原始问题提供下界证书与经济解释。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">外包公司的装车费与卸货补贴报价单。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为 φ、ψ 各自有意义；真正有意义的是它们的和贴近 c 的程度。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">Kantorovich–Rubinstein（W₁ 的 Lipschitz 形式）、第8章 WGAN。</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <h2><span class="sec-no">📝</span>分层习题</h2>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>判断对错：Kantorovich 问题的最优耦合存在时，它一定对应某个 Monge 映射（即质量不需要劈分）。</div>
+      <details>
+        <summary>提示</summary>
+        <p>回想 2.2 节 2×2 例的最优解 π* = [[0.4,0],[0.3,0.3]]：x=1 的质量去了几个地方？</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p>错。2×2 例的最优耦合把 x=1 的 0.6 劈成 0.3+0.3 送往两处，任何映射都做不到这一点（映射要求 π 每行至多一个非零元）。一般地，最优耦合是映射当且仅当某种"非退化"条件成立（连续情形 μ 无原子时由 Brenier 类定理保证，第5章）；离散情形下最优解经常是真正劈分的。易错点：把"最优解存在"与"映射形式的最优解存在"混为一谈。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>选择：下列哪个对象一定属于 Π(μ,ν)？（A）最大化 ∫c dπ 的 π（B）独立耦合 μ⊗ν（C）满足 π≥0 的任意联合分布（D）最优对偶势 (φ,ψ)。</div>
+      <details>
+        <summary>提示</summary>
+        <p>Π 的定义只有两条边际约束加非负，逐个核对。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p>B。μ⊗ν 的两个边际天然就是 μ 和 ν，永远在 Π 里——这也证明了 Π 非空。A 错：最大化者未必在 Π 中（何况我们求最小）。C 错：任意非负联合分布的边际可以不是 μ、ν。D 错：对偶势是对偶问题的变量，不是耦合。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>μ = 0.5δ₀ + 0.5δ₂，ν = 0.5δ₁ + 0.5δ₃，c(x,y)=|x−y|²。先写出成本矩阵，参数化 Π(μ,ν)，再求最优耦合与最小代价。</div>
+      <details>
+        <summary>提示</summary>
+        <p>成本矩阵四个元素是 (0−1)²、(0−3)²、(2−1)²、(2−3)²；设 π₁₁=t 用边际约束推出其余三格与 t 的范围。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p>步骤1：C = [[1, 9], [1, 1]]（行 x=0,2；列 y=1,3）。</p>
+          <p>步骤2：π₁₁=t ⇒ π₁₂=0.5−t，π₂₁=0.5−t，π₂₂=t；非负要求 t∈[0, 0.5]。</p>
+          <p>步骤3：代价 = t + 9(0.5−t) + (0.5−t) + t = 5 − 8t，随 t 递减，取 t = 0.5。</p>
+          <p>步骤4：π* = [[0.5, 0], [0, 0.5]]，最小代价 = 5 − 4 = <strong>1</strong>。读法：0→1、2→3，各搬 0.5 单位、单位代价 1。本例最优解恰好是映射（对角耦合），与上一道 L1 题形成对照。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>μ = 0.25δ₀ + 0.25δ₁ + 0.5δ₃，ν = 0.5δ₂ + 0.5δ₄。用分位数函数手算 W₁ 与 W₂²。</div>
+      <details>
+        <summary>提示</summary>
+        <p>断点在 t = 0.25, 0.5, 1（μ）与 t = 0.5（ν）；合起来把 [0,1] 切成 [0,.25)、[.25,.5)、[.5,1] 三段。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p>步骤1：分段。F⁻¹：t∈[0,.25) 取 0，[.25,.5) 取 1，[.5,1] 取 3。G⁻¹：t∈[0,.5) 取 2，[.5,1] 取 4。</p>
+          <p>步骤2：三段距离 |[0,.25): |0−2|=2；[.25,.5): |1−2|=1；[.5,1]: |3−4|=1。</p>
+          <p>步骤3：W₁ = 0.25×2 + 0.25×1 + 0.5×1 = 0.5 + 0.25 + 0.5 = <strong>1.25</strong>。</p>
+          <p>步骤4：W₂² = 0.25×4 + 0.25×1 + 0.5×1 = 1 + 0.25 + 0.5 = <strong>1.75</strong>（W₂ ≈ 1.32）。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l3">L3 建模应用</span>某城市有 2 个仓库（存量 0.4、0.6）和 2 个商店（需求 0.7、0.3），单位运输成本是距离的平方，数据与 2.2 节 2×2 例相同。老板问："为什么不让仓库 1 也分担一点商店 2 的需求？" 用对偶势的语言向老板解释最优方案（0.4 留本地、0.3+0.3 从仓库 2 发出）为什么合理。</div>
+      <details>
+        <summary>提示</summary>
+        <p>用对偶势 φ=(0,1)、ψ=(0,0) 算出每条路线的"报价余量" c − φ − ψ，看哪条路线余量最大。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p>对偶势 φ=(0,1)、ψ=(0,0) 给出各路线报价余量：(0→店1) 0−0−0=0（顶格在用）；(1→店1) 1−1−0=0（顶格在用）；(1→店2) 1−1−0=0（顶格在用）；(0→店2) 4−0−0=4（余量 4，闲置）。</p>
+          <p>解释：仓库 1 → 商店 2 的自搬市价是 4，而公司报价只有 0——走这条路每单位要亏 4 的"机会成本"，所以最优方案一克都不走（互补松弛：余量 &gt; 0 的路线 π=0）。仓库 1 的 0.4 全部就近供给店 1 是免费的；店 1 剩余 0.3 需求与店 2 的 0.3 由仓库 2 以单位成本 1 供应。</p>
+          <p>建模要点：成本用距离平方会强烈惩罚长途（4 vs 1），最优解倾向于"近处饱和供应"；若成本改为距离本身，结论会不同——成本函数的选择本身就是业务决策。</p>
+        </div>
+      </details>
+    </div>
+
+    <h2><span class="sec-no">✍️</span>本章自测</h2>
+    <p class="quiz-hint">点击选项判分，答错会给出原因。</p>
+
+    <div class="quiz-block" data-answer="c">
+      <div class="q-no">自测 1</div>
+      <div class="q-stem">μ=δ₀、ν=0.5δ₋₁+0.5δ₁，下列说法正确的是：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. Monge 问题有解，代价为 1</li>
+        <li data-opt="b">B. Kantorovich 问题无解</li>
+        <li data-opt="c">C. Monge 无解，Kantorovich 最优代价为 1</li>
+        <li data-opt="d">D. 两者都有解且最优值不同</li>
+      </ul>
+      <div class="quiz-explain">解析：映射劈不开 δ₀ 的质量，Monge 无解；耦合允许 0.5/0.5 劈分，代价 0.5×1+0.5×1=1，选 C。A、D 错在以为映射存在；B 错在把 Monge 的无解误传给 Kantorovich——松弛正是为修复它而生。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 2</div>
+      <div class="q-stem">离散情形下，耦合矩阵 P ∈ ℝⁿˣᵐ 必须满足的条件是：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 每行至多一个非零元</li>
+        <li data-opt="b">B. P ≥ 0，行和为 a，列和为 b</li>
+        <li data-opt="c">C. P 是置换矩阵</li>
+        <li data-opt="d">D. P 的秩为 1</li>
+      </ul>
+      <div class="quiz-explain">解析：边际约束 P1=a、Pᵀ1=b 加非负，就是全部，选 B。A、C 错在把 Monge 映射的刚性混进来（那是不许劈分的要求）；D 错：秩 1 的是独立耦合 abᵀ，只是 Π 中的一个元素而非要求。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="a">
+      <div class="q-no">自测 3</div>
+      <div class="q-stem">μ = 0.3δ₁ + 0.3δ₂ + 0.4δ₅，ν = 0.5δ₀ + 0.5δ₄，用分位数公式算得 W₁ = ？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 1.3</li>
+        <li data-opt="b">B. 1.9</li>
+        <li data-opt="c">C. 0.9</li>
+        <li data-opt="d">D. 2.6</li>
+      </ul>
+      <div class="quiz-explain">解析：分段 0.3×1+0.2×2+0.1×2+0.4×1 = 1.3，选 A。B 错在算了 W₂²（平方后积分）；C 错在漏掉 [0.5,0.6) 这段 0.1×2；D 错在把每段距离加倍——忘了区间长度就是质量。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="d">
+      <div class="q-no">自测 4</div>
+      <div class="q-stem">Kantorovich 对偶中约束 φ(x)+ψ(y)≤c(x,y) 的经济含义是：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 公司每条路线都要盈利</li>
+        <li data-opt="b">B. 势函数不能超过 1</li>
+        <li data-opt="c">C. 装车费必须为正</li>
+        <li data-opt="d">D. 公司的组合报价不能超过客户自搬的市价</li>
+      </ul>
+      <div class="quiz-explain">解析：选 D——报价若超过自搬成本，客户就自己搬了，公司失去生意。A 错：个别路线报价可以低于成本（只要组合不超）。B 错：1-Lipschitz 是 c=|x−y| 特例的结论，不是一般约束。C 错：势可以取负（例中 ψ=0、φ 可平移），重要的是 φ+ψ 与 c 的关系。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 5</div>
+      <div class="q-stem">2×2 例中（C=[[0,4],[1,1]]，a=(0.4,0.6)，b=(0.7,0.3)），取 φ=(0,1)、ψ=(0,0)，对偶值是：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 0.4</li>
+        <li data-opt="b">B. 0.6</li>
+        <li data-opt="c">C. 1.0</li>
+        <li data-opt="d">D. 2.2</li>
+      </ul>
+      <div class="quiz-explain">解析：0.4×0+0.6×1+0.7×0+0.3×0 = 0.6 = 原始最优值，选 B。A 错在只加了一个边际；C 错在把权重全当 1；D 错在把参数化代价的截距 2.2 当成答案——那是 t=0 时的（次优）代价。</div>
+    </div>
+
+    <div class="retell">
+      <h3>🗣️ 用自己的话，三句话讲完本章</h3>
+      <p>对着空气（或室友）说出这三句。说卡壳的那句，回去重读对应小节。</p>
+      <details>
+        <summary>句1：这章解决什么问题？——</summary>
+        <div class="retell-answer">参考答案：把第1章"最小搬运代价"的直觉严格化。Monge 用映射定义但不许劈分质量、可能无解；Kantorovich 改用耦合（流量表）定义，凸、非空、线性，永远可解。</div>
+      </details>
+      <details>
+        <summary>句2：核心机制是什么？——</summary>
+        <div class="retell-answer">参考答案：耦合 π∈Π(μ,ν) 满足两条边际约束，最小化 ∫c dπ 是 LP；一维时有分位数闭式解（单调重排），一般情形有对偶 max∫φdμ+∫ψdν（s.t. φ+ψ≤c），强对偶成立且互补松弛给出最优性证书。</div>
+      </details>
+      <details>
+        <summary>句3：它和前后章怎么分工？——</summary>
+        <div class="retell-answer">参考答案：本章只定义问题与结构（耦合、一维闭式、对偶）；第3章把 LP 真算出来（北西角、运输单纯形、复杂度）；第4章用熵正则把 LP 变成可并行的 Sinkhorn 迭代。</div>
+      </details>
+    </div>
+
+    <div class="review-plan">
+      <h3>🔁 间隔复习计划</h3>
+      <p>回忆本身比重读有效 10 倍。到点只做一件事：翻卡 + 重做标记题。</p>
+      <table>
+        <tr><th>时间点</th><th>复习内容</th><th>预计用时</th></tr>
+        <tr><td>第 1 天</td><td>概念卡 1–6 全部 + 回忆卡 2.2-1、2.3-1</td><td>12 分钟</td></tr>
+        <tr><td>第 3 天</td><td>概念卡 3、5、6 + 重做 L2 两题（2×2 参数化与分位数）</td><td>10 分钟</td></tr>
+        <tr><td>第 7 天</td><td>三句话复述 + 自测错题 + 回忆卡全部</td><td>10 分钟</td></tr>
+        <tr><td>第 15 天</td><td>只做合上书挑战；能全过就毕业</td><td>15 分钟</td></tr>
+      </table>
+    </div>
+
+    <div class="final-challenge">
+      <h3>📕 合上书挑战</h3>
+      <p class="fc-sub">现在关掉这个页面，拿一张纸，凭记忆完成以下任务。全部做完再回来核对——这是本章真正的毕业考试。</p>
+      <ol id="challenge-list">
+        <li><span class="fc-check"></span>写出 Monge 问题（目标+推前约束），并用 δ₀→0.5δ₋₁+0.5δ₁ 说明它为何无解</li>
+        <li><span class="fc-check"></span>写出 Π(μ,ν) 的两条边际约束，并证明它非空（给出一个总在里面的耦合）</li>
+        <li><span class="fc-check"></span>在 C=[[0,4],[1,1]]、a=(0.4,0.6)、b=(0.7,0.3) 上参数化耦合并求出最优解 0.6</li>
+        <li><span class="fc-check"></span>写出分位数公式 W_p^p=∫₀¹|F⁻¹−G⁻¹|ᵖdt，并对 μ=0.3δ₁+0.3δ₂+0.4δ₅、ν=0.5δ₀+0.5δ₄ 算出 W₁=1.3</li>
+        <li><span class="fc-check"></span>写出 Kantorovich 对偶，用外包公司语言解释，并在 2×2 例上验证强对偶 0.6=0.6</li>
+        <li><span class="fc-check"></span>回答本章的主线问题："最小搬运代价"的严格数学对象是什么？（一句话）</li>
+      </ol>
+    </div>
+
+    <div class="complete-zone">
+      <button class="btn-complete" id="btn-complete" onclick="markDone()">✓ 我已完成本章（含合上书挑战）</button>
+    </div>
+
+    <div class="chapter-nav">
+      <a href="chapter-01.html"><span class="nav-dir">← 上一章</span>第1章 引言：从搬运土方到概率度量</a>
+      <a href="chapter-03.html" class="next"><span class="nav-dir">下一章 →</span>第3章 离散最优传输与线性规划</a>
+    </div>
+
+  </div>
+</div>
+
+<footer class="footer">
+  <div class="wrap">第2章 Monge 与 Kantorovich 问题 · 最优传输互动讲义 · 基于 Peyré &amp; Cuturi (2019)</div>
+</footer>
+
+<script src="/lectures-assets/mermaid.min.js"></script>
+<script>
+mermaid.initialize({
+  startOnLoad: true,
+  theme: "base",
+  themeVariables: {
+    primaryColor: "#e3edf7",
+    primaryBorderColor: "#1d5f9e",
+    primaryTextColor: "#1d5f9e",
+    lineColor: "#5c554b",
+    secondaryColor: "#fbeedd",
+    tertiaryColor: "#f5f1e8",
+    fontFamily: "-apple-system, PingFang SC, sans-serif",
+    fontSize: "14px"
+  },
+  flowchart: { curve: "linear", htmlLabels: false }
+});
+</script>
+<script>
+// 自测题判分
+document.querySelectorAll(".quiz-block").forEach(block => {
+  const answer = block.dataset.answer;
+  const explain = block.querySelector(".quiz-explain");
+  block.querySelectorAll(".quiz-opts li").forEach(li => {
+    li.addEventListener("click", () => {
+      const opts = block.querySelectorAll(".quiz-opts li");
+      opts.forEach(o => o.classList.add("disabled"));
+      if (li.dataset.opt === answer) {
+        li.classList.add("correct");
+      } else {
+        li.classList.add("wrong");
+        block.querySelector(`[data-opt="${answer}"]`).classList.add("correct");
+      }
+      explain.classList.add("show");
+    });
+  });
+});
+
+// 合上书清单打勾
+document.querySelectorAll("#challenge-list li").forEach(li => {
+  li.addEventListener("click", () => li.classList.toggle("checked"));
+});
+
+// 完成标记 → localStorage
+const KEY = "ot_progress_v1";
+const CH = "2";
+function loadProgress() {
+  try { return JSON.parse(localStorage.getItem(KEY)) || {}; } catch (e) { return {}; }
+}
+const progress = loadProgress();
+const btn = document.getElementById("btn-complete");
+if (progress[CH] && progress[CH].done) {
+  btn.textContent = "✓ 已完成 · 再次点击重置";
+  btn.classList.add("done");
+}
+function markDone() {
+  const p = loadProgress();
+  if (p[CH] && p[CH].done) {
+    delete p[CH];
+    btn.textContent = "✓ 我已完成本章（含合上书挑战）";
+    btn.classList.remove("done");
+  } else {
+    p[CH] = { done: true, completedAt: Date.now(), reviewsDone: 0 };
+    btn.textContent = "✓ 已完成 · 复习提醒已开启";
+    btn.classList.add("done");
+  }
+  localStorage.setItem(KEY, JSON.stringify(p));
+}
+</script>
+
+</body>
+</html>

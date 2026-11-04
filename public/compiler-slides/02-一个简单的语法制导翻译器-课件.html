@@ -1,0 +1,607 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第2章 一个简单的语法制导翻译器 · 编译原理课件</title>
+<script>
+window.MathJax = {
+  tex: {
+    inlineMath: [['$', '$'], ['\\(', '\\)']],
+    displayMath: [['$$', '$$'], ['\\[', '\\]']],
+    processEscapes: true,
+    tags: 'none'
+  },
+  svg: { fontCache: 'global', scale: 1.05 },
+  options: { skipHtmlTags: ['script','noscript','style','textarea','pre','code'] }
+};
+</script>
+<script src="/lectures-assets/tex-svg.js" async></script>
+<style>
+  :root{
+    --primary:#1a365d; --accent:#2b6cb0; --accent-light:#ebf8ff; --accent-border:#bee3f8;
+    --text:#2d3748; --muted:#718096; --border:#e2e8f0; --bg-light:#f7fafc;
+    --success:#38a169; --danger:#e53e3e; --warning:#dd6b20; --warn-bg:#fffaf0;
+  }
+  *{margin:0;padding:0;box-sizing:border-box;}
+  html,body{width:100%;height:100%;overflow:hidden;background:#0f172a;}
+  body{
+    font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Hiragino Sans GB","Microsoft YaHei","WenQuanYi Micro Hei",sans-serif;
+    color:var(--text);
+  }
+  #stage{
+    position:absolute; left:50%; top:50%;
+    width:1280px; height:720px;
+    transform:translate(-50%,-50%) scale(1);
+    transform-origin:center center;
+    background:#ffffff;
+    box-shadow:0 0 40px rgba(0,0,0,.4);
+    overflow:hidden;
+  }
+  .slide{
+    position:absolute; inset:0;
+    padding:36px 60px 52px;
+    display:none;
+    flex-direction:column;
+    background:#ffffff;
+    opacity:0;
+    transition:opacity .35s ease;
+  }
+  .slide.active{ display:flex; opacity:1; }
+
+  #progress{ position:absolute; top:0; left:0; height:6px; background:var(--accent); width:0; z-index:50; transition:width .35s; }
+
+  /* 封面 / 结束页 */
+  .slide-cover{ justify-content:center; align-items:center; text-align:center; }
+  .slide-cover{ background:linear-gradient(135deg,#1a365d 0%,#2b6cb0 100%); color:#fff; }
+  .slide-cover .kicker{ font-size:22px; letter-spacing:6px; opacity:.85; margin-bottom:18px;}
+  .slide-cover h1{ font-size:64px; font-weight:800; line-height:1.2; margin-bottom:22px; letter-spacing:2px;}
+  .slide-cover .sub{ font-size:26px; opacity:.92; margin-bottom:36px;}
+  .slide-cover .meta{ font-size:19px; opacity:.85; line-height:2;}
+  .slide-cover .divider{ width:160px;height:5px;background:#fff;opacity:.6;margin:0 auto 30px;border-radius:3px;}
+  .slide-cover .question{ font-size:24px; background:rgba(255,255,255,.12); border:1px solid rgba(255,255,255,.35); border-radius:12px; padding:12px 28px; margin-bottom:30px;}
+
+  /* 页头：结论式标题 */
+  .slide-head{ display:flex; align-items:baseline; gap:16px; border-bottom:3px solid var(--accent); padding-bottom:9px; margin-bottom:12px;}
+  .slide-head .sec{ font-size:17px; color:var(--accent); font-weight:700; background:var(--accent-light); padding:3px 11px; border-radius:6px; white-space:nowrap;}
+  .slide-head h3{ font-size:29px; color:var(--primary); font-weight:700;}
+  .slide-body{ flex:1; display:flex; flex-direction:column; justify-content:center; min-height:0; }
+
+  p{ font-size:21px; line-height:1.65; margin-bottom:8px;}
+  .lead{ font-size:23px; color:#374151; line-height:1.75;}
+  ul,ol{ margin:0 0 8px 26px; font-size:21px; line-height:1.7;}
+  li{ margin-bottom:5px;}
+  strong{ color:var(--primary); }
+
+  /* 公式块 */
+  .formula{ background:var(--accent-light); border-left:5px solid var(--accent); border-radius:0 10px 10px 0; padding:9px 22px; margin:9px 0; text-align:center; font-size:23px;}
+  .formula-concl{ background:#fffaf0; border-left:5px solid var(--warning);}
+  .MathJax{ font-size:1.05em !important; }
+  mjx-container[display="true"]{ margin:6px 0 !important; }
+
+  /* 表格 */
+  table{ width:100%; border-collapse:collapse; margin:10px 0; font-size:20px;}
+  th{ background:var(--accent); color:#fff; padding:8px 12px; text-align:center; font-weight:600;}
+  td{ padding:7px 12px; border:1px solid var(--border); text-align:center; vertical-align:middle;}
+  tr:nth-child(even) td{ background:var(--bg-light);}
+  td.l{ text-align:left; }
+  table.small{ font-size:18px; }
+  table.small td, table.small th{ padding:6px 10px; }
+
+  /* 组件 */
+  .card{ background:var(--accent-light); border:1px solid var(--accent-border); border-radius:12px; padding:12px 20px; margin:10px 0;}
+  .tip{ background:#ebf8ff; border-left:5px solid var(--accent); border-radius:0 10px 10px 0; padding:10px 20px; margin:10px 0; font-size:20px; color:#2c5282;}
+  .deep{ background:#f0fff4; border-left:5px solid var(--success); border-radius:0 10px 10px 0; padding:10px 20px; margin:10px 0; font-size:20px; color:#22543d;}
+  .warn{ background:var(--warn-bg); border-left:5px solid var(--warning); border-radius:0 10px 10px 0; padding:10px 20px; margin:10px 0; font-size:20px; color:#744210;}
+  .trap{ background:#fef2f2; border-left:5px solid var(--danger); border-radius:0 10px 10px 0; padding:10px 20px; margin:10px 0; font-size:20px; color:#7f1d1d;}
+
+  .pause{
+    background:var(--warn-bg); border:2px dashed var(--warning); border-radius:14px;
+    padding:10px 22px; margin:10px 0; display:flex; align-items:center; gap:16px;
+  }
+  .pause .icon{ font-size:36px; line-height:1; }
+  .pause .txt b{ color:var(--warning); font-size:21px; }
+  .pause .txt p{ font-size:18px; color:#744210; margin:3px 0 0; }
+
+  .cols{ display:flex; gap:28px; align-items:stretch; }
+  .col{ flex:1; min-width:0; }
+
+  /* 推导分步：仅互动模式隐藏，截图(autohide)模式全部可见——此规则不可删 */
+  .step{ opacity:0; transform:translateY(8px); transition:opacity .3s ease, transform .3s ease; }
+  .step.on{ opacity:1; transform:none; }
+  body.autohide .step{ opacity:1 !important; transform:none !important; }
+  .step-hint{ font-size:14px; color:var(--muted); margin-top:4px;}
+  body.autohide .step-hint{ display:none; }
+
+  /* 因果链 */
+  .chain{ margin:6px 0; }
+  .chain .link{ display:flex; align-items:center; gap:14px; margin:6px 0;}
+  .chain .no{ width:34px; height:34px; border-radius:50%; background:var(--accent); color:#fff; font-size:18px; font-weight:700; display:flex; align-items:center; justify-content:center; flex-shrink:0;}
+  .chain .txt{ font-size:21px; line-height:1.5;}
+  .chain .txt strong{ color:var(--primary); }
+
+  /* mermaid 容器：高度封顶，防止溢出 720px 舞台 */
+  .mmd{ background:var(--bg-light); border:1px solid var(--border); border-radius:12px; padding:10px 14px; display:flex; justify-content:center; align-items:center; margin:8px 0;}
+  .mmd .mermaid{ display:flex; justify-content:center; width:100%; visibility:hidden; }
+  .mmd .mermaid[data-done]{ visibility:visible; }
+  .mmd .mermaid svg{ max-width:100%; height:auto; max-height:230px; }
+  .mmd.mmd-tall .mermaid svg{ max-height:330px; }
+  .mmd.mmd-sm svg{ max-height:150px; }
+  .mmd-row{ display:flex; gap:18px; }
+  .mmd-row .mmd{ flex:1; flex-direction:column; }
+  .mmd .cap{ font-size:17px; color:var(--muted); margin-top:6px; text-align:center;}
+  .mmd .cap b{ color:var(--text); }
+
+  #footer{ position:absolute; bottom:0; left:0; right:0; height:40px; display:flex; align-items:center; justify-content:space-between; padding:0 30px; font-size:15px; color:#94a3b8; background:rgba(247,250,252,.85); border-top:1px solid var(--border); z-index:40;}
+  #footer .brand{ font-weight:600; color:var(--accent); }
+
+  .nav{ position:absolute; bottom:48px; right:40px; display:flex; gap:12px; z-index:45;}
+  .nav button{ width:54px; height:54px; border-radius:50%; border:none; background:var(--accent); color:#fff; font-size:24px; cursor:pointer; box-shadow:0 3px 10px rgba(43,108,176,.4); display:flex; align-items:center; justify-content:center;}
+  .nav button:hover{ background:var(--primary); }
+  .nav button:disabled{ background:#cbd5d0; cursor:default; box-shadow:none;}
+
+  #hint{ position:absolute; bottom:48px; left:40px; font-size:14px; color:#94a3b8; z-index:45;}
+
+  body.autohide #progress, body.autohide #footer, body.autohide .nav, body.autohide #hint{ display:none !important; }
+</style>
+</head>
+<body>
+<div id="stage">
+
+  <div id="progress"></div>
+
+  <section class="slide slide-cover active" data-narration="你好，欢迎回来。上一章我们把编译器拆成七个阶段的流水线，画出了全景地图，但每个格子还只是个名字。这一章立刻动手，回答一个很实在的问题：只靠一份文法，不借助任何自动生成工具，能不能直接手写一个能跑的翻译器？最小可行的编译器又长什么样？我们的目标是造一个中缀转后缀的翻译器：输入九减五加二，输出九五减二加。它小到扫描器手写、分析器手写、翻译动作就是直接打印。学完本章，你就能独立写出这个全书最小可行的编译器，还会看清后面每一章都在给它换什么零件。">
+    <div class="kicker">编译原理 · 第 2 章 · 第①段 前端：词法与语法</div>
+    <h1>一个简单的语法制导翻译器</h1>
+    <div class="sub">A Simple Syntax-Directed Translator —— 全书第一个最小可行编译器</div>
+    <div class="question">本章要回答：只靠「语法」能不能直接造出一个能跑的翻译器？最小可行的编译器长什么样？</div>
+    <div class="meta">
+      配套讲义：《编译原理互动讲义》第2章 · 基于 Aho/Lam/Sethi/Ullman《编译原理》（第2版）<br>
+      ← → 或空格翻页 · 推导页逐步显示
+    </div>
+  </section>
+
+  <section class="slide" data-narration="先定位。全书分四段：第一段前端词法与语法，覆盖前四章，本章就在这一段；后面依次是语义与中间代码、后端与优化、全书收束。上一章给了我们什么？一张七阶段流水线的全景地图，但地图还不会跑。本章解决什么？只凭一份文法，手造一个最小可行的翻译器，把词法、语法、翻译三个环节压进一个小程序。本章往下一章交什么？交一笔账：扫描器是手写的，第三章要用正则表达式和有穷自动机把它机械化。记住这个坐标，后面每一章都在还本章欠下的手工账。">
+    <div class="slide-head"><span class="sec">定位</span><h3>本章把第1章的地图跑成一台能动的最小翻译器</h3></div>
+    <div class="slide-body">
+      <div class="mmd">
+        <div class="mermaid">
+flowchart TB
+  A["第①段 前端：词法与语法<br>Ch1–4 · 本章在此"]:::here --> B["第②段 语义与中间代码<br>Ch5–7"]
+  B --> C["第③段 后端与优化<br>Ch8–11"]
+  C --> D["第④段 全书收束<br>Ch12"]
+  classDef here fill:#2b6cb0,color:#ffffff,stroke:#1a365d,stroke-width:3px
+        </div>
+      </div>
+      <table class="small" style="margin-top:6px;">
+        <thead><tr><th>承接关系</th><th>章节</th><th>一句话</th></tr></thead>
+        <tbody>
+          <tr><td class="l"><strong>从哪来</strong></td><td class="l">第1章 编译器全景（引论）</td><td class="l">给了七阶段流水线全景地图，但每格还只是名字</td></tr>
+          <tr><td class="l"><strong>本章做什么</strong></td><td class="l">第2章 语法制导翻译器</td><td class="l">只凭文法手造最小可行翻译器，词法、语法、翻译三环跑通</td></tr>
+          <tr><td class="l"><strong>交给谁</strong></td><td class="l">第3章 词法分析</td><td class="l">把手写扫描器机械化：正则表达式 + 有穷自动机</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="slide" data-narration="本章主线就一条链，五环。第一环，我们要机械地判定一个串合不合法，自然语言描述做不到，于是引入上下文无关文法，给语言定形状。第二环，光判合法不够，还要翻译，于是把动作挂进产生式右部，位置就是执行时机。第三环，照抄文法写函数会撞上左递归，函数一口输入不吃就调自己，必须消除。第四环，消除之后每个非终结符对应一个函数，递归下降的调用顺序恰好就是注释分析树的深度优先遍历。第五环，配上手写扫描器和符号表，最小翻译器跑通，机械化的活儿留给第三章和第四章。">
+    <div class="slide-head"><span class="sec">主线</span><h3>从一份文法到一台能跑的翻译器，本章只走五步</h3></div>
+    <div class="slide-body">
+      <div class="chain">
+        <div class="link"><span class="no">1</span><span class="txt">要机械判定合法串 → <strong>上下文无关文法</strong>给语言定形状</span></div>
+        <div class="link"><span class="no">2</span><span class="txt">要翻译 → <strong>翻译方案</strong>把动作挂进产生式右部，位置即时机</span></div>
+        <div class="link"><span class="no">3</span><span class="txt">照抄文法写函数 → 撞上<strong>左递归</strong>，原地爆炸必须消除</span></div>
+        <div class="link"><span class="no">4</span><span class="txt">消除后<strong>每个非终结符一个函数</strong>，调用顺序 = 深度优先遍历</span></div>
+        <div class="link"><span class="no">5</span><span class="txt">配上手写扫描器与符号表 → <strong>最小翻译器跑通</strong>，机械化留给 Ch3/4</span></div>
+      </div>
+      <div class="tip">这条链就是本章的目录：文法（2.1）→ 翻译方案（2.2）→ 预测分析（2.3）→ 组装（2.4）。</div>
+    </div>
+  </section>
+
+  <section class="slide" data-narration="先看一个最朴素的拷问：九减五加二合法，九减加五不合法，你凭什么一眼看出来？你可能会说，数字和运算符交替出现就行了。但交替是什么意思？开头能不能是减号？两个减号能不能挨着？自然语言一到边界就含糊，而编译器是机器，必须有一条毫不含糊的判定规则。那把合法串全部枚举出来行不行？不行，合法串有无穷多个，永远列不完。出路就是本章的主角，上下文无关文法：用有限的几条产生式，生成并判定无限多个合法串。下一页看它的四个部件。">
+    <div class="slide-head"><span class="sec">动机</span><h3>「大概长这样」交给不了机器，合法串必须有机械的判定规则</h3></div>
+    <div class="slide-body">
+      <p class="lead">9-5+2 合法，9-+5 不合法——你凭什么一眼看出来？编译器也需要同样的一眼，但它只认规则。</p>
+      <div class="cols">
+        <div class="col"><div class="card">😇 <strong>自然语言描述</strong><br>「数字和运算符交替出现」——人能懂，机器没法执行；开头能不能是减号？两个减号能不能挨着？一到边界就含糊。</div></div>
+        <div class="col"><div class="card">🙂 <strong>逐个枚举合法串</strong><br>合法串有无穷多个：9、9-5、9-5+2、9-5+2-3……永远枚举不完，更谈不上判定。</div></div>
+      </div>
+      <div class="tip">💡 本章方案：<strong>上下文无关文法（CFG）</strong>——用有限的几条产生式，生成并判定无限多个合法串。</div>
+    </div>
+  </section>
+
+  <section class="slide" data-narration="上下文无关文法是个四元组，四个部件挨个看。终结符，语言里真正出现的基本符号，比如数字零到九、加号减号，它们是推导的终点，不能再展开。非终结符，语法变量，代表一类串，比如 list 和 digit，可以被产生式继续展开。开始符号，指定一个非终结符当推导起点，本章是 list。产生式，形如左部箭头右部的替换规则，左部必须是一个非终结符。这里埋着全章第一个坑：digit 到底是终结符还是非终结符？判断标准只有一个，能不能出现在产生式左部。digit 能，所以它是非终结符。">
+    <div class="slide-head"><span class="sec">定义</span><h3>上下文无关文法就四个部件：终结符、非终结符、开始符号、产生式</h3></div>
+    <div class="slide-body">
+      <div class="cols">
+        <div class="col"><div class="card">🔤 <strong>终结符</strong>（Terminal）<br>语言里实际出现的基本符号：0–9、+、-。推导的终点，不能再展开。</div></div>
+        <div class="col"><div class="card">🧩 <strong>非终结符</strong>（Nonterminal）<br>语法变量，代表「一类串」：list、digit。可以被产生式继续展开。</div></div>
+      </div>
+      <div class="cols">
+        <div class="col"><div class="card">🚩 <strong>开始符号</strong>（Start Symbol）<br>指定一个非终结符作为推导起点，本章是 list（或 expr）。</div></div>
+        <div class="col"><div class="card">📏 <strong>产生式</strong>（Production）<br>形如「左部 → 右部」的替换规则：左部是一个非终结符，右部是终结符与非终结符的串。</div></div>
+      </div>
+      <div class="deep">判断终结还是非终结，标准只有一个：<strong>能否出现在产生式左部被继续展开</strong>。digit → 0|…|9，所以 digit 是非终结符；9 才是终结符。</div>
+    </div>
+  </section>
+
+  <section class="slide" data-narration="把四元组填上料，就得到本章第一份文法。list 有三条备选：list 加 digit，list 减 digit，或者本身就是一个 digit；digit 展开成零到九的任何一个数字。读一遍：一个加减表达式，要么是表达式加减一位数字，要么本身就是一位数字，竖线读作或。接下来一个动作叫推导：从开始符号出发，反复用产生式替换非终结符，直到串里只剩终结符。如果每一步都替换当前句型中最左边的那个非终结符，就叫最左推导。下一页拿九减五加二，一步不跳地推一遍。">
+    <div class="slide-head"><span class="sec">文法</span><h3>两条产生式，定义了全部一位数加减表达式</h3></div>
+    <div class="slide-body">
+      <div class="formula formula-concl">list → list + digit &nbsp;|&nbsp; list - digit &nbsp;|&nbsp; digit<br>digit → 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9</div>
+      <p>读法：list 是「加减表达式」——要么是「表达式 加/减 一位数字」，要么本身就是一位数字；竖线 | 读作「或」。</p>
+      <div class="tip"><strong>推导</strong>（Derivation）：从开始符号出发，反复用产生式替换非终结符，直到串里只剩终结符。每步都替换当前句型中<strong>最左边的非终结符</strong>，就叫<strong>最左推导</strong>（Leftmost Derivation）。</div>
+    </div>
+  </section>
+
+  <section class="slide" data-narration="七步最左推导，盯住每步最左边的非终结符。第零步只有 list。第一步，根部的 list 展开成 list 加 digit，注意，这对应的是最右边的加二。第二步，里面那层 list 再展开成 list 减 digit，对应减五。为什么先拆右边？因为加减从左向右结合，先算九减五再加二，树的嵌套顺序就是这个结合顺序。第三步，最左的 list 收成 digit；第四五六步，三个 digit 依次落成九、五、二。每步只用一条产生式，只动最左的非终结符，这就是最左推导的全部纪律。下一页把这七步画成一棵树。">
+    <div class="slide-head"><span class="sec">推导</span><h3>七步最左推导：每步只动最左边的非终结符</h3></div>
+    <div class="slide-body">
+      <table class="small">
+        <thead><tr><th>步</th><th>当前句型</th><th>本步所用产生式</th></tr></thead>
+        <tbody>
+          <tr><td>0</td><td class="l">list</td><td class="l">（开始符号）</td></tr>
+          <tr><td>1</td><td class="l">list + digit</td><td class="l">list → list + digit</td></tr>
+          <tr><td>2</td><td class="l">list - digit + digit</td><td class="l">list → list - digit</td></tr>
+          <tr><td>3</td><td class="l">digit - digit + digit</td><td class="l">list → digit</td></tr>
+          <tr><td>4</td><td class="l">9 - digit + digit</td><td class="l">digit → 9</td></tr>
+          <tr><td>5</td><td class="l">9 - 5 + digit</td><td class="l">digit → 5</td></tr>
+          <tr><td>6</td><td class="l">9 - 5 + 2</td><td class="l">digit → 2</td></tr>
+        </tbody>
+      </table>
+      <div class="tip">第 1、2 步先展开最右边的 +2、再展开 -5：加、减<strong>从左向右结合</strong>（先算 9-5），推导的嵌套顺序就是结合顺序。</div>
+    </div>
+  </section>
+
+  <section class="slide" data-narration="把推导画成树，就是分析树。根是开始符号，内部节点是非终结符，叶子从左到右横着读，恰好是原串九减五加二。节点超过八个，图拆成两半看：左图是上半骨架，根 list 拆出加号和右边的 digit，里面那层 list 再拆出减号；右图是叶子层，三个 digit 分别落成九、五、二。盯嵌套：减号比加号离叶子更近，所以先算九减五，这就是左结合在树上的长相。最后说一句二义性：同一个串若能长出两棵不同的树，文法就二义了，那是编译器的灾难。本章所有文法都特意设计成无二义，推导和树一一对应，放心用。">
+    <div class="slide-head"><span class="sec">分析树</span><h3>分析树是推导的图形证据：叶子横读是原串，嵌套就是左结合</h3></div>
+    <div class="slide-body">
+      <div class="mmd-row">
+        <div class="mmd">
+          <div class="mermaid">
+flowchart TB
+  R["list 根"] --> A["list 中层"]
+  R --> P["+"]
+  R --> D3["digit"]
+  A --> B["list 内层"]
+  A --> M["-"]
+  A --> D2["digit"]
+          </div>
+          <div class="cap"><b>上半骨架</b><br>根拆出 +，中层再拆出 -</div>
+        </div>
+        <div class="mmd">
+          <div class="mermaid">
+flowchart TB
+  B["list 内层"] --> D1["digit"]
+  D1 --> L9["9"]
+  D2["digit"] --> L5["5"]
+  D3["digit"] --> L2["2"]
+          </div>
+          <div class="cap"><b>叶子层</b><br>三个 digit 落成 9、5、2，横读得 9-5+2</div>
+        </div>
+      </div>
+      <div class="warn" style="margin-top:8px;"><strong>二义性</strong>（Ambiguity）一句话：同一串若能长出两棵不同的分析树，文法就二义了——树不同，含义就不同。本章所有文法都特意设计成<strong>无二义</strong>，推导与树一一对应。</div>
+    </div>
+  </section>
+
+  <section class="slide" data-narration="会判合法还不够，编译器要的是翻译。能不能不另写翻译程序，直接在文法上顺手完成？能，这就是语法制导翻译。它分两层，务必分清。第一层叫语法制导定义，SDD：给每个文法符号关联属性，给每条产生式关联语义规则，只说要算什么，比如表达式的翻译等于子表达式的翻译拼接上加号，但它不管计算顺序。第二层叫翻译方案：把花括号包着的动作，直接嵌进产生式右部的具体位置。记住这八个字：位置即时机。动作写在哪儿，分析走到哪儿就执行。下一页看本章的核心翻译方案。">
+    <div class="slide-head"><span class="sec">概念</span><h3>SDD 只管「算什么」，翻译方案把动作嵌进右部，位置即时机</h3></div>
+    <div class="slide-body">
+      <div class="cols">
+        <div class="col"><div class="card">📐 <strong>语法制导定义</strong>（SDD）<br>给每个文法符号关联<strong>属性</strong>，给每条产生式关联<strong>语义规则</strong>——只说明要算什么，不规定计算顺序。</div></div>
+        <div class="col"><div class="card">🎬 <strong>翻译方案</strong>（Translation Scheme）<br>把 { 动作 } 直接用花括号嵌进产生式<strong>右部的具体位置</strong>——写在哪，分析走到那就执行。</div></div>
+      </div>
+      <div class="deep">关键八个字：<strong>位置即时机</strong>。SDD 不谈顺序；翻译方案的顺序就是生命线——同一个动作，写开头是前缀，写末尾是后缀。</div>
+    </div>
+  </section>
+
+  <section class="slide" data-narration="目标：把中缀表达式翻成后缀表达式，运算符写在两个运算对象之后，九减五加二变成九五减二加。方案长这样：expr 加 term 这条产生式，末尾挂动作打印加号；expr 减 term，末尾挂打印减号；term 是数字几，就打印几。直觉很直白：动作写在右部末尾，意思是子表达式和右操作数都翻译完了，最后才输出运算符。先两边、后运算符，这正是后缀记法的定义。注意，一个字符都挪不得：动作写到右部开头，先吐运算符，出来的就是前缀表达式。顺序就是生命线。">
+    <div class="slide-head"><span class="sec">方案</span><h3>动作写在右部末尾，运算符自然排到两个运算对象之后</h3></div>
+    <div class="slide-body">
+      <div class="formula formula-concl">expr → expr + term { print(「+」) } &nbsp;|&nbsp; expr - term { print(「-」) } &nbsp;|&nbsp; term<br>term → 0 { print(「0」) } | 1 { print(「1」) } | … | 9 { print(「9」) }</div>
+      <p>目标：中缀 → 后缀（运算符写在两个运算对象之后）：<strong>9-5+2 → 95-2+</strong>。</p>
+      <div class="tip">直觉：动作写在右部<strong>末尾</strong> = 子表达式和右操作数都翻译完，最后才输出运算符。「先两边、后运算符」，正是后缀记法的定义。</div>
+    </div>
+  </section>
+
+  <section class="slide" data-narration="翻译方案怎么产生输出？用注释分析树：把每个动作当成产生式右部多出来的一片叶子挂进树里，然后对整棵树做深度优先遍历，走到动作叶子就执行它。现在轮到你了：拿九减五加二，画出注释分析树，按左子树优先、动作最后，把输出串写出来。先暂停视频自己推一遍。推出来了吗？好，对答案。遍历一路扎到最左边，先输出九；回到中层，输出五，再执行中层的动作，输出减号；回到根，输出二，最后执行根的动作，输出加号。合起来，九五减二加。动作叶子不参与语法，只是翻译的挂件，但它决定了输出的次序。">
+    <div class="slide-head"><span class="sec">演练</span><h3>动作挂成叶子，深度优先遍历依次输出 9、5、-、2、+</h3></div>
+    <div class="slide-body">
+      <p><strong>注释分析树</strong>（Annotated Parse Tree）：把每个动作当作产生式右部<strong>额外的一片叶子</strong>挂进分析树；对整棵树做<strong>深度优先遍历</strong>，走到动作叶就执行它。</p>
+      <div class="pause"><div class="icon">✍️</div><div class="txt"><b>暂停推导</b><p>拿 9-5+2 画出注释分析树，按「左子树优先、动作最后」遍历一遍，写出最终后缀输出串。</p></div></div>
+      <div class="step"><p>① 一路深入最左：term → 9，执行 print(「9」)　<strong>累计输出 9</strong></p></div>
+      <div class="step"><p>② 回到中层：走过 -，term → 5 输出 5；执行中层动作 print(「-」)　<strong>累计输出 95-</strong></p></div>
+      <div class="step"><p>③ 回到根：走过 +，term → 2 输出 2；执行根动作 print(「+」)　<strong>累计输出 95-2+</strong></p></div>
+      <p class="step-hint">按空格 / → 逐步揭示答案</p>
+    </div>
+  </section>
+
+  <section class="slide" data-narration="方案有了，怎么让它跑起来？最直觉的实现叫预测分析，也叫递归下降：每个非终结符写成一个函数，产生式右部就是函数体。右部里出现非终结符，就递归调对应函数；出现终结符，就吃掉一个输入符号；出现花括号动作，就照做。决策依据只有一个：当前这一个向前看符号，看一眼就决定选哪条产生式，绝不回溯。听起来一帆风顺，但把上一页的文法照抄成函数，会当场爆炸。问题出在哪？下一页看全章最著名的反例。">
+    <div class="slide-head"><span class="sec">思想</span><h3>预测分析：每个非终结符一个函数，凭一个向前看符号选产生式</h3></div>
+    <div class="slide-body">
+      <p><strong>预测分析</strong>（Predictive Parsing）＝<strong>递归下降</strong>（Recursive Descent）：每个非终结符写成一个函数，产生式右部变成函数体；只凭当前一个<strong>向前看符号</strong>（Lookahead）决定选哪条产生式，不回溯。</p>
+      <table>
+        <thead><tr><th>产生式右部出现</th><th>函数体里对应</th></tr></thead>
+        <tbody>
+          <tr><td class="l"><strong>非终结符</strong></td><td class="l">递归调用对应函数</td></tr>
+          <tr><td class="l"><strong>终结符</strong></td><td class="l">吃掉一个输入符号（match）</td></tr>
+          <tr><td class="l"><strong>{ 动作 }</strong></td><td class="l">照做（如 print）</td></tr>
+        </tbody>
+      </table>
+      <div class="warn">但把上一页的文法<strong>照抄</strong>成函数，会当场爆炸——问题出在哪？</div>
+    </div>
+  </section>
+
+  <section class="slide" data-narration="把 expr 推出 expr 加 term 照抄成函数：过程 expr，第一条语句，调用 expr 自己。看出问题了吗？expr 被调用后，一个输入符号都还没吃，第一件事又是调 expr，然后又是调 expr，无限递归，直到栈溢出。病根一句话：产生式右部以左部自身开头，这叫左递归。左递归为什么致命？因为递归下降每前进一步都必须消耗输入，而左递归让函数原地踏步。还要强调一句：左递归文法本身并没有错，它生成的语言是对的，只是不适合自顶向下这条路。必须改写掉，下一页给消除规则。">
+    <div class="slide-head"><span class="sec">反例</span><h3>左递归让函数一口输入不吃就调自己，无限递归直到栈溢出</h3></div>
+    <div class="slide-body">
+      <div class="card"><strong>反例：照抄左递归文法 expr → expr + term</strong>
+<pre style="font-size:17px;line-height:1.55;margin:6px 0 0;">procedure expr()
+  expr()      // 第一条语句就调自己
+  match(「+」)
+  term()
+  print(「+」)</pre></div>
+      <p>expr() 被调用后，<strong>不消耗任何输入</strong>，第一件事又是调 expr() → 无限递归，直到<strong>栈溢出</strong>。</p>
+      <div class="tip"><strong>左递归</strong>（Left Recursion）：产生式右部以左部自身开头（A → Aα）。文法本身没错、生成的语言也对——只是对自顶向下分析致命，必须消除。</div>
+    </div>
+  </section>
+
+  <section class="slide" data-narration="消除规则一句话：A 推出 A 阿尔法或者贝塔，改写成 A 推出贝塔 R，R 推出阿尔法 R 或者空。阿尔法是加 term 打印加号这样的尾巴，贝塔是不以 A 开头的备选。直觉是：原来的 A 能生成贝塔后面跟任意多个阿尔法，新文法里 R 专门负责还有几个阿尔法没处理，空表示一个都不剩。套用到我们的文法：expr 推出 term rest；rest 三条路，加 term 打印加号再 rest，减 term 打印减号再 rest，或者空；term 照旧。左结合的循环，就这样变成了向右的尾递归。">
+    <div class="slide-head"><span class="sec">规则</span><h3>A → Aα | β 改写成 A → βR、R → αR | ε，左结合循环变尾递归</h3></div>
+    <div class="slide-body">
+      <div class="formula">消除规则：A → Aα | β　⟹　A → β R &nbsp;&nbsp;&nbsp; R → α R | ε</div>
+      <p>直觉：原来的 A 生成「β 后面跟任意多个 α」；R 专门负责「还有几个 α 没处理」，ε 表示「一个都不剩」。</p>
+      <div class="formula formula-concl">expr → term rest<br>rest → + term { print(「+」) } rest &nbsp;|&nbsp; - term { print(「-」) } rest &nbsp;|&nbsp; ε<br>term → 0 { print(「0」) } | … | 9 { print(「9」) }</div>
+    </div>
+  </section>
+
+  <section class="slide" data-narration="四个过程，照抄改写后的文法。expr 最简单：先调 term，再调 rest，对应 expr 推出 term rest。rest 看向前看符号做决定：是加号，就 match 加号、调 term、打印加号、递归 rest；是减号，对称走一遍；都不是，就什么也不做，直接返回，这就是选空那条。term 看到数字就 match 并打印，否则报错。match 是公共小助手：向前看符号跟期望相等，才读入下一个记号，否则报错。全程序只有 match 会消耗输入，其余判断都只是看一眼。这句话，误区页还要再敲一次。">
+    <div class="slide-head"><span class="sec">实现</span><h3>四个过程照抄文法，全程序只有 match 消耗输入</h3></div>
+    <div class="slide-body">
+      <div class="cols">
+        <div class="col">
+          <div class="card"><strong>expr()</strong> —— 对应 expr → term rest
+<pre style="font-size:16px;line-height:1.5;margin:6px 0 0;">procedure expr()
+  term()
+  rest()</pre></div>
+          <div class="card"><strong>term()</strong> —— 匹配数字并打印
+<pre style="font-size:16px;line-height:1.5;margin:6px 0 0;">procedure term()
+  if lookahead 是数字 d:
+    match(d); print(d)
+  else:
+    报错</pre></div>
+        </div>
+        <div class="col">
+          <div class="card"><strong>rest()</strong> —— 按 lookahead 选 + / - / ε
+<pre style="font-size:16px;line-height:1.5;margin:6px 0 0;">procedure rest()
+  if lookahead = 「+」:
+    match(「+」); term(); print(「+」); rest()
+  else if lookahead = 「-」:
+    match(「-」); term(); print(「-」); rest()
+  else:
+    return    // 选 ε：什么也不做</pre></div>
+          <div class="card"><strong>match(t)</strong> —— 唯一消耗输入的口
+<pre style="font-size:16px;line-height:1.5;margin:6px 0 0;">procedure match(t)
+  if lookahead = t:
+    lookahead ← 下一个输入记号
+  else:
+    报错</pre></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="slide" data-narration="主实验：对九减五加二跑完整调用轨迹，一共十步。expr 先调 term，向前看是九，匹配并打印，输出九；expr 再调 rest，向前看是减号，选减号那条产生式。match 吃掉减号，向前看前进到五；term 匹配五并打印，输出九五；执行动作打印减号，输出九五减。rest 递归调 rest，向前看是加号；match 吃掉加号，term 打印二，动作打印加号，输出九五减二加。最后 rest 再见向前看，既不是加也不是减，选空，层层返回。对照注释分析树的遍历，输出一模一样：递归下降的调用顺序，恰好就是深度优先遍历。">
+    <div class="slide-head"><span class="sec">实验</span><h3>十步调用轨迹，恰好走出注释分析树的深度优先遍历</h3></div>
+    <div class="slide-body">
+      <table class="small">
+        <thead><tr><th>步</th><th>当前调用</th><th>向前看</th><th>动作</th><th>累计输出</th></tr></thead>
+        <tbody>
+          <tr><td>1</td><td class="l">expr() → term()</td><td>9</td><td class="l">匹配数字 9，print(「9」)</td><td>9</td></tr>
+          <tr><td>2</td><td class="l">expr() → rest()</td><td>-</td><td class="l">不是数字，选 rest → - term {print(「-」)} rest</td><td>9</td></tr>
+          <tr><td>3</td><td class="l">match(「-」)</td><td>-</td><td class="l">消耗 -，向前看前进到 5</td><td>9</td></tr>
+          <tr><td>4</td><td class="l">term()</td><td>5</td><td class="l">匹配数字 5，print(「5」)</td><td>95</td></tr>
+          <tr><td>5</td><td class="l">动作叶</td><td>5</td><td class="l">执行 print(「-」)</td><td>95-</td></tr>
+          <tr><td>6</td><td class="l">rest() 递归调 rest()</td><td>+</td><td class="l">选 rest → + term {print(「+」)} rest</td><td>95-</td></tr>
+          <tr><td>7</td><td class="l">match(「+」)</td><td>+</td><td class="l">消耗 +，向前看前进到 2</td><td>95-</td></tr>
+          <tr><td>8</td><td class="l">term()</td><td>2</td><td class="l">匹配数字 2，print(「2」)</td><td>95-2</td></tr>
+          <tr><td>9</td><td class="l">动作叶</td><td>2</td><td class="l">执行 print(「+」)</td><td>95-2+</td></tr>
+          <tr><td>10</td><td class="l">rest() 递归调 rest()</td><td>结束</td><td class="l">既不是 + 也不是 -，选 ε，层层返回</td><td>95-2+</td></tr>
+        </tbody>
+      </table>
+      <div class="deep">对照注释分析树的遍历结果：输出完全一样（95-2+）。这不是巧合——<strong>递归下降的调用顺序恰好实现了注释分析树的深度优先遍历</strong>。</div>
+    </div>
+  </section>
+
+  <section class="slide" data-narration="预测分析器吃的是记号，可磁盘上的输入是字符：九、减、五、加、二，一个一个字符。中间缺的零件叫词法分析器，也叫扫描器。本章手写一个最简单的，只做三件事。第一，跳过空白：空格、制表符、换行直接丢。第二，识别数字：用一个 peek 变量预读一个字符，是数字就把连续数字拼成一个 num 记号；本章只有一位数，多位数不过是多读几位。第三，识别运算符：peek 是加号减号这种单字符，直接当记号返回。顺便认识符号表：存标识符信息的数据结构，核心操作就两个，put 登记、get 查询。本章还没有变量，它只是露个脸。">
+    <div class="slide-head"><span class="sec">组装</span><h3>扫描器只做三件事：跳空白、peek 拼 num、运算符直接返回</h3></div>
+    <div class="slide-body">
+      <p>分析器吃的是「记号」，磁盘上的输入却是字符——中间的零件就是<strong>词法分析器</strong>（Scanner / Lexer），本章手写一个最简单的：</p>
+      <div class="cols">
+        <div class="col"><div class="card">🧹 <strong>① 跳过空白</strong><br>空格、制表符、换行直接丢弃。</div></div>
+        <div class="col"><div class="card">🔢 <strong>② 识别数字</strong><br>用 <strong>peek</strong> 变量预读一个字符；是数字就把连续数字拼成<strong>记号</strong>（Token）num。</div></div>
+        <div class="col"><div class="card">➕ <strong>③ 识别运算符</strong><br>peek 是 + 或 - 等单字符，直接作为记号返回。</div></div>
+      </div>
+      <div class="tip">顺便露脸：<strong>符号表</strong>（Symbol Table）——存标识符信息的数据结构，核心操作就两个：<strong>put</strong>（登记）与 <strong>get</strong>（查询）。本章还没有变量，后面章节才真正上场。</div>
+    </div>
+  </section>
+
+  <section class="slide" data-narration="把零件拼起来：源程序字符流进来，扫描器切成记号流，预测分析器 expr、rest、term 边分析边执行内嵌动作，后缀串就流出去了；符号表用虚线连着分析器，本章只露脸不上场。回头看第一章的流水线：词法分析、语法分析、翻译三个环节，在本章被压成一个小而能跑的程序。扫描器手写的，分析器手写的，翻译动作直接打印——这就是全书的最小可行编译器。后面路线很清楚：第三章用正则表达式和有穷自动机换掉手写扫描器，第四章用 LL 和 LR 换掉手写递归下降。手工件一个个被换掉，骨架永远是本章这副。">
+    <div class="slide-head"><span class="sec">全景</span><h3>字符流进、后缀串出：全书最小可行编译器在此</h3></div>
+    <div class="slide-body">
+      <div class="mmd">
+        <div class="mermaid">
+flowchart TB
+  S["源程序字符流"] --> L["词法分析器 Scanner<br>跳空白 · 拼 num · 返回运算符"]
+  L --> P["预测分析器<br>expr / rest / term 内嵌动作"]
+  P --> O["后缀输出"]
+  T["符号表 put / get"] -.-> P
+        </div>
+      </div>
+      <p style="text-align:center;">第1章流水线的词法、语法、翻译三环，在本章被压成一个小而能跑的程序——<strong>这就是全书的最小可行编译器</strong>。</p>
+      <div class="tip">接下来的账：第3章用正则表达式与有穷自动机换掉手写扫描器，第4章用 LL/LR 换掉手写递归下降。手工件一个个被换掉，骨架永远是本章这副。</div>
+    </div>
+  </section>
+
+  <section class="slide" data-narration="三个坑，挨个排。第一个，把 digit 当终结符。判断标准只有一个：能不能出现在产生式左部被继续展开。digit 能推出零到九，所以它是非终结符；九才是真正的终结符。第二个，以为动作位置无所谓。打印加号写到右部开头，就会先输出加号再输出运算对象，后缀变前缀，意思全拧了。SDD 不谈顺序，翻译方案里顺序就是生命线。第三个，以为向前看符号每次判断都被消耗。不对，只有 match 消耗输入，rest 里的 if 只是看一眼；选空那条分支一个符号都不吃，这正是它能在输入末尾安全退出的原因。">
+    <div class="slide-head"><span class="sec">避坑</span><h3>三个高频坑，全是把「角色」搞混</h3></div>
+    <div class="slide-body">
+      <div class="trap">❌ <strong>digit 是终结符</strong><br>✅ 判断标准只有一个：能否出现在产生式<strong>左部</strong>被继续展开。digit → 0|…|9，所以 digit 是<strong>非终结符</strong>；9 才是真正的终结符。</div>
+      <div class="trap">❌ <strong>动作位置无所谓，写哪都行</strong><br>✅ { print(「+」) } 写到右部<strong>开头</strong>，就先输出 + 再输出运算对象——后缀变前缀。SDD 不谈顺序，翻译方案的<strong>顺序就是生命线</strong>。</div>
+      <div class="trap">❌ <strong>向前看符号每次判断都会被消耗</strong><br>✅ 只有 <strong>match()</strong> 消耗输入；rest() 里的 if 只是「看一眼」。选 ε 分支时一个符号都不吃——这正是它能在输入末尾安全退出的原因。</div>
+    </div>
+  </section>
+
+  <section class="slide" data-narration="回到本章开头的主线问题：只靠语法，能不能直接造出一个能跑的翻译器？答案是能。一句话说完：文法定形状，翻译方案挂动作，消掉左递归之后每个非终结符一个函数，翻译器就跑起来了。这台机器小到极致，却五脏俱全：词法、语法、翻译，三环一个不少。那留下了什么？两笔手工账：扫描器是手写的，换一批词法规则就得重写；递归下降是手写的，换一套文法也得重写。把这两件手工活机械化，正是第三章和第四章的任务。带着这笔账往下看，后面每一章你都知道它在换哪个零件。">
+    <div class="slide-head"><span class="sec">收束</span><h3>主线问题的答案：能，而且只需三层结构</h3></div>
+    <div class="slide-body">
+      <div class="chain">
+        <div class="link"><span class="no">问</span><span class="txt">只靠「语法」能不能直接造出一个能跑的翻译器？最小可行的编译器长什么样？</span></div>
+        <div class="link"><span class="no">答</span><span class="txt"><strong>能</strong>——文法定形状，翻译方案挂动作，消掉左递归后<strong>每个非终结符一个函数</strong>。</span></div>
+        <div class="link"><span class="no">账</span><span class="txt">遗留两笔手工账：手写扫描器、手写递归下降——机械化分别交给<strong>第3章</strong>与<strong>第4章</strong>。</span></div>
+      </div>
+      <div class="deep">这台机器小到极致，却五脏俱全：词法、语法、翻译三环一个不少。后面每一章，都是在给这三层换更强大的引擎。</div>
+    </div>
+  </section>
+
+  <section class="slide" data-narration="三句话讲完本章。第一句，解决什么：只凭一份文法，不借助任何自动生成工具，手写一个能跑的中缀转后缀翻译器，全书最小可行的编译器。第二句，核心机制：给产生式挂动作，位置即时机；左递归改写成首项加 rest 尾递归之后，每个非终结符一个函数，递归下降的调用顺序天然就是注释分析树的深度优先遍历，后缀输出顺势产生。第三句，承上启下：第一章只画了地图，本章把前端跑通证明可行；第三章机械化词法，第四章机械化语法。屏幕上这套文法和方案，合上书也要能默写。">
+    <div class="slide-head"><span class="sec">小结</span><h3>三句话讲完第2章</h3></div>
+    <div class="slide-body">
+      <div class="chain">
+        <div class="link"><span class="no">1</span><span class="txt"><strong>解决什么</strong>：只凭一份文法、不借助任何工具，手写一个能跑的中缀 → 后缀翻译器——全书最小可行的编译器。</span></div>
+        <div class="link"><span class="no">2</span><span class="txt"><strong>核心机制</strong>：给产生式挂动作，位置即时机；左递归改写成「首项 + rest 尾递归」后一符一函数，递归下降的调用顺序天然就是注释分析树的深度优先遍历。</span></div>
+        <div class="link"><span class="no">3</span><span class="txt"><strong>承上启下</strong>：第1章只画地图，本章跑通前端证明可行；第3章机械化词法，第4章机械化语法。</span></div>
+      </div>
+      <div class="formula formula-concl">expr → term rest &nbsp;&nbsp; rest → + term { print(「+」) } rest | - term { print(「-」) } rest | ε &nbsp;——合上书也要能默写</div>
+    </div>
+  </section>
+
+  <section class="slide slide-cover" data-narration="本章结束。毕业挑战四条，合上书，拿一张纸。第一，默写 list 文法，对九减五加二写出最左推导，并画出分析树。第二，默写中缀转后缀的翻译方案，画出注释分析树，写出遍历输出九五减二加。第三，默写 expr、rest、term、match 四个过程的伪代码。第四，对输入四减七加一写出完整调用轨迹，最终输出应该是四七减一加。全部做出来，本章才算真正毕业。下一章，第三章词法分析：用正则表达式描述词形，用有穷自动机驱动识别，把本章的手写扫描器彻底机械化。我们下一章见。">
+    <div class="kicker">本 章 结 束</div>
+    <h1>文法定形状，动作挂树上，一符一函数</h1>
+    <div class="sub">毕业挑战：合上书，拿一张纸</div>
+    <div class="divider"></div>
+    <div class="meta">
+      ☑ 默写 list 文法，对 9-5+2 写最左推导并画分析树　　☑ 默写翻译方案，画注释分析树并写出 95-2+<br>
+      ☑ 默写 expr / rest / term / match 四过程伪代码　　☑ 对 4-7+1 写完整调用轨迹，输出 47-1+<br><br>
+      下一章 · 第3章 词法分析：用正则表达式与有穷自动机，把手写扫描器机械化
+    </div>
+  </section>
+
+  <div id="footer">
+    <span class="brand">第2章 一个简单的语法制导翻译器 · 编译原理课件</span>
+    <span id="pagenum">1 / 22</span>
+  </div>
+
+  <div class="nav">
+    <button id="prev" title="上一页 (←)">‹</button>
+    <button id="next" title="下一页 (→ / 空格)">›</button>
+  </div>
+  <div id="hint">← → 翻页 · 空格下一页 · 推导页逐步显示 · 点击左右半屏翻页</div>
+
+</div>
+
+<script src="/lectures-assets/mermaid.min.js"></script>
+<script>
+mermaid.initialize({
+  startOnLoad: false,   // 必须为 false：display:none 的隐藏页渲染会得到 0 宽高的退化 SVG，
+                        // 改为页面激活时懒渲染（见 renderMermaid）
+  theme: "base",
+  themeVariables: {
+    primaryColor: "#ebf8ff",
+    primaryBorderColor: "#2b6cb0",
+    primaryTextColor: "#1a365d",
+    lineColor: "#718096",
+    fontFamily: "-apple-system, PingFang SC, sans-serif",
+    fontSize: "15px"
+  },
+  flowchart: { curve: "linear", htmlLabels: false }
+});
+</script>
+<script>
+(function(){
+  const slides = Array.from(document.querySelectorAll('.slide'));
+  const total = slides.length;
+  let idx = 0;
+
+  const params = new URLSearchParams(location.search);
+  const startSlide = parseInt(params.get('slide'), 10);
+  if (params.get('autohide') === '1') document.body.classList.add('autohide');
+  if (!isNaN(startSlide) && startSlide >= 1 && startSlide <= total) idx = startSlide - 1;
+
+  const progress = document.getElementById('progress');
+  const pagenum = document.getElementById('pagenum');
+  const prevBtn = document.getElementById('prev');
+  const nextBtn = document.getElementById('next');
+
+  // 推导分步：每页记住已展开的步数；autohide（截图）模式下 CSS 强制全显
+  const stepState = new Map();
+  function stepsOf(i){ return Array.from(slides[i].querySelectorAll('.step')); }
+  function applySteps(){
+    stepsOf(idx).forEach((el, k)=> el.classList.toggle('on', k < (stepState.get(idx) || 0)));
+  }
+  // 前进一步：先展开本页下一步，全部展开后才翻页
+  function forward(){
+    const steps = stepsOf(idx);
+    const shown = stepState.get(idx) || 0;
+    if (shown < steps.length){ stepState.set(idx, shown + 1); applySteps(); return; }
+    go(idx + 1);
+  }
+  // 后退一步：先收起本页最后一步，收完才回上一页
+  function backward(){
+    const steps = stepsOf(idx);
+    const shown = stepState.get(idx) || 0;
+    if (shown > 0){ stepState.set(idx, shown - 1); applySteps(); return; }
+    go(idx - 1);
+  }
+
+  // mermaid 懒渲染：只在页面激活（有真实宽高）时渲染该页的图，渲染后打 data-done 防重复
+  function renderMermaid(slide){
+    if (typeof mermaid === 'undefined') return;
+    const nodes = Array.from(slide.querySelectorAll('.mermaid:not([data-done])'));
+    if (!nodes.length) return;
+    nodes.forEach(n => n.setAttribute('data-done', ''));
+    mermaid.run({ nodes }).catch(err => {
+      nodes.forEach(n => n.removeAttribute('data-done'));
+      console.error('mermaid 渲染失败：', err);
+    });
+  }
+
+  function render(){
+    slides.forEach((s,i)=> s.classList.toggle('active', i===idx));
+    progress.style.width = ((idx+1)/total*100) + '%';
+    pagenum.textContent = (idx+1) + ' / ' + total;
+    prevBtn.disabled = (idx===0);
+    nextBtn.disabled = (idx===total-1);
+    applySteps();
+    renderMermaid(slides[idx]);
+  }
+  function go(n){ idx = Math.max(0, Math.min(total-1, n)); render(); }
+
+  prevBtn.addEventListener('click', e=>{ e.stopPropagation(); backward(); });
+  nextBtn.addEventListener('click', e=>{ e.stopPropagation(); forward(); });
+
+  document.addEventListener('keydown', e=>{
+    if(e.key==='ArrowRight'||e.key===' '||e.key==='PageDown'){ e.preventDefault(); forward(); }
+    else if(e.key==='ArrowLeft'||e.key==='PageUp'){ e.preventDefault(); backward(); }
+    else if(e.key==='Home'){ stepState.set(idx, 0); go(0); }
+    else if(e.key==='End'){ go(total-1); }
+  });
+
+  document.getElementById('stage').addEventListener('click', e=>{
+    if(e.target.closest('.nav')) return;
+    const x = e.clientX;
+    if(x < window.innerWidth*0.5) backward(); else forward();
+  });
+
+  function fit(){
+    const s = Math.min(window.innerWidth/1280, window.innerHeight/720);
+    document.getElementById('stage').style.transform = 'translate(-50%,-50%) scale(' + s + ')';
+  }
+  window.addEventListener('resize', fit);
+  fit();
+  render();
+})();
+</script>
+</body>
+</html>

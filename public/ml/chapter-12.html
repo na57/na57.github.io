@@ -1,0 +1,806 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第12章 计算学习理论 · 机器学习互动讲义</title>
+<link rel="stylesheet" href="/lectures-assets/style.css">
+</head>
+<body>
+
+<nav class="topbar">
+  <div class="topbar-inner">
+    <span class="brand"><a href="index.html" style="color:inherit">← 学习地图</a></span>
+    <span class="crumb">阶段③ · 无监督与理论 / 第12章</span>
+  </div>
+</nav>
+
+<div class="wrap">
+
+  <div class="lecture-head">
+    <span class="ch-label">CHAPTER 12 · 无监督与理论</span>
+    <h1>计算学习理论</h1>
+    <p class="lead">本章回答：学出来的模型凭什么在新数据上也可靠——可靠到什么程度、需要多少样本？</p>
+  </div>
+
+  <!-- ===== 章首四件套之 1：全书定位 ===== -->
+  <div class="position-bar">
+    <strong>本章在主线上的位置：</strong>前面所有章节都在讲"怎么学"（怎么拟合训练集） → <u>本章回答"学出来的东西可信吗"</u> → 第13章半监督学习因此能在标注稀缺时论证"为什么还能学"。<br>
+    第12章回答主线上的问题：<strong>经验误差小，泛化误差就一定小吗？需要多少样本才能保证？</strong>
+    <div class="map-inline">
+      <span class="node">Ch11 特征选择与稀疏学习（压缩假设空间）</span><span class="arrow">→</span>
+      <span class="node here">Ch12 计算学习理论</span><span class="arrow">→</span>
+      <span class="node">Ch13 半监督学习（样本不足时怎么办）</span><span class="arrow">→</span>
+      <span class="node">Ch16 强化学习（理论在交互场景的延伸）</span>
+    </div>
+  </div>
+
+  <!-- ===== 章首四件套之 2：学习目标 ===== -->
+  <div class="objectives">
+    <h4>🎯 学完本章，合上书你应该能：</h4>
+    <ol>
+      <li>说出 PAC 可学习的定义，解释 ε 与 δ 各自控制什么；</li>
+      <li>写出有限假设空间可分情形的样本复杂度公式，并完整推导一遍；</li>
+      <li>手算给定 |ℋ|、ε、δ 时所需的样本数 m；</li>
+      <li>说出 VC 维与打散的定义，判定实轴区间、平面线性分类器的 VC 维；</li>
+      <li>写出泛化界的三项结构，并用具体数字算出误差上界；</li>
+      <li>解释 Rademacher 复杂度"拟合噪声"的直觉，说出理论界的局限。</li>
+    </ol>
+  </div>
+
+  <div class="lecture">
+
+    <!-- ===== 章首四件套之 3：推导主线图 ===== -->
+    <div class="figure">
+      <div class="mermaid">
+flowchart LR
+  A["经验误差小就够了吗"] --> B["需要给泛化误差一个概率上界"]
+  B --> C["PAC 框架 有限假设空间可数出样本复杂度"]
+  B --> D["目标概念不在空间里 不可分情形"]
+  C --> E["无限假设空间怎么办 用 VC 维度量容量"]
+  D --> C
+  E --> F["更细的容量尺子 Rademacher 复杂度"]
+  F --> G["代价 界太松 理论滞后于实践"]
+  classDef hot fill:#fbeedd,stroke:#c4651f,stroke-width:2.5px,color:#c4651f;
+  classDef danger fill:#fae9e7,stroke:#b03a2e,stroke-width:2.5px,color:#b03a2e;
+  class E hot;
+  class G danger;
+      </div>
+      <div class="caption">图 12.0 本章推导主线：从"经验误差小为什么不够"出发，逐层追问到 VC 维与 Rademacher 复杂度，最后落到"界太松"这一遗留问题。注意 VC 维是全章枢纽。</div>
+    </div>
+
+    <!-- ================= 12.1 ================= -->
+    <h2><span class="sec-no">12.1</span>为什么经验误差小不够：泛化误差与 PAC 学习</h2>
+
+    <p>前面十一章里，我们让模型在训练集上把误差降到最低，然后默认"训练误差小 → 新数据上也好"。这个默认靠谱吗？一个能把训练集背下来的模型（比如一层的决策树桩记住了所有样本的噪声），经验误差可以是 0，但在新数据上可能一塌糊涂。本章的第一步，就是把这件事<b>说严格</b>：训练误差和真实表现之间到底差多少？</p>
+
+    <p>形式化：设样本空间 𝒳 上有未知分布 𝒟，目标概念（真实标记规则）为 <span class="term">目标概念</span>（Target Concept）c。学习算法从<span class="term">假设空间</span>（Hypothesis Space）ℋ 中挑出一个假设 h。定义两个误差：</p>
+
+    <ul>
+      <li><span class="term">经验误差</span>（Empirical Error）：Ê(h) = (1/m) ∑<sub>i=1</sub><sup>m</sup> 𝟙(h(x<sub>i</sub>) ≠ y<sub>i</sub>) —— 训练集上的错误率，<b>看得见、算得出</b>；</li>
+      <li><span class="term">泛化误差</span>（Generalization Error）：E(h) = P<sub>(x,y)∼𝒟</sub>(h(x) ≠ y) —— 在真实分布上的错误率，<b>看不见、是随机变量</b>。</li>
+    </ul>
+
+    <p>注意：h 是从随机采样得到的训练集上学出来的，所以 h 本身是随机的，E(h) 与 Ê(h) 的差距也是随机的。我们只能谈<b>概率保证</b>，这正是 PAC 的名字来源：</p>
+
+    <p><span class="term">PAC 可学习</span>（Probably Approximately Correct Learnable）：若存在算法，对任意 0 &lt; ε, δ &lt; 1，只要样本数 m 足够大（m 是关于 1/ε、1/δ、问题规模的多项式），就能输出 h 使得</p>
+
+    <div class="formula">P( E(h) ≤ ε ) ≥ 1 − δ</div>
+
+    <p>则称该问题 PAC 可学习。其中 ε 是<span class="term">精度参数</span>：输出"近似正确"（Approximately Correct，误差不超过 ε）；δ 是<span class="term">置信参数</span>：这件事以至少 1−δ 的概率发生（Probably，允许倒霉碰到坏训练集）。若算法输出的 h 本身还要求属于 ℋ 且与训练集完全一致（即存在这样的 h，称<span class="term">可分</span>（Separable）情形），并称"恰 PAC 可学习"。</p>
+
+    <h3>有限假设空间、可分情形：样本复杂度可以"数"出来</h3>
+
+    <p>当 ℋ 是有限集合、且目标概念 c ∈ ℋ（可分情形）时，我们能给出 m 的显式公式。<b>推导思路（写全，不跳步）</b>：</p>
+
+    <ol>
+      <li>学习算法输出任何一个与训练集 D 完全一致的 h（所有这样的 h 构成<span class="term">版本空间</span>（Version Space））。我们要排除的坏事件是："存在一个 E(h) &gt; ε 的坏假设，却碰巧在 D 上全对"。</li>
+      <li>先固定一个坏假设 h（E(h) &gt; ε）。它在<b>一个</b>随机样本上与 c 一致的概率 = 1 − E(h) &lt; 1 − ε。</li>
+      <li>样本独立同分布，所以它在 <b>m 个</b>样本上全部一致的概率 &lt; (1−ε)<sup>m</sup>。</li>
+      <li>ℋ 中至多有 |ℋ| 个假设，用联合界（Union Bound）：P(存在坏假设蒙混过关) ≤ |ℋ|(1−ε)<sup>m</sup>。</li>
+      <li>利用不等式 1−x ≤ e<sup>−x</sup>，得 |ℋ|(1−ε)<sup>m</sup> ≤ |ℋ|e<sup>−mε</sup>。</li>
+      <li>令 |ℋ|e<sup>−mε</sup> ≤ δ，两边取 ln：ln|ℋ| − mε ≤ ln δ，即 mε ≥ ln|ℋ| + ln(1/δ)，解出：</li>
+    </ol>
+
+    <div class="formula"><span class="var">m</span> ≥ <span class="frac"><span class="num-part">1</span><span class="den-part">ε</span></span> ( ln|ℋ| + ln <span class="frac"><span class="num-part">1</span><span class="den-part">δ</span></span> )</div>
+
+    <h3>手算例 1：布尔合取需要多少样本</h3>
+
+    <p>考虑 n 个布尔变量的<span class="term">布尔合取</span>（Boolean Conjunction）假设空间：每个文字可以"以正例出现"（如 x₃）、"以反例出现"（如 ¬x₃）、或"不出现"，共 3 种状态，故 |ℋ| = 3<sup>n</sup>。</p>
+
+    <p>取 n = 10，则 |ℋ| = 3¹⁰ = 59049。要求 ε = 0.1（误差不超过 10%）、δ = 0.05（95% 置信），代入公式逐步计算：</p>
+
+    <ol>
+      <li>1/ε = 1/0.1 = 10；</li>
+      <li>ln|ℋ| = ln 59049 = ln 3¹⁰ = 10 × ln 3 = 10 × 1.098612 = 10.986；</li>
+      <li>ln(1/δ) = ln(1/0.05) = ln 20 = 2.996；</li>
+      <li>括号内合计 = 10.986 + 2.996 = 13.982；</li>
+      <li>m ≥ 10 × 13.982 = 139.82，向上取整 <b>m ≥ 140</b>。</li>
+    </ol>
+
+    <p>结论：只要有 140 个独立同分布的样本，任何与训练集一致的布尔合取假设，都以至少 95% 的概率保证真实误差不超过 10%。140 这个数不大——这就是"有限假设空间 + 可分"为什么是最理想的情形。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>样本复杂度公式在做一件事：<b>用样本把坏假设逐个"枪毙"</b>。每个样本以至少 ε 的概率杀死一个坏假设，m 个样本后漏网的概率随 e<sup>−mε</sup> 指数衰减；假设空间越大（ln|ℋ| 越大），要枪毙的坏假设越多，需要的子弹（样本）也越多。ln|ℋ| 就是"假设空间的描述长度"——用多少比特能编号一个假设。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>误区一："经验误差为 0 就等于泛化误差为 0"。错——经验误差为 0 只说明 h 在这 m 个点上蒙对了，PAC 界告诉你的正是"蒙对"和"真对"之间的概率关系。<br>
+      误区二："δ 是模型的错误率"。错——ε 才约束错误率；δ 是"拿到一个坏训练集"的倒霉概率。P(E(h)≤ε) ≥ 1−δ 里，随机性来自训练集的抽样，不来自数据本身。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 12.1-1</div>
+              <div class="q-text">PAC 中的 "Approximately Correct" 和 "Probably" 分别由哪个参数控制？各自的含义是什么？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              Approximately Correct 由 ε 控制：泛化误差 E(h) ≤ ε；Probably 由 δ 控制：这件事以 ≥ 1−δ 的概率成立。随机性来自训练集抽样。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 12.1-2</div>
+              <div class="q-text">默写有限假设空间、可分情形的样本复杂度公式，并说出推导中最关键的两个不等式。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              m ≥ (1/ε)(ln|ℋ| + ln(1/δ))。关键不等式：联合界 |ℋ|(1−ε)<sup>m</sup>；指数化 1−ε ≤ e<sup>−ε</sup>。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ================= 12.2 ================= -->
+    <h2><span class="sec-no">12.2</span>目标概念不在空间里怎么办：不可分情形与 Hoeffding</h2>
+
+    <p>上一节假设目标概念 c 恰好在 ℋ 里，且训练集里存在零误差假设（可分）。现实里这两条经常都不成立：数据有噪声、真实规则比我们能表达的更复杂。这时连"经验误差为 0 的假设"都不存在，算法只能挑经验误差最小的 h（ERM，经验风险最小化）。问题变成：<b>Ê(h) 与 E(h) 的差距</b>能对<b>所有</b> h 同时控制住吗？</p>
+
+    <p>工具是 <span class="term">Hoeffding 不等式</span>（Hoeffding's Inequality）：对任意固定的 h，把每个样本上"h 是否犯错"看作一个 0/1 随机变量，其期望正是 E(h)，样本均值正是 Ê(h)。Hoeffding 给出</p>
+
+    <div class="formula">P( |E(h) − Ê(h)| ≥ ε ) ≤ 2 e<sup>−2mε²</sup></div>
+
+    <p>再对全部 |ℋ| 个假设用联合界：P(存在 h 使 |E(h)−Ê(h)| ≥ ε) ≤ 2|ℋ|e<sup>−2mε²</sup>。令其 ≤ δ：ln(2|ℋ|) − 2mε² ≤ ln δ，解出<span class="term">不可分情形</span>（Agnostic，又称不可知情形）的样本复杂度：</p>
+
+    <div class="formula"><span class="var">m</span> ≥ <span class="frac"><span class="num-part">1</span><span class="den-part">2ε²</span></span> ( ln(2|ℋ|) + ln <span class="frac"><span class="num-part">1</span><span class="den-part">δ</span></span> )</div>
+
+    <h3>手算：同一个布尔合取问题，不可分要多少样本</h3>
+
+    <p>仍取 |ℋ| = 59049（n = 10 的布尔合取），ε = 0.1，δ = 0.05，逐步计算：</p>
+
+    <ol>
+      <li>2ε² = 2 × 0.01 = 0.02，故 1/(2ε²) = 1/0.02 = 50；</li>
+      <li>2|ℋ| = 2 × 59049 = 118098，ln(118098) = ln 2 + ln 59049 = 0.693 + 10.986 = 11.679 ≈ 11.68；</li>
+      <li>ln(1/δ) = ln 20 = 2.996 ≈ 3.00；</li>
+      <li>括号内合计 = 11.68 + 3.00 = 14.68；</li>
+      <li>m ≥ 50 × 14.68 = 734。</li>
+    </ol>
+
+    <p>对比可分情形的 m ≥ 140：同样的问题，仅仅因为"目标可能不在 ℋ 里、只能用 ERM"，样本需求从 140 涨到 734，约 5 倍。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>看 m 对 ε 的依赖：可分情形 m = O(1/ε)，不可分情形 m = O(1/ε²)。为什么更贵？可分情形里，一个坏假设每个样本以 ≥ ε 的概率"自爆"，淘汰是<b>乘法</b>的（指数衰减）；不可分情形里没有完美的假设可以对照，只能靠大数定律让 Ê(h) <b>收敛</b>到 E(h)，而集中不等式的收敛速度是 1/√m——要精度高 10 倍，样本就得多 100 倍。这就是"1/ε²"的来源。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>"样本复杂度只由问题难度决定，与 |ℋ| 无关"。恰恰相反：两个公式里 |ℋ| 都直接进入对数项。同一个任务，你选的假设空间越大（哪怕表达力富余），所需的样本就越多——这是"奥卡姆剃刀"的第一个严格版本：在能拟合数据的前提下，选更小的假设空间。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 12.2-1</div>
+              <div class="q-text">不可分（agnostic）情形的样本复杂度公式是什么？与可分情形相比，对 ε 的依赖发生了什么变化？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              m ≥ (1/(2ε²))(ln(2|ℋ|) + ln(1/δ))。对 ε 的依赖从 O(1/ε) 恶化为 O(1/ε²)，来源是集中不等式的 1/√m 收敛速率。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 12.2-2</div>
+              <div class="q-text">Hoeffding 不等式在本章中扮演什么角色？为什么固定一个 h 时 Ê(h) 是 E(h) 的样本均值估计？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              它控制单一假设上 |E(h)−Ê(h)| 的偏差概率（≤ 2e<sup>−2mε²</sup>）。因为"h 犯错"是 0/1 变量，期望恰为 E(h)，m 个样本的错误率均值就是 Ê(h)。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ================= 12.3 ================= -->
+    <h2><span class="sec-no">12.3</span>假设空间无限大怎么办：VC 维</h2>
+
+    <p>前两节的公式都含 ln|ℋ|，可一旦 ℋ 无限——比如"实轴上所有区间 [a,b]"，a、b 取遍全体实数，|ℋ| = ∞——联合界直接失效。但直觉告诉我们：实轴区间族其实"很简单"，不该因为无限就不可学。问题出在我们用"个数"度量容量太粗糙。需要的是一把能度量无限空间<b>有效容量</b>的尺子。</p>
+
+    <p>这把尺子从"能对样本造成多少种不同的标记方式"出发。给定 m 个样本 {x₁,…,x<sub>m</sub>}，ℋ 中每个 h 给它们打出一套 ±1 标记；所有 h 能产生的不同标记方案数记为 <span class="term">增长函数</span>（Growth Function）Π<sub>ℋ</sub>(m)，显然 Π<sub>ℋ</sub>(m) ≤ 2<sup>m</sup>。若某个 m 点集合上 Π<sub>ℋ</sub>(m) = 2<sup>m</sup>（即所有 2<sup>m</sup> 种标记方案都能被 ℋ 中某个 h 实现），则称 ℋ <span class="term">打散</span>（Shatter）了这个集合。</p>
+
+    <p><span class="term">VC 维</span>（Vapnik-Chervonenkis Dimension）：ℋ 能打散的<b>最大</b>集合的大小，记 d<sub>VC</sub>(ℋ)。即：存在 d<sub>VC</sub> 个点能被任意标记方式实现，而任何 d<sub>VC</sub>+1 个点都存在实现不了的标记。</p>
+
+    <h3>判定示例 1：实轴上的区间族，VC 维 = 2</h3>
+
+    <p>ℋ = { 所有形如 [a,b] 的区间 }，规则：x ∈ [a,b] 标 +，否则标 −。</p>
+
+    <ol>
+      <li><b>能打散 2 个点</b>：任取 x₁ &lt; x₂，四种标记都可行——(+,+)：取区间罩住两点；(−,−)：取区间避开两点；(+,−)：取区间只罩 x₁（如 [x₁, (x₁+x₂)/2]）；(−,+)：取区间只罩 x₂。故 VC ≥ 2。</li>
+      <li><b>打不散 3 个点</b>：任取 x₁ &lt; x₂ &lt; x₃，考虑标记 (+,−,+)——要求区间同时包含 x₁ 和 x₃ 却排除 x₂。但区间是连续的一段：含 x₁ 与 x₃ 必含其间的 x₂。所以 (+,−,+) 永远无法实现。3 个点尚且如此，更多点更不行，故 VC &lt; 3。</li>
+      <li>合起来：d<sub>VC</sub> = 2。<b>注意 VC 维只要求"存在" d 个点能打散，不是"任意" d 个点都能打散</b>——找一组好位置即可；而证明不能打散 d+1 个点时必须对"任意" d+1 个点成立。</li>
+    </ol>
+
+    <h3>判定示例 2：ℝ² 中的线性划分，VC 维 = 3；d 维超平面，VC = d+1</h3>
+
+    <ul>
+      <li>ℝ² 中任取不共线的 3 个点，8 种标记都能用一条直线分开（逐一举例：同色时直线放一侧或拿远；两正一负时直线把负点单独隔开，不共线保证做得到）。故 VC ≥ 3。</li>
+      <li>任意 4 个点做不到：若四点构成凸四边形，标记"对角为正、另两角为负"（即 XOR 构型）无法用一条直线分开；若有一点在另三点内部，把内部点标负、外部三点标正也分不开。故 VC = 3。</li>
+      <li>一般地，ℝ<sup>d</sup> 中的超平面（线性分类器）d<sub>VC</sub> = d + 1——恰好等于"参数个数 +1"，这容易让人误以为 VC 维总等于参数个数，下面的警告框专门破除它。</li>
+    </ul>
+
+    <p>有了 VC 维，无限假设空间也有了泛化界（形式之一）：</p>
+
+    <div class="formula">E(h) ≤ Ê(h) + <span style="white-space:nowrap">√</span><span class="frac"><span class="num-part">8<span class="var">d</span> ln <span class="frac"><span class="num-part">2e<span class="var">m</span></span><span class="den-part"><span class="var">d</span></span></span> + 8 ln <span class="frac"><span class="num-part">4</span><span class="den-part">δ</span></span></span><span class="den-part"><span class="var">m</span></span></span></div>
+
+    <p>（其中 d 为 VC 维，e 为自然常数，以至少 1−δ 的概率成立。）</p>
+
+    <h3>手算例 2：这个界具体有多大</h3>
+
+    <p>取 d = 10（如 9 维空间里的线性分类器，或粗略看作一个 10 自由度模型），m = 10000，δ = 0.05，逐项算根号里的分子：</p>
+
+    <ol>
+      <li>第一项系数：8d = 8 × 10 = 80；</li>
+      <li>对数项：ln(2em/d) = ln(2e × 10000 / 10) = ln(2000e) = ln 2000 + ln e = 7.601 + 1 = 8.601；</li>
+      <li>第一项合计：80 × 8.601 = 688.1；</li>
+      <li>置信项：ln(4/δ) = ln(4/0.05) = ln 80 = 4.382，8 × 4.382 = 35.06 ≈ 35.1；</li>
+      <li>分子合计：688.1 + 35.1 = 723.2；</li>
+      <li>除以 m：723.2 / 10000 = 0.07232；</li>
+      <li>开根号：√0.07232 ≈ 0.269。</li>
+    </ol>
+
+    <p>结论：E(h) ≤ Ê(h) + 0.269——以 95% 的置信度，泛化误差最多比经验误差高 <b>26.9 个百分点</b>。再算 m = 100000 对比：</p>
+
+    <ol>
+      <li>ln(2e × 100000 / 10) = ln(20000e) = ln 20000 + 1 = 9.903 + 1 = 10.903；</li>
+      <li>80 × 10.903 = 872.3；加置信项 35.1，分子 = 907.4；</li>
+      <li>907.4 / 100000 = 0.009074；√0.009074 ≈ 0.095。</li>
+    </ol>
+
+    <p>样本多 10 倍，界的附加项从 0.269 缩到 0.095（约按 1/√m 收缩）。<b>界本身很松</b>（1 万样本只能保证 27 个点的差距，实践中往往好得多），但<b>趋势是对的</b>：容量 d 越大界越松，样本 m 越大界越紧。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>两个直觉。其一：<b>VC 维 ≈ 有效自由度</b>——不是参数个数，而是假设空间"能独立表达的判别方向"有几个。其二：泛化界是<b>三项结构</b>——经验项 Ê(h)（拟合得多好）+ 容量项（含 d，空间多大）+ 置信项（含 ln(1/δ)，要多稳）。训练误差往下压、容量往上顶，最优模型在两者平衡处——这就是结构风险最小化（SRM）的思想源头。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>"VC 维 = 参数个数"。错。反例：单参数函数族 h<sub>ω</sub>(x) = sign(sin(ωx))，只有一个参数 ω，但 VC 维是<b>无穷大</b>——对任意 m 个点和任意标记，只要把 ω 取得足够大，正弦振荡足够密，就能让每个点落在所需的符号区间里。反过来也有参数很多但 VC 维小的例子（受正则约束的线性族）。参数个数只是一个粗略代理，VC 维度量的是"对标记方案的表达能力"。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 12.3-1</div>
+              <div class="q-text">写出"打散"和"VC 维"的定义。证明 VC 维 ≥ d 与 ≤ d 分别需要论证"存在"还是"任意"？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              打散：某 m 点集合的全部 2<sup>m</sup> 种标记都能被 ℋ 实现。VC 维 = 能被打散的最大集合大小。证 ≥ d 只需"存在"一组 d 点；证 ≤ d 必须对"任意" d+1 点给出一种实现不了的标记。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 12.3-2</div>
+              <div class="q-text">泛化界 E(h) ≤ Ê(h) + √((8d·ln(2em/d) + 8·ln(4/δ))/m) 的三项分别叫什么？各自随什么变量增大而变差？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              经验项 Ê(h)、容量项（随 d 增大）、置信项（随 1/δ 增大）。样本 m 同时压制后两项（按 1/√m 收缩）。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ================= 12.4 ================= -->
+    <h2><span class="sec-no">12.4</span>更细的容量尺子：Rademacher 复杂度与稳定性</h2>
+
+    <p>VC 维有一个毛病：它是"最坏情形"的尺子——只要存在一组 d 个点能被打散，d 就 +1，完全不看数据分布。但现实中数据往往很"乖"，假设空间在实际数据上的有效容量远小于最坏情形。能不能让容量尺子<b>依赖数据本身</b>？这就是 <span class="term">Rademacher 复杂度</span>（Rademacher Complexity）的出发点。</p>
+
+    <p>定义（经验 Rademacher 复杂度）：给定样本 S = {x₁,…,x<sub>m</sub>}，给每个样本独立地随机打一个 ±1 的"噪声标签" σ<sub>i</sub>（各以 1/2 概率取 ±1），然后问：ℋ 里最好的那个假设，能把这套<b>纯随机标签</b>对齐到什么程度？</p>
+
+    <div class="formula">R̂(ℋ) = E<sub>σ</sub> [ sup<sub>h∈ℋ</sub> <span class="frac"><span class="num-part">1</span><span class="den-part"><span class="var">m</span></span></span> ∑<sub>i=1</sub><sup>m</sup> σ<sub>i</sub> h(x<sub>i</sub>) ]</div>
+
+    <p>读法：σ<sub>i</sub>h(x<sub>i</sub>) = +1 表示 h 在这个点上与噪声标签一致。R̂(ℋ) 就是"ℋ 拟合纯随机噪声的期望最好成绩"。一个假设空间连噪声都能拟合得很好，说明它容量过大、容易过拟合——<b>拟合噪声越厉害，泛化越差</b>。VC 维回答"最坏能打散多少点"，Rademacher 复杂度回答"在这份数据上平均能蒙对多少噪声"，因此更细、且可以直接从数据估计。</p>
+
+    <p>用它表达的泛化界形状（0/1 损失的一种典型形式，以至少 1−δ 概率成立）：</p>
+
+    <div class="formula">E(h) ≤ Ê(h) + 2R̂(ℋ) + 3 <span style="white-space:nowrap">√</span><span class="frac"><span class="num-part">ln(2/δ)</span><span class="den-part">2<span class="var">m</span></span></span></div>
+
+    <p>同样是三项结构：经验项 + 容量项（这次是 R̂(ℋ)，可数据驱动地估计）+ 置信项（按 1/√m 收缩）。</p>
+
+    <p>另一条互补的线索是<span class="term">稳定性</span>（Stability）：不分析假设空间多大，而是分析<b>算法</b>——如果换走训练集中的一个样本，学出来的模型变化很小，那么它的经验表现就接近真实表现。稳定性为正则化提供了理论解释：正则项正是让算法对单个样本不敏感，从而"稳定"，从而泛化。</p>
+
+    <p><b>本章的收尾与遗留问题</b>：无论 VC 界还是 Rademacher 界，都是 worst-case 的保证。现代深度学习里，网络参数量远超样本数（按 VC 维的直觉早该过拟合到失控），实际却泛化得相当好——所有经典界在这种超参数化 regime 下都松得失去意义。"为什么大网络能泛化"至今是开放问题，深度学习理论仍远未完成。理论的价值此刻不在于给出精确数字，而在于给出正确的定性方向：控容量、要稳定、置信与精度不可兼得。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>三代容量尺子的进化逻辑：|ℋ|（数个数，只对有限空间有效）→ VC 维（数"能打散多少点"，对无限空间有效但只看最坏情形）→ Rademacher 复杂度（数"能拟合多少噪声"，随数据分布自适应）。尺子越来越细，共同的内核不变：<b>容量即"能对随机性照单全收的能力"，这种能力越强，从有限样本到无限分布的外推越不可信</b>。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>误区一："Rademacher 复杂度高说明模型拟合能力强，是好事"。要看场合：它衡量的是拟合<b>噪声</b>的能力，这正是过拟合的定义，出现在泛化界的"罚金"位置，越小越好。<br>
+      误区二："理论界算出来 0.269，说明这个模型真的要比训练误差差 26.9%"。界是<b>充分条件式的上界</b>：保证"不会超过"，不预测"实际会是"。实践中的差距往往比界小得多——界用来比较趋势（加样本、减容量有没有用），不用来报实测值。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 12.4-1</div>
+              <div class="q-text">用一句话说出经验 Rademacher 复杂度的直觉，并说明它相对 VC 维的两个优势。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              "假设空间拟合纯随机 ±1 噪声标签的期望最好成绩"。优势：依赖数据分布而非最坏情形；可直接从样本估计。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 12.4-2</div>
+              <div class="q-text">稳定性分析的角度与 VC/Rademacher 有何不同？它如何解释正则化为什么有效？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              它不度量假设空间容量，而度量算法对样本扰动的敏感度：换一个样本输出几乎不变 ⇒ 泛化好。正则化使算法对单样本不敏感，即提高稳定性，故改善泛化。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ================= 概念卡 ================= -->
+    <h2><span class="sec-no">🃏</span>概念卡：本章概念的一分钟画像</h2>
+    <p>翻面前先自问：这个概念我能用一句话讲清楚吗？</p>
+    <div class="flip-grid">
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 1</div>
+            <div class="q-text">PAC 学习（Probably Approximately Correct Learning）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">对任意 ε, δ ∈ (0,1)，样本数足够大时算法以 ≥ 1−δ 概率输出 E(h) ≤ ε 的假设。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">把"学习成功"从口号变成可验证的概率命题。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">近似正确（ε 之内），大概靠谱（1−δ 的把握）。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">把 δ 当成模型错误率；其实 ε 管误差、δ 管抽样的运气。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">一切样本复杂度与泛化保证的表述框架，贯穿本章及第13章。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 2</div>
+            <div class="q-text">假设空间与版本空间（Hypothesis Space / Version Space）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">假设空间 ℋ 是学习算法可选假设的全体；版本空间是其中与训练集完全一致的假设子集。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">界定"学习"的搜索范围，使容量可度量（|ℋ|、VC 维）。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">ℋ 是考场全体考生，版本空间是笔试全对进入面试的那批。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为版本空间里全是好假设——坏假设可能靠运气蒙进面试。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">样本复杂度推导的第一步：估计版本空间含坏假设的概率。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 3</div>
+            <div class="q-text">VC 维（Vapnik-Chervonenkis Dimension）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">假设空间能打散的样本集合的最大大小。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">给无限假设空间一把有限容量的尺子，使泛化界可写。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">有效自由度：你能独立"拨动"的判别方向有几个。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">等于参数个数——sin(ωx) 单参数但 VC 维无穷。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">估计模型容量、理解 SVM 与结构风险最小化（第6章回响）。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 4</div>
+            <div class="q-text">打散（Shattering）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">若某 m 点集合的全部 2<sup>m</sup> 种标记方案都能被 ℋ 中假设实现，称 ℋ 打散该集合。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">把"表达能力"变成逐个可判定的组合问题，是 VC 维的地基。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">考官出任意答案，你都有办法交卷——这个规模的考场被你"通吃"了。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">证"能打散 d 点"要对所有点集成立——其实只需存在一组；证"不能打散"才须对任意成立。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">判定具体函数族 VC 维时的标准操作（区间族、线性族）。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 5</div>
+            <div class="q-text">Rademacher 复杂度（Rademacher Complexity）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">R̂(ℋ) = E<sub>σ</sub>[sup<sub>h</sub> (1/m)∑ σ<sub>i</sub>h(x<sub>i</sub>)]：拟合随机 ±1 噪声的期望最好成绩。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">给出依赖数据分布、可从样本估计的容量度量，修正 VC 维的最坏情形偏差。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">连掷硬币的标签都能背下来的空间，什么也学不到。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">把它当作拟合能力来夸——它在泛化界里是罚金项，越小越好。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">需要数据自适应泛化界、分析深度学习容量的理论研究。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 6</div>
+            <div class="q-text">泛化界（Generalization Bound）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">以 ≥ 1−δ 概率成立的 E(h) ≤ Ê(h) + 容量项 + 置信项 型不等式。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">把不可观测的 E(h) 用可计算的 Ê(h)、d、R̂(ℋ)、m、δ 锁住。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">考试成绩 = 平时成绩 + 考题偏门修正 + 运气修正。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">把上界当实测值；它是趋势性工具，数值通常极松。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">比较模型容量与样本量是否匹配；论证"为什么小模型/正则化有效"。</span></div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- ================= 分层习题 ================= -->
+    <h2><span class="sec-no">📝</span>分层习题</h2>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>判断正误并说明理由：①"PAC 可学习要求算法对所有可能的训练集都输出误差 ≤ ε 的假设"；②"实轴区间族的 VC 维是 2，意味着任意 2 个实数点都能被区间族打散"。</div>
+      <details>
+        <summary>提示</summary>
+        <p>① 回顾 P(E(h)≤ε) ≥ 1−δ 中随机性的来源；② 回顾 VC 维定义中"存在"与"任意"的位置。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p>① <b>错</b>。PAC 只要求以 ≥ 1−δ 的概率成功，允许 δ 比例的"坏运气"训练集（随机性来自抽样）。"对所有训练集都成功"要求 δ = 0，这在有限样本下一般不可能。</p>
+          <p>② <b>错（方向反了）</b>。VC 维 ≥ 2 只需要"存在"一组 2 点被打散——确实任意 2 点也能打散（本题恰好成立），但 VC 维定义本身只断言存在性；真正含"任意"的是上界那半句：任意 3 点都打不散。混淆"存在/任意"是 VC 维判定里最常见的丢分点。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>下列哪个函数族的 VC 维"不等于"其自由参数个数？A. ℝ² 中的线性分类器（3 个参数，VC=3）；B. 实轴区间 [a,b]（2 个参数，VC=2）；C. 单参数族 h<sub>ω</sub>(x) = sign(sin(ωx))（1 个参数）；D. ℝ<sup>d</sup> 超平面（d+1 个参数，VC=d+1）。</div>
+      <details>
+        <summary>提示</summary>
+        <p>回忆警告框里那个"振荡可以任意密"的反例。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p>选 <b>C</b>。sin(ωx) 只有一个参数，但取 ω 足够大时函数在任意有限点集上都能振荡出任意指定的 ±1 模式，故 VC 维为无穷大。A、B、D 的参数个数与 VC 维恰好相等，这正是"VC 维 = 参数个数"错觉的来源——C 说明这种相等只是常见巧合，不是定理。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>布尔合取问题，n = 15 个布尔文字（|ℋ| = 3¹⁵），可分情形，要求 ε = 0.05、δ = 0.01。求 PAC 保证所需的样本数 m。</div>
+      <details>
+        <summary>提示</summary>
+        <p>用 m ≥ (1/ε)(ln|ℋ| + ln(1/δ))；ln(3¹⁵) = 15 ln 3，ln 3 ≈ 1.0986。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <ol>
+            <li>|ℋ| = 3¹⁵ = 14348907；</li>
+            <li>1/ε = 1/0.05 = 20；</li>
+            <li>ln|ℋ| = ln(3¹⁵) = 15 × 1.0986 = 16.48；</li>
+            <li>ln(1/δ) = ln(1/0.01) = ln 100 = 4.61；</li>
+            <li>括号合计 = 16.48 + 4.61 = 21.09；</li>
+            <li>m ≥ 20 × 21.09 = 421.8，向上取整 <b>m ≥ 422</b>。</li>
+          </ol>
+          <p>结论：422 个样本即可以 ≥ 99% 的概率保证任何与训练集一致的合取假设误差 ≤ 5%。与手算例 1（n=10, ε=0.1, δ=0.05 → 140）对比：ε 减半使系数 1/ε 翻倍，δ 更严使对数项略增——样本需求的主要杠杆是 ε。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>判定实轴上"两个区间的并"函数族 ℋ = { [a₁,b₁] ∪ [a₂,b₂] }（在任一区间内标 +）的 VC 维。写出判定思路，证明 VC = 4 的两个方向。</div>
+      <details>
+        <summary>提示</summary>
+        <p>模仿区间族 VC=2 的证明：能打散 d 点只需构造一组位置；打不散 d+1 点要对任意位置给出一个实现不了的交替标记。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p><b>VC ≥ 4</b>：取 x₁ &lt; x₂ &lt; x₃ &lt; x₄ 四点。逐类验证 2⁴ = 16 种标记：</p>
+          <ul>
+            <li>全 −：两个区间都放到四点之外；</li>
+            <li>全 +：一个区间罩住全部四点（另一个任意，如与之重合）；</li>
+            <li>恰一个 +：一个区间只罩该点；</li>
+            <li>恰两个 + 且相邻（++−−、−++−、−−++）：一个区间罩住这对相邻点即可；</li>
+            <li>恰两个 + 且不相邻（+−+−、+−−+、−+−+）：两个区间各罩一个正点；</li>
+            <li>恰三个 +（即恰一个 −）：两个区间分别罩负点左侧与右侧的正点段（如 −+++：一个区间罩 x₂x₃ 段、一个罩 x₄，或直接一个区间罩 [x₂,x₄] 而负点 x₁ 在外）。</li>
+          </ul>
+          <p>16 种全部可实现，故 VC ≥ 4。</p>
+          <p><b>VC ≤ 4（任意 5 点打不散）</b>：任取 x₁ &lt; x₂ &lt; x₃ &lt; x₄ &lt; x₅，考虑交替标记 (+,−,+,−,+)。每个标 + 的点都需要被某个区间覆盖，而每个区间是连续一段——一个区间若覆盖两个不相邻的正点，必然把中间的负点也罩进去，产生错误。因此每个区间至多覆盖"一段连续的正点"，而 (+,−,+,−,+) 的正点分成 3 段，只有 2 个区间，至少有一段罩不到。故该标记无法实现，任意 5 点打不散。</p>
+          <p>合起来 <b>d<sub>VC</sub> = 4</b>。规律：k 个不相交区间的并，VC 维 = 2k——交替标记 (+,−,…,+) 需要 2k+1 个点才能逼出 k+1 段正点。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l3">L3 建模应用</span>某医院用逻辑回归（线性分类器）做疾病辅助诊断，特征共 10 维，只收集到 200 个标注样本。请：①用本章的 VC 泛化界（δ = 0.05）估算"泛化误差 − 经验误差"的上界；②评价这个界对临床上线是否有用；③给出至少三条改进路线。</div>
+      <details>
+        <summary>提示</summary>
+        <p>10 维线性分类器 VC 维 d = 11；把 d=11、m=200、δ=0.05 代入根号项。若结果大于 1，想想这意味着什么。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p><b>① 计算</b>（d = 11, m = 200, δ = 0.05）：</p>
+          <ol>
+            <li>8d = 88；</li>
+            <li>ln(2em/d) = ln(2e × 200 / 11) = ln(400e/11) = ln(36.36e) = ln 36.36 + 1 = 3.593 + 1 = 4.593；</li>
+            <li>88 × 4.593 = 404.2；</li>
+            <li>置信项：8 × ln(4/0.05) = 8 × ln 80 = 8 × 4.382 = 35.1；</li>
+            <li>分子 = 404.2 + 35.1 = 439.3；439.3 / 200 = 2.196；√2.196 ≈ 1.48。</li>
+          </ol>
+          <p>界为 E(h) ≤ Ê(h) + 1.48。误差上界超过 100%，是<b>废话界</b>——200 个样本对 d=11 的容量完全不够。</p>
+          <p><b>② 评价</b>：这个界对临床上线没有任何背书作用。若想让附加项 ≤ 0.1，试 m = 100000：ln(2e×10⁵/11) = ln(18181.8e) ≈ 9.808 + 1 = 10.808；88 × 10.808 + 35.1 = 986.2；986.2/10⁵ = 0.00986，√ ≈ 0.0993。即需要约 <b>10 万样本</b>级别——远超医院现有数据。理论在此的价值恰恰是<b>提前喊出"数据不够"</b>，而不是事后补救。</p>
+          <p><b>③ 改进路线</b>：（a）压容量——用第11章的特征选择把 10 维降到 3–4 维（d 从 11 降到 4–5），根号项分子近似按比例缩小；（b）加正则/限模——L2 正则、限制范数可降低有效容量（稳定性视角），同样缩小容量项；（c）增样本——第13章半监督学习利用大量未标注病例；（d）换更细的尺子——用 Rademacher 复杂度在这 200 个真实样本上估计数据依赖的界，通常远紧于 VC 界；（e）降置信或精度要求（如 δ=0.1）只能微调 ln 项，救不了量级，不应作为主路线。</p>
+        </div>
+      </details>
+    </div>
+
+    <!-- ================= 本章自测 ================= -->
+    <h2><span class="sec-no">✍️</span>本章自测</h2>
+    <p class="quiz-hint">点击选项判分，答错会给出原因。</p>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 1</div>
+      <div class="q-stem">在 PAC 学习的定义 P(E(h) ≤ ε) ≥ 1 − δ 中，概率是相对于什么取的？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 相对于测试数据的随机性</li>
+        <li data-opt="b">B. 相对于训练集的随机抽样</li>
+        <li data-opt="c">C. 相对于学习算法内部必然存在的随机化</li>
+        <li data-opt="d">D. 相对于目标概念 c 的随机选择</li>
+      </ul>
+      <div class="quiz-explain">解析：<b>B 对</b>——h 是从随机抽到的训练集学出来的，"可能倒霉抽到坏样本"正是 δ 的来源。A 错：E(h) 本身已对测试分布取期望，不是概率来源。C 错：确定性算法（如 ERM）同样满足 PAC 框架，算法不必随机。D 错：标准 PAC 中 c 是固定但未知的，不对其取概率（对 c 取概率是贝叶斯框架）。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="c">
+      <div class="q-no">自测 2</div>
+      <div class="q-stem">有限假设空间下，从"可分"情形换到"不可分（agnostic）"情形，样本复杂度对 ε 的依赖如何变化？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 不变，都是 O(1/ε)</li>
+        <li data-opt="b">B. 从 O(1/ε²) 改善到 O(1/ε)</li>
+        <li data-opt="c">C. 从 O(1/ε) 恶化到 O(1/ε²)</li>
+        <li data-opt="d">D. 从 O(1/ε) 恶化到 O(1/ε³)</li>
+      </ul>
+      <div class="quiz-explain">解析：<b>C 对</b>——可分 m ≥ (1/ε)(ln|ℋ|+ln(1/δ))；不可分 m ≥ (1/(2ε²))(ln(2|ℋ|)+ln(1/δ))。A 错：两种情形的机制不同，可分靠"坏假设逐个被淘汰"（指数衰减），不可分靠集中不等式（1/√m 收敛）。B 方向说反了。D 错：集中不等式给出的是 ε² 而非 ε³ 的代价（手算例：同一问题 140 → 734，主要由 1/ε² 造成）。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 3</div>
+      <div class="q-stem">实轴区间族 [a,b] 的 VC 维是 2。要证明"任意 3 个点都打不散"，最关键的一步是指出哪种标记无法实现？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. (+,+,+) —— 区间不可能同时罩住 3 个点</li>
+        <li data-opt="b">B. (+,−,+) —— 区间罩住两端必罩住中间</li>
+        <li data-opt="c">C. (−,−,−) —— 区间不可能避开所有点</li>
+        <li data-opt="d">D. (+,+,−) —— 区间形状受限无法实现</li>
+      </ul>
+      <div class="quiz-explain">解析：<b>B 对</b>——区间是连续一段，含 x₁ 与 x₃ 必含中间的 x₂，故 (+,−,+) 永远做不到。A 错：取区间罩住整个范围即可实现全 +。C 错：把区间放到三点之外即可全 −。D 错：(+,+,−) 用一个罩住前两点的区间即可实现。关键永远是"交替标记逼出区间的不连续性"。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="d">
+      <div class="q-no">自测 4</div>
+      <div class="q-stem">下列哪一个是"VC 维 = 参数个数"这一错误观念的著名反例？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. ℝ² 中的线性分类器（3 参数，VC = 3）</li>
+        <li data-opt="b">B. 实轴区间族（2 参数，VC = 2）</li>
+        <li data-opt="c">C. 有限布尔合取空间（|ℋ| 有限，VC 维有限）</li>
+        <li data-opt="d">D. 单参数正弦族 h(x) = sign(sin(ωx))（1 参数，VC = ∞）</li>
+      </ul>
+      <div class="quiz-explain">解析：<b>D 对</b>——ω 取得足够大时正弦振荡任意密，可对任意有限点集的任意标记拟合，VC 维无穷，而参数只有 1 个。A、B 恰好参数与 VC 维相等，是错觉的来源而非反例。C 错：有限空间的 VC 维有限（≤ log₂|ℋ|），不构成对"参数个数说"的反证。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="a">
+      <div class="q-no">自测 5</div>
+      <div class="q-stem">关于经验 Rademacher 复杂度 R̂(ℋ) = E<sub>σ</sub>[sup<sub>h</sub> (1/m)∑σ<sub>i</sub>h(x<sub>i</sub>)]，下列说法正确的是？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 它度量 ℋ 拟合随机噪声标签的能力，该值越大泛化界越松</li>
+        <li data-opt="b">B. 它度量 ℋ 拟合真实标签的能力，该值越大模型越好</li>
+        <li data-opt="c">C. 它与数据分布无关，只由 ℋ 的最坏情形决定</li>
+        <li data-opt="d">D. 它在泛化界中替代的是经验误差 Ê(h) 的位置</li>
+      </ul>
+      <div class="quiz-explain">解析：<b>A 对</b>——σ 是随机 ±1 噪声，R̂ 大说明空间连噪声都能背，出现在界的罚金位置（E ≤ Ê + 2R̂ + …）。B 错：拟合的是随机标签而非真实标签，且方向相反（越小越好）。C 错：这恰是 VC 维的特点；R̂ 定义在具体样本上，是数据依赖的。D 错：它替代的是"容量项"（VC 界中含 d 的那一项），经验项仍是 Ê(h)。</div>
+    </div>
+
+    <!-- ================= 三句话复述 ================= -->
+    <div class="retell">
+      <h3>🗣️ 用自己的话，三句话讲完本章</h3>
+      <p>对着空气（或室友）说出这三句。说卡壳的那句，回去重读对应小节。</p>
+      <details>
+        <summary>句1：这章解决什么问题？——</summary>
+        <div class="retell-answer">参考答案：训练误差小不等于泛化好；本章要为"学出的假设在新数据上的误差"给出概率化的上界，并回答"需要多少样本才能保证这个界"。</div>
+      </details>
+      <details>
+        <summary>句2：核心机制是什么？——</summary>
+        <div class="retell-answer">参考答案：用假设空间的容量换置信——有限空间用 |ℋ|（联合界 + Hoeffding），无限空间用 VC 维（打散/增长函数），更细的用 Rademacher 复杂度；统一形式是"泛化误差 ≤ 经验误差 + 容量项 + 置信项"，样本 m 按 1/√m 或更快压住后两项。</div>
+      </details>
+      <details>
+        <summary>句3：它和前后章怎么分工？——</summary>
+        <div class="retell-answer">参考答案：前十一章教"怎么学"，本章教"学出来的信不信得过、要多少数据"；第11章的特征选择、正则化在这里获得理论解释（压容量、增稳定），第13章半监督学习则在本章揭示的"样本不够"困境下给出出路。</div>
+      </details>
+    </div>
+
+    <!-- ================= 复习计划 ================= -->
+    <div class="review-plan">
+      <h3>🔁 间隔复习计划</h3>
+      <p>回忆本身比重读有效 10 倍。到点只做一件事：翻卡 + 重做标记题。</p>
+      <table>
+        <tr><th>时间点</th><th>复习内容</th><th>预计用时</th></tr>
+        <tr><td>第 1 天</td><td>概念卡 1–6 全部 + 回忆卡 12.1-2、12.3-1（两个公式两个定义）</td><td>10 分钟</td></tr>
+        <tr><td>第 3 天</td><td>概念卡 3、5、6 + 重做手算例 1（n=10 布尔合取）+ 自测错题</td><td>10 分钟</td></tr>
+        <tr><td>第 7 天</td><td>三句话复述 + 重做 L2 两题（n=15 样本复杂度、两区间并 VC=4）</td><td>15 分钟</td></tr>
+        <tr><td>第 15 天</td><td>只做合上书挑战；能手算出 0.269 那个界、能一句话答主线问题就毕业</td><td>15 分钟</td></tr>
+      </table>
+    </div>
+
+    <!-- 合上书挑战 -->
+    <div class="final-challenge">
+      <h3>📕 合上书挑战</h3>
+      <p class="fc-sub">现在关掉这个页面，拿一张纸，凭记忆完成以下任务。全部做完再回来核对——这是本章真正的毕业考试。</p>
+      <ol id="challenge-list">
+        <li><span class="fc-check"></span>写出 PAC 可学习的定义式 P(E(h)≤ε) ≥ 1−δ，并说明 ε、δ 各自的含义与随机性来源</li>
+        <li><span class="fc-check"></span>完整推导有限假设空间可分情形的样本复杂度：从单个坏假设蒙混概率 (1−ε)<sup>m</sup> 推到 m ≥ (1/ε)(ln|ℋ|+ln(1/δ))</li>
+        <li><span class="fc-check"></span>手算：n=10 布尔合取（|ℋ|=59049）、ε=0.1、δ=0.05 时，可分情形 m ≥ 140，不可分情形 m ≥ 734</li>
+        <li><span class="fc-check"></span>证明实轴区间族 VC 维 = 2（两个方向都写），并举 (+,−,+) 打不散的理由</li>
+        <li><span class="fc-check"></span>写出 VC 泛化界，用 d=10、m=10000、δ=0.05 算出附加项 ≈ 0.269，并说出界的三项结构</li>
+        <li><span class="fc-check"></span>一句话讲清 Rademacher 复杂度的直觉，并举"VC 维 ≠ 参数个数"的反例</li>
+        <li><span class="fc-check"></span>一句话回答本章主线问题：学出来的模型凭什么在新数据上也可靠——可靠到什么程度、需要多少样本？</li>
+      </ol>
+    </div>
+
+    <div class="complete-zone">
+      <button class="btn-complete" id="btn-complete" onclick="markDone()">✓ 我已完成本章（含合上书挑战）</button>
+    </div>
+
+    <div class="chapter-nav">
+      <a href="chapter-11.html"><span class="nav-dir">← 上一章</span>第11章 特征选择与稀疏学习</a>
+      <a href="chapter-13.html" class="next"><span class="nav-dir">下一章 →</span>第13章 半监督学习</a>
+    </div>
+
+  </div>
+</div>
+
+<footer class="footer">
+  <div class="wrap">第12章 计算学习理论 · 机器学习互动讲义 · 基于周志华《机器学习》</div>
+</footer>
+
+<script src="/lectures-assets/mermaid.min.js"></script>
+<script>
+mermaid.initialize({
+  startOnLoad: true,
+  theme: "base",
+  themeVariables: {
+    primaryColor: "#e3edf7",
+    primaryBorderColor: "#1d5f9e",
+    primaryTextColor: "#1d5f9e",
+    lineColor: "#5c554b",
+    secondaryColor: "#fbeedd",
+    tertiaryColor: "#f5f1e8",
+    fontFamily: "-apple-system, PingFang SC, sans-serif",
+    fontSize: "14px"
+  },
+  flowchart: { curve: "linear", htmlLabels: false }
+});
+</script>
+<script>
+// 自测题判分（原样复用，勿改）
+document.querySelectorAll(".quiz-block").forEach(block => {
+  const answer = block.dataset.answer;
+  const explain = block.querySelector(".quiz-explain");
+  block.querySelectorAll(".quiz-opts li").forEach(li => {
+    li.addEventListener("click", () => {
+      const opts = block.querySelectorAll(".quiz-opts li");
+      opts.forEach(o => o.classList.add("disabled"));
+      if (li.dataset.opt === answer) {
+        li.classList.add("correct");
+      } else {
+        li.classList.add("wrong");
+        block.querySelector(`[data-opt="${answer}"]`).classList.add("correct");
+      }
+      explain.classList.add("show");
+    });
+  });
+});
+
+// 合上书清单打勾（原样复用，勿改）
+document.querySelectorAll("#challenge-list li").forEach(li => {
+  li.addEventListener("click", () => li.classList.toggle("checked"));
+});
+
+// 完成标记 → localStorage
+const KEY = "ml_progress_v1";
+function loadProgress() {
+  try { return JSON.parse(localStorage.getItem(KEY)) || {}; } catch (e) { return {}; }
+}
+const progress = loadProgress();
+const btn = document.getElementById("btn-complete");
+if (progress[12] && progress[12].done) {
+  btn.textContent = "✓ 已完成 · 再次点击重置";
+  btn.classList.add("done");
+}
+function markDone() {
+  const p = loadProgress();
+  if (p[12] && p[12].done) {
+    delete p[12];
+    btn.textContent = "✓ 我已完成本章（含合上书挑战）";
+    btn.classList.remove("done");
+  } else {
+    p[12] = { done: true, completedAt: Date.now(), reviewsDone: 0 };
+    btn.textContent = "✓ 已完成 · 复习提醒已开启";
+    btn.classList.add("done");
+  }
+  localStorage.setItem(KEY, JSON.stringify(p));
+}
+</script>
+
+</body>
+</html>

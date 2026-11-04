@@ -1,0 +1,881 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第4章 数值计算 · 深度学习互动讲义</title>
+<link rel="stylesheet" href="/lectures-assets/style.css">
+</head>
+<body>
+
+<nav class="topbar">
+  <div class="topbar-inner">
+    <span class="brand"><a href="index.html" style="color:inherit">← 学习地图</a></span>
+    <span class="crumb">第一部分 · 数学与机器学习基础 / 第4章</span>
+  </div>
+</nav>
+
+<div class="wrap">
+
+  <div class="lecture-head">
+    <span class="ch-label">CHAPTER 04 · 数学与机器学习基础</span>
+    <h1>数值计算</h1>
+    <p class="lead">一句话副标题：连续数学在有限精度机器上，怎样才能算得对、走得稳？</p>
+  </div>
+
+  <!-- ===== 章首四件套之 1：全书定位 ===== -->
+  <div class="position-bar">
+    <strong>本章在主线上的位置：</strong>前三章给了连续的数学语言（线性代数、概率、信息论）→ <u>本章回答这些公式在计算机里为什么会算错、怎么修</u> → 第5章及以后的每一个训练算法都建立在本章的数值技巧之上。<br>
+    第4章回答主线上的第4个问题：<strong>连续数学在有限精度机器上怎样才能算得对、走得稳？</strong>
+    <div class="map-inline">
+      <span class="node">① 数学与机器学习基础（Ch1–5）</span><span class="arrow">→</span>
+      <span class="node">② 现代深度网络（Ch6–11）</span><span class="arrow">→</span>
+      <span class="node">③ 表示与推断（Ch12–16）</span><span class="arrow">→</span>
+      <span class="node">④ 生成模型与前沿（Ch17–20）</span>
+    </div>
+    <div class="map-inline">
+      <span class="node">Ch1 引言</span><span class="arrow">→</span>
+      <span class="node">Ch2 线性代数</span><span class="arrow">→</span>
+      <span class="node">Ch3 概率与信息论</span><span class="arrow">→</span>
+      <span class="node here">Ch4 数值计算</span><span class="arrow">→</span>
+      <span class="node">Ch5 机器学习基础</span>
+    </div>
+  </div>
+
+  <!-- ===== 章首四件套之 2：学习目标 ===== -->
+  <div class="objectives">
+    <h4>🎯 学完本章，合上书你应该能：</h4>
+    <ol>
+      <li>说出上溢与下溢是什么，并举出 softmax 算出 NaN 的完整场景。</li>
+      <li>写出 LogSumExp 技巧的公式，并对 z = (1000, 1001) 手算出数值稳定的 log-sum-exp 与 softmax 结果。</li>
+      <li>用条件数解释：为什么 A = diag(10, 0.1) 上 1% 的输入扰动会在某个方向被放大成 10%。</li>
+      <li>手算梯度下降一步更新（给定 f、x₀、η），并在 f(x,y) = x² + 10y² 上演示两步 zigzag 震荡。</li>
+      <li>用海森矩阵的特征值符号判定临界点是极小、极大还是鞍点。</li>
+      <li>手算一个简单的拉格朗日乘子问题，并说出 KKT 条件比拉格朗日多了什么。</li>
+    </ol>
+  </div>
+
+  <div class="lecture">
+
+    <!-- ===== 章首四件套之 3：推导主线图 ===== -->
+    <div class="figure">
+      <div class="mermaid">
+flowchart TB
+  A["连续数学很美，但机器只有有限精度"] --> B["上溢下溢让 softmax 算出 NaN"]
+  B --> C["LogSumExp 提出最大值稳住数值"]
+  C --> D["方向对了，走多大会震荡"]
+  D --> E["梯度与海森刻画方向和曲率"]
+  E --> F["条件数锁死可用步长"]
+  F --> G["代价：即使方向对步长稳，深度网络优化仍困难，非凸加鞍点，通向第8章优化算法"]
+  classDef hot fill:#fbeedd,stroke:#c4651f,stroke-width:2.5px,color:#c4651f;
+  classDef danger fill:#fae9e7,stroke:#b03a2e,stroke-width:2.5px,color:#b03a2e;
+  class C hot;
+  class G danger;
+      </div>
+      <div class="caption">本章推导主线：从「算不对」（溢出）到「走不稳」（病态与曲率），每一步都回答为什么需要下一步；末端是本章解决不了、留给第 8 章的问题。</div>
+    </div>
+
+    <!-- ========== 4.1 ========== -->
+    <h2><span class="sec-no">4.1</span>上溢与下溢：机器里的「数」不是实数</h2>
+
+    <p>第 2、3 章我们一直在理想的实数世界里推导。但计算机用固定位数存数：单精度浮点数（float32）能表示的范围大约只有 ±3.4 × 10³⁸。超出这个范围，就会发生两种事故：</p>
+    <ul>
+      <li><span class="term">上溢</span>（Overflow）：数值太大，存不下，直接变成 ∞（无穷大）。</li>
+      <li><span class="term">下溢</span>（Underflow）：数值太接近 0，被四舍五入成 0。</li>
+    </ul>
+    <p>这两种事故单独看都像边角问题，但它们会联手摧毁深度学习中最重要的一个函数——<span class="term">softmax 函数</span>（Softmax Function）：</p>
+
+    <div class="formula">softmax(<span class="var">z</span>)<sub>i</sub> = <span class="frac"><span class="num-part">e<sup>z<sub>i</sub></sup></span><span class="den-part">∑<sub>j</sub> e<sup>z<sub>j</sub></sup></span></span></div>
+
+    <p><strong>完整事故演示</strong>：设 logits 为 z = (1000, 1001)。直接按公式算：</p>
+    <ol>
+      <li>e¹⁰⁰⁰ ≈ 10⁴³⁴，远超 float32 上限 10³⁸ → <strong>上溢，结果为 ∞</strong>。</li>
+      <li>e¹⁰⁰¹ 同样 → ∞。</li>
+      <li>softmax 第一项 = ∞ / (∞ + ∞) = ∞ / ∞ = <strong>NaN</strong>（Not a Number，非法值）。</li>
+    </ol>
+    <p>一旦 NaN 进入计算图，之后所有运算都被污染——loss 是 NaN，梯度是 NaN，训练直接报废。而下溢同样致命：若 z 全是很小的负数，e<sup>z<sub>i</sub></sup> 全部下溢成 0，分母 ∑ = 0，0/0 又是 NaN。</p>
+
+    <h3>修复：LogSumExp 技巧（提出最大值）</h3>
+    <p>核心观察：softmax 和 log-sum-exp 里所有 z<sub>i</sub> <strong>同时减去同一个常数 m，结果在数学上完全不变</strong>。取 m = max(z) 就能把所有指数压到 ≤ 0，e 的幂次最大是 e⁰ = 1，永不溢出。这就是 <span class="term">LogSumExp 技巧</span>（LogSumExp Trick）：</p>
+
+    <div class="formula">log ∑<sub>i</sub> e<sup>z<sub>i</sub></sup> = <span class="var">m</span> + log ∑<sub>i</sub> e<sup>z<sub>i</sub> − m</sup>，其中 <span class="var">m</span> = max<sub>i</sub> z<sub>i</sub></div>
+
+    <p><strong>纸笔手算</strong>：求 log(e¹⁰⁰⁰ + e¹⁰⁰¹)，步骤写全：</p>
+    <ol>
+      <li>提出最大值：m = max(1000, 1001) = <strong>1001</strong>。</li>
+      <li>提公因子：e¹⁰⁰⁰ + e¹⁰⁰¹ = e¹⁰⁰¹ · (e¹⁰⁰⁰⁻¹⁰⁰¹ + e¹⁰⁰¹⁻¹⁰⁰¹) = e¹⁰⁰¹ · (e⁻¹ + e⁰)。</li>
+      <li>取对数拆成两项：log[e¹⁰⁰¹ · (e⁻¹ + 1)] = log(e¹⁰⁰¹) + log(e⁻¹ + 1) = 1001 + log(e⁻¹ + 1)。</li>
+      <li>算小项：e⁻¹ ≈ 0.3679，e⁻¹ + 1 ≈ 1.3679。</li>
+      <li>log(1.3679) ≈ 0.3133（因为 e⁰·³¹³³ ≈ 1.368）。</li>
+      <li>合并：log(e¹⁰⁰⁰ + e¹⁰⁰¹) ≈ 1001 + 0.3133 = <strong>1001.3133</strong>。全程最大只算过 e⁰ = 1，没有溢出。</li>
+    </ol>
+
+    <p><strong>softmax 版本</strong>：z 减去 m = 1001 后变为 z′ = (−1, 0)，于是第一项</p>
+    <div class="formula">softmax(z)₁ = <span class="frac"><span class="num-part">e⁻¹</span><span class="den-part">e⁻¹ + e⁰</span></span></span> = <span class="frac"><span class="num-part">1</span><span class="den-part">1 + e</span></span></span> ≈ <span class="frac"><span class="num-part">1</span><span class="den-part">3.7183</span></span></span> ≈ <strong>0.2689</strong></div>
+    <p>第二项 = 1 − 0.2689 = 0.7311。与理论值完全一致，且没有任何一步触碰 e¹⁰⁰⁰。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>LogSumExp 的本质：softmax 只看 <strong>差距</strong>，不看绝对高度。z = (1000, 1001) 和 z′ = (−1, 0) 给出同一个分布。把「山峰整体平移到海平面」，风景不变，但不会撞上天花板。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>「减去 max 是近似，会损失精度」——错。e<sup>z<sub>i</sub> − m</sup> / ∑ e<sup>z<sub>j</sub> − m</sup> 与 e<sup>z<sub>i</sub></sup> / ∑ e<sup>z<sub>j</sub></sup> 在数学上严格相等（分子分母同乘 e<sup>−m</sup>），它不是近似，是恒等变形，唯一作用是规避溢出。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 4.1-1</div>
+              <div class="q-text">z = (1000, 1001) 直接算 softmax 为什么会得到 NaN？分哪几步发生？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              e¹⁰⁰⁰ 与 e¹⁰⁰¹ 超出 float32 上限（约 10³⁸）发生上溢变为 ∞；随后 ∞ / (∞ + ∞) = ∞/∞，产生 NaN。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 4.1-2</div>
+              <div class="q-text">LogSumExp 技巧的公式是什么？为什么减去 max 不改变结果？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              log ∑ e<sup>z<sub>i</sub></sup> = m + log ∑ e<sup>z<sub>i</sub> − m</sup>，m = max z<sub>i</sub>。因为相当于分子分母同乘 e<sup>−m</sup>，是恒等变形；减 max 后最大指数为 e⁰ = 1，消除上溢。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ========== 4.2 ========== -->
+    <h2><span class="sec-no">4.2</span>病态条件：为什么 1% 的误差会变成 10%</h2>
+
+    <p>上一节解决的是「数太大存不下」。但即使所有数都在浮点范围内，还有更隐蔽的敌人：<strong>舍入误差被放大</strong>。第 2 章我们见过 <span class="term">条件数</span>（Condition Number）κ = λ<sub>max</sub> / λ<sub>min</sub>（最大与最小特征值绝对值之比）。本节看清它到底怎么咬人。</p>
+
+    <p>考虑函数 f(x) = A⁻¹x，取对角矩阵 A = diag(10, 0.1)，则 A⁻¹ = diag(0.1, 10)。条件数 κ = 10 / 0.1 = <strong>100</strong>。</p>
+
+    <p><strong>手算演示</strong>：给输入 x 加一个大小为 ε 的扰动（相当于 1% 量级的测量误差），看输出变化量 A⁻¹ε 在两个方向上的差别：</p>
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>扰动方向</th><th>扰动向量</th><th>输出变化 A⁻¹ε</th><th>放大倍数</th></tr>
+        <tr><td>沿 e₁ = (1, 0)</td><td>(ε, 0)</td><td>(0.1ε, 0)</td><td>×0.1（缩小到十分之一）</td></tr>
+        <tr><td>沿 e₂ = (0, 1)</td><td>(0, ε)</td><td>(0, 10ε)</td><td>×10（放大十倍）</td></tr>
+      </table>
+    </div>
+    <p>同样大小的输入误差，一个方向被压成 1/10，另一个方向被放大 10 倍——两个方向的「待遇」相差整整 100 倍，正是条件数 κ = 100。输入扰动 1%，沿坏方向输出就偏 10%。</p>
+
+    <div class="box insight">
+      <span class="box-tag">✅ 判定规则</span>
+      <p>κ 接近 1（如正交矩阵）：误差各方向同等传递，问题「良态」（well-conditioned）。κ 很大（如 10⁴ 以上）：问题「病态」（ill-conditioned），<strong>任何算法都救不了</strong>——因为误差来自输入的浮点表示本身，不是算法产生的。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>「换个更聪明的算法就能解决病态问题」——错。病态是问题本身的性质：输入的微小不确定性被矩阵结构放大。算法只能避免「再添乱」，无法消除输入误差被放大 κ 倍这个下限。能改善的是换问题（如重新缩放特征、加正则），不是换算法。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 4.2-1</div>
+              <div class="q-text">条件数 κ 怎么定义？κ 很大意味着什么？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              κ = λ<sub>max</sub> / λ<sub>min</sub>（特征值绝对值之比）。κ 大 = 病态：同样大小的输入误差，在不同方向被放大/缩小的倍数相差 κ 倍，输出对输入误差极度敏感。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 4.2-2</div>
+              <div class="q-text">A = diag(10, 0.1) 作用在 f(x) = A⁻¹x 上，1% 的输入扰动最坏会变成多大的输出误差？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              A⁻¹ = diag(0.1, 10)，沿 e₂ 方向误差被放大 10 倍：1% → 10%。因为 κ = 100，两个方向的放大倍数相差 100 倍。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ========== 4.3 ========== -->
+    <h2><span class="sec-no">4.3</span>基于梯度的优化：方向选对，步长别翻车</h2>
+
+    <p>4.1、4.2 管「算得对」，从本节开始管「走得稳」。训练神经网络就是最小化损失函数，而我们几乎只有一个工具可用：<strong>沿着局部信息一步步往下走</strong>。</p>
+
+    <p>先把概念摆齐：</p>
+    <ul>
+      <li><span class="term">导数</span>（Derivative）：单变量函数在某点的瞬时变化率，f′(x) 是切线斜率。</li>
+      <li><span class="term">方向导数</span>（Directional Derivative）：沿单位向量 u 方向的变化率 = ∇f · u。</li>
+      <li><span class="term">梯度</span>（Gradient）：各偏导数组成的向量 ∇f = (∂f/∂x₁, …, ∂f/∂xₙ)。由方向导数公式可知：<strong>梯度方向是局部上升最快的方向，负梯度是下降最快的方向</strong>。</li>
+      <li><span class="term">雅可比矩阵</span>（Jacobian Matrix）：向量值函数 f : ℝⁿ → ℝᵐ 的所有偏导数排成的 m × n 矩阵，J<sub>ij</sub> = ∂f<sub>i</sub>/∂x<sub>j</sub>。梯度是 m = 1 时的特例。</li>
+    </ul>
+
+    <p><span class="term">梯度下降</span>（Gradient Descent）的更新公式：</p>
+    <div class="formula"><span class="var">x</span><sub>t+1</sub> = <span class="var">x</span><sub>t</sub> − η ∇f(<span class="var">x</span><sub>t</sub>)　　（η 为<span class="term">学习率</span> Learning Rate）</div>
+
+    <p><strong>一步完整手算</strong>：f(x) = x² − 4x + 1，x₀ = 0，η = 0.25。</p>
+    <ol>
+      <li>求导：f′(x) = 2x − 4。</li>
+      <li>代入当前点：f′(0) = 2 × 0 − 4 = <strong>−4</strong>（斜率为负，函数在下降，应向右走）。</li>
+      <li>更新：x₁ = x₀ − η · f′(x₀) = 0 − 0.25 × (−4) = 0 + 1 = <strong>1</strong>。</li>
+      <li>验证：f(0) = 1，f(1) = 1 − 4 + 1 = −2 &lt; 1，确实下降了。✓</li>
+    </ol>
+
+    <p><strong>zigzag 震荡演示</strong>：f(x, y) = x² + 10y²，梯度 ∇f = (2x, 20y)，从 (1, 1) 出发，η = 0.1。注意这个函数 y 方向的曲率是 x 方向的 10 倍（条件数 10）。</p>
+    <ol>
+      <li>第 1 步：∇f(1, 1) = (2 × 1, 20 × 1) = (2, 20)。更新：x₁ = 1 − 0.1 × 2 = 0.8；y₁ = 1 − 0.1 × 20 = <strong>−1</strong>。新点 (0.8, −1)——y 直接冲过了最优值 0，变成负数。</li>
+      <li>第 2 步：∇f(0.8, −1) = (1.6, −20)。更新：x₂ = 0.8 − 0.1 × 1.6 = 0.64；y₂ = −1 − 0.1 × (−20) = <strong>+1</strong>。新点 (0.64, 1)——y 又弹回 +1。</li>
+    </ol>
+    <p>两步下来，x 方向稳步接近 0（1 → 0.8 → 0.64），y 方向却在 −1 和 +1 之间来回弹跳，毫无进展。这就是病态条件在优化中的样子：<strong>陡坡方向来回震荡，平地方向缓慢爬行</strong>，轨迹呈 zigzag 锯齿。</p>
+
+    <div class="figure">
+      <div class="mermaid">
+flowchart LR
+  A["条件数很大"] --> B["各方向曲率差异悬殊"]
+  B --> C["统一步长对陡方向太大"]
+  C --> D["震荡甚至发散"]
+  B --> E["统一步长对缓方向太小"]
+  E --> F["收敛极慢"]
+  classDef hot fill:#fbeedd,stroke:#c4651f,stroke-width:2.5px,color:#c4651f;
+  classDef danger fill:#fae9e7,stroke:#b03a2e,stroke-width:2.5px,color:#b03a2e;
+  class D danger;
+  class F hot;
+      </div>
+      <div class="caption">图 4.1 病态条件的连锁反应：一个 κ 同时造成「震荡」与「爬行」两种症状——看中间节点「统一步长」如何两头不讨好。</div>
+    </div>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>梯度下降像一只蒙眼下山的山羊：每一步只敢沿最陡方向迈固定一小步。山谷越狭长（κ 越大），它越是在两壁之间撞来撞去，而不是沿谷底前进。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 4.3-1</div>
+              <div class="q-text">梯度 ∇f 指向什么方向？梯度下降的更新公式是什么？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              梯度指向局部函数值上升最快的方向（由方向导数 ∇f·u 在 u 与 ∇f 同向时最大可知）。更新公式：x<sub>t+1</sub> = x<sub>t</sub> − η∇f(x<sub>t</sub>)。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 4.3-2</div>
+              <div class="q-text">f(x,y) = x² + 10y² 上梯度下降为什么会 zigzag？根源是什么？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              y 方向曲率是 x 方向的 10 倍（条件数 10）：步长对 y 太大 → 来回冲过最优值（震荡），对 x 又太小 → 爬行。根源是各方向曲率不均，即海森矩阵病态。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ========== 4.4 ========== -->
+    <h2><span class="sec-no">4.4</span>海森矩阵与曲率：牛顿法为什么一步登顶</h2>
+
+    <p>上一节的 zigzag 暴露了梯度下降的盲区：它只看一阶信息（哪边陡），看不见二阶信息（坡有多弯）。<span class="term">海森矩阵</span>（Hessian Matrix）补齐这一课：H<sub>ij</sub> = ∂²f/∂x<sub>i</sub>∂x<sub>j</sub>，即所有二阶偏导排成的矩阵。梯度告诉你「往哪走」，海森告诉你「这个方向能走多远」。</p>
+
+    <p><span class="term">牛顿法</span>（Newton's Method）用二阶泰勒展开直接跳到当前抛物线的最低点：</p>
+    <div class="formula"><span class="var">x</span>⁺ = <span class="var">x</span> − <span class="frac"><span class="num-part">f′(<span class="var">x</span>)</span><span class="den-part">f″(<span class="var">x</span>)</span></span></span>　　（多维版：<span class="var">x</span>⁺ = <span class="var">x</span> − H⁻¹∇f(<span class="var">x</span>)）</div>
+
+    <p><strong>一步手算</strong>：还是 f(x) = x² − 4x + 1，从 x₀ = 0 出发：</p>
+    <ol>
+      <li>f′(x) = 2x − 4，f′(0) = −4。</li>
+      <li>f″(x) = 2（处处相同，因为二次函数曲率恒定）。</li>
+      <li>牛顿更新：x₁ = x₀ − f′(x₀)/f″(x₀) = 0 − (−4)/2 = <strong>2</strong>。</li>
+      <li>验证：f′(2) = 2 × 2 − 4 = 0，x = 2 正是全局最优解——<strong>一步到位</strong>，而 4.3 节的梯度下降只挪到 x = 1。</li>
+    </ol>
+    <p>对二次函数，牛顿法一步到最优；对一般函数，它在最优解附近二次收敛，远快于梯度下降。代价是：要算并求逆海森矩阵，n 维参数下是 O(n³)，深度网络里根本用不起——这是后话（第 8 章的拟牛顿法正是来补这个洞的）。</p>
+
+    <h3>用海森矩阵给临界点分类</h3>
+    <p>临界点（∇f = 0 的点）有三种性格，由 H 的特征值符号判定。看三个对角海森的小例（对角元即特征值）：</p>
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>海森矩阵</th><th>特征值符号</th><th>定性</th><th>临界点类型</th></tr>
+        <tr><td>H = diag(2, 3)</td><td>全正（正定）</td><td>两个方向都向上弯</td><td>局部极小值</td></tr>
+        <tr><td>H = diag(−2, −3)</td><td>全负（负定）</td><td>两个方向都向下弯</td><td>局部极大值</td></tr>
+        <tr><td>H = diag(1, −2)</td><td>有正有负（不定）</td><td>一个方向向上弯、一个向下弯</td><td><span class="term">鞍点</span>（Saddle Point）</td></tr>
+      </table>
+    </div>
+    <p>鞍点在高维空间里是主角：n 维中随机一个临界点，要 n 个特征值全部为正才是极小值——维度越高，极小值越稀有，鞍点越常见。这是深度网络优化困难的核心原因之一。</p>
+
+    <h3>病态条件如何锁死步长：η &lt; 2/λ<sub>max</sub></h3>
+    <p>为什么 zigzag 例子里 η 不敢取大？用最简单的二次函数 f(x) = ½λx² 推导（任何光滑函数在最优点附近都近似长成这样）：</p>
+    <ol>
+      <li>梯度：f′(x) = λx。</li>
+      <li>GD 更新：x<sub>t+1</sub> = x<sub>t</sub> − ηλx<sub>t</sub> = <strong>(1 − ηλ) x<sub>t</sub></strong>。</li>
+      <li>每步把误差乘以因子 (1 − ηλ)。要收敛，必须 |1 − ηλ| &lt; 1。</li>
+      <li>解不等式：−1 &lt; 1 − ηλ &lt; 1 ⟹ 0 &lt; ηλ &lt; 2 ⟹ <strong>η &lt; 2/λ</strong>。</li>
+      <li>多方向时，最陡方向 λ<sub>max</sub> 最先违反条件，故全局要求 η &lt; 2/λ<sub>max</sub>。</li>
+    </ol>
+    <p>于是条件数 κ = λ<sub>max</sub>/λ<sub>min</sub> 大意味着：步长被 λ<sub>max</sub> 压得很小，而 λ<sub>min</sub> 方向的收缩因子 (1 − ηλ<sub>min</sub>) ≈ 1，几乎不动。震荡与爬行，全写在这一个不等式里。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>梯度下降问「哪边下坡」，牛顿法多问一句「坡有多弯」——用曲率把步长校准到恰好落在抛物线底部。海森矩阵就是优化问题的「地形图」。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>「梯度为 0 就是最优点」——错。∇f = 0 只是临界点，可能是极小、极大或鞍点。必须再看海森：正定才是极小。在高维深度网络里，遇到的临界点绝大多数是鞍点。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 4.4-1</div>
+              <div class="q-text">牛顿法更新公式是什么？为什么对二次函数一步到最优？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              x⁺ = x − f′(x)/f″(x)（多维：x − H⁻¹∇f）。二次函数的二阶泰勒展开是精确的，牛顿步直接跳到该抛物线顶点，故一步收敛。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 4.4-2</div>
+              <div class="q-text">H = diag(1, −2) 对应什么临界点？η &lt; 2/λ<sub>max</sub> 是怎么来的？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              特征值有正有负（不定）→ 鞍点。对 f = ½λx²，GD 更新为 x<sub>t+1</sub> = (1 − ηλ)x<sub>t</sub>，收敛要求 |1 − ηλ| &lt; 1，解得 η &lt; 2/λ；全局受最大特征值 λ<sub>max</sub> 限制。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ========== 4.5 ========== -->
+    <h2><span class="sec-no">4.5</span>约束优化初步：带着镣铐跳舞</h2>
+
+    <p>前面几节都是「无约束」优化。但机器学习里常见约束：参数要在单位球面上、概率要和为 1、范数不能超过阈值。<span class="term">拉格朗日乘子法</span>（Lagrange Multiplier）把等式约束问题变回无约束问题：给约束配一个乘子 λ，构造拉格朗日函数，然后对所有变量求导置零。</p>
+
+    <p><strong>完整手算</strong>：min x² + y²，约束 x + y = 1（几何意义：直线 x + y = 1 上离原点最近的点）。</p>
+    <div class="formula">L(<span class="var">x</span>, <span class="var">y</span>, λ) = <span class="var">x</span>² + <span class="var">y</span>² + λ(<span class="var">x</span> + <span class="var">y</span> − 1)</div>
+    <ol>
+      <li>对 x 求导置零：∂L/∂x = 2x + λ = 0 ⟹ x = −λ/2。</li>
+      <li>对 y 求导置零：∂L/∂y = 2y + λ = 0 ⟹ y = −λ/2。</li>
+      <li>由前两式：x = y（直觉：对称）。</li>
+      <li>对 λ 求导置零，正好还原约束：∂L/∂λ = x + y − 1 = 0。</li>
+      <li>代入 x = y：2x = 1 ⟹ <strong>x = y = 0.5</strong>，λ = −1。最小值 f = 0.25 + 0.25 = 0.5。✓</li>
+    </ol>
+    <p>直觉：在最优点，目标函数的梯度与约束边界的法线共线（∇f = −λ∇g）——沿约束方向已经「无处可降」。</p>
+
+    <p>如果约束是<strong>不等式</strong>（如 x + y ≤ 1），拉格朗日条件要升级为 <span class="term">KKT 条件</span>（KKT Conditions，Karush–Kuhn–Tucker）：核心新增一条「互补松弛」——要么约束不起作用（乘子为 0），要么约束恰好顶满（约束取等号），二者必居其一。KKT 是支持向量机（SVM）和许多正则化方法的理论基石，后续章节会再相遇。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>拉格朗日乘子是「约束的物价」：λ 告诉你约束每放松一点，目标函数能改善多少。λ = 0 意味着这个约束根本不值钱——最优解本来就在约束内部。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 4.5-1</div>
+              <div class="q-text">min x² + y² s.t. x + y = 1 的拉格朗日函数怎么写？解是什么？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              L = x² + y² + λ(x + y − 1)。求导置零得 x = y = −λ/2，代入约束 x + y = 1 得 x = y = 0.5，λ = −1，最小值 0.5。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 4.5-2</div>
+              <div class="q-text">KKT 条件比拉格朗日乘子法多处理了什么？互补松弛是什么意思？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              多处理了不等式约束。互补松弛：对每个不等式约束，「乘子为 0」与「约束取等号（起约束作用）」至少成立其一。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ========== 概念卡 ========== -->
+    <h2><span class="sec-no">🃏</span>概念卡：本章概念的一分钟画像</h2>
+    <p>翻面前先自问：这个概念我能用一句话讲清楚吗？</p>
+    <div class="flip-grid">
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 1</div>
+            <div class="q-text">上溢 / 下溢（Overflow / Underflow）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">数值超出浮点表示范围变 ∞（上溢）或被舍入为 0（下溢）。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">它是问题本身不是工具：认识它才能解释 softmax 为何算出 NaN。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">水桶装不下就漫出（∞），小到看不见就当没有（0）。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为只有超大数才危险——下溢让分母变 0 同样产生 NaN。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">调试任何出现 NaN/Inf 的训练，第 6 章 softmax 输出层天天见。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 2</div>
+            <div class="q-text">LogSumExp 技巧（LogSumExp Trick）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">log ∑ e^zᵢ = m + log ∑ e^(zᵢ−m)，m = max zᵢ。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">让 softmax / log-sum-exp 在极大 logits 下不溢出。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">把整座山平移到海平面：相对高度不变，绝不撞天花板。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为是近似算法——它是恒等变形，数学上严格相等。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">交叉熵损失、注意力分数归一化（第 6、12 章）。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 3</div>
+            <div class="q-text">条件数（Condition Number）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">κ = λ_max / λ_min，衡量矩阵对误差的最坏放大倍数。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">预判「输入一点噪声会被放大多少」，解释 GD 的 zigzag。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">山谷的狭长程度：越狭长，下山越左右碰壁。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为换算法能治好——病态是问题的属性，不是算法的错。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">特征缩放、批归一化、选学习率（第 5、8 章反复出现）。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 4</div>
+            <div class="q-text">梯度（Gradient）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">各偏导组成的向量 ∇f，指向函数值上升最快的方向。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">给「该往哪走」一个局部最优答案，是梯度下降的方向盘。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">山坡上水珠滚落方向的反方向；蒙眼下山时脚底的坡度。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为梯度指向全局最优——它只是局部最速上升方向。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">反向传播（第 6 章）计算的就是损失对参数的梯度。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 5</div>
+            <div class="q-text">海森矩阵（Hessian Matrix）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">二阶偏导矩阵 H_ij = ∂²f/∂xᵢ∂xⱼ，刻画各方向曲率。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">判定临界点类型；告诉步长能取多大；支撑牛顿法。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">优化地形图：哪里是碗底、哪里是山脊、哪里是马鞍。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为深度网络能直接用——n 维求逆 O(n³)，实际用不起。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">理解鞍点与曲率；第 8 章拟牛顿/自适应方法的动机。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 6</div>
+            <div class="q-text">牛顿法（Newton's Method）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">x⁺ = x − H⁻¹∇f(x)，用二阶展开直接跳向抛物线顶点。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">克服 GD 只看坡向不看曲率的盲区，二次函数一步到最优。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">不但知道往哪走，还知道这步该迈多大——曲率校准步长。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为处处优于 GD——海森负定时它会朝极大值跑。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">小维问题直接用；深度学习中演化为二阶近似方法（第 8 章）。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 7</div>
+            <div class="q-text">鞍点（Saddle Point）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">∇f = 0 且海森不定的临界点：某些方向极小、另一些方向极大。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">解释高维训练中梯度消失般停滞的主因（不是局部极小）。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">马鞍中心：前后是谷、左右是峰，坐在上面不知道该去哪。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为训练卡住就是陷入局部极小——高维里鞍点远比极小值多。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">第 8 章动量法、自适应学习率要逃离的主要障碍。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 8</div>
+            <div class="q-text">KKT 条件（KKT Conditions）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">不等式约束下最优解的必要条件：拉格朗日条件 + 互补松弛 + 乘子非负。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">把「≤」约束纳入解析求解框架，而不只是「=」约束。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">约束要么顶满（起作用），要么不存在（乘子为 0），没有中间态。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为所有约束都在最优解处取等号——不起作用的约束乘子为 0。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">SVM 间隔最大化、正则化的约束视角（第 5、7 章）。</span></div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- ========== 分层习题 ========== -->
+    <h2><span class="sec-no">📝</span>分层习题</h2>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>
+        <p>判断正误并说明理由：「softmax 前减去 max(z) 是一种近似计算，会牺牲一点数值精度来换取不溢出。」</p>
+      </div>
+      <details>
+        <summary>提示</summary>
+        <p>把 e^(zᵢ − m) / ∑ e^(zⱼ − m) 的分子分母同乘 e^m，看看能得到什么。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p><strong>错误。</strong>分子分母同乘 e^m 后：e^(zᵢ−m)·e^m / ∑ e^(zⱼ−m)·e^m = e^zᵢ / ∑ e^zⱼ，与原式<strong>严格相等</strong>，零近似。它的唯一作用是把最大指数压到 e⁰ = 1，规避上溢。</p>
+          <p>易错点：把「数值稳定技巧」和「近似算法」混为一谈。判断标准是：恒等变形（同乘同除、提公因子）不损失任何精度。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>
+        <p>判断正误并说明理由：「矩阵 A 是病态的（κ 很大），但只要换用更精确的迭代算法求解 A⁻¹x，就能避免误差放大。」</p>
+      </div>
+      <details>
+        <summary>提示</summary>
+        <p>误差从哪里来？是算法算错的，还是输入的浮点表示本身就有的？</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p><strong>错误。</strong>病态是<strong>问题本身</strong>的性质：输入 x 在浮点表示中已带舍入误差，而 A⁻¹ 会把某些方向的误差放大 κ 倍——这个放大由矩阵结构决定，与用什么算法无关。再好的算法也只能保证「不额外添乱」，无法低于「输入误差 × κ」这个下限。</p>
+          <p>可行的改善是改变问题本身：重新缩放特征、加正则项，把 κ 降下来。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>
+        <p>设 z = (2000, 2002)。（a）用 LogSumExp 技巧手算 log(e²⁰⁰⁰ + e²⁰⁰²)，保留 4 位小数；（b）手算数值稳定的 softmax(z)，保留 4 位小数。已知 e⁻² ≈ 0.1353，log(1.1353) ≈ 0.1269。</p>
+      </div>
+      <details>
+        <summary>提示</summary>
+        <p>先取 m = max = 2002，提出 e²⁰⁰²，把两个指数分别写成 e⁻² 和 e⁰。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p><strong>（a）log-sum-exp：</strong></p>
+          <p>① m = max(2000, 2002) = 2002。<br>
+          ② 提公因子：e²⁰⁰⁰ + e²⁰⁰² = e²⁰⁰² · (e⁻² + e⁰) = e²⁰⁰² · (e⁻² + 1)。<br>
+          ③ 取对数：log = 2002 + log(e⁻² + 1)。<br>
+          ④ 代入：e⁻² + 1 ≈ 1.1353，log(1.1353) ≈ 0.1269。<br>
+          ⑤ 结果：<strong>2002.1269</strong>。</p>
+          <p><strong>（b）softmax：</strong>z′ = z − 2002 = (−2, 0)。<br>
+          p₁ = e⁻² / (e⁻² + 1) ≈ 0.1353 / 1.1353 ≈ <strong>0.1192</strong>；<br>
+          p₂ = 1 / 1.1353 ≈ <strong>0.8808</strong>（或 1 − 0.1192 = 0.8808）。<br>
+          验算：0.1192 + 0.8808 = 1 ✓。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>
+        <p>设 f(x) = x² + 2x − 3，从 x₀ = 2 出发。（a）用 η = 0.1 的梯度下降手算一步 x₁；（b）用牛顿法手算一步 x₁。两种方法的结果有何不同？为什么？</p>
+      </div>
+      <details>
+        <summary>提示</summary>
+        <p>先求 f′(x) = 2x + 2 与 f″(x) = 2，再分别代入两个更新公式。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p><strong>（a）梯度下降：</strong>f′(2) = 2×2 + 2 = 6。<br>
+          x₁ = x₀ − η·f′(x₀) = 2 − 0.1×6 = 2 − 0.6 = <strong>1.4</strong>。<br>
+          验证：f(2) = 4+4−3 = 5，f(1.4) = 1.96+2.8−3 = 1.76 &lt; 5，下降 ✓。</p>
+          <p><strong>（b）牛顿法：</strong>x₁ = x₀ − f′(x₀)/f″(x₀) = 2 − 6/2 = 2 − 3 = <strong>−1</strong>。<br>
+          验证：f′(−1) = −2 + 2 = 0，x = −1 恰为全局最优点（f(−1) = 1−2−3 = −4）。</p>
+          <p><strong>差异：</strong>GD 只挪了 0.6（步长受 η 限制），牛顿法一步直达最优。原因：f 是二次函数，牛顿法的二阶模型是精确的，曲率信息把步长自动校准到恰好落地。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l3">L3 建模应用</span>
+        <p>你在训练一个 softmax 分类器：logits 层直接输出未归一化分数，损失为交叉熵 −log softmax(z)。训练到一半 loss 突然变成 NaN，且此前 logits 的数值随训练越变越大。请：（a）指出 NaN 的最可能来源；（b）给出至少两个修复方案并说明各自利用了本章哪个知识点。</p>
+      </div>
+      <details>
+        <summary>提示</summary>
+        <p>从「logits 越变越大」出发，分别想：4.1 的溢出链路是什么？学习率与 4.4 的哪个不等式有关？</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p><strong>（a）来源：</strong>logits 不断增大（权重发散的征兆），某个 zᵢ 超过约 88（float32 中 e⁸⁸ ≈ 1.7×10³⁸ 已达上限）→ e^zᵢ 上溢为 ∞ → softmax 出现 ∞/∞ = NaN → −log(NaN) 使 loss 为 NaN。深层原因往往是学习率过大，参数更新发散（违反 η &lt; 2/λ_max 类型的稳定条件），把 logits 越推越大。</p>
+          <p><strong>（b）修复方案：</strong></p>
+          <p>① <strong>数值稳定的 softmax/交叉熵</strong>：实现时先减 max(logits)（LogSumExp 技巧，4.1）。多数框架的交叉熵接口已内置此处理，直接传 logits 而不是先手动 softmax——治标，保证任何 logits 下都不溢出。</p>
+          <p>② <strong>调小学习率</strong>：发散的根因是步长超过曲率允许的上限（4.4 节 η &lt; 2/λ_max），把 η 减小一个数量级通常立即稳定——治本之一。</p>
+          <p>③ <strong>梯度裁剪 / 特征与权重归一化</strong>：限制梯度范数防止单步暴冲；对输入做标准化降低条件数（4.2），让各方向曲率接近，步长不再被极端方向锁死。</p>
+        </div>
+      </details>
+    </div>
+
+    <!-- ========== 自测 ========== -->
+    <h2><span class="sec-no">✍️</span>本章自测</h2>
+    <p class="quiz-hint">点击选项判分，答错会给出原因。</p>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 1</div>
+      <div class="q-stem">计算 softmax 前先减去 max(z)，根本原因是：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 让梯度更容易反向传播</li>
+        <li data-opt="b">B. 减 max 是恒等变形，同时把最大指数压到 e⁰ = 1，避免上溢产生 NaN</li>
+        <li data-opt="c">C. 让概率分布更均匀，防止某一个类别概率过大</li>
+        <li data-opt="d">D. 提高 softmax 的计算精度（它是一种近似但更准）</li>
+      </ul>
+      <div class="quiz-explain">解析：B 对——e^(zᵢ−m)/∑e^(zⱼ−m) 与原式严格相等，且减 max 后最大项为 e⁰=1，不会溢出。A 错：减 max 与反向传播无关。C 错：分布形状完全不变（恒等变形）。D 错：它不是近似，严格相等；「提精度」说反了，它防的是溢出而非提高精度。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="c">
+      <div class="q-no">自测 2</div>
+      <div class="q-stem">一个矩阵的条件数 κ 很大，直接后果是：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 矩阵无法求逆</li>
+        <li data-opt="b">B. 矩阵的行列式为 0</li>
+        <li data-opt="c">C. 输入的微小误差在不同方向被放大/缩小的程度相差悬殊，换算法也救不了</li>
+        <li data-opt="d">D. 矩阵的特征值全部是复数</li>
+      </ul>
+      <div class="quiz-explain">解析：C 对——κ = λ_max/λ_min 度量最坏方向的误差放大倍数，病态是问题本身的性质。A 错：κ 大不等于奇异，A = diag(10, 0.1) 完全可逆。B 错：diag(10, 0.1) 行列式 = 1，不是 0；κ 趋于无穷才逼近奇异。D 错：对称正定矩阵也能病态，特征值全是正实数。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="a">
+      <div class="q-no">自测 3</div>
+      <div class="q-stem">梯度 ∇f(x) 的方向含义是：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 函数值局部上升最快的方向（所以梯度下降走它的反方向）</li>
+        <li data-opt="b">B. 指向全局最小值的方向</li>
+        <li data-opt="c">C. 函数值不变的方向（等高线的切线方向）</li>
+        <li data-opt="d">D. 曲率最大的方向</li>
+      </ul>
+      <div class="quiz-explain">解析：A 对——方向导数 ∇f·u 在 u 与 ∇f 同向时取最大值，故梯度是最速上升方向。B 错：梯度只含局部信息，不指向全局最优（否则一步就到了）。C 错：梯度与等高线垂直，切线方向的方向导数为 0。D 错：曲率信息在海森矩阵里，不在梯度里。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="d">
+      <div class="q-no">自测 4</div>
+      <div class="q-stem">某临界点处海森矩阵 H = diag(1, −2)，该点是：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 局部极小值</li>
+        <li data-opt="b">B. 局部极大值</li>
+        <li data-opt="c">C. 全局最小值</li>
+        <li data-opt="d">D. 鞍点</li>
+      </ul>
+      <div class="quiz-explain">解析：D 对——特征值一正一负（不定），沿 +1 特征向量方向向上弯（像极小），沿 −2 方向向下弯（像极大），正是鞍点。A 错：极小要求 H 正定（特征值全正）。B 错：极大要求负定（全负）。C 错：临界点类型是局部性质，「全局最小」无法从单点海森判定，更何况它是鞍点。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 5</div>
+      <div class="q-stem">牛顿法与梯度下降的本质区别是：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 牛顿法不用计算导数</li>
+        <li data-opt="b">B. 牛顿法用海森（二阶曲率）把步长自动校准，二次函数一步到最优；GD 只用一阶梯度，步长靠手调且被 λ_max 限制</li>
+        <li data-opt="c">C. 牛顿法一定能找到全局最优，GD 不能</li>
+        <li data-opt="d">D. 牛顿法计算更便宜，适合深度网络</li>
+      </ul>
+      <div class="quiz-explain">解析：B 对——x⁺ = x − H⁻¹∇f 用曲率信息校准方向与步长；GD 的 η 须满足 η &lt; 2/λ_max，病态时被迫很小。A 错：牛顿法既要梯度还要海森，算得更多。C 错：两者都是局部方法，非凸问题上都不保证全局最优；海森不定时牛顿法甚至朝极大跑。D 错：海森求逆 O(n³)，恰恰因为太贵才在深度学习中不能直接用它。</div>
+    </div>
+
+    <!-- ========== 三句话复述 ========== -->
+    <div class="retell">
+      <h3>🗣️ 用自己的话，三句话讲完本章</h3>
+      <p class="retell-sub">对着空气（或室友）说出这三句。说卡壳的那句，回去重读对应小节。</p>
+      <details>
+        <summary>句1：这章解决什么问题？——</summary>
+        <div class="retell-answer">参考答案：连续数学公式在有限精度计算机上会「算不对」（上溢/下溢产生 NaN）和「走不稳」（病态条件放大误差、让优化震荡），本章研究如何数值上安全、高效地计算与优化。</div>
+      </details>
+      <details>
+        <summary>句2：核心机制是什么？——</summary>
+        <div class="retell-answer">参考答案：两条线。算得对：用恒等变形（LogSumExp 提最大值）规避溢出，用条件数认清误差放大的下限。走得稳：用梯度定方向、海森定曲率与步长上限（η &lt; 2/λ_max），用海森特征值给临界点分类，用拉格朗日/KKT 处理约束。</div>
+      </details>
+      <details>
+        <summary>句3：它和前后章怎么分工？——</summary>
+        <div class="retell-answer">参考答案：第 2、3 章提供连续的数学语言，本章负责让这些语言在机器里落地不出事；第 5 章的机器学习算法（和第 8 章的优化算法、第 6 章的反向传播）都直接踩在本章的数值技巧与梯度工具之上。</div>
+      </details>
+    </div>
+
+    <!-- ========== 复习计划 ========== -->
+    <div class="review-plan">
+      <h3>🔁 间隔复习计划</h3>
+      <p>回忆本身比重读有效 10 倍。到点只做一件事：翻卡 + 重做标记题。</p>
+      <table>
+        <tr><th>时间点</th><th>复习内容</th><th>预计用时</th></tr>
+        <tr><td>第 1 天</td><td>全部 8 张概念卡 + 回忆卡 4.1-1、4.1-2、4.4-2</td><td>10 分钟</td></tr>
+        <tr><td>第 3 天</td><td>概念卡 2、3、5、7 + 重做 L2 两道手算题 + 自测错题</td><td>12 分钟</td></tr>
+        <tr><td>第 7 天</td><td>三句话复述 + 回忆卡 4.2-2、4.3-2、4.5-1 + 重推 η &lt; 2/λ_max</td><td>10 分钟</td></tr>
+        <tr><td>第 15 天</td><td>只做合上书挑战；能全过就毕业</td><td>15 分钟</td></tr>
+      </table>
+    </div>
+
+    <!-- ========== 合上书挑战 ========== -->
+    <div class="final-challenge">
+      <h3>📕 合上书挑战</h3>
+      <p class="fc-sub">现在关掉这个页面，拿一张纸，凭记忆完成以下任务。全部做完再回来核对——这是本章真正的毕业考试。</p>
+      <ol id="challenge-list">
+        <li><span class="fc-check"></span>写出 softmax 公式和 LogSumExp 技巧公式，并说明减 max 为什么是恒等变形</li>
+        <li><span class="fc-check"></span>手算 log(e¹⁰⁰⁰ + e¹⁰⁰¹)（写出提出最大值的每一步）和 z = (1000, 1001) 的数值稳定 softmax</li>
+        <li><span class="fc-check"></span>用 A = diag(10, 0.1) 演示 1% 输入扰动在两个方向上的不同放大倍数，并说出条件数 κ 的值</li>
+        <li><span class="fc-check"></span>对 f(x) = x² − 4x + 1 从 x₀ = 0 手算一步梯度下降（η = 0.25）和一步牛顿法，比较结果</li>
+        <li><span class="fc-check"></span>写出 η &lt; 2/λ_max 的推导（从 f = ½λx² 的更新公式出发），并用它解释 zigzag</li>
+        <li><span class="fc-check"></span>用海森特征值符号判定三类临界点，各举一个 diag 矩阵例子</li>
+        <li><span class="fc-check"></span>一句话回答本章主线问题：连续数学在有限精度机器上怎样才能算得对、走得稳？</li>
+      </ol>
+    </div>
+
+    <div class="complete-zone">
+      <button class="btn-complete" id="btn-complete" onclick="markDone()">✓ 我已完成本章（含合上书挑战）</button>
+    </div>
+
+    <div class="chapter-nav">
+      <a href="chapter-03.html"><span class="nav-dir">← 上一章</span>第3章 概率与信息论</a>
+      <a href="chapter-05.html" class="next"><span class="nav-dir">下一章 →</span>第5章 机器学习基础</a>
+    </div>
+
+  </div>
+</div>
+
+<footer class="footer">
+  <div class="wrap">第4章 数值计算 · 深度学习互动讲义 · 基于 Goodfellow, Bengio &amp; Courville (2016)</div>
+</footer>
+
+<script src="/lectures-assets/mermaid.min.js"></script>
+<script>
+mermaid.initialize({
+  startOnLoad: true,
+  theme: "base",
+  themeVariables: {
+    primaryColor: "#e3edf7",
+    primaryBorderColor: "#1d5f9e",
+    primaryTextColor: "#1d5f9e",
+    lineColor: "#5c554b",
+    secondaryColor: "#fbeedd",
+    tertiaryColor: "#f5f1e8",
+    fontFamily: "-apple-system, PingFang SC, sans-serif",
+    fontSize: "14px"
+  },
+  flowchart: { curve: "linear", htmlLabels: false }
+});
+</script>
+<script>
+// 自测题判分（原样复用，勿改）
+document.querySelectorAll(".quiz-block").forEach(block => {
+  const answer = block.dataset.answer;
+  const explain = block.querySelector(".quiz-explain");
+  block.querySelectorAll(".quiz-opts li").forEach(li => {
+    li.addEventListener("click", () => {
+      const opts = block.querySelectorAll(".quiz-opts li");
+      opts.forEach(o => o.classList.add("disabled"));
+      if (li.dataset.opt === answer) {
+        li.classList.add("correct");
+      } else {
+        li.classList.add("wrong");
+        block.querySelector(`[data-opt="${answer}"]`).classList.add("correct");
+      }
+      explain.classList.add("show");
+    });
+  });
+});
+
+// 合上书清单打勾（原样复用，勿改）
+document.querySelectorAll("#challenge-list li").forEach(li => {
+  li.addEventListener("click", () => li.classList.toggle("checked"));
+});
+
+// 完成标记 → localStorage
+const KEY = "dl_progress_v1";
+function loadProgress() {
+  try { return JSON.parse(localStorage.getItem(KEY)) || {}; } catch (e) { return {}; }
+}
+const progress = loadProgress();
+const btn = document.getElementById("btn-complete");
+if (progress[4] && progress[4].done) {
+  btn.textContent = "✓ 已完成 · 再次点击重置";
+  btn.classList.add("done");
+}
+function markDone() {
+  const p = loadProgress();
+  if (p[4] && p[4].done) {
+    delete p[4];
+    btn.textContent = "✓ 我已完成本章（含合上书挑战）";
+    btn.classList.remove("done");
+  } else {
+    p[4] = { done: true, completedAt: Date.now(), reviewsDone: 0 };
+    btn.textContent = "✓ 已完成 · 复习提醒已开启";
+    btn.classList.add("done");
+  }
+  localStorage.setItem(KEY, JSON.stringify(p));
+}
+</script>
+
+</body>
+</html>

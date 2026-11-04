@@ -1,0 +1,590 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第11章 并行性与局部性优化 · 编译原理课件</title>
+<script>
+window.MathJax = {
+  tex: {
+    inlineMath: [['$', '$'], ['\\(', '\\)']],
+    displayMath: [['$$', '$$'], ['\\[', '\\]']],
+    processEscapes: true,
+    tags: 'none'
+  },
+  svg: { fontCache: 'global', scale: 1.05 },
+  options: { skipHtmlTags: ['script','noscript','style','textarea','pre','code'] }
+};
+</script>
+<!-- MathJax 本地引用（tex-svg 单文件全量组件，约2MB，自带字体数据），file:// 与断网均可用 -->
+<script src="/lectures-assets/tex-svg.js" async></script>
+<style>
+  :root{
+    --primary:#1a365d; --accent:#2b6cb0; --accent-light:#ebf8ff; --accent-border:#bee3f8;
+    --text:#2d3748; --muted:#718096; --border:#e2e8f0; --bg-light:#f7fafc;
+    --success:#38a169; --danger:#e53e3e; --warning:#dd6b20; --warn-bg:#fffaf0;
+  }
+  *{margin:0;padding:0;box-sizing:border-box;}
+  html,body{width:100%;height:100%;overflow:hidden;background:#0f172a;}
+  body{
+    font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Hiragino Sans GB","Microsoft YaHei","WenQuanYi Micro Hei",sans-serif;
+    color:var(--text);
+  }
+  #stage{
+    position:absolute; left:50%; top:50%;
+    width:1280px; height:720px;
+    transform:translate(-50%,-50%) scale(1);
+    transform-origin:center center;
+    background:#ffffff;
+    box-shadow:0 0 40px rgba(0,0,0,.4);
+    overflow:hidden;
+  }
+  .slide{
+    position:absolute; inset:0;
+    padding:36px 60px 52px;
+    display:none;
+    flex-direction:column;
+    background:#ffffff;
+    opacity:0;
+    transition:opacity .35s ease;
+  }
+  .slide.active{ display:flex; opacity:1; }
+
+  #progress{ position:absolute; top:0; left:0; height:6px; background:var(--accent); width:0; z-index:50; transition:width .35s; }
+
+  /* 封面 / 结束页 */
+  .slide-cover{ justify-content:center; align-items:center; text-align:center; }
+  .slide-cover{ background:linear-gradient(135deg,#1a365d 0%,#2b6cb0 100%); color:#fff; }
+  .slide-cover .kicker{ font-size:22px; letter-spacing:6px; opacity:.85; margin-bottom:18px;}
+  .slide-cover h1{ font-size:64px; font-weight:800; line-height:1.2; margin-bottom:22px; letter-spacing:2px;}
+  .slide-cover .sub{ font-size:26px; opacity:.92; margin-bottom:36px;}
+  .slide-cover .meta{ font-size:19px; opacity:.85; line-height:2;}
+  .slide-cover .divider{ width:160px;height:5px;background:#fff;opacity:.6;margin:0 auto 30px;border-radius:3px;}
+  .slide-cover .question{ font-size:24px; background:rgba(255,255,255,.12); border:1px solid rgba(255,255,255,.35); border-radius:12px; padding:12px 28px; margin-bottom:30px;}
+
+  /* 页头：结论式标题 */
+  .slide-head{ display:flex; align-items:baseline; gap:16px; border-bottom:3px solid var(--accent); padding-bottom:9px; margin-bottom:12px;}
+  .slide-head .sec{ font-size:17px; color:var(--accent); font-weight:700; background:var(--accent-light); padding:3px 11px; border-radius:6px; white-space:nowrap;}
+  .slide-head h3{ font-size:29px; color:var(--primary); font-weight:700;}
+  .slide-body{ flex:1; display:flex; flex-direction:column; justify-content:center; min-height:0; }
+
+  p{ font-size:21px; line-height:1.65; margin-bottom:8px;}
+  .lead{ font-size:23px; color:#374151; line-height:1.75;}
+  ul,ol{ margin:0 0 8px 26px; font-size:21px; line-height:1.7;}
+  li{ margin-bottom:5px;}
+  strong{ color:var(--primary); }
+
+  /* 公式块 */
+  .formula{ background:var(--accent-light); border-left:5px solid var(--accent); border-radius:0 10px 10px 0; padding:9px 22px; margin:9px 0; text-align:center; font-size:23px;}
+  .formula-concl{ background:#fffaf0; border-left:5px solid var(--warning);}
+  .MathJax{ font-size:1.05em !important; }
+  mjx-container[display="true"]{ margin:6px 0 !important; }
+
+  /* 表格 */
+  table{ width:100%; border-collapse:collapse; margin:10px 0; font-size:20px;}
+  th{ background:var(--accent); color:#fff; padding:8px 12px; text-align:center; font-weight:600;}
+  td{ padding:7px 12px; border:1px solid var(--border); text-align:center; vertical-align:middle;}
+  tr:nth-child(even) td{ background:var(--bg-light);}
+  td.l{ text-align:left; }
+  table.small{ font-size:18px; }
+  table.small td, table.small th{ padding:6px 10px; }
+
+  /* 组件 */
+  .card{ background:var(--accent-light); border:1px solid var(--accent-border); border-radius:12px; padding:12px 20px; margin:10px 0;}
+  .tip{ background:#ebf8ff; border-left:5px solid var(--accent); border-radius:0 10px 10px 0; padding:10px 20px; margin:10px 0; font-size:20px; color:#2c5282;}
+  .deep{ background:#f0fff4; border-left:5px solid var(--success); border-radius:0 10px 10px 0; padding:10px 20px; margin:10px 0; font-size:20px; color:#22543d;}
+  .warn{ background:var(--warn-bg); border-left:5px solid var(--warning); border-radius:0 10px 10px 0; padding:10px 20px; margin:10px 0; font-size:20px; color:#744210;}
+  .trap{ background:#fef2f2; border-left:5px solid var(--danger); border-radius:0 10px 10px 0; padding:10px 20px; margin:10px 0; font-size:20px; color:#7f1d1d;}
+
+  .pause{
+    background:var(--warn-bg); border:2px dashed var(--warning); border-radius:14px;
+    padding:10px 22px; margin:10px 0; display:flex; align-items:center; gap:16px;
+  }
+  .pause .icon{ font-size:36px; line-height:1; }
+  .pause .txt b{ color:var(--warning); font-size:21px; }
+  .pause .txt p{ font-size:18px; color:#744210; margin:3px 0 0; }
+
+  .cols{ display:flex; gap:28px; align-items:stretch; }
+  .col{ flex:1; min-width:0; }
+
+  /* 推导分步：仅互动模式隐藏，截图(autohide)模式全部可见——此规则不可删 */
+  .step{ opacity:0; transform:translateY(8px); transition:opacity .3s ease, transform .3s ease; }
+  .step.on{ opacity:1; transform:none; }
+  body.autohide .step{ opacity:1 !important; transform:none !important; }
+  .step-hint{ font-size:14px; color:var(--muted); margin-top:4px;}
+  body.autohide .step-hint{ display:none; }
+
+  /* 因果链 */
+  .chain{ margin:6px 0; }
+  .chain .link{ display:flex; align-items:center; gap:14px; margin:6px 0;}
+  .chain .no{ width:34px; height:34px; border-radius:50%; background:var(--accent); color:#fff; font-size:18px; font-weight:700; display:flex; align-items:center; justify-content:center; flex-shrink:0;}
+  .chain .txt{ font-size:21px; line-height:1.5;}
+  .chain .txt strong{ color:var(--primary); }
+
+  /* mermaid 容器：高度封顶，防止溢出 720px 舞台 */
+  .mmd{ background:var(--bg-light); border:1px solid var(--border); border-radius:12px; padding:10px 14px; display:flex; justify-content:center; align-items:center; margin:8px 0;}
+  .mmd .mermaid{ display:flex; justify-content:center; width:100%; visibility:hidden; }
+  .mmd .mermaid[data-done]{ visibility:visible; }
+  .mmd .mermaid svg{ max-width:100%; height:auto; max-height:230px; }
+  .mmd.mmd-tall .mermaid svg{ max-height:330px; }
+  .mmd.mmd-sm svg{ max-height:150px; }
+  .mmd-row{ display:flex; gap:18px; }
+  .mmd-row .mmd{ flex:1; flex-direction:column; }
+  .mmd .cap{ font-size:17px; color:var(--muted); margin-top:6px; text-align:center;}
+  .mmd .cap b{ color:var(--text); }
+
+  #footer{ position:absolute; bottom:0; left:0; right:0; height:40px; display:flex; align-items:center; justify-content:space-between; padding:0 30px; font-size:15px; color:#94a3b8; background:rgba(247,250,252,.85); border-top:1px solid var(--border); z-index:40;}
+  #footer .brand{ font-weight:600; color:var(--accent); }
+
+  .nav{ position:absolute; bottom:48px; right:40px; display:flex; gap:12px; z-index:45;}
+  .nav button{ width:54px; height:54px; border-radius:50%; border:none; background:var(--accent); color:#fff; font-size:24px; cursor:pointer; box-shadow:0 3px 10px rgba(43,108,176,.4); display:flex; align-items:center; justify-content:center;}
+  .nav button:hover{ background:var(--primary); }
+  .nav button:disabled{ background:#cbd5d0; cursor:default; box-shadow:none;}
+
+  #hint{ position:absolute; bottom:48px; left:40px; font-size:14px; color:#94a3b8; z-index:45;}
+
+  body.autohide #progress, body.autohide #footer, body.autohide .nav, body.autohide #hint{ display:none !important; }
+</style>
+</head>
+<body>
+<div id="stage">
+
+  <div id="progress"></div>
+
+  <!-- ★ 1 封面 -->
+  <section class="slide slide-cover active" data-narration="同学们好，欢迎来到编译原理第十一章。上一章我们在一个核里把指令级并行榨到了头：调度、流水、踪迹，能借的指令都借遍了，最后撞上功耗墙。本章把粒度抬高一层：把循环拆到多个核上跑，并且回答一个真正决定速度的问题——数据离计算有多近。学完你要会用距离向量逐层判定一个循环能不能并行，会亲手算一遍矩阵乘的 cache 缺失账，看懂分块为什么能带来一百四十二倍的提升，还要知道指针别名为什么让这一切打了折扣。本章是把工程手段推到极致的一章，下一章则登顶理论高度做全书收束。我们开始。">
+    <div class="kicker">编译原理 · 第 11 章 · 后端与优化</div>
+    <h1>并行性与局部性优化</h1>
+    <div class="sub">Parallelism and Locality —— 把循环拆给多个核，把数据摁在 cache 里</div>
+    <div class="question">本章要回答：哪些循环能安全拆到多核？拆完之后，cache 又为什么不答应？</div>
+    <div class="meta">
+      配套讲义：《编译原理互动讲义》第11章 · 基于 Aho, Lam, Sethi &amp; Ullman《编译原理》(第2版)<br>
+      ← → 或空格翻页 · 推导页逐步显示
+    </div>
+  </section>
+
+  <!-- ★ 2 全书位置 -->
+  <section class="slide" data-narration="老规矩，先定位。前四章是前端，五到七章管语义和中间代码，八到十一章是后端与优化，十二章做全书收束。本章是第十一章，后端段的最后一站：第十章在单核里排指令，本章把循环拆给多个核；拆完还会发现一个新敌人——并行让数据访问量翻倍，cache 顶不住，于是要用分块把局部性捏出来。本章收尾会碰到一道理论的缝：两个指针是不是指向同一位置没法精确判定，依赖分析只能保守地说可能相等，本可并行的循环被判成串行。这条缝，正是第十二章要从可判定性的高度回头审视的东西。">
+    <div class="slide-head"><span class="sec">定位</span><h3>后端优化的最后一站：粒度从指令级抬到线程级</h3></div>
+    <div class="slide-body">
+      <div class="mmd">
+        <div class="mermaid">
+flowchart TB
+  A["① 前端：词法与语法 Ch1–4"] --> B["② 语义与中间代码 Ch5–7"]
+  B --> C["③ 后端与优化 Ch8–11 · 本章 Ch11"]:::here
+  C --> D["④ 全书收束 Ch12"]
+  classDef here fill:#2b6cb0,color:#ffffff,stroke:#1a365d,stroke-width:3px
+        </div>
+      </div>
+      <p style="text-align:center; margin-top:10px;">第10章榨干<strong>单核</strong> → 本章把循环拆给<strong>多核</strong>并喂饱 <strong>cache</strong> → 第12章回看<strong>理论边界</strong></p>
+    </div>
+  </section>
+
+  <!-- ★ 3 本章主线 -->
+  <section class="slide" data-narration="本章主线六环，三个追问串起来。第一环，出发点是上一章的终点：单核撞上功耗墙，只能转向多核加共享内存的线程级并行。第二环，先问算得动吗：阿姆达尔定律给出加速比上界，串行部分不消灭，堆核没用。第三环，再问跑得对吗：哪些迭代能同时跑？用依赖距离向量逐层判定，这是本章第一件工具。第四环，接着问跑得快吗：并行之后数据访问量翻倍，cache 顶不住，于是循环分块让三个小块同时驻留，i-k-j 换序消灭按列访问。第五环，把交换、分块、倾斜统一成迭代空间上的仿射变换。最后一环是终点：指针别名让依赖分析变保守，移交第十二章。">
+    <div class="slide-head"><span class="sec">主线</span><h3>先问能不能拆，再问拆完快不快，最后落到分析的极限</h3></div>
+    <div class="slide-body">
+      <div class="chain">
+        <div class="link"><span class="no">1</span><span class="txt"><strong>出发点</strong>：单核 ILP 见顶（功耗墙）→ 多核＋共享内存，线程级并行</span></div>
+        <div class="link"><span class="no">2</span><span class="txt"><strong>算得动吗</strong>：阿姆达尔定律——串行部分压住加速比上界</span></div>
+        <div class="link"><span class="no">3</span><span class="txt"><strong>跑得对吗</strong>：距离向量逐层判定 DOALL，无跨迭代依赖才可拆</span></div>
+        <div class="link"><span class="no">4</span><span class="txt"><strong>跑得快吗</strong>：cache 顶不住 → 循环分块＋i-k-j 换序</span></div>
+        <div class="link"><span class="no">5</span><span class="txt"><strong>统一视角</strong>：交换／分块／倾斜 ＝ 迭代空间上的仿射变换</span></div>
+        <div class="link"><span class="no">6</span><span class="txt"><strong>终点</strong>：指针别名让分析变保守 → 移交第12章</span></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 4 动机页：阿姆达尔定律 -->
+  <section class="slide" data-narration="单核为什么见顶，上一章说过：电路墙加功耗墙。那就上多核——但「能拆」不等于「快 p 倍」。阿姆达尔定律给出冷酷的上界：设程序里必须串行的部分占 f s，用 p 个核，加速比等于一除以「f s 加一减 f s 再除以 p」。手算一遍：串行占百分之五，六十四个核，分母是零点零五加零点九五除以六十四，约等于零点零六四八，加速比约十五点四倍。就算核数趋于无穷，上界也只有一除以零点零五，二十倍。结论一句话：串行部分不消灭，堆核没用。所以并行化的头号目标不是堆线程，而是找到那些「全体迭代互不依赖」的循环——怎么找？下一页给工具。">
+    <div class="slide-head"><span class="sec">动机</span><h3>阿姆达尔定律：5% 串行，64 核也只有 15.4 倍</h3></div>
+    <div class="slide-body">
+      <div class="formula">$$S(p) = \frac{1}{f_s + (1-f_s)/p}\qquad \text{串行占 } f_s\text{，用 } p \text{ 个核}$$</div>
+      <table>
+        <thead><tr><th>设定</th><th>算式</th><th>加速比</th></tr></thead>
+        <tbody>
+          <tr><td class="l">f_s＝5%，p＝64</td><td class="l">1 / (0.05 ＋ 0.95/64) ＝ 1 / 0.0648</td><td><strong>≈ 15.4 倍</strong></td></tr>
+          <tr><td class="l">f_s＝5%，p → ∞</td><td class="l">1 / 0.05</td><td><strong>20 倍封顶</strong></td></tr>
+        </tbody>
+      </table>
+      <div class="warn">串行部分不消灭，堆核没用——头号目标是找到「全体迭代互不依赖」的循环。</div>
+    </div>
+  </section>
+
+  <!-- ★ 5 定义页：迭代空间与依赖 -->
+  <section class="slide" data-narration="先立定义。一个 d 层嵌套循环，每层循环变量取一串整数值，所有迭代就构成整数格点集合——这叫迭代空间，可以画成网格，每个格子是一次迭代。两个迭代之间有依赖，意思是：迭代甲写了某个数组位置，迭代乙又读或写同一个位置，且乙按顺序排在甲后面。要判定循环能不能拆，靠的不是肉眼盯下标，而是把依赖量化成一个向量：迭代甲的下标是 i 一逗号 j 一，迭代乙是 i 二逗号 j 二，距离向量就是两个下标逐分量相减。因为读必然发生在写之后，合法的距离向量必须字典序非负——第一个非零分量必须为正。记住这个网格图景，本章后面的判定、变换、分块，全是在这张网格上做文章。">
+    <div class="slide-head"><span class="sec">定义</span><h3>迭代空间是一张网格，依赖是网格上的向量</h3></div>
+    <div class="slide-body">
+      <div class="cols">
+        <div class="col"><div class="card">🕸️ <strong>迭代空间</strong><br>d 层嵌套循环的全体迭代 ＝ ℤ 的 d 次方中的整点集合，每个整点 (i, j) 是一次迭代</div></div>
+        <div class="col"><div class="card">➡️ <strong>依赖距离向量</strong><br>迭代 (i₁, j₁) 写、迭代 (i₂, j₂) 读同一位置，则 d ＝ (i₂−i₁, j₂−j₁)</div></div>
+      </div>
+      <div class="formula formula-concl">$$\text{读必在写后} \;\Longrightarrow\; \text{合法距离向量}\ \boldsymbol{d}\ \text{字典序非负（第一个非零分量为正）}$$</div>
+      <div class="deep">读法：距离向量就是「这次写，多久之后被读」的网格坐标差。</div>
+    </div>
+  </section>
+
+  <!-- ★ 6 定义页：DOALL 判定 -->
+  <section class="slide" data-narration="有了距离向量，可并行性变成一行判定。DOALL 循环指所有迭代互不依赖、可以任意顺序同时执行的循环——这是最理想的并行循环，拆给多少个核都行，零通信。判定规则逐层来：对嵌套循环的第 k 层，如果所有依赖距离向量的第 k 个分量都等于零，那么第 k 层就是 DOALL，可以把这一层的迭代切块分给多个核；只要存在一个距离向量的第 k 分量非零，这一层就携带依赖，不能原样并行。注意措辞：是「所有向量」的第 k 分量都为零，一个例外就否决。还有一点极其重要：DOALL 是逐层性质——外层不行不代表内层不行，反过来也一样。下一页先看一个「全都可以」的舒服例子。">
+    <div class="slide-head"><span class="sec">定义</span><h3>DOALL 判定：所有距离向量的第 k 分量为 0，第 k 层才可拆</h3></div>
+    <div class="slide-body">
+      <div class="formula formula-concl">$$\forall d \in D:\ d_k = 0 \;\Longleftrightarrow\; \text{第 } k \text{ 层是 DOALL（可切块分给多核）}$$</div>
+      <div class="cols">
+        <div class="col"><div class="card">✅ <strong>分量为 0 的含义</strong><br>写和读永远落在同一迭代行上，那一层就是自由的</div></div>
+        <div class="col"><div class="card">⚠️ <strong>两个「别搞错」</strong><br>是「所有」向量为 0，一个例外即否决；DOALL 是<strong>逐层</strong>性质，不是整体性质</div></div>
+      </div>
+      <div class="tip">操作顺序固定：写出全部距离向量 → 逐层看分量 → 分量全 0 的层切块并行。</div>
+    </div>
+  </section>
+
+  <!-- 7 例1：矩阵加 -->
+  <section class="slide" data-narration="第一个例子，逐元素矩阵加：C 的 i j 元等于 A 的 i j 元加 B 的 i j 元，两层循环 i 和 j。一步步查依赖：第一，写操作只有 C 的 i j 元，每个 i j 恰好被一个迭代写一次，不存在两个迭代写同一位置，所以没有输出依赖。第二，A 和 B 在整个循环里只读不写，读的双方永远不会和写冲突。第三，结论：依赖集是空集，距离向量集合也是空集——空集上「所有第 k 分量为零」平凡成立，于是内外两层都是 DOALL。想怎么拆就怎么拆：四个核按 i 切成四段，各跑各的，零通信。这种循环叫「尴尬并行」，尴尬的意思是并行起来毫不费力。可惜世上不全是这种好事，下一页换个有依赖的。">
+    <div class="slide-head"><span class="sec">例1</span><h3>矩阵加：依赖集为空，两层都是 DOALL，零通信</h3></div>
+    <div class="slide-body">
+      <div class="card">C[i][j] = A[i][j] + B[i][j]　（两层循环 i、j）</div>
+      <div class="chain">
+        <div class="link"><span class="no">1</span><span class="txt"><strong>查写</strong>：每个 C[i][j] 恰好被一个迭代写一次 → 无输出依赖</span></div>
+        <div class="link"><span class="no">2</span><span class="txt"><strong>查读</strong>：A、B 全程只读不写 → 读与写永不冲突</span></div>
+        <div class="link"><span class="no">3</span><span class="txt"><strong>结论</strong>：D ＝ 空集 → 分量条件平凡成立 → <strong>两层都是 DOALL</strong></span></div>
+      </div>
+      <div class="deep">4 个核按 i 切 4 段即可，零通信——这种循环又叫「尴尬并行」：并行起来毫不费力。</div>
+    </div>
+  </section>
+
+  <!-- ★ 8 演练页（.pause 唯一所在）：例2 递推 -->
+  <section class="slide" data-narration="第二个例子动真格：A 的 i j 元等于 A 的 i 减一 j 元加 A 的 i j 减一元。同一个数组既读又写，依赖来了。两个读分别产生距离向量：读「i 减一，j」这个位置，它是被迭代 i 减一逗号 j 写的，距离向量一零；读「i，j 减一」，被迭代 i 逗号 j 减一写的，距离向量零一。好，轮到你：请写出距离向量集合，并逐层判定 i 层、j 层哪个是 DOALL。先暂停视频自己推一遍。推出来了吗？好，对答案：集合是一零和零一，都字典序非负，合法；但第一层分量里有一，第二层分量里有一，两层都带依赖，两层都不能原样并行。图上的箭头看得很清楚：横向是零一，纵向是一零，每个格子都等左边和上边的邻居。">
+    <div class="slide-head"><span class="sec">演练</span><h3>A[i][j]=A[i−1][j]+A[i][j−1]：两个向量，两层全锁死</h3></div>
+    <div class="slide-body">
+      <div class="cols">
+        <div class="col">
+          <div class="step"><p><strong>①</strong> 读 A[i−1][j] ← 写于迭代 (i−1, j) → 距离 <strong>(1, 0)</strong></p></div>
+          <div class="step"><p><strong>②</strong> 读 A[i][j−1] ← 写于迭代 (i, j−1) → 距离 <strong>(0, 1)</strong></p></div>
+          <div class="step"><p><strong>③</strong> D ＝ {(1,0), (0,1)}，均字典序非负 ✓；但第 1 分量含 1、第 2 分量含 1 → <strong>两层都不可并行</strong></p></div>
+          <div class="pause"><div class="icon">✍️</div><div class="txt"><b>暂停推导</b><p>先自己写出距离向量集合，再逐层判定 i 层与 j 层是否 DOALL。</p></div></div>
+        </div>
+        <div class="col">
+          <div class="mmd mmd-tall">
+            <div class="mermaid">
+flowchart TB
+  n11["(1,1)"] -->|"纵向 (1,0)"| n21["(2,1)"]
+  n12["(1,2)"] -->|"纵向 (1,0)"| n22["(2,2)"]
+  n13["(1,3)"] -->|"纵向 (1,0)"| n23["(2,3)"]
+  n11 -->|"横向 (0,1)"| n12
+  n12 -->|"横向 (0,1)"| n13
+  n21 -->|"横向 (0,1)"| n22
+  n22 -->|"横向 (0,1)"| n23
+            </div>
+            <div class="cap">每个迭代都要等<b>左边</b>与<b>上边</b>的邻居——但对角线 (1,1)、(2,2)… 之间没有箭头（波前并行的伏笔）</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 9 变体：j 层 DOALL -->
+  <section class="slide" data-narration="再看一个粒度更细的对照：把例二改成 A 的 i j 元等于 A 的 i 减一 j 元加一。这次只读上边的邻居，不读左边。距离向量只剩一个：一零。逐层判定：第一层分量是一，i 层锁死，行间必须排队；但所有向量的第二分量都是零，所以 j 层是 DOALL——固定一行，行内 n 个元素可以同时算。这个对照教两件事。第一，并行化不必全有或全无，逐层判定才有意义，外层串行、内层并行是非常常见的结局。第二，不能看见下标里有减号就断言整个循环不可并行：A 的 i 减一 j 元只产生距离一零，它锁死的是 i 层，跟 j 层无关。先写出全部距离向量，再一层一层下结论，这是纪律。顺带记住图上那个细节：对角线之间没有箭头，这是后面波前并行的伏笔。">
+    <div class="slide-head"><span class="sec">对照</span><h3>改成 A[i][j]=A[i−1][j]+1：i 层锁死，j 层照样 DOALL</h3></div>
+    <div class="slide-body">
+      <div class="card">A[i][j] = A[i−1][j] + 1　→　D ＝ {(1, 0)}</div>
+      <div class="cols">
+        <div class="col"><div class="card">🔒 <strong>i 层（第 1 分量）</strong><br>分量 ＝ 1 ≠ 0 → 携带依赖，行间排队</div></div>
+        <div class="col"><div class="card">🔓 <strong>j 层（第 2 分量）</strong><br>所有向量分量 ＝ 0 → <strong>DOALL</strong>：固定一行，行内 N 个元素同时算</div></div>
+      </div>
+      <div class="warn">纪律：写出全部距离向量再逐层判定——不能看见下标里有减号就断言「整个循环不可并行」。并行化不必全有或全无。</div>
+    </div>
+  </section>
+
+  <!-- 10 局部性动机：矩阵乘设定 -->
+  <section class="slide" data-narration="跑得对，还要跑得快。并行使数据访问量按核数翻倍，真正的瓶颈往往不是算，而是喂数据：一次主存访问比一次算术运算慢两个数量级。所以后半章换个战场：cache。战场用例是矩阵乘，i-j-k 三重循环，C 的 i j 元等于对 k 求和 A 的 i k 元乘 B 的 k j 元。机器设定记牢：N 等于一千零二十四，元素是八字节 double，cache 容量 C 等于三十二 KB，行大小 L 等于六十四字节，也就是一行装八个元素，行优先布局——同一行的元素在内存里连续。三个数组各八 MB，谁都装不进三十二 KB 的 L1， miss 不可避免。问题是：miss 多少次？不同循环结构差多少？下一页先算不分块的账。">
+    <div class="slide-head"><span class="sec">换战场</span><h3>矩阵乘＋cache：算得快不如喂得快</h3></div>
+    <div class="slide-body">
+      <div class="card">C[i][j] += A[i][k] × B[k][j]　（i-j-k 三重循环，行优先布局）</div>
+      <table class="small">
+        <thead><tr><th>参数</th><th>值</th><th>含义</th></tr></thead>
+        <tbody>
+          <tr><td>N</td><td>1024</td><td class="l">矩阵规模，三个数组各 8 MB</td></tr>
+          <tr><td>元素</td><td>8 B（double）</td><td class="l">一行 cache 装 8 个元素</td></tr>
+          <tr><td>C（cache 容量）</td><td>32 KB</td><td class="l">典型 L1——三个数组谁都装不下</td></tr>
+          <tr><td>L（行大小）</td><td>64 B</td><td class="l">一次 miss 搬一整行</td></tr>
+        </tbody>
+      </table>
+      <div class="tip">一次主存访问比一次算术慢两个数量级——后半章只问一件事：miss 多少次？</div>
+    </div>
+  </section>
+
+  <!-- 11 不分块 miss 账 -->
+  <section class="slide" data-narration="不分块，按 i-j-k 原序，逐数组算 miss。先看 B：内层循环走 k，访问 B 的 k j 元——k 是行号，每次跳一整行，这叫按列访问，步长一千零二十四个元素，没有两次访问落在同一行 cache 行里，于是 N 立方次访问次次 miss，B 贡献 N 立方。再看 A：内层走 k，访问 A 的 i k 元，按行连续，一行 cache 行服务八次访问，每八次 miss 一次，贡献 N 立方除以八。你可能会问：A 的第 i 行八 KB，能不能留在 cache 里跨 j 复用？不能——两次使用之间扫过 B 的一整列，八 MB 的访问面，早把 A 的行挤掉了。最后 C：每个元素在整个 k 循环里反复用，miss 只有 N 方除以八。三项合计，九除以八乘 N 立方。下一页看分块怎么收拾它。">
+    <div class="slide-head"><span class="sec">手算</span><h3>不分块：B 按列步长 1024，次次 miss——合计 9/8·N³</h3></div>
+    <div class="slide-body">
+      <table>
+        <thead><tr><th>数组</th><th>内层访问模式</th><th>miss 次数</th></tr></thead>
+        <tbody>
+          <tr><td><strong>B[k][j]</strong></td><td class="l">按列：步长 N 个元素，无两次访问同行</td><td><strong>N³</strong></td></tr>
+          <tr><td><strong>A[i][k]</strong></td><td class="l">按行连续：一行服务 8 次（跨 j 复用被 B 的整列挤掉）</td><td><strong>N³/8</strong></td></tr>
+          <tr><td><strong>C[i][j]</strong></td><td class="l">k 循环内反复用同一元素</td><td><strong>N²/8</strong></td></tr>
+        </tbody>
+      </table>
+      <div class="formula formula-concl">$$\mathrm{miss}_{\text{不分块}} \approx N^3 + \frac{N^3}{8} + \frac{N^2}{8} \approx \boldsymbol{\frac{9}{8}N^3}$$</div>
+    </div>
+  </section>
+
+  <!-- 12 分块：约束与 B=32 -->
+  <section class="slide" data-narration="分块登场。循环分块把 i、j、k 各切成 N 除以 B 段，先固定三个块下标，再算块内 B 立方的局部乘加。关键观察：每个内层块的计算需要 A、B、C 各一个 B 乘 B 子块同时驻留在 cache 里，用完才换下一批——时间局部性就这么被捏出来了。于是块大小被容量卡死：三个块各 B 方个元素、每个元素八字节，三倍 B 方乘八必须小于等于 C。代入数字：C 等于三万二千七百六十八字节，B 方小于等于三万二千七百六十八除以二十四，约一千三百六十五，B 小于等于三十六点九。取二的幂方便地址计算，B 等于三十二。验证：三乘三十二方乘八等于二万四千五百七十六，小于等于三万二千七百六十八，成立；B 等于三十七就超了。分块的艺术是贴着容量线取最大，不是越大越豪迈。">
+    <div class="slide-head"><span class="sec">分块</span><h3>三块同时驻留：3B²×8 ≤ C，贴着容量线取 B＝32</h3></div>
+    <div class="slide-body">
+      <div class="formula">$$\text{三块同时驻留：}\quad 3B^2 \times 8 \le C \;\Longrightarrow\; B^2 \le \frac{32768}{24} \approx 1365.3 \;\Longrightarrow\; B \le 36.9$$</div>
+      <div class="cols">
+        <div class="col"><div class="card">✅ <strong>B ＝ 32（取 2 的幂）</strong><br>3 × 32² × 8 ＝ 24576 ≤ 32768，成立</div></div>
+        <div class="col"><div class="card">❌ <strong>B ＝ 37</strong><br>3 × 37² × 8 ＝ 32856 ＞ 32768，超限</div></div>
+      </div>
+      <div class="deep">分块＝把时间局部性捏出来：三个小块反复用，用完再扔。艺术在于<strong>贴着容量线取最大</strong>，不是越大越好。</div>
+    </div>
+  </section>
+
+  <!-- 13 分块 miss 账 -->
+  <section class="slide" data-narration="分块之后的 miss 账这样算。每个块三元组需要装载 A 块和 B 块各一次：一个 B 乘 B 的块，块内每行 B 个连续元素，占 B 除以八行 cache 行，共 B 行，所以每块 miss B 方除以八次，两块合计 B 方除以四。块三元组的总数是 N 除以 B 的立方。两数相乘：N 立方除以 B 立方，乘 B 方除以四，约掉 B 立方，得 N 立方除以四 B。跟不分块的九除以八乘 N 立方比，因子从一点一二五降到了四 B 分之一——B 等于三十二时就是一百二十八分之一。C 的 miss 还是 N 方除以八，但相对主项可以忽略。注意这个推导的前提是三个块驻留得下，这正是上一页那条容量约束的全部意义：B 选得越大账越好看，但稍一过线，三个块互相挤压，miss 立刻反弹回 N 立方量级。">
+    <div class="slide-head"><span class="sec">手算</span><h3>分块后：miss ＝ N³/(4B)，B＝32 即除以 128</h3></div>
+    <div class="slide-body">
+      <div class="chain">
+        <div class="link"><span class="no">1</span><span class="txt">每个 B×B 块：每行 B 个连续元素占 B/8 个 cache 行，共 B 行 → 每块 miss <strong>B²/8</strong> 次；A、B 两块合计 <strong>B²/4</strong></span></div>
+        <div class="link"><span class="no">2</span><span class="txt">块三元组总数 ＝ <strong>(N/B)³</strong></span></div>
+        <div class="link"><span class="no">3</span><span class="txt">相乘：(N/B)³ × B²/4 ＝ <strong>N³/(4B)</strong>（C 的 N²/8 可忽略）</span></div>
+      </div>
+      <div class="formula formula-concl">$$\mathrm{miss}_{\text{分块}} \approx \frac{N^3}{4B}\qquad B{=}32 \text{ 时即 } \frac{N^3}{128}$$</div>
+      <div class="warn">前提：三块驻留得下。B 一旦过容量线，三块互相挤压，miss 反弹回 O(N³)。</div>
+    </div>
+  </section>
+
+  <!-- 14 数字对比 -->
+  <section class="slide" data-narration="代入 N 等于一千零二十四，看具体数字。不分块：A 贡献一亿三千四百万次，B 贡献十亿七千万次，C 贡献十三万次，合计十二点零八亿次 miss。分块 B 等于三十二：A 加 B 合计 N 立方除以一百二十八，八百三十八万次，再加 C 的十三万次，总共八百五十二万次。比值：十二点零八亿除以八百五十二万，约一百四十二倍。同一台机器、同一个编译器、同一份数学计算，只因循环结构不同，访存开销差出两个数量级——这就是局部性优化的分量。而且这还没算换序：下一页的 i-k-j 连分块都不用做，零成本再救一波。请记住这组数字，它是本章面试和考试的双重常客。">
+    <div class="slide-head"><span class="sec">数字</span><h3>N＝1024：12.08 亿次 → 852 万次，约 142 倍</h3></div>
+    <div class="slide-body">
+      <table>
+        <thead><tr><th>形态</th><th>A</th><th>B</th><th>C</th><th>合计</th></tr></thead>
+        <tbody>
+          <tr><td class="l">不分块（i-j-k）</td><td>N³/8 ≈ 1.34×10⁸</td><td>N³ ≈ 1.07×10⁹</td><td>N²/8 ≈ 1.3×10⁵</td><td><strong>1.208×10⁹</strong></td></tr>
+          <tr><td class="l">分块 B＝32</td><td colspan="2">N³/(4B) ≈ 8.39×10⁶</td><td>N²/8 ≈ 1.3×10⁵</td><td><strong>8.52×10⁶</strong></td></tr>
+        </tbody>
+      </table>
+      <div class="formula formula-concl">$$\frac{1.208\times 10^{9}}{8.52\times 10^{6}} \approx \boldsymbol{142}\ \text{倍——同一份计算，只差循环结构}$$</div>
+    </div>
+  </section>
+
+  <!-- 15 i-k-j 换序 -->
+  <section class="slide" data-narration="如果不能改数据布局、也嫌分块麻烦，还有一个零成本手段：把三重循环从 i-j-k 换成 i-k-j 序。看内层变成什么：固定 i 和 k，内层走 j——C 的 i j 元按行连续，B 的 k j 元也按行连续，A 的 i k 元干脆是常量。按列访问消失了，所有步长都是一，空间局部性全部顺出来，miss 从 N 立方量级直接掉到 N 立方除以八量级，连块都不用分。这就是循环交换的威力：不动数据、不动 cache，只动迭代顺序。和第十章对照一下很有意思：指令调度重排的是基本块里的指令，循环交换重排的是迭代空间里的整点——同一个思想，「在依赖允许的范围内换顺序」，在两个粒度上各显神通。交换合法吗？看距离向量：i-k-j 序下所有依赖仍字典序非负，合法。下一页把这类操作统一起来。">
+    <div class="slide-head"><span class="sec">换序</span><h3>i-k-j：不动数据不动 cache，按列访问直接消失</h3></div>
+    <div class="slide-body">
+      <table>
+        <thead><tr><th>内层走 j 时</th><th>访问模式</th><th>效果</th></tr></thead>
+        <tbody>
+          <tr><td class="l">C[i][j]</td><td class="l">按行连续，步长 1</td><td class="l">一行服务 8 次</td></tr>
+          <tr><td class="l">B[k][j]</td><td class="l">按行连续，步长 1</td><td class="l"><strong>按列访问消失</strong></td></tr>
+          <tr><td class="l">A[i][k]</td><td class="l">内层不变</td><td class="l">相当于常量</td></tr>
+        </tbody>
+      </table>
+      <div class="deep">与第10章对照：指令调度重排基本块里的指令，循环交换重排迭代空间里的整点——同一个思想「在依赖允许的范围内换顺序」，两个粒度各显神通。</div>
+    </div>
+  </section>
+
+  <!-- 16 仿射变换统一 -->
+  <section class="slide" data-narration="现在把本章所有循环变换统一成一个数学框架：仿射变换。想法一句话：循环变换就是迭代空间上的矩阵乘法。给迭代向量左乘一个矩阵 M，旧坐标变新坐标。交换：M 是零一一零，i 撇等于 j、j 撇等于 i，内外层互换，i-k-j 就是两次交换。分块：引入块下标 i 除以 B 向下取整，坐标重塑，大空间切成小块。倾斜：M 等于一一零一，s 等于 i 加 j、t 等于 j，把例二那种递推变成沿反对角线的波前并行。变换不能乱做，合法性只有一条：对每个依赖距离向量 d，M 乘 d 必须仍然字典序非负——读不能跑到写之前。在这条约束下搜索「让某层分量全为零」的 M，就是自动并行化编译器每天在做的事。">
+    <div class="slide-head"><span class="sec">统一</span><h3>交换、分块、倾斜 ＝ 迭代空间上的同一个矩阵乘法</h3></div>
+    <div class="slide-body">
+      <table class="small">
+        <thead><tr><th>变换</th><th>矩阵 / 坐标</th><th>干了什么</th></tr></thead>
+        <tbody>
+          <tr><td class="l">交换 interchange</td><td class="l">M＝[[0,1],[1,0]]，即 i′=j, j′=i</td><td class="l">内外层互换；i-k-j 即两次交换</td></tr>
+          <tr><td class="l">分块 tiling</td><td class="l">引入块下标 ⌊i/B⌋，坐标重塑</td><td class="l">大迭代空间切成小块，块内驻留 cache</td></tr>
+          <tr><td class="l">倾斜 skewing</td><td class="l">M＝[[1,1],[0,1]]，即 s=i+j, t=j</td><td class="l">把例2 变成沿反对角线的波前并行</td></tr>
+        </tbody>
+      </table>
+      <div class="formula formula-concl">$$\text{合法性：}\ \forall d \in D,\ M\!\cdot\! d\ \text{字典序非负（读不得先于写）}$$</div>
+    </div>
+  </section>
+
+  <!-- 17 倾斜手算 -->
+  <section class="slide" data-narration="倾斜的手算演示一遍，用例二。距离向量两个：一零和零一。左乘 M 等于一一零一：一零变成一加零逗号零，还是一零；零一变成一加一——不对，第一分量是一乘零加一乘一等于一，第二分量是零乘零加一乘一等于一，变成一一。两个新向量都字典序为正，变换合法。新坐标 s 等于 i 加 j，t 等于 j。看含义：所有 s 相同的迭代构成一条反对角线；两个依赖向量的第一分量都是一，意味着 s 层之间才有依赖，而同一条反对角线上的迭代之间，依赖向量的 s 分量为零——t 层自由了。固定一条反对角线，线上所有迭代同时算，然后推进到下一条——这就是波前并行。例二两层全锁死的循环，倾斜之后硬是挤出了并行性。矩阵一转，自由的维度自己露出来。">
+    <div class="slide-head"><span class="sec">手算</span><h3>例2 加倾斜：(1,0)→(1,0)、(0,1)→(1,1)，反对角线成自由维</h3></div>
+    <div class="slide-body">
+      <div class="formula">$$M=\begin{pmatrix}1&1\\0&1\end{pmatrix}\quad M(1,0)^{\!\top}=(1,0)^{\!\top}\ \checkmark\qquad M(0,1)^{\!\top}=(1,1)^{\!\top}\ \checkmark\ \text{均字典序为正，合法}$$</div>
+      <div class="chain">
+        <div class="link"><span class="no">1</span><span class="txt">新坐标 <strong>s＝i＋j，t＝j</strong>：s 相同的迭代构成一条反对角线</span></div>
+        <div class="link"><span class="no">2</span><span class="txt">新依赖的 s 分量都是 1 → 依赖只存在于<strong>对角线之间</strong>，同一条线上 t 层自由</span></div>
+        <div class="link"><span class="no">3</span><span class="txt">固定一条反对角线，线上迭代同时算 → <strong>波前并行</strong>：两层全锁死的循环硬是挤出了并行</span></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ★ 18 误区页 -->
+  <section class="slide" data-narration="扫三个雷。雷一：以为开 p 个线程就近乎快 p 倍。错：阿姆达尔定律把加速比死死压在串行部分之下，百分之五串行，六十四个核也只有十五倍左右；此外还有同步开销、负载不均、伪共享——两个核写同一 cache 行的不同字节，也会互相把对方的行挤掉。雷二：以为分块的块越大越好。错：块一旦超过三倍 B 方乘八小于等于 C 的容量线，三个块互相挤压，miss 立刻反弹回 N 立方量级；而且 L2、L3 各有自己的最优块大小，工程上常做两级分块。雷三：以为仿射变换总能把串行循环变并行。错：如果依赖本身把迭代串成一条链，比如 A 的 i 元等于 A 的 i 减一元加 A 的 i 减二元这种强递推，任何合法矩阵都变不出 DOALL 层——仿射框架只能搜索最优，不能无中生有。">
+    <div class="slide-head"><span class="sec">避坑</span><h3>三个真实误解：堆核即加速、块越大越好、变换无中生有</h3></div>
+    <div class="slide-body">
+      <div class="trap">❌ <strong>开 p 个线程就近乎快 p 倍</strong><br>✅ 阿姆达尔压住上界（5% 串行 ⇒ 64 核 ≈ 15 倍）；还有同步开销、负载不均、伪共享——两核写同一 cache 行的不同字节也会互相挤掉。</div>
+      <div class="trap">❌ <strong>分块的块越大越好</strong><br>✅ 过 3B²×8 ≤ C 的容量线，三块互相挤压，miss 反弹回 O(N³)；L2/L3 各有最优块大小，工程上常做两级分块。</div>
+      <div class="trap">❌ <strong>仿射变换总能把串行循环变并行</strong><br>✅ 强递推（A[i]=A[i−1]+A[i−2]）把迭代串成链，任何合法矩阵都变不出 DOALL 层——框架只能搜索最优，不能无中生有。</div>
+    </div>
+  </section>
+
+  <!-- 19 接口页 -->
+  <section class="slide" data-narration="收个口，说说本章和前后章的接缝。和第十章的分工：第十章在单核内重排指令，省的是周期；本章在核间切分迭代，抬的是粒度——依赖分析这套工具原封不动，只是从寄存器读写搬到了数组下标上。本章留给下一章的是一条裂缝：这套并行机器的正确性，完全押在依赖分析的精确性上，而 C 语言里两个指针是否指向同一位置——指针别名——无法精确判定。分析只能保守地说「可能相等」，于是一条本可并行的循环被判成串行。理论上存在的并行性，工程上够不着。这条缝到底有多深？是工程不足还是原理所限？这正是第十二章要从可判定性的高度回头审视的问题——停机问题的幽灵，将在那里正式登场。">
+    <div class="slide-head"><span class="sec">接口</span><h3>指针别名：理论上可行与工程上可做之间的缝</h3></div>
+    <div class="slide-body">
+      <table>
+        <thead><tr><th></th><th>第10章 指令级并行</th><th>本章 并行与局部性</th></tr></thead>
+        <tbody>
+          <tr><td class="l"><strong>粒度</strong></td><td class="l">单核内重排指令</td><td class="l">核间切分迭代＋cache 分块</td></tr>
+          <tr><td class="l"><strong>依赖分析</strong></td><td class="l">寄存器读写 → DAG</td><td class="l">数组下标 → 距离向量</td></tr>
+          <tr><td class="l"><strong>共同敌人</strong></td><td class="l">停顿（等操作数）</td><td class="l">cache miss（等数据）＋别名（不敢拆）</td></tr>
+        </tbody>
+      </table>
+      <div class="warn">指针别名无法精确判定 → 分析只能保守假设「可能依赖」→ 本可并行的循环被判成串行。这条缝是工程不足还是原理所限？第12章从可判定性高度回看。</div>
+    </div>
+  </section>
+
+  <!-- ★ 20 小结页 -->
+  <section class="slide" data-narration="三句话讲完第十一章。第一句，解决什么：单核撞上功耗墙之后，把循环安全地拆到多个核，并在并行放大访存量之后把数据摁回 cache。第二句，核心机制：用依赖距离向量逐层判定 DOALL，分量全为零的层才可以拆；用循环分块让三个小块同时驻留，miss 从 N 立方压到 N 立方除以四 B；用 i-k-j 换序消灭按列访问；交换、分块、倾斜统一为迭代空间上的仿射变换，合法性只有一条——M 乘 d 字典序非负。第三句，承上启下：第十章优化单核内何时发射，本章优化核间如何切分；而指针别名暴露的分析极限，移交第十二章从可判定性高度回看。必背结论在下方，合上书也要能默写。">
+    <div class="slide-head"><span class="sec">小结</span><h3>三句话讲完第11章</h3></div>
+    <div class="slide-body">
+      <div class="chain">
+        <div class="link"><span class="no">1</span><span class="txt"><strong>解决什么</strong>：把循环安全拆到多核，并把并行放大的访存量摁回 cache</span></div>
+        <div class="link"><span class="no">2</span><span class="txt"><strong>核心机制</strong>：距离向量判 DOALL → 分块驻留 → 换序顺步长 → 仿射变换统一</span></div>
+        <div class="link"><span class="no">3</span><span class="txt"><strong>承上启下</strong>：别名让分析变保守 → 第12章回看可判定性</span></div>
+      </div>
+      <div class="formula formula-concl">$$\forall d\,{\in}\,D:\ d_k{=}0 \Leftrightarrow \text{第}k\text{层DOALL}\qquad \mathrm{miss}_{\text{分块}} \approx \frac{N^3}{4B}\ \ (3B^2{\times}8 \le C)$$</div>
+    </div>
+  </section>
+
+  <!-- ★ 21 结束页 -->
+  <section class="slide slide-cover" data-narration="本章到此结束。毕业挑战，合上书拿一张纸，六道题：一，默写阿姆达尔定律，算出百分之五串行、六十四核的加速比；二，写出距离向量的定义和合法性条件；三，对例二写出全部距离向量并逐层判定；四，推出三倍 B 方乘八小于等于 C 的来历，并对三十二 KB 算出 B 等于三十二；五，写出分块后 miss 等于 N 立方除以四 B，报出一百四十二倍这个数；六，一句话说明 i-k-j 为什么能消除按列访问。全过即毕业。下一章预告：第十二章理论回顾——编译器每一道工序背后站着哪台抽象机器，它永远做不到的事又是什么？全书收束，我们下章见。">
+    <div class="kicker">本 章 结 束</div>
+    <h1>能拆的层才拆，摁得住的数据才快</h1>
+    <div class="sub">毕业挑战：合上书，拿一张纸</div>
+    <div class="divider"></div>
+    <div class="meta">
+      ☑ 默写阿姆达尔定律并算 5% 串行、64 核的加速比　　☑ 写距离向量定义与合法性条件<br>
+      ☑ 例2 写全部距离向量并逐层判定　　☑ 推 3B²×8 ≤ C 并对 32KB 取 B＝32<br>
+      ☑ 写 miss＝N³/(4B) 并报出 ≈142 倍　　☑ 一句话说明 i-k-j 为何消除按列访问<br><br>
+      下一章 · 第12章 理论回顾：每道工序背后的抽象机器，与编译器永远做不到的事
+    </div>
+  </section>
+
+  <!-- 页脚 -->
+  <div id="footer">
+    <span class="brand">第11章 并行性与局部性优化 · 编译原理课件</span>
+    <span id="pagenum">1 / 21</span>
+  </div>
+
+  <!-- 导航 -->
+  <div class="nav">
+    <button id="prev" title="上一页 (←)">‹</button>
+    <button id="next" title="下一页 (→ / 空格)">›</button>
+  </div>
+  <div id="hint">← → 翻页 · 空格下一页 · 推导页逐步显示 · 点击左右半屏翻页</div>
+
+</div>
+
+<!-- mermaid 本地引用，保证离线可用；初始化参数全套课件统一，勿改 -->
+<script src="/lectures-assets/mermaid.min.js"></script>
+<script>
+mermaid.initialize({
+  startOnLoad: false,   // 必须为 false：display:none 的隐藏页渲染会得到 0 宽高的退化 SVG，
+                        // 改为页面激活时懒渲染（见 renderMermaid）
+  theme: "base",
+  themeVariables: {
+    primaryColor: "#ebf8ff",
+    primaryBorderColor: "#2b6cb0",
+    primaryTextColor: "#1a365d",
+    lineColor: "#718096",
+    fontFamily: "-apple-system, PingFang SC, sans-serif",
+    fontSize: "15px"
+  },
+  flowchart: { curve: "linear", htmlLabels: false }
+});
+</script>
+<script>
+(function(){
+  const slides = Array.from(document.querySelectorAll('.slide'));
+  const total = slides.length;
+  let idx = 0;
+
+  const params = new URLSearchParams(location.search);
+  const startSlide = parseInt(params.get('slide'), 10);
+  if (params.get('autohide') === '1') document.body.classList.add('autohide');
+  if (!isNaN(startSlide) && startSlide >= 1 && startSlide <= total) idx = startSlide - 1;
+
+  const progress = document.getElementById('progress');
+  const pagenum = document.getElementById('pagenum');
+  const prevBtn = document.getElementById('prev');
+  const nextBtn = document.getElementById('next');
+
+  // 推导分步：每页记住已展开的步数；autohide（截图）模式下 CSS 强制全显
+  const stepState = new Map();
+  function stepsOf(i){ return Array.from(slides[i].querySelectorAll('.step')); }
+  function applySteps(){
+    stepsOf(idx).forEach((el, k)=> el.classList.toggle('on', k < (stepState.get(idx) || 0)));
+  }
+  // 前进一步：先展开本页下一步，全部展开后才翻页
+  function forward(){
+    const steps = stepsOf(idx);
+    const shown = stepState.get(idx) || 0;
+    if (shown < steps.length){ stepState.set(idx, shown + 1); applySteps(); return; }
+    go(idx + 1);
+  }
+  // 后退一步：先收起本页最后一步，收完才回上一页
+  function backward(){
+    const steps = stepsOf(idx);
+    const shown = stepState.get(idx) || 0;
+    if (shown > 0){ stepState.set(idx, shown - 1); applySteps(); return; }
+    go(idx - 1);
+  }
+
+  // mermaid 懒渲染：只在页面激活（有真实宽高）时渲染该页的图，渲染后打 data-done 防重复
+  function renderMermaid(slide){
+    if (typeof mermaid === 'undefined') return;
+    const nodes = Array.from(slide.querySelectorAll('.mermaid:not([data-done])'));
+    if (!nodes.length) return;
+    nodes.forEach(n => n.setAttribute('data-done', ''));
+    mermaid.run({ nodes }).catch(err => {
+      nodes.forEach(n => n.removeAttribute('data-done'));
+      console.error('mermaid 渲染失败：', err);
+    });
+  }
+
+  function render(){
+    slides.forEach((s,i)=> s.classList.toggle('active', i===idx));
+    progress.style.width = ((idx+1)/total*100) + '%';
+    pagenum.textContent = (idx+1) + ' / ' + total;
+    prevBtn.disabled = (idx===0);
+    nextBtn.disabled = (idx===total-1);
+    applySteps();
+    renderMermaid(slides[idx]);
+  }
+  function go(n){ idx = Math.max(0, Math.min(total-1, n)); render(); }
+
+  prevBtn.addEventListener('click', e=>{ e.stopPropagation(); backward(); });
+  nextBtn.addEventListener('click', e=>{ e.stopPropagation(); forward(); });
+
+  document.addEventListener('keydown', e=>{
+    if(e.key==='ArrowRight'||e.key===' '||e.key==='PageDown'){ e.preventDefault(); forward(); }
+    else if(e.key==='ArrowLeft'||e.key==='PageUp'){ e.preventDefault(); backward(); }
+    else if(e.key==='Home'){ stepState.set(idx, 0); go(0); }
+    else if(e.key==='End'){ go(total-1); }
+  });
+
+  document.getElementById('stage').addEventListener('click', e=>{
+    if(e.target.closest('.nav')) return;
+    const x = e.clientX;
+    if(x < window.innerWidth*0.5) backward(); else forward();
+  });
+
+  function fit(){
+    const s = Math.min(window.innerWidth/1280, window.innerHeight/720);
+    document.getElementById('stage').style.transform = 'translate(-50%,-50%) scale(' + s + ')';
+  }
+  window.addEventListener('resize', fit);
+  fit();
+  render();
+})();
+</script>
+</body>
+</html>

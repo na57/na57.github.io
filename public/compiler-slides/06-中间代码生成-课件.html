@@ -1,0 +1,673 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第6章 中间代码生成 · 编译原理课件</title>
+<script>
+window.MathJax = {
+  tex: {
+    inlineMath: [['$', '$'], ['\\(', '\\)']],
+    displayMath: [['$$', '$$'], ['\\[', '\\]']],
+    processEscapes: true,
+    tags: 'none'
+  },
+  svg: { fontCache: 'global', scale: 1.05 },
+  options: { skipHtmlTags: ['script','noscript','style','textarea','pre','code'] }
+};
+</script>
+<!-- MathJax 本地引用（tex-svg 单文件全量组件，约2MB，自带字体数据），file:// 与断网均可用 -->
+<script src="/lectures-assets/tex-svg.js" async></script>
+<style>
+  :root{
+    --primary:#1a365d; --accent:#2b6cb0; --accent-light:#ebf8ff; --accent-border:#bee3f8;
+    --text:#2d3748; --muted:#718096; --border:#e2e8f0; --bg-light:#f7fafc;
+    --success:#38a169; --danger:#e53e3e; --warning:#dd6b20; --warn-bg:#fffaf0;
+  }
+  *{margin:0;padding:0;box-sizing:border-box;}
+  html,body{width:100%;height:100%;overflow:hidden;background:#0f172a;}
+  body{
+    font-family:-apple-system,BlinkMacSystemFont,'PingFang SC','Hiragino Sans GB','Microsoft YaHei','WenQuanYi Micro Hei',sans-serif;
+    color:var(--text);
+  }
+  #stage{
+    position:absolute; left:50%; top:50%;
+    width:1280px; height:720px;
+    transform:translate(-50%,-50%) scale(1);
+    transform-origin:center center;
+    background:#ffffff;
+    box-shadow:0 0 40px rgba(0,0,0,.4);
+    overflow:hidden;
+  }
+  .slide{
+    position:absolute; inset:0;
+    padding:36px 60px 52px;
+    display:none;
+    flex-direction:column;
+    background:#ffffff;
+    opacity:0;
+    transition:opacity .35s ease;
+  }
+  .slide.active{ display:flex; opacity:1; }
+
+  #progress{ position:absolute; top:0; left:0; height:6px; background:var(--accent); width:0; z-index:50; transition:width .35s; }
+
+  /* 封面 / 结束页 */
+  .slide-cover{ justify-content:center; align-items:center; text-align:center; }
+  .slide-cover{ background:linear-gradient(135deg,#1a365d 0%,#2b6cb0 100%); color:#fff; }
+  .slide-cover .kicker{ font-size:22px; letter-spacing:6px; opacity:.85; margin-bottom:18px;}
+  .slide-cover h1{ font-size:64px; font-weight:800; line-height:1.2; margin-bottom:22px; letter-spacing:2px;}
+  .slide-cover .sub{ font-size:26px; opacity:.92; margin-bottom:36px;}
+  .slide-cover .meta{ font-size:19px; opacity:.85; line-height:2;}
+  .slide-cover .divider{ width:160px;height:5px;background:#fff;opacity:.6;margin:0 auto 30px;border-radius:3px;}
+  .slide-cover .question{ font-size:24px; background:rgba(255,255,255,.12); border:1px solid rgba(255,255,255,.35); border-radius:12px; padding:12px 28px; margin-bottom:30px;}
+
+  /* 页头：结论式标题 */
+  .slide-head{ display:flex; align-items:baseline; gap:16px; border-bottom:3px solid var(--accent); padding-bottom:9px; margin-bottom:12px;}
+  .slide-head .sec{ font-size:17px; color:var(--accent); font-weight:700; background:var(--accent-light); padding:3px 11px; border-radius:6px; white-space:nowrap;}
+  .slide-head h3{ font-size:29px; color:var(--primary); font-weight:700;}
+  .slide-body{ flex:1; display:flex; flex-direction:column; justify-content:center; min-height:0; }
+
+  p{ font-size:21px; line-height:1.65; margin-bottom:8px;}
+  .lead{ font-size:23px; color:#374151; line-height:1.75;}
+  ul,ol{ margin:0 0 8px 26px; font-size:21px; line-height:1.7;}
+  li{ margin-bottom:5px;}
+  strong{ color:var(--primary); }
+
+  /* 公式块 */
+  .formula{ background:var(--accent-light); border-left:5px solid var(--accent); border-radius:0 10px 10px 0; padding:9px 22px; margin:9px 0; text-align:center; font-size:23px;}
+  .formula-concl{ background:#fffaf0; border-left:5px solid var(--warning);}
+  .MathJax{ font-size:1.05em !important; }
+  mjx-container[display='true']{ margin:6px 0 !important; }
+
+  /* 表格 */
+  table{ width:100%; border-collapse:collapse; margin:10px 0; font-size:20px;}
+  th{ background:var(--accent); color:#fff; padding:8px 12px; text-align:center; font-weight:600;}
+  td{ padding:7px 12px; border:1px solid var(--border); text-align:center; vertical-align:middle;}
+  tr:nth-child(even) td{ background:var(--bg-light);}
+  td.l{ text-align:left; }
+  table.small{ font-size:18px; }
+  table.small td, table.small th{ padding:6px 10px; }
+
+  /* 组件 */
+  .card{ background:var(--accent-light); border:1px solid var(--accent-border); border-radius:12px; padding:12px 20px; margin:10px 0;}
+  .tip{ background:#ebf8ff; border-left:5px solid var(--accent); border-radius:0 10px 10px 0; padding:10px 20px; margin:10px 0; font-size:20px; color:#2c5282;}
+  .deep{ background:#f0fff4; border-left:5px solid var(--success); border-radius:0 10px 10px 0; padding:10px 20px; margin:10px 0; font-size:20px; color:#22543d;}
+  .warn{ background:var(--warn-bg); border-left:5px solid var(--warning); border-radius:0 10px 10px 0; padding:10px 20px; margin:10px 0; font-size:20px; color:#744210;}
+  .trap{ background:#fef2f2; border-left:5px solid var(--danger); border-radius:0 10px 10px 0; padding:10px 20px; margin:10px 0; font-size:20px; color:#7f1d1d;}
+
+  .pause{
+    background:var(--warn-bg); border:2px dashed var(--warning); border-radius:14px;
+    padding:10px 22px; margin:10px 0; display:flex; align-items:center; gap:16px;
+  }
+  .pause .icon{ font-size:36px; line-height:1; }
+  .pause .txt b{ color:var(--warning); font-size:21px; }
+  .pause .txt p{ font-size:18px; color:#744210; margin:3px 0 0; }
+
+  .cols{ display:flex; gap:28px; align-items:stretch; }
+  .col{ flex:1; min-width:0; }
+
+  /* 推导分步：仅互动模式隐藏，截图(autohide)模式全部可见——此规则不可删 */
+  .step{ opacity:0; transform:translateY(8px); transition:opacity .3s ease, transform .3s ease; }
+  .step.on{ opacity:1; transform:none; }
+  body.autohide .step{ opacity:1 !important; transform:none !important; }
+  .step-hint{ font-size:14px; color:var(--muted); margin-top:4px;}
+  body.autohide .step-hint{ display:none; }
+
+  /* 因果链 */
+  .chain{ margin:6px 0; }
+  .chain .link{ display:flex; align-items:center; gap:14px; margin:6px 0;}
+  .chain .no{ width:34px; height:34px; border-radius:50%; background:var(--accent); color:#fff; font-size:18px; font-weight:700; display:flex; align-items:center; justify-content:center; flex-shrink:0;}
+  .chain .txt{ font-size:21px; line-height:1.5;}
+  .chain .txt strong{ color:var(--primary); }
+
+  /* mermaid 容器：高度封顶，防止溢出 720px 舞台 */
+  .mmd{ background:var(--bg-light); border:1px solid var(--border); border-radius:12px; padding:10px 14px; display:flex; justify-content:center; align-items:center; margin:8px 0;}
+  .mmd .mermaid{ display:flex; justify-content:center; width:100%; visibility:hidden; }
+  .mmd .mermaid[data-done]{ visibility:visible; }
+  .mmd .mermaid svg{ max-width:100%; height:auto; max-height:230px; }
+  .mmd.mmd-tall .mermaid svg{ max-height:330px; }
+  .mmd.mmd-sm svg{ max-height:150px; }
+  .mmd-row{ display:flex; gap:18px; }
+  .mmd-row .mmd{ flex:1; flex-direction:column; }
+  .mmd .cap{ font-size:17px; color:var(--muted); margin-top:6px; text-align:center;}
+  .mmd .cap b{ color:var(--text); }
+
+  #footer{ position:absolute; bottom:0; left:0; right:0; height:40px; display:flex; align-items:center; justify-content:space-between; padding:0 30px; font-size:15px; color:#94a3b8; background:rgba(247,250,252,.85); border-top:1px solid var(--border); z-index:40;}
+  #footer .brand{ font-weight:600; color:var(--accent); }
+
+  .nav{ position:absolute; bottom:48px; right:40px; display:flex; gap:12px; z-index:45;}
+  .nav button{ width:54px; height:54px; border-radius:50%; border:none; background:var(--accent); color:#fff; font-size:24px; cursor:pointer; box-shadow:0 3px 10px rgba(43,108,176,.4); display:flex; align-items:center; justify-content:center;}
+  .nav button:hover{ background:var(--primary); }
+  .nav button:disabled{ background:#cbd5d0; cursor:default; box-shadow:none;}
+
+  #hint{ position:absolute; bottom:48px; left:40px; font-size:14px; color:#94a3b8; z-index:45;}
+
+  body.autohide #progress, body.autohide #footer, body.autohide .nav, body.autohide #hint{ display:none !important; }
+</style>
+</head>
+<body>
+<div id="stage">
+
+  <div id="progress"></div>
+
+  <!-- ★ 1 封面 -->
+  <section class="slide slide-cover active" data-narration="大家好，欢迎来到编译原理第6章。上一章我们拿到了语法制导翻译这把扳手，知道语义动作挂在哪、什么时候触发。可扳手拧出来的到底是什么？这一章就回答主线上的第三个问题：前端和后端之间，需要一种什么样的中间语言。我们会认识编译器内部的世界语，三地址码，学会把表达式随手翻成指令序列。更棘手的是控制流：生成跳转指令的那一刻，跳转目标还根本没影，怎么办？答案叫回填，先把目标留空，记一笔账，事后统一补票。学完这章，你能徒手把一个带 or 和 and 的条件翻成六条指令，也能把 while 循环的每一次回填写得明明白白。">
+    <div class="kicker">编译原理 · 第 6 章 · 语义与中间代码</div>
+    <h1>中间代码生成</h1>
+    <div class="sub">Intermediate Code Generation —— 前端与后端之间的「世界语」</div>
+    <div class="question">本章要回答：前端与后端之间需要什么样的中间语言——控制流语句的跳转地址，如何在地址未知时先生成、事后回填？</div>
+    <div class="meta">
+      配套讲义：《编译原理互动讲义》第6章 · 基于 Aho/Lam/Sethi/Ullman《编译原理》（第2版）<br>
+      ← → 或空格翻页 · 推导页逐步显示
+    </div>
+  </section>
+
+  <!-- ★ 2 全书位置 -->
+  <section class="slide" data-narration="先看看这张地图。前四章是前端：词法分析把字符切成单词，语法分析把单词组织成树。第5到第7章是语义与中间代码，本章正坐在这段的中央：第5章发给我们语法制导翻译的扳手，本章用它产出与机器无关的中间代码。再往后的第8到第11章是后端与优化，第8章把三地址码变成目标代码，第9章在四元式上做优化，最后第12章全书收束。所以本章是一座桥：桥的这头是语法树，那头是机器码，桥面本身要足够平、足够通用，让前后两端都只跟桥打交道。记住这个位置，后面每一步都是在铺这座桥。">
+    <div class="slide-head"><span class="sec">定位</span><h3>本章是前端与后端之间的桥：产出机器无关的中间代码</h3></div>
+    <div class="slide-body">
+      <div class="mmd">
+        <div class="mermaid">
+flowchart TB
+  A[Ch1–4 前端与词法语法] --> B[Ch5–7 语义与中间代码「本章」]:::here
+  B --> C[Ch8–11 后端与优化]
+  C --> D[Ch12 全书收束]
+  classDef here fill:#2b6cb0,color:#ffffff,stroke:#1a365d,stroke-width:3px
+        </div>
+      </div>
+      <p style="text-align:center; margin-top:10px;">本章解决「<strong>产什么、跳转地址怎么办</strong>」——第8章解决「变成目标码」，第9章解决「变得更好」。</p>
+    </div>
+  </section>
+
+  <!-- ★ 3 本章主线 -->
+  <section class="slide" data-narration="这一页是本章的行程单，一条因果链，五个环节。第一环，问题：直接从语法树生成机器码，又痛又难移植，机器细节会把人淹死。第二环，出路：插一层中间表示，本章选的是三地址码，配上四元式这种实现。第三环，表达式怎么办：靠三个小零件，E.addr、gen 和 new Temp，边归约边吐指令。第四环，布尔表达式按短路语义翻译，天然就是跳转代码，可跳转目标此刻还不知道。第五环，回填登场：目标先留空，指令号记进真链假链，地址一确定就回头补票，控制流语句全靠这副骨架接线。下面一页一页走，就是把这条链变成你的肌肉记忆。">
+    <div class="slide-head"><span class="sec">主线</span><h3>从「为什么需要 IR」到「回填如何补地址」，五环一线</h3></div>
+    <div class="slide-body">
+      <div class="chain">
+        <div class="link"><span class="no">1</span><span class="txt"><strong>问题</strong>：语法树直接生成机器码——又痛又难移植</span></div>
+        <div class="link"><span class="no">2</span><span class="txt"><strong>出路</strong>：插一层中间表示 IR——三地址码 ＋ 四元式</span></div>
+        <div class="link"><span class="no">3</span><span class="txt"><strong>表达式</strong>：E.addr、gen()、new Temp() 三零件增量翻译</span></div>
+        <div class="link"><span class="no">4</span><span class="txt"><strong>布尔式</strong>：短路求值 ＝ 跳转代码，但目标地址此刻未知</span></div>
+        <div class="link"><span class="no">5</span><span class="txt"><strong>回填</strong>：先留空、记账、事后补票——控制流统一接线</span></div>
+      </div>
+      <div class="tip">这条链就是本章的目录：6.1 对应第 1–2 环，6.2 对应第 3 环，6.3–6.4 对应第 4–5 环。</div>
+    </div>
+  </section>
+
+  <!-- 4 动机页 -->
+  <section class="slide" data-narration="为什么非要这层中间表示？算一笔账。假设有 m 种源语言、n 种目标机器，如果每对组合都单独写一个编译器，那就是 m 乘 n 个编译器，工作量爆炸。直接让前端吐机器码行不行？不行，x86 有 x86 的寄存器分配和寻址模式，ARM 有 ARM 的一套，换个目标机，整个后端就得推翻重写。那在机器码上做优化呢？面对的是机器细节的海洋，根本下不去手。出路是把编译器拦腰切成两半：前端只负责产出中间表示，后端只负责把中间表示变成目标码，优化器也在这一层上做文章。m 个前端加 n 个后端，就覆盖了 m 乘 n 种组合。本章用三地址码当这层中间表示。">
+    <div class="slide-head"><span class="sec">动机</span><h3>m 种语言配 n 种机器，不该写 m×n 个编译器</h3></div>
+    <div class="slide-body">
+      <p>第5章的 SDT 只是扳手，它留下的问题是：<strong>触发的动作到底产出什么？</strong>假设直接产出目标机器码——</p>
+      <div class="formula">$$m\text{ 种语言}\times n\text{ 种机器}\Rightarrow m\times n\text{ 个编译器}\qquad\text{插一层 IR}\Rightarrow m+n\text{ 个编译器}$$</div>
+      <div class="cols">
+        <div class="col"><div class="card">😣 <strong>直接产机器码</strong><br>x86 与 ARM 各一套寄存器与寻址模式，换目标机＝后端推翻重写</div></div>
+        <div class="col"><div class="card">🌊 <strong>在机器码上优化</strong><br>面对的是机器细节的海洋，优化器无处下嘴</div></div>
+      </div>
+      <div class="tip">💡 本章方案：前端产 <strong>中间表示</strong>（Intermediate Representation, IR），后端消费 IR，优化器在 IR 上做文章。</div>
+    </div>
+  </section>
+
+  <!-- ★ 5 三地址码定义页 -->
+  <section class="slide" data-narration="给三地址码下定义，约束只有一条：每条指令至多一个运算符，典型长相是 x 等于 y op z。别小看这一条，它逼着你把再复杂的表达式拆成一列小步。指令里说的地址这个词有点唬人，它不专指内存地址，而是操作数位置的统称，一共三种：第一种是名字，源程序里的变量，经符号表找到它的存储位置；第二种是常量，源程序里直接写出来的字面量，比如 60、3.14；第三种是编译器临时变量，为暂存中间结果新造的名字，t1、t2、t3 这样编号。记住一句话：三地址码就是把语法树拍平，每个临时变量恰好对应原树的一个内部节点，求值顺序被显式固定下来。">
+    <div class="slide-head"><span class="sec">定义</span><h3>三地址码只有一条约束：每条指令至多一个运算符</h3></div>
+    <div class="slide-body">
+      <p><strong>三地址码</strong>（Three-Address Code）是一种低层 IR，典型形态：</p>
+      <div class="formula formula-concl">$$x = y\ \mathrm{op}\ z\quad\text{（每条指令至多一个运算符）}$$</div>
+      <table>
+        <thead><tr><th>地址种类</th><th>说明</th><th>例子</th></tr></thead>
+        <tbody>
+          <tr><td class="l"><strong>名字</strong>（Name）</td><td class="l">源程序变量，经符号表指向其存储位置</td><td>a、b、position</td></tr>
+          <tr><td class="l"><strong>常量</strong>（Constant）</td><td class="l">源程序中直接出现的字面量</td><td>60、3.14</td></tr>
+          <tr><td class="l"><strong>临时变量</strong>（Temporary）</td><td class="l">编译器为暂存中间结果新造的名字</td><td>t1、t2、t3</td></tr>
+        </tbody>
+      </table>
+      <div class="deep">读法：「地址」不是三个内存地址，而是<strong>操作数位置</strong>的统称——名字、常量、临时变量都算地址。</div>
+    </div>
+  </section>
+
+  <!-- 6 四元式页 -->
+  <section class="slide" data-narration="三地址码是文本，落到编译器内部要变成数据结构，最常用的实现叫四元式：一条指令一行记录，固定四个字段，op 是运算符，arg1、arg2 是两个操作数，result 放结果的名字，用不上就留空。看 x 等于 a 加 b 乘 c：先乘后加拆三条，t1 等于 b 乘 c，t2 等于 a 加 t1，x 等于 t2。写成四元式就是右边这张表：第一行星号 b c t1；第二行加号 a t1 t2；第三行等号 t2，arg2 留空，result 是 x。注意 result 放的是名字不是值，编译期根本没有值。这张表就是后端的算盘，字段一错位，后端就把名字当成运算符。">
+    <div class="slide-head"><span class="sec">实现</span><h3>四元式把指令变成一张四列的表：op / arg1 / arg2 / result</h3></div>
+    <div class="slide-body">
+      <div class="cols">
+        <div class="col">
+          <p style="text-align:center;"><strong>x = a + b * c</strong> 的三地址码（先乘后加）</p>
+          <table>
+            <thead><tr><th>地址</th><th>指令</th></tr></thead>
+            <tbody>
+              <tr><td>1</td><td>t1 = b * c</td></tr>
+              <tr><td>2</td><td>t2 = a + t1</td></tr>
+              <tr><td>3</td><td>x = t2</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="col">
+          <p style="text-align:center;"><strong>四元式</strong>（Quadruple）：赋值指令 arg2 留空</p>
+          <table>
+            <thead><tr><th>op</th><th>arg1</th><th>arg2</th><th>result</th></tr></thead>
+            <tbody>
+              <tr><td>*</td><td>b</td><td>c</td><td>t1</td></tr>
+              <tr><td>+</td><td>a</td><td>t1</td><td>t2</td></tr>
+              <tr><td>=</td><td>t2</td><td></td><td>x</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+      <div class="deep">读法：四元式让指令成为可存放、可重排的记录——优化器就在这张表上打算盘（第9章的主场）。</div>
+    </div>
+  </section>
+
+  <!-- 7 增量翻译机制页 -->
+  <section class="slide" data-narration="产什么说清楚了，接下来问怎么产：能不能不先建语法树，在语法分析的过程中直接把指令吐出来？可以，这叫增量翻译，每条产生式归约时，顺手把对应的三地址指令追加到输出流里。机制只有三个零件：属性 E.addr，记表达式的值存放在哪个地址，注意是地址不是值；函数 gen，向输出流追加一条指令；函数 new Temp，分配一个从没用过的新临时变量。右边这张表把三个零件挂到表达式文法上：加法和单目减要先开新临时变量再生成指令；括号只传递地址；id 是叶子，地址就是变量本身，一条指令都不产生。拿着这张表，下一页我们完整手算一遍。">
+    <div class="slide-head"><span class="sec">机制</span><h3>增量翻译只要三个零件：E.addr 接力、gen 吐指令、new Temp 开新名</h3></div>
+    <div class="slide-body">
+      <div class="cols">
+        <div class="col">
+          <div class="card">🏷️ <strong>E.addr</strong><br>E 的值<strong>存放在哪个地址</strong>（名字或临时变量），不是值本身</div>
+          <div class="card">📤 <strong>gen()</strong><br>向输出流追加一条三地址指令</div>
+          <div class="card">🆕 <strong>new Temp()</strong><br>分配一个从未用过的临时变量名 t1、t2……</div>
+          <div class="tip">💡 <strong>增量翻译</strong>（Incremental Translation）：归约时顺手吐指令，不必先建语法树。</div>
+        </div>
+        <div class="col">
+          <table class="small">
+            <thead><tr><th>产生式</th><th>语义规则</th></tr></thead>
+            <tbody>
+              <tr><td>S → id = E</td><td class="l">gen(top.get(id.lexeme) '=' E.addr)</td></tr>
+              <tr><td>E → E₁ + E₂</td><td class="l">E.addr := new Temp()；gen(E.addr '=' E₁.addr '+' E₂.addr)</td></tr>
+              <tr><td>E → -E₁</td><td class="l">E.addr := new Temp()；gen(E.addr '=' 'minus' E₁.addr)</td></tr>
+              <tr><td>E → ( E₁ )</td><td class="l">E.addr := E₁.addr（不生成指令）</td></tr>
+              <tr><td>E → id</td><td class="l">E.addr := top.get(id.lexeme)（不生成指令）</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 8 手算页（本章唯一互动停顿页） -->
+  <section class="slide" data-narration="轮到你了。题目是 a 等于 b 加负 c 加 d，指令从地址 100 开始，加法左结合，规则就在上一页那张表里。纸笔拿出来，先暂停视频自己推一遍。推出来了吗？好，对答案。归约顺序决定生成顺序：最先归约负 c，开 t1，第 100 条 t1 等于 minus c；接着归约 b 加 t1，开 t2，第 101 条 t2 等于 b 加 t1；再归约 t2 加 d，开 t3，第 102 条 t3 等于 t2 加 d；最后归约赋值，第 103 条 a 等于 t3。对照右边四元式表逐行核对。最常错的是给 id 开临时变量：叶子只传地址不生成指令，开了只会多出复制指令">
+    <div class="slide-head"><span class="sec">演练</span><h3>a = b + -c + d：归约顺序就是生成顺序，地址 100–103</h3></div>
+    <div class="slide-body">
+      <div class="cols">
+        <div class="col">
+          <div class="step"><p><strong>① 归约 E → -E₁</strong>（E₁.addr = c）：E.addr := t1　→　<strong>100: t1 = minus c</strong></p></div>
+          <div class="step"><p><strong>② 归约 E → E₁ + E₂</strong>（b 加 t1）：E.addr := t2　→　<strong>101: t2 = b + t1</strong></p></div>
+          <div class="step"><p><strong>③ 归约 E → E₁ + E₂</strong>（t2 加 d）：E.addr := t3　→　<strong>102: t3 = t2 + d</strong></p></div>
+          <div class="step"><p><strong>④ 归约 S → id = E</strong>（a 接 t3）　→　<strong>103: a = t3</strong></p></div>
+          <div class="pause"><div class="icon">✍️</div><div class="txt"><b>暂停推导</b><p>合上讲义，用上一页的 SDD 表，自己写出地址 100–103 的四条指令与四元式表。</p></div></div>
+        </div>
+        <div class="col">
+          <table>
+            <thead><tr><th>地址</th><th>op</th><th>arg1</th><th>arg2</th><th>result</th></tr></thead>
+            <tbody>
+              <tr><td>100</td><td>minus</td><td>c</td><td></td><td>t1</td></tr>
+              <tr><td>101</td><td>+</td><td>b</td><td>t1</td><td>t2</td></tr>
+              <tr><td>102</td><td>+</td><td>t2</td><td>d</td><td>t3</td></tr>
+              <tr><td>103</td><td>=</td><td>t3</td><td></td><td>a</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+      <p class="step-hint">按空格 / → 逐步揭示答案</p>
+    </div>
+  </section>
+
+  <!-- 9 布尔短路页 -->
+  <section class="slide" data-narration="表达式的翻译解决了，另一类式子更棘手：控制流条件。if 括号里那个布尔表达式，你以为要算出个 0 或 1 存起来？其实绝大多数语言采用短路求值：or 左边为真就不再算右边，and 左边为假就不再算右边。这不只是省时间，还是语义的一部分：x 不等于 0 先挡一道，y 除以 x 才不会除零。短路求值告诉我们，控制流语境里的布尔表达式，本质不是算出一个值，而是一段跳转代码：条件成立跳真出口，不成立跳假出口。所以翻译 B 归约为 E1 rel E2 时，生成两条指令：一条条件跳转去真出口，一条无条件跳转去假出口。问题是，这两个出口此刻还根本不存在。">
+    <div class="slide-head"><span class="sec">短路</span><h3>控制流里的布尔表达式不算值，它是一段跳转代码</h3></div>
+    <div class="slide-body">
+      <p><strong>短路求值</strong>（Short-Circuit Evaluation）：or 左真即真、and 左假即假，右侧不再求值。</p>
+      <div class="warn">⚠️ 短路是<strong>语义</strong>，不只是省时间：<strong>x ≠ 0 and y/x &gt; 1</strong> —— x ≠ 0 先挡一道，y/x 才不会除零。</div>
+      <table>
+        <thead><tr><th>B → E₁ rel E₂ 生成的指令</th><th>去向</th></tr></thead>
+        <tbody>
+          <tr><td class="l"><strong>if</strong> E₁.addr relop E₂.addr <strong>goto</strong> _</td><td>真出口（成立时跳）</td></tr>
+          <tr><td class="l"><strong>goto</strong> _</td><td>假出口（不成立时跳）</td></tr>
+        </tbody>
+      </table>
+      <div class="tip">💡 麻烦来了：生成这两条指令的那一刻，<strong>真出口和假出口的地址根本不存在</strong>——它们落在后面还没翻译的语句里。</div>
+    </div>
+  </section>
+
+  <!-- 10 回填三操作页 -->
+  <section class="slide" data-narration="出口还不存在，跳转指令却必须现在生成，难道为此再扫描一趟源程序？不必。答案叫回填：先把目标栏留空，把指令编号记在链表里随身带着，等目标地址确定了，回头统一补填，一趟扫描就够。机制只有三个操作：makelist，造一个只含指令号 i 的新链表；merge，把两条链表合并；backpatch，把链表里每一条指令的跳转目标补填成 i，这是唯一真正改指令的动作。账本是布尔表达式 B 挂的真链和假链，分别记下该跳真出口、假出口但还没填的指令号。再加标记非终结符 M，归约为空，唯一作用是记下当前位置，M.instr 等于 nextinstr。">
+    <div class="slide-head"><span class="sec">回填</span><h3>先上车后补票：指令号记进账本，地址定了统一还</h3></div>
+    <div class="slide-body">
+      <p><strong>回填</strong>（Backpatching）：跳转目标留空先生成，指令号记入链表，目标确定后统一补填——一趟扫描就够。</p>
+      <table>
+        <thead><tr><th>操作</th><th>作用</th></tr></thead>
+        <tbody>
+          <tr><td class="l"><strong>makelist(i)</strong></td><td class="l">造一个只含指令号 i 的新链表，返回表指针</td></tr>
+          <tr><td class="l"><strong>merge(p₁, p₂)</strong></td><td class="l">把 p₁、p₂ 两条链表合并，返回合并后的表指针</td></tr>
+          <tr><td class="l"><strong>backpatch(p, i)</strong></td><td class="l">把链表 p 里<strong>每一条</strong>指令的跳转目标补填为 i</td></tr>
+        </tbody>
+      </table>
+      <div class="cols">
+        <div class="col"><div class="card">📒 <strong>真链 truelist / 假链 falselist</strong><br>B 上挂的两本账：所有「该跳真 / 假出口但还没填」的<strong>指令号</strong>（不是指令内容）</div></div>
+        <div class="col"><div class="card">📍 <strong>M → ε</strong><br>唯一职责是记下当前位置：<strong>M.instr := nextinstr</strong>（下一条待生成指令的地址）</div></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 11 or/and 翻译方案页 -->
+  <section class="slide" data-narration="三个零件备齐，看本章最重要的一张表。or 怎么翻？B1 or M B2 归约时，把 B1 的假链回填到 M.instr，真链两边合并，假链取 B2 的。为什么填假链？or 的语义是左边为假才去算右边，B1 的假出口恰好落在 B2 的入口。and 正好对偶：左边为真才算右边，回填 B1 的真链，假链合并，真链取 B2 的。not 最直接，真假链互换；括号原样传递。基础情形 E1 rel E2 生成两条指令，真假链各记一条。口诀防记反：or 假才继续，and 真才继续，考场上先把口诀默在草稿纸上，这是本章头号错误高发区。下一页拿真式子练手。">
+    <div class="slide-head"><span class="sec">方案</span><h3>or 回填假链、and 回填真链——口诀：or 假才继续，and 真才继续</h3></div>
+    <div class="slide-body">
+      <table class="small">
+        <thead><tr><th>产生式</th><th>语义规则</th></tr></thead>
+        <tbody>
+          <tr><td class="l">B → B₁ <strong>or</strong> M B₂</td><td class="l">backpatch(B₁.<strong>falselist</strong>, M.instr)；B.truelist := merge(B₁.truelist, B₂.truelist)；B.falselist := B₂.falselist</td></tr>
+          <tr><td class="l">B → B₁ <strong>and</strong> M B₂</td><td class="l">backpatch(B₁.<strong>truelist</strong>, M.instr)；B.truelist := B₂.truelist；B.falselist := merge(B₁.falselist, B₂.falselist)</td></tr>
+          <tr><td class="l">B → <strong>not</strong> B₁</td><td class="l">B.truelist := B₁.falselist；B.falselist := B₁.truelist</td></tr>
+          <tr><td class="l">B → ( B₁ )</td><td class="l">B.truelist := B₁.truelist；B.falselist := B₁.falselist</td></tr>
+          <tr><td class="l">B → E₁ rel E₂</td><td class="l">B.truelist := makelist(nextinstr)；B.falselist := makelist(nextinstr + 1)；gen('if' … 'goto _')；gen('goto _')</td></tr>
+          <tr><td class="l">M → ε</td><td class="l">M.instr := nextinstr</td></tr>
+        </tbody>
+      </table>
+      <div class="warn">口诀：<strong>or 假才继续、and 真才继续</strong>——M 必须插在 or / and 与 B₂ 之间，因为 M.instr 要在 B₂ 生成之前取值。</div>
+    </div>
+  </section>
+
+  <!-- 12 回填大手算 ①：设定 + 控制流 + 生成六条指令 -->
+  <section class="slide" data-narration="核心手算来了：a 小于 b or c 小于 d and e 小于 f，and 优先于 or，地址从 100 开始。左图就是最终要实现的控制流：a 小于 b 为真直接通关，为假才去测 c 小于 d；c 小于 d 为真才去测 e 小于 f。跟着步骤生成：翻译第一块，生成第 100 条条件跳转和第 101 条无条件跳转，真链记 100，假链记 101；标记 M1 记下 102，这是第二块入口；翻译第二块，生成 102、103 两条，真假链各记一条；标记 M2 记下 104；翻译第三块，生成 104、105 两条。六条指令目标栏全空，欠条记在链上，下一页还账。">
+    <div class="slide-head"><span class="sec">手算</span><h3>a&lt;b or c&lt;d and e&lt;f（上）：先生成六条留空指令</h3></div>
+    <div class="slide-body">
+      <div class="cols">
+        <div class="col">
+          <div class="mmd">
+            <div class="mermaid">
+flowchart TB
+  A[a 小于 b？] -- 真 --> T[真出口]
+  A -- 假 --> C[c 小于 d？]
+  C -- 真 --> D[e 小于 f？]
+  C -- 假 --> F[假出口]
+  D -- 真 --> T
+  D -- 假 --> F
+            </div>
+          </div>
+          <p style="text-align:center; font-size:18px; color:var(--muted);">短路控制流：六条指令恰好实现这张图</p>
+        </div>
+        <div class="col">
+          <div class="step"><p><strong>① B₁ = a&lt;b</strong>：<strong>100</strong>: if a&lt;b goto _／<strong>101</strong>: goto _　（B₁.tl={100}，B₁.fl={101}）；M₁.instr = <strong>102</strong></p></div>
+          <div class="step"><p><strong>② B₂ = c&lt;d</strong>：<strong>102</strong>: if c&lt;d goto _／<strong>103</strong>: goto _　（B₂.tl={102}，B₂.fl={103}）；M₂.instr = <strong>104</strong></p></div>
+          <div class="step"><p><strong>③ B₃ = e&lt;f</strong>：<strong>104</strong>: if e&lt;f goto _／<strong>105</strong>: goto _　（B₃.tl={104}，B₃.fl={105}）</p></div>
+          <div class="tip">此刻六个目标栏全部留空，欠条都在链上——下一页两次归约统一还账。</div>
+        </div>
+      </div>
+      <p class="step-hint">按空格 / → 逐步展开</p>
+    </div>
+  </section>
+
+  <!-- 13 回填大手算 ②：归约 and 与 or -->
+  <section class="slide" data-narration="接着上一页开始归约。先归约 and：执行 backpatch，参数是第二块的真链，单元素 102，和 M2 记下的 104，于是第 102 条补填成：c 小于 d 就跳到 104；合并后真链取第三块的 104，假链是 103 和 105 合成。再归约 or：执行 backpatch，参数是第一块的假链，单元素 101，和 M1 记下的 102，第 101 条补填成跳到 102；最终真链是 100 和 104 合并，假链就是 103、105。这两条链就是上交控制流语句的欠条。每次 backpatch 都要写全两个参数：哪条链、填什么地址。下页看对照表。">
+    <div class="slide-head"><span class="sec">手算</span><h3>a&lt;b or c&lt;d and e&lt;f（中）：两次归约，两次 backpatch</h3></div>
+    <div class="slide-body">
+      <div class="step">
+        <p><strong>④ 归约 and（B₂ and M₂ B₃）——and 真才继续，回填 B₂ 真链</strong></p>
+        <p style="margin-left:22px;">backpatch(B₂.truelist = {102}, M₂.instr = 104)　⇒　102 补填为 <strong>if c&lt;d goto 104</strong><br>
+        B′.truelist := B₃.truelist = {104}；　B′.falselist := merge({103}, {105}) = {103, 105}</p>
+      </div>
+      <div class="step">
+        <p><strong>⑤ 归约 or（B₁ or M₁ B′）——or 假才继续，回填 B₁ 假链</strong></p>
+        <p style="margin-left:22px;">backpatch(B₁.falselist = {101}, M₁.instr = 102)　⇒　101 补填为 <strong>goto 102</strong></p>
+      </div>
+      <div class="step">
+        <div class="formula formula-concl">$$\boldsymbol{B.truelist = \{100,\ 104\}\qquad B.falselist = \{103,\ 105\}}$$</div>
+      </div>
+      <p class="step-hint">按空格 / → 逐步展开</p>
+    </div>
+  </section>
+
+  <!-- 14 回填大手算 ③：生成时 / 回填后对照表 -->
+  <section class="slide" data-narration="把整个过程压成一张对照表，逐行看。第 100 条生成时挂在左边真链，后来并入 B 的真链，作为真出口留给上层。第 101 条在假链里，归约 or 时填成 goto 102。第 102 条归约 and 时填成 goto 104。第 103 条并入最终假链，留作假出口。第 104 条是 e 小于 f 的条件跳转，并入最终真链。第 105 条并入最终假链。所以上交的欠条是：真链 100 和 104，假链 103 和 105。六个目标，两个当场还了，四个留给上层。特别提醒，102 已经还过账，不再属于任何链，把它留在链里是最常见的错。">
+    <div class="slide-head"><span class="sec">手算</span><h3>a&lt;b or c&lt;d and e&lt;f（下）：生成时与回填后逐行对照</h3></div>
+    <div class="slide-body">
+      <table class="small">
+        <thead><tr><th>地址</th><th>生成时指令</th><th>链表归属</th><th>回填后指令</th></tr></thead>
+        <tbody>
+          <tr><td>100</td><td class="l">if a&lt;b goto _</td><td class="l">B₁.tl={100} → B.tl</td><td class="l">if a&lt;b goto _（真出口，留给上层）</td></tr>
+          <tr><td>101</td><td class="l">goto _</td><td class="l">B₁.fl={101}</td><td class="l"><strong>goto 102</strong></td></tr>
+          <tr><td>102</td><td class="l">if c&lt;d goto _</td><td class="l">B₂.tl={102}</td><td class="l"><strong>if c&lt;d goto 104</strong></td></tr>
+          <tr><td>103</td><td class="l">goto _</td><td class="l">B₂.fl={103} → B.fl</td><td class="l">goto _（假出口，留给上层）</td></tr>
+          <tr><td>104</td><td class="l">if e&lt;f goto _</td><td class="l">B₃.tl={104} → B.tl</td><td class="l">if e&lt;f goto _（真出口，留给上层）</td></tr>
+          <tr><td>105</td><td class="l">goto _</td><td class="l">B₃.fl={105} → B.fl</td><td class="l">goto _（假出口，留给上层）</td></tr>
+        </tbody>
+      </table>
+      <div class="deep">最终上交的「欠条」：<strong>B.truelist = {100, 104}，B.falselist = {103, 105}</strong>——等控制流语句来抵债。102 已还清，不在任何链上。</div>
+    </div>
+  </section>
+
+  <!-- 15 控制流方案页 -->
+  <section class="slide" data-narration="布尔表达式交出两本欠条，谁来还债？使用它的语句。控制流语句的翻译只做两件事：真链回填到语句体入口，假链连同语句自己的未决跳转打包成 S.nextlist 交给上层。if 最简单，一个 M 记住语句体入口就够；if-else 多一个零件 N，生成跳过 else 的那条 goto，它的指令号也是欠条；while 要两个 M，M1 记条件入口，M2 记循环体入口。四个动作：回填 S1.nextlist 到条件入口，回填 B 的真链到循环体入口，S.nextlist 取 B 的假链，再生成跳回 M1 的 goto。骨架相同，接线位置不同。下一页完整手算。">
+    <div class="slide-head"><span class="sec">方案</span><h3>if / if-else / while 共用一副骨架：真链接语句体，假链交上层</h3></div>
+    <div class="slide-body">
+      <table class="small">
+        <thead><tr><th>语句</th><th>翻译方案要点</th></tr></thead>
+        <tbody>
+          <tr><td class="l"><strong>if-then</strong><br>S → if M B then S₁</td><td class="l">backpatch(B.truelist, M.instr)；S.nextlist := merge(B.falselist, S₁.nextlist)</td></tr>
+          <tr><td class="l"><strong>if-then-else</strong><br>S → if B then M₁ S₁ N else M₂ S₂</td><td class="l">backpatch(B.truelist, M₁.instr)；backpatch(B.falselist, M₂.instr)；N → ε 生成「跳过 else」的 goto _，N.nextlist := makelist(nextinstr)；S.nextlist 三者 merge</td></tr>
+          <tr><td class="l"><strong>while</strong><br>S → while M₁ B do M₂ S₁</td><td class="l">backpatch(S₁.nextlist, M₁.instr)；backpatch(B.truelist, M₂.instr)；S.nextlist := B.falselist；gen('goto' M₁.instr)</td></tr>
+        </tbody>
+      </table>
+      <div class="tip">为什么 while 要<strong>两个</strong>标记？M₁.instr 记条件入口（循环体执行完跳回去），M₂.instr 记循环体入口（B 为真落进来）——要记两个地址；if 只记一个，所以一个 M 就够。</div>
+    </div>
+  </section>
+
+  <!-- 16 while 手算（上）：准备阶段 -->
+  <section class="slide" data-narration="手算：当 a 小于 b 时循环做 x 等于 x 加 1，起始地址 100，这一页先备齐材料。第一步，M1 归约为空，记下 M1.instr 等于 100，这是条件入口，循环体跑完要跳回这里。第二步，翻译条件：生成第 100 条 if a 小于 b goto 空，真链记 100；第 101 条 goto 空，假链记 101。第三步，M2 记下 102，这是循环体入口，条件为真就落进来。第四步，翻译循环体：102 生成 t1 等于 x 加 1，103 生成 x 等于 t1。注意赋值语句没有未决跳转，未决链表是空表，马上要用。材料齐了，下页执行归约的四个动作。">
+    <div class="slide-head"><span class="sec">手算</span><h3>while a&lt;b do x=x+1（上）：两个 M 记地址，B 与循环体先生成</h3></div>
+    <div class="slide-body">
+      <div class="step"><p><strong>① M₁ → ε</strong>：M₁.instr = nextinstr = <strong>100</strong>（条件入口，先记下）</p></div>
+      <div class="step"><p><strong>② 翻译 B = a&lt;b</strong>：<strong>100</strong>: if a&lt;b goto _（B.truelist={100}）／<strong>101</strong>: goto _（B.falselist={101}）</p></div>
+      <div class="step"><p><strong>③ M₂ → ε</strong>：M₂.instr = <strong>102</strong>（循环体入口）</p></div>
+      <div class="step"><p><strong>④ 翻译 S₁ = x = x + 1</strong>：<strong>102</strong>: t1 = x + 1／<strong>103</strong>: x = t1　——赋值无未决跳转，<strong>S₁.nextlist = {}</strong></p></div>
+      <p class="step-hint">按空格 / → 逐步展开</p>
+    </div>
+  </section>
+
+  <!-- 17 while 手算（下）：归约四动作 + 最终序列 -->
+  <section class="slide" data-narration="收尾：归约 while，四个动作逐个来，参数都写全。动作一，把循环体的未决链表回填到 100，可它是空表，没有指令可改，它不生成那条 goto。动作二，把条件的真链，单元素 100，回填到 M2 记下的 102，第 100 条补成 if a 小于 b goto 102。动作三，语句的未决链表取条件的假链，单元素 101，这是唯一出口，上交。动作四，生成 goto 100，即第 104 条，此刻 M1 的地址早已记下，目标直接写入，无需回填。最后一步在上层：外层翻译到 105 时把 101 填成 goto 105。右边是最终序列，逐行核对手算结果。">
+    <div class="slide-head"><span class="sec">手算</span><h3>while a&lt;b do x=x+1（下）：归约四动作，101 由上层回填到 105</h3></div>
+    <div class="slide-body">
+      <div class="cols">
+        <div class="col">
+          <div class="step"><p><strong>① backpatch(S₁.nextlist = {}, M₁.instr = 100)</strong>：空表，无指令可改（不是这一步生成 goto 100）</p></div>
+          <div class="step"><p><strong>② backpatch(B.truelist = {100}, M₂.instr = 102)</strong>　⇒　100 补填为 <strong>if a&lt;b goto 102</strong></p></div>
+          <div class="step"><p><strong>③ S.nextlist := B.falselist = {101}</strong>——循环唯一出口，留给上层</p></div>
+          <div class="step"><p><strong>④ gen('goto' M₁.instr)</strong>　⇒　<strong>104: goto 100</strong>（目标已知，直接写入，无需回填）</p></div>
+          <div class="step"><p><strong>⑤ 上层回填</strong>：backpatch(S.nextlist = {101}, 105)　⇒　101 补填为 <strong>goto 105</strong></p></div>
+        </div>
+        <div class="col">
+          <table class="small">
+            <thead><tr><th>地址</th><th>指令</th><th>来源</th></tr></thead>
+            <tbody>
+              <tr><td>100</td><td class="l">if a&lt;b goto 102</td><td class="l">B 真链被回填到 M₂.instr</td></tr>
+              <tr><td>101</td><td class="l">goto 105</td><td class="l">S.nextlist，由上层回填</td></tr>
+              <tr><td>102</td><td class="l">t1 = x + 1</td><td class="l">循环体（M₂.instr）</td></tr>
+              <tr><td>103</td><td class="l">x = t1</td><td class="l">循环体</td></tr>
+              <tr><td>104</td><td class="l">goto 100</td><td class="l">gen 时目标已知</td></tr>
+              <tr><td>105</td><td class="l">…（循环外第一条）</td><td class="l">101 的跳转目标</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+      <p class="step-hint">按空格 / → 逐步展开</p>
+    </div>
+  </section>
+
+  <!-- ★ 18 误区页 -->
+  <section class="slide" data-narration="扫三个雷。第一个，本章头号错误：or 和 and 的回填对象记反。口诀：or 假才继续，回填假链；and 真才继续，回填真链，动笔前先默在草稿纸上。第二个，以为 while 里那条 goto 100 是 backpatch 填的。不是，gen 执行那一刻 M1.instr 早已记下，目标直接写入；同理给 id 开临时变量也是白干，叶子只传地址。第三个，以为三地址是三个内存地址，或者 E.addr 存的是表达式的值。都不对：三种地址是操作数位置的统称，E.addr 装的是结果存放在哪，编译期还没有值。填平这三个坑，本章手算题就稳了。">
+    <div class="slide-head"><span class="sec">避坑</span><h3>本章三个高频错误：记反、误回填、把地址当成值</h3></div>
+    <div class="slide-body">
+      <div class="trap">❌ <strong>or 回填真链、and 回填假链</strong><br>✅ 记反整题崩盘。口诀：<strong>or 假才继续、and 真才继续</strong>——or 填 B₁ 的 falselist，and 填 B₁ 的 truelist。</div>
+      <div class="trap">❌ <strong>104 那条 goto 100 是 backpatch 填出来的</strong><br>✅ gen('goto' M₁.instr) 执行时 M₁.instr = 100 早已记下，目标直接写入；同理，叶子 E → id 只传地址、不生成指令，给 id 开临时变量是浪费。</div>
+      <div class="trap">❌ <strong>三地址＝三个内存地址；E.addr 存的是值</strong><br>✅ 名字、常量、临时变量都算「地址」，是操作数位置的统称；E.addr 装的是「结果存放在哪」，编译期还没有值。</div>
+    </div>
+  </section>
+
+  <!-- 19 接口页 -->
+  <section class="slide" data-narration="收个尾，看看本章和邻居们怎么分工。第5章给了我们语法制导翻译这把扳手，解决规则怎么挂、何时触发；本章握住这把扳手，产出三地址码这个中间表示。第7章讲运行环境，栈和活动记录，回答这些名字在内存里住在哪；第8章把三地址码变成真正的目标代码，第9章在四元式上做优化。本章还留下三个尾巴：类型检查、数组寻址、声明处理，声明与存储分配正是第7章的主场，其余的后续章节展开。也就是说，本章只管把程序翻译成一张干净、与机器无关的指令表，表里的名字怎么落到内存，是下一章的故事。带着这张指令表，我们去第7章看看运行时到底长什么样。">
+    <div class="slide-head"><span class="sec">接口</span><h3>本章产「指令表」，名字的住所与目标码交给后面几章</h3></div>
+    <div class="slide-body">
+      <table>
+        <thead><tr><th>相邻章</th><th>它做什么</th><th>与本章的接口</th></tr></thead>
+        <tbody>
+          <tr><td class="l"><strong>第5章 语法制导翻译</strong></td><td class="l">发扳手：规则挂在哪、何时触发</td><td class="l">本章用 SDT 机制产出三地址码</td></tr>
+          <tr><td class="l"><strong>第7章 运行环境</strong></td><td class="l">栈与活动记录：名字的住所</td><td class="l">本章遗留的声明处理、存储分配去这里</td></tr>
+          <tr><td class="l"><strong>第8–9章 代码生成与优化</strong></td><td class="l">三地址码 → 目标代码；在四元式上优化</td><td class="l">本章的四元式序列是它们的输入</td></tr>
+        </tbody>
+      </table>
+      <div class="tip">钩子：本章留下的三个尾巴——<strong>类型检查、数组寻址、声明处理</strong>，将在第7、8章陆续收掉。</div>
+    </div>
+  </section>
+
+  <!-- ★ 20 小结页 -->
+  <section class="slide" data-narration="三句话讲完第6章。第一句，解决什么：语法树和机器码之间，需要一种与机器无关、又足够低层的中间语言；控制流的跳转目标在生成指令那一刻还不知道，必须先生成、事后回填。第二句，核心机制：三地址码加四元式当中间表示；表达式靠 E.addr、gen、new Temp 增量翻译；布尔表达式按短路语义变成跳转代码，未决目标记进真链假链，靠回填三操作在归约时统一补票，if、if-else、while 共用这副接线骨架。第三句，承上启下：第5章发扳手，本章拧螺丝，第7章安排运行时内存，第8章生成目标码。主线问题的答案就一句话：欠条随身带，一趟扫描，回头统一还账。">
+    <div class="slide-head"><span class="sec">小结</span><h3>三句话讲完第6章</h3></div>
+    <div class="slide-body">
+      <div class="chain">
+        <div class="link"><span class="no">1</span><span class="txt"><strong>解决什么</strong>：前端与后端之间需要机器无关、足够低层的中间语言；跳转地址未知时先生成、事后回填</span></div>
+        <div class="link"><span class="no">2</span><span class="txt"><strong>核心机制</strong>：三地址码＋四元式当 IR；E.addr/gen/new Temp 增量翻译；短路语义 → 跳转代码，真链假链记账，三操作统一补票</span></div>
+        <div class="link"><span class="no">3</span><span class="txt"><strong>承上启下</strong>：第5章发扳手，本章拧螺丝；第7章安排运行时内存，第8章生成目标码</span></div>
+      </div>
+      <div class="formula formula-concl">$$\text{backpatch}(p,\,i):\ \text{把链表 }p\text{ 里每条指令的跳转目标补填为 }i\quad\text{——合上书也要能默写}$$</div>
+    </div>
+  </section>
+
+  <!-- ★ 21 结束页 -->
+  <section class="slide slide-cover" data-narration="第6章到站。本章金句：先上车，后补票。合上讲义拿一张纸，完成四项毕业挑战：第一，写出三地址码的约束和三种地址，把 x 等于 a 加 b 乘 c 翻成三地址码并列四元式表；第二，默写表达式翻译的五条语义规则，对 a 等于 b 加负 c 加 d 写出 gen 序列；第三，从零执行 a 小于 b or c 小于 d and e 小于 f 的回填全过程，写出六条指令、backpatch 参数、真链假链；第四，默写 while 的四个语义动作，生成 100 到 105 的序列，说清 104 为何不回填、101 谁来回填。全部过关，本章毕业。下一章第7章运行环境见。">
+    <div class="kicker">本 章 结 束</div>
+    <h1>先上车，后补票</h1>
+    <div class="sub">毕业挑战：合上书，拿一张纸</div>
+    <div class="divider"></div>
+    <div class="meta">
+      ☑ 写出三地址码约束与三种地址；x = a + b*c → 三地址码＋四元式表<br>
+      ☑ 默写五条语义规则；a = b + -c + d 逐条写出 gen 序列（100–103）<br>
+      ☑ a&lt;b or c&lt;d and e&lt;f 全程回填：六条指令、每次 backpatch 参数、最终真链假链<br>
+      ☑ 默写 while 四动作；生成 100–105 序列，说清 104 为何不回填、101 由谁回填<br><br>
+      下一章 · 第7章 运行环境：这些名字在内存里住在哪——栈与活动记录
+    </div>
+  </section>
+
+  <!-- 页脚 -->
+  <div id="footer">
+    <span class="brand">第6章 中间代码生成 · 编译原理课件</span>
+    <span id="pagenum">1 / 21</span>
+  </div>
+
+  <!-- 导航 -->
+  <div class="nav">
+    <button id="prev" title="上一页 (←)">‹</button>
+    <button id="next" title="下一页 (→ / 空格)">›</button>
+  </div>
+  <div id="hint">← → 翻页 · 空格下一页 · 推导页逐步显示 · 点击左右半屏翻页</div>
+
+</div>
+
+<!-- mermaid 本地引用，保证离线可用；初始化参数全套课件统一，勿改 -->
+<script src="/lectures-assets/mermaid.min.js"></script>
+<script>
+mermaid.initialize({
+  startOnLoad: false,   // 必须为 false：display:none 的隐藏页渲染会得到 0 宽高的退化 SVG，
+                        // 改为页面激活时懒渲染（见 renderMermaid）
+  theme: 'base',
+  themeVariables: {
+    primaryColor: '#ebf8ff',
+    primaryBorderColor: '#2b6cb0',
+    primaryTextColor: '#1a365d',
+    lineColor: '#718096',
+    fontFamily: '-apple-system, PingFang SC, sans-serif',
+    fontSize: '15px'
+  },
+  flowchart: { curve: 'linear', htmlLabels: false }
+});
+</script>
+<script>
+(function(){
+  const slides = Array.from(document.querySelectorAll('.slide'));
+  const total = slides.length;
+  let idx = 0;
+
+  const params = new URLSearchParams(location.search);
+  const startSlide = parseInt(params.get('slide'), 10);
+  if (params.get('autohide') === '1') document.body.classList.add('autohide');
+  if (!isNaN(startSlide) && startSlide >= 1 && startSlide <= total) idx = startSlide - 1;
+
+  const progress = document.getElementById('progress');
+  const pagenum = document.getElementById('pagenum');
+  const prevBtn = document.getElementById('prev');
+  const nextBtn = document.getElementById('next');
+
+  // 推导分步：每页记住已展开的步数；autohide（截图）模式下 CSS 强制全显
+  const stepState = new Map();
+  function stepsOf(i){ return Array.from(slides[i].querySelectorAll('.step')); }
+  function applySteps(){
+    stepsOf(idx).forEach((el, k)=> el.classList.toggle('on', k < (stepState.get(idx) || 0)));
+  }
+  // 前进一步：先展开本页下一步，全部展开后才翻页
+  function forward(){
+    const steps = stepsOf(idx);
+    const shown = stepState.get(idx) || 0;
+    if (shown < steps.length){ stepState.set(idx, shown + 1); applySteps(); return; }
+    go(idx + 1);
+  }
+  // 后退一步：先收起本页最后一步，收完才回上一页
+  function backward(){
+    const steps = stepsOf(idx);
+    const shown = stepState.get(idx) || 0;
+    if (shown > 0){ stepState.set(idx, shown - 1); applySteps(); return; }
+    go(idx - 1);
+  }
+
+  // mermaid 懒渲染：只在页面激活（有真实宽高）时渲染该页的图，渲染后打 data-done 防重复
+  function renderMermaid(slide){
+    if (typeof mermaid === 'undefined') return;
+    const nodes = Array.from(slide.querySelectorAll('.mermaid:not([data-done])'));
+    if (!nodes.length) return;
+    nodes.forEach(n => n.setAttribute('data-done', ''));
+    mermaid.run({ nodes }).catch(err => {
+      nodes.forEach(n => n.removeAttribute('data-done'));
+      console.error('mermaid 渲染失败：', err);
+    });
+  }
+
+  function render(){
+    slides.forEach((s,i)=> s.classList.toggle('active', i===idx));
+    progress.style.width = ((idx+1)/total*100) + '%';
+    pagenum.textContent = (idx+1) + ' / ' + total;
+    prevBtn.disabled = (idx===0);
+    nextBtn.disabled = (idx===total-1);
+    applySteps();
+    renderMermaid(slides[idx]);
+  }
+  function go(n){ idx = Math.max(0, Math.min(total-1, n)); render(); }
+
+  prevBtn.addEventListener('click', e=>{ e.stopPropagation(); backward(); });
+  nextBtn.addEventListener('click', e=>{ e.stopPropagation(); forward(); });
+
+  document.addEventListener('keydown', e=>{
+    if(e.key==='ArrowRight'||e.key===' '||e.key==='PageDown'){ e.preventDefault(); forward(); }
+    else if(e.key==='ArrowLeft'||e.key==='PageUp'){ e.preventDefault(); backward(); }
+    else if(e.key==='Home'){ stepState.set(idx, 0); go(0); }
+    else if(e.key==='End'){ go(total-1); }
+  });
+
+  document.getElementById('stage').addEventListener('click', e=>{
+    if(e.target.closest('.nav')) return;
+    const x = e.clientX;
+    if(x < window.innerWidth*0.5) backward(); else forward();
+  });
+
+  function fit(){
+    const s = Math.min(window.innerWidth/1280, window.innerHeight/720);
+    document.getElementById('stage').style.transform = 'translate(-50%,-50%) scale(' + s + ')';
+  }
+  window.addEventListener('resize', fit);
+  fit();
+  render();
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,777 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第15章 表示学习 · 深度学习互动讲义</title>
+<link rel="stylesheet" href="/lectures-assets/style.css">
+</head>
+<body>
+
+<nav class="topbar">
+  <div class="topbar-inner">
+    <span class="brand"><a href="index.html" style="color:inherit">← 学习地图</a></span>
+    <span class="crumb">第三部分 · 表示与推断 / 第15章</span>
+  </div>
+</nav>
+
+<div class="wrap">
+
+  <div class="lecture-head">
+    <span class="ch-label">CHAPTER 15 · 表示与推断</span>
+    <h1>表示学习</h1>
+    <p class="lead">本章回答第三部分的核心问题：什么样的表示才算"好表示"？它凭什么能跨任务、跨领域迁移？</p>
+  </div>
+
+  <!-- ===== 章首四件套之 1：全书定位 ===== -->
+  <div class="position-bar">
+    <strong>本章在主线上的位置：</strong>第 13 章用线性因子模型、第 14 章用自编码器分别给出了"学表示"的两台具体机器；本章退一步回答一个更根本的问题——好表示的标准是什么、为什么它能迁移。这个标准是第 16 章结构化概率模型的出发点。<br>
+    第15章回答主线上的问题：<strong>什么样的表示才算"好表示"？它凭什么能跨任务、跨领域迁移？</strong>
+    <div class="map-inline">
+      <span class="node">① 数学与机器学习基础（Ch1–5）</span><span class="arrow">→</span>
+      <span class="node">② 现代深度网络（Ch6–11）</span><span class="arrow">→</span>
+      <span class="node here">③ 表示与推断（Ch12–16）</span><span class="arrow">→</span>
+      <span class="node">④ 生成模型与前沿（Ch17–20）</span>
+    </div>
+    <div class="map-inline">
+      <span class="node">Ch13 线性因子模型</span><span class="arrow">→</span>
+      <span class="node">Ch14 自编码器</span><span class="arrow">→</span>
+      <span class="node here">Ch15 表示学习</span><span class="arrow">→</span>
+      <span class="node">Ch16 结构化概率模型</span>
+    </div>
+  </div>
+
+  <!-- ===== 章首四件套之 2：学习目标 ===== -->
+  <div class="objectives">
+    <h4>🎯 学完本章，合上书你应该能：</h4>
+    <ol>
+      <li>用"整理抽屉"式的人话向非专业者解释流形假设，并复述"26 万维像素空间里人脸只占测度为零的薄片"这个论证；</li>
+      <li>举例说明分布式表示的指数优势：手算 n=10 个二值特征时 one-hot 只能区分 10 个模式而分布式能区分 2¹⁰=1024 个，并推广到 kⁿ 对 k·n；</li>
+      <li>说出迁移学习何时会失败（域差距过大、负迁移、灾难性遗忘），并在小数据场景下给出"冻结哪些层"的决策与理由；</li>
+      <li>解释"共享因素"为什么让同一套表示能跨任务、跨领域迁移，并举出一个跨任务共享因素的具体例子；</li>
+      <li>说明自监督学习如何从数据自身挖标签，举出旋转预测、掩码还原、对比学习三个实例并各用一句话说清其标签来源。</li>
+    </ol>
+  </div>
+
+  <div class="lecture">
+
+    <!-- ===== 章首四件套之 3：推导主线图（flowchart TB 因果链）===== -->
+    <div class="figure">
+      <div class="mermaid">
+flowchart TB
+  A["原始输入把多种变化因素纠缠在一起"] --> B["好表示 把共享因素解开 解耦"]
+  B --> C["凭什么能解开 流形假设 数据躺在低维曲面上"]
+  B --> D["凭什么省数据 分布式表示 n 个特征 k 个取值就是 k 的 n 次方个可区分区域"]
+  C --> E["同一套表示跨任务迁移"]
+  D --> E
+  E --> F["代价 表示好坏无法直接度量 只能靠下游任务检验 第16章及以后"]
+  classDef danger fill:#fae9e7,stroke:#b03a2e,stroke-width:2.5px,color:#b03a2e;
+  class F danger;
+      </div>
+      <div class="caption">本章推导主线：从"纠缠"到"解耦"是好表示的定义；流形假设与分布式表示是它可行的两条腿；最后红色节点是本章留给第 16 章及以后的功课。</div>
+    </div>
+
+    <!-- ================= 15.1 ================= -->
+    <h2><span class="sec-no">15.1</span>什么算好表示：变化因素与解耦</h2>
+
+    <p>前两章各给了一台学表示的机器，但都没有回答"学成什么样才算好"。先用人话把问题摆出来。一张猫的照片，是什么？从像素看，它是几十万个数字；但从"成因"看，它是几样东西的乘积：<strong>品种 × 姿势 × 光照 × 背景</strong>。同一只猫，换个姿势、换个打光、换块地毯，像素几乎全变，"猫"却没变。这些独立起作用、各自变化就能让数据看起来完全不同的底层原因，叫<span class="term">变化因素</span>（Factors of Variation）。</p>
+
+    <p>麻烦在于：这些因素在像素里是<strong>纠缠</strong>（Entangled）在一起的。没有一个像素单独对应"光照"，也没有一个像素单独对应"品种"——改任何一个因素，成片像素一起变。人脑处理这种纠缠的方式是整理抽屉：把纠缠的东西<strong>分格放</strong>——这一格是"品种"，那一格是"姿势"，再一格是"光照"。好表示做的事一模一样：把混在一起的变化因素拆成独立的维度，每一维只对一个因素负责。这个拆解过程叫<span class="term">解耦</span>（Disentanglement）。</p>
+
+    <p>为什么解耦了的表示好用？因为不同任务、不同类别<strong>共享同一批底层因素</strong>——这就是<span class="term">共享因素</span>（Shared Factors）。边缘、角点、简单形状，对识别猫、识别狗、识别汽车、识别人脸全都用得上；音高、音色、共振峰，对识别说话人、识别内容、识别情绪全都用得上。一旦表示把这些共享因素分格放好，新任务往往只需要重新学"怎么用这几格"，而不需要重新学"怎么从像素里挖因素"。这是本章后半章"迁移"二字成立的根本原因。</p>
+
+    <p>但"好"本身没法直接定义——你没法写一个函数 f(表示) 输出它的好坏分数。于是整个领域采用一个务实的替代标准——<span class="term">代理任务</span>（Proxy Task）观点：<strong>表示好不好，看它喂给下游任务后的表现</strong>。用表示训练一个简单的线性分类器，分得好，表示就算好；换个简单探针还分得好，表示就更好。这个观点贯穿本章，也是章末"代价"节点的来历。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>好表示 = 把共享的变化因素解开。像素是"原材料仓库"，所有东西堆在一起；好表示是"整理好的抽屉"，每格一个因素。下游任务只需要拉开对应的抽屉，而不是翻遍整个仓库。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>"解耦就是让各维度统计独立"——不够准确。统计独立是数学性质，解耦还要求每一维<em>对应一个语义上可解释的因素</em>。随机旋转一组独立成分仍保持统计独立，但语义可能已经面目全非。解耦要的是"独立 + 对准人类能理解的因素"。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 15.1-1</div>
+              <div class="q-text">什么是变化因素？用"猫的照片"说明"纠缠"与"解耦"分别指什么？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              变化因素：独立起作用、各自变化就使数据看起来完全不同的底层原因（品种、姿势、光照、背景）。纠缠：这些因素在像素中混在一起，改动任一因素成片像素一起变。解耦：把因素拆成独立维度，每维只对一个因素负责（整理抽屉）。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 15.1-2</div>
+              <div class="q-text">"共享因素"是什么？代理任务观点如何绕开"好表示无法直接定义"的困难？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              共享因素：不同任务/类别共同依赖的底层因素（边缘、形状对一切物体识别有用）。代理任务观点：无法直接给"好"打分，就用下游任务表现当代价——表示接简单分类器分得好，表示就算好。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ================= 15.2 ================= -->
+    <h2><span class="sec-no">15.2</span>流形假设：数据躺在低维曲面上</h2>
+
+    <p>上一节说好表示要解耦，但它带出一个问题：<strong>凭什么解得开？</strong>26 万个像素纠缠在一起，凭什么几十个因素就能概括？答案是一条关于自然数据形状的根本假设——<span class="term">流形假设</span>（Manifold Hypothesis）：<strong>高维空间里的自然数据，其实都躺在一张低维的"曲面"附近</strong>。这张曲面就叫<span class="term">流形</span>（Manifold）：局部看像平平的欧氏空间，整体却可以弯曲折叠。</p>
+
+    <p>最熟的例子是地球仪：地球表面嵌在 3 维空间里，但它本身是个 2 维流形——报位置只需要经度、纬度两个数，第三个维度（到地心的距离）被"你在球面上"这个约束几乎锁死了。人脸照片同理：一张 512×512 的灰度人脸照是 262,144 维空间里的一个点，但真正"能长出来的脸"只占其中一个极薄的曲面——姿态、表情、光照、身份加起来几十个旋钮，转动这些旋钮就能扫出几乎全部合理的脸。维度从 262,144 塌缩到几十，这就是解耦在数学上可能的依据。</p>
+
+    <h3>数字例 1：随机噪声为什么几乎不可能是脸</h3>
+    <p>把上面的话算成一笔账。假设每个像素取 256 个灰度级之一，则 512×512 灰度图的全部可能图像是 256<sup>262144</sup> 张——这个数大到任何"人脸占比"的分母都撑不起。换个更好算的口径：把每张图归一化到单位超球面上，只问"随机构造一张图，它落在人脸流形附近的概率"。</p>
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>步骤</th><th>内容</th><th>含义</th></tr>
+        <tr><td>1. 算空间维度</td><td>512 × 512 = 262,144 维</td><td>每张图是该空间中的一个点</td></tr>
+        <tr><td>2. 估人脸流形维度</td><td>姿态、表情、光照、身份等约 10¹–10² 个自由度</td><td>人脸点集是一张几十维的曲面</td></tr>
+        <tr><td>3. 比一比</td><td>几十维曲面在 26 万维空间中的体积占比</td><td>严格为 0（低维流形在高维空间中测度为零）</td></tr>
+        <tr><td>4. 动手验证</td><td>均匀随机逐像素生成"图像"，看 10⁶ 次</td><td>100% 是噪声雪花，0 次出现可辨认结构</td></tr>
+      </table>
+    </div>
+    <p>结论：自然图像占据整个像素空间的比例小到<strong>测度为零</strong>——这就是"数据有结构"这句话的精确含义。如果数据真的均匀铺满 26 万维空间，任何降维、任何表示学习都不可能成功；正因为数据挤在薄片上，"用几十个因素描述 26 万个像素"才不是奢望而是事实。</p>
+
+    <p>流形假设还有一个直接好用的推论——<strong>邻域性</strong>：流形上相近的点，语义也相近。把一张人脸的"微笑程度"旋钮拧小一点，得到的是同一个人笑得收敛一点的脸，不会变成狗。这就是为什么插值合理（在两张脸之间渐变会得到一串合理的脸）、为什么<span class="term">平滑假设</span>（Smoothness Assumption）成立：输入动一小步，输出通常也只该动一小步。分类器可以利用这一点：只要知道流形上几个点的标签，附近的点大概率同标签。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>流形假设把"数据有结构"从口号变成几何命题：自然数据 = 高维空间里的低维薄片。表示学习的第一件事，就是找到这张薄片并把它"摊平"成坐标——摊平后的坐标轴，正是 15.1 要的变化因素。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>"流形假设 = 数据是低维的"——错。数据<em>存放</em>的维度很高（26 万），流形假设说的是数据<em>分布</em>的内蕴维度很低。像素空间里点到点乱走会立刻掉下薄片；只有沿流形走，才始终是合理的脸。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 15.2-1</div>
+              <div class="q-text">用人话说出流形假设，并用地球仪类比解释"高维空间里的低维曲面"。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              流形假设：自然数据虽以高维形式存放，实际只占据其中一张低维弯曲曲面。地球仪类比：球面嵌在 3 维空间里却是 2 维对象，经纬两个数即可定位；人脸照嵌在 26 万维像素空间里，几十个旋钮即可扫出全部。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 15.2-2</div>
+              <div class="q-text">"随机生成一张 26 万维噪声图几乎不可能是脸"说明了什么？邻域性又如何支持平滑假设？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              说明自然图像在像素空间中占比测度为零，即"数据有结构"的精确含义。邻域性：流形上相近的点语义相近，所以输入动一小步输出也只动一小步——平滑假设与插值因此成立。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ================= 15.3 ================= -->
+    <h2><span class="sec-no">15.3</span>分布式表示：指数级的表达能力</h2>
+
+    <p>上一节说数据躺在薄片上，把薄片摊平就得到因素坐标。这带出一个新问题：<strong>用这些坐标时，一个概念该占用几个维度？</strong>两种极端方案差别巨大。非分布式方案——one-hot 编码、最近邻、硬聚类——每个样本只激活表示中的<strong>一个</strong>单元："这是第 7 类"，其余单元全灭。<span class="term">分布式表示</span>（Distributed Representation）则相反：每个概念由<strong>许多</strong>单元共同激活的某个模式来表示，每个单元又参与表示许多不同概念。</p>
+
+    <h3>数字例 2：n=10 个二值特征，两种方案差多少</h3>
+    <p>给你 10 个二值（开/关）特征单元，问：最多能区分多少种不同的输入模式？</p>
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>步骤</th><th>one-hot（非分布式）</th><th>分布式</th></tr>
+        <tr><td>1. 表示规则</td><td>每个模式只准点亮 1 个单元</td><td>每个模式可自由点亮任意子集</td></tr>
+        <tr><td>2. 数可区分模式</td><td>点亮第 1 个、第 2 个……第 10 个，共 10 种</td><td>每个单元独立取 0/1，共 2¹⁰ 种</td></tr>
+        <tr><td>3. 算结果</td><td>10 个模式</td><td>2¹⁰ = 1024 个模式</td></tr>
+        <tr><td>4. 一般化（n 个特征、每个 k 个取值）</td><td>k·n 个模式</td><td>kⁿ 个模式</td></tr>
+      </table>
+    </div>
+    <p>同样的硬件，表达力从 10 跳到 1024，差两个数量级；一般情形 kⁿ 对 k·n 是<strong>指数对线性</strong>的碾压。n=20 时 one-hot 区分 20 种，分布式区分 2²⁰ ≈ 100 万种。</p>
+
+    <p>表达力只是账面，真正的红利是<strong>统计效率</strong>：one-hot 里每个单元只为一个模式服务，没见过第 7 类就永远学不会第 7 类——泛化只能靠"见过的最近邻"；分布式表示里，每个参数（每个单元的行为）被许许多多样本<em>共享</em>训练——学过"红苹果、红汽车、青苹果"，"青汽车"的表示就已由各成分拼好，无需见过它。泛化从"背邻居"升级为"做组合"。</p>
+
+    <h3>数字例 3：词嵌入的类比算术</h3>
+    <p>分布式表示做组合式泛化的经典证据是词向量里的算术：</p>
+    <div class="formula">vec(国王) − vec(男人) + vec(女人) ≈ vec(女王)</div>
+    <p>逐个成分看这笔账为什么成立："国王"的分布式表示里，某一组维度编码"王室"，另一组维度编码"男性"，还有维度编码"成年"等等。减去"男人"抵消掉"男性"那组维度，加上"女人"换成"女性"，王室、成年等维度原样保留——拼出来的点恰好落在"女王"附近。没有任何人向系统灌输过类比规则；类比能力是从"每个维度对应一个共享因素"里<em>自动涌现</em>的。这就是分布式表示的奥卡姆式泛化：用少量共享因素解释大量组合。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>one-hot 像查字典：每个词条独立，词条之间零共享。分布式表示像化学元素表：万物由百余种元素组合而成，见过 H₂O 和 CO₂，就推得出 H、O、C 还能怎么搭。kⁿ 的组合空间，只用 k·n 个成分就付了账。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>"分布式 = 把表示向量摊得很宽"——不是宽度问题，是<em>组合</em>问题。1000 维的 one-hot 依然是非分布式（每样本只激活 1 维）；3 维稠密向量若各维共享编码因素，已是分布式。判别标准：一个概念由几个单元联合表示？一个单元参与几个概念？</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 15.3-1</div>
+              <div class="q-text">n 个 k 值特征，one-hot 与分布式各能区分多少模式？差距的本质来源是什么？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              one-hot：k·n 个；分布式：kⁿ 个（n=10、k=2 时 10 对 1024）。本质：分布式让每个单元独立参与组合，模式数随 n 指数增长；one-hot 每模式独占一个单元，只能线性增长。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 15.3-2</div>
+              <div class="q-text">为什么分布式表示带来统计效率？"国王−男人+女人≈女王"说明了什么？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              统计效率：每个参数被大量样本共享训练，未见过的组合可由已见成分拼出（青汽车 = 青 + 汽车）。词向量算术说明语义因素被拆进了独立维度，类比能力从组合结构中自动涌现，无需灌输规则。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ================= 15.4 ================= -->
+    <h2><span class="sec-no">15.4</span>迁移学习与域适应：好表示能搬家</h2>
+
+    <p>前面三节合起来给出一个推论：如果表示真的解耦出了共享因素、真的摊平了流形、真的是分布式的，那么它不该只属于一个任务——它应该能<strong>搬家</strong>。<span class="term">迁移学习</span>（Transfer Learning）就是把在任务 A 上学到的表示搬到任务 B 用；当 A、B 的数据分布还有差异时，配套的校准技术叫<span class="term">域适应</span>（Domain Adaptation）。</p>
+
+    <p>标准做法是<strong>预训练—微调</strong>（Pretrain–Finetune）两阶段：先在大数据任务 A 上把网络训好（预训练），再把权重复制过来，在任务 B 的小数据上继续训练（微调）。为什么底层通常原样可用？因为对视觉任务来说，第一层学到的几乎是普适工具——大量实验反复观察到，无论以什么视觉任务训练，第一层滤波器都会长成 Gabor 样边缘检测器的样子（不同方向、不同频率的条纹感受野）。边缘、角点、纹理是几乎所有视觉任务都绕不开的共享因素，没有重学的必要。层级越靠近输入越通用，越靠近输出越专用——这决定了冻结策略的空间。</p>
+
+    <h3>数字例 4：500 张标注下的三种策略对比</h3>
+    <p>场景：你要做蝴蝶分类（100 类），手里只有 500 张标注照片；另有一个在 120 万张 ImageNet 上预训练好的 4 层卷积网络。比较三种用法：</p>
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>策略</th><th>做法</th><th>需要估计的参数量</th><th>预期表现排序与理由</th></tr>
+        <tr><td>① 从零训练</td><td>4 层全部随机初始化，500 张从头训</td><td>全部（设约 10⁶ 量级）</td><td><strong>最差</strong>：500 张 ÷ 100 类 = 每类 5 张，根本喂不饱百万级参数，边缘检测器都要从零学起，必然过拟合</td></tr>
+        <tr><td>② 全量微调</td><td>预训练权重做初始化，4 层全部参与微调</td><td>全部可动，但起点好</td><td><strong>居中</strong>：起点通用，但 500 张仍可能把底层通用特征"带偏"——小数据拉动全部参数，有过拟合与遗忘风险</td></tr>
+        <tr><td>③ 冻结前 2 层，微调后 2 层</td><td>边缘/纹理层锁死不动，只训语义组合层与分类头</td><td>只动后 2 层（参数量降一个量级以上）</td><td><strong>最好</strong>：通用特征原样保留，可动参数与 500 张的数据量级匹配，方差最小</td></tr>
+      </table>
+    </div>
+    <p>排序：③ &gt; ② &gt; ①。理由链条很朴素——<em>可动参数量要和数据量级匹配；预训练替你省掉的正是数据最买不起的那部分（底层通用特征）</em>。</p>
+
+    <p>迁移不是免费的，三个典型失败模式必须记住。其一，<strong>域差距太大</strong>：把 ImageNet 的权重直接搬去识别医学显微图像，自然照片的边缘/纹理统计与染色细胞结构相差悬殊，底层特征不再通用，预训练几乎帮不上忙。其二，<span class="term">负迁移</span>（Negative Transfer）：源任务与目标任务的规律互相矛盾时，搬来的表示反而比从零学更差——先验越强，错得越远。其三，<span class="term">灾难性遗忘</span>（Catastrophic Forgetting）：微调步子太大，新任务学好了，预训练攒下的通用能力被覆盖，表示"搬了家却丢了行李"。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>迁移学习是本章主线问题的实证试金石：表示里共享因素解耦得越干净，搬家时越不用重装。一个表示迁移得越广，我们越有理由相信它抓住了真正的变化因素，而不是某个任务的巧合规律。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>"预训练权重永远有帮助"——错。帮助的前提是<em>源任务与目标任务共享底层因素</em>。域差距大（自然图像 → 显微/遥感/医学）或任务规律冲突时，预训练权重可能无害也可能有害，必须小数据验证，不能默认加分。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 15.4-1</div>
+              <div class="q-text">预训练—微调的标准流程是什么？为什么底层特征（如 Gabor 样边缘检测器）通常可以原样保留？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              流程：先在大数据任务上预训练，再复制权重到目标任务小数据上微调。底层保留的原因：越靠近输入的层学到的越通用——边缘、纹理是一切视觉任务的共享因素，无需重学；冻结它们还能让可动参数量与数据量级匹配。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 15.4-2</div>
+              <div class="q-text">说出迁移学习的三个典型失败模式，并各给一句话机理。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              ① 域差距太大：源域底层统计与目标域不同（ImageNet → 医学显微），通用特征失效；② 负迁移：两任务规律矛盾，搬来的先验帮倒忙；③ 灾难性遗忘：微调过猛，覆盖预训练攒下的通用表示。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ================= 15.5 ================= -->
+    <h2><span class="sec-no">15.5</span>半监督与自监督：让未标注数据开口</h2>
+
+    <p>上一节的迁移需要"大数据任务 A"，可标注数据常常根本不存在。这逼出本章最后一问：<strong>没标签的数据能不能帮忙学好表示？</strong>答案是能，而且依据正是 15.2 的流形。<span class="term">半监督学习</span>（Semi-supervised Learning）的推理是：未标注数据描绘了 p(x) 的形状——数据流形在哪儿、哪儿密度高、哪儿密度低；而合理的分类边界应该<strong>穿过低密度区</strong>、绕开高密度流形（同类样本在流形上聚成一团，边界切进去就会把同一团劈开）。于是 p(x) 的结构反过来约束了 p(y|x)：少量标注定方向，海量未标注定边界的位置。这就是"未标注数据有用"的几何原理。</p>
+
+    <p>更激进的一步是<span class="term">自监督学习</span>（Self-supervised Learning）：<strong>从数据自身挖标签</strong>，把无标注数据改造成有监督任务。三个代表做法：</p>
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>做法</th><th>标签从哪来</th><th>逼表示学到什么</th></tr>
+        <tr><td>预测旋转角度</td><td>把图旋转 0°/90°/180°/270°，角度就是标签</td><td>要猜对角度，必须先知道"正常朝向"长什么样——即物体的结构因素</td></tr>
+        <tr><td>掩码还原</td><td>遮住一块像素（或一个词），原内容就是标签</td><td>要补全缺失，必须学出上下文与部件之间的统计结构</td></tr>
+        <tr><td><span class="term">对比学习</span>（Contrastive Learning）</td><td>同一样本做两种增强视为同类，不同样本视为异类</td><td>把同一内容在增强下不变的部分留下——留下的正是内容因素，扔掉的是光照、裁剪等 nuisance 因素</td></tr>
+      </table>
+    </div>
+    <p>注意三者的共同点：<em>标签免费，但任务设计有讲究</em>——代理任务必须难到"不解出变化因素就做不好"，又简单到"解出因素就能做好"。旋转太易猜、掩码遮得太少，表示都会偷懒学不到东西。</p>
+
+    <p>至此本章可以收束了。表示学习很少出现在最终产品的宣传里，却是深度学习的<strong>暗物质</strong>：看不见它，但下游一切——分类、检测、生成、迁移、少样本——都被它的引力决定。好表示把纠缠的变化因素解开、把高维数据摊回低维流形、用分布式组合换来指数表达力，然后带着这些结构跨任务迁移。它的唯一软肋是无法自证好坏——只能交给下游任务检验。怎样给"表示"配上严格的概率语言、让因素之间的关系可以被精确建模与推断，正是第 16 章结构化概率模型要接的棒。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>半监督利用 p(x) 的形状放边界，自监督干脆自己造标签。两条路通向同一终点：<strong>标注稀缺的世界里，表示必须先靠无标注数据学出来</strong>，标签只负责最后那一点点对齐。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>"自监督学出的表示对任何下游任务都好"——不一定。表示记住的是代理任务需要的东西。用"预测旋转"学出的表示擅长朝向与结构，未必擅长细粒度品种区分；选代理任务就是在选"你希望表示记住哪些因素"。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 15.5-1</div>
+              <div class="q-text">半监督学习中，未标注数据为什么有用？用"分类边界应穿过低密度区"解释。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              未标注数据描绘 p(x) 的形状：流形位置、密度高低。同类样本在流形上聚团，合理边界应绕开高密团、穿过低密度区；于是 p(x) 结构约束 p(y|x)，少量标注定方向、海量未标注定边界位置。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 15.5-2</div>
+              <div class="q-text">说出三个自监督代理任务及其标签来源，并说明代理任务设计的讲究。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              旋转预测（角度即标签）、掩码还原（被遮内容即标签）、对比学习（同一样本两增强为同类）。讲究：任务必须难到"不解出变化因素就做不好"、又简单到"解出就能做好"，否则表示会偷懒。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ================= 概念卡 ================= -->
+    <h2><span class="sec-no">🃏</span>概念卡：本章概念的一分钟画像</h2>
+    <p>翻面前先自问：这个概念我能用一句话讲清楚吗？</p>
+    <div class="flip-grid">
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 1</div>
+            <div class="q-text">变化因素（Factors of Variation）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">独立起作用、各自变化就使数据看起来完全不同的底层原因（品种、姿势、光照、背景）。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">回答"数据为什么长这样"：像素是表象，因素是成因。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">一张照片 = 几个旋钮的联合设置，转一个旋钮整张图跟着变。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为因素等于某个像素——因素在像素里是纠缠的，无一像素单独对应一个因素。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">本章主线；Ch16 结构化概率模型用图模型显式建模因素关系。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 2</div>
+            <div class="q-text">流形假设（Manifold Hypothesis）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">高维空间中的自然数据集中分布在一张低维弯曲曲面（流形）附近的假设。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">解释降维与解耦为何可能：26 万维像素里的脸只需几十个旋钮扫出。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">地球表面：嵌在 3 维空间里的 2 维对象，经纬两数即可定位。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为"数据是低维的"——存放维度很高，是分布的内蕴维度低。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">半监督边界放低密度区（15.5）、生成模型学流形（Ch17 以后）。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 3</div>
+            <div class="q-text">解耦（Disentanglement）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">把纠缠在原始输入中的变化因素拆成表示里相互独立的维度，每维只对一个因素负责。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">纠缠使改一个因素成片像素一起变；解耦后下游任务只取所需维度。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">整理抽屉：品种一格、姿势一格、光照一格，各归其位。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为统计独立就等于解耦——还需每维对准语义上可解释的因素。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">本章与 Ch13/14 的评价标准；生成模型可控编辑的理论依据。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 4</div>
+            <div class="q-text">分布式表示（Distributed Representation）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">每个概念由许多单元共同激活的模式表示，每个单元又参与表示许多概念。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">one-hot 每样本只激活一个单元，只能背最近邻；分布式换来 kⁿ 组合表达力。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">化学元素表：万物由百余元素组合，见过 H₂O 与 CO₂ 即推得出新搭配。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为"向量宽"就是分布式——1000 维 one-hot 仍非分布式，关键在组合。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">词嵌入、一切深度网络隐藏层；迁移学习的物质基础。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 5</div>
+            <div class="q-text">迁移学习（Transfer Learning）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">把在源任务学到的表示（通常是预训练权重）搬到目标任务上复用，再小数据微调。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">目标域标注太少（如 500 张）从零训不动；共享底层因素可直接搬用。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">学会骑自行车的人学摩托车，平衡感与车感直接带走，只重学油门。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为预训练永远加分——域差距大、规律冲突时会负迁移，微调过猛会灾难性遗忘。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">小数据视觉/语音/NLP 任务的默认起点；大模型时代的标准范式。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 6</div>
+            <div class="q-text">自监督学习（Self-supervised Learning）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">从数据自身构造标签的表示学习方法：预测旋转、掩码还原、对比学习等。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">标注稀缺：把无标注数据改造成免费的有监督任务来学表示。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">自己给自己出考题：遮住课文背单词，能默写才算真懂。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为它对一切下游任务都好——表示只记住代理任务需要的因素。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">大模型预训练的标准方法；Ch17–20 生成模型与表示交汇于此。</span></div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- ================= 分层习题 ================= -->
+    <h2><span class="sec-no">📝</span>分层习题</h2>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>
+        <p>辨析：流形假设与平滑假设是一回事吗？如果不是，它们之间是什么关系？</p>
+      </div>
+      <details>
+        <summary>提示</summary>
+        <p>一个是关于"数据躺在哪儿"的假设，一个是关于"函数怎么变"的假设。谁推出谁？</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p><strong>不是一回事，前者蕴含后者。</strong>流形假设是关于<em>数据分布</em>的几何命题：自然数据集中在高维空间的低维曲面附近。平滑假设是关于<em>目标函数</em>的命题：输入变化很小，输出通常也变化很小。两者的关系是"邻域性"这座桥：流形上相近的点语义相近，所以在流形上目标函数是平滑的——流形假设为平滑假设提供了成立的几何舞台。若数据不在流形上（均匀铺满空间），平滑假设就无处立足。易错点：把"数据有结构"（流形）和"函数好学习"（平滑）混为一谈。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>
+        <p>判断并说理：one-hot 编码是一种分布式表示，因为它也把每个样本表示成一个高维向量。对还是错？</p>
+      </div>
+      <details>
+        <summary>提示</summary>
+        <p>回到分布式的两条判别标准：一个概念由几个单元联合表示？一个单元参与几个概念？</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p><strong>错。</strong>分布式表示的定义不在维度高低，而在<em>组合结构</em>：一个概念须由多个单元联合激活表示、每个单元须参与表示多个概念。one-hot 恰恰相反：每个概念只激活<strong>一个</strong>单元，每个单元只服务于<strong>一个</strong>概念——它是非分布式的典型。后果对比：n 个单元的 one-hot 只能区分 n 个模式，泛化全靠"见过的最近邻"；同 n 个单元的分布式表示可区分 2ⁿ 个模式，未见组合可由已见成分拼出。"高维向量"只是形式，共享与组合才是灵魂。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>
+        <p>n = 6 个特征，每个特征 k = 3 个取值。① one-hot 方式最多能区分多少个模式？② 分布式方式最多能区分多少个模式？③ 差距是多少倍，这个差距随 n 增大如何变化？④ 用一句话解释差距的来源。</p>
+      </details>
+      <details>
+        <summary>提示</summary>
+        <p>one-hot：每个模式独占一个"单元 × 取值"组合。分布式：每个特征独立取 k 值之一，模式 = 全部取值组合。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p>① one-hot：每个模式对应"第 i 个特征取第 j 个值"，共 n × k = 6 × 3 = <strong>18</strong> 个模式。<br>
+          ② 分布式：6 个特征各自独立取 3 值之一，共 kⁿ = 3⁶ = 729 个模式（验算：3²=9，3³=27，3⁶=27²=<strong>729</strong>）。<br>
+          ③ 差距 = 729 ÷ 18 ≈ <strong>40.5 倍</strong>。随 n 增大，kⁿ 指数增长而 k·n 线性增长，倍数 kⁿ/(k·n) = kⁿ⁻¹/n 爆炸式扩大（n=10 时 3¹⁰/30 = 59049/30 ≈ 1968 倍）。<br>
+          ④ 来源：分布式让每个特征<em>独立参与组合</em>，模式数是所有取值组合的乘积；one-hot 让每个模式独占一份资源，模式数只是资源的加法。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>
+        <p>二维平面上，某数据流形是抛物线 y = x²。训练样本 3 个：A = (0, 0) 标签猫，B = (1, 1) 标签猫，C = (2, 4) 标签狗。新点 P = (1.1, 1.5)。① P 到流形的垂直距离大约是多少（用在 x = 1.1 处的抛物线切线近似）？它在流形附近吗？② 普通最近邻（欧氏距离）把 P 判成什么？③ 若采用"先投影回流形再最近邻"的流形约束分类，P 被投影到 (1.1, 1.21) 附近，判成什么？④ 两个结果不同说明了什么？</p>
+      </details>
+      <details>
+        <summary>提示</summary>
+        <p>抛物线在 x 处的切线斜率是 2x。点 P 与流形上最近点 (1.1, 1.21) 的差几乎全在竖直方向。最近邻分别算 P 到 A、B、C 的距离。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p>① 流形上横坐标同为 1.1 的点是 (1.1, 1.21)；P = (1.1, 1.5) 与它的竖直差 = 1.5 − 1.21 = 0.29。x = 1.1 处切线斜率 = 2 × 1.1 = 2.2，切线方向较陡，竖直差近似等于垂直距离 × √(1+2.2²)/√(1+2.2²) 的修正很小——垂直距离 ≈ 0.29 ÷ √(1 + 2.2²) ≈ 0.29 ÷ 2.42 ≈ <strong>0.12</strong>。相对样本间距（A 到 B 为 √2 ≈ 1.41）来说很小，P <strong>在流形附近</strong>。<br>
+          ② 欧氏最近邻：|PA| = √(1.1² + 1.5²) = √(1.21+2.25) = √3.46 ≈ 1.86；|PB| = √(0.1² + 0.5²) = √0.26 ≈ 0.51；|PC| = √(0.9² + 2.5²) = √(0.81+6.25) = √7.06 ≈ 2.66。最近的是 B（猫）⟹ 判<strong>猫</strong>。<br>
+          ③ 投影后 P′ ≈ (1.1, 1.21)：|P′A| = √(1.21+1.46) = √2.67 ≈ 1.63；|P′B| = √(0.01 + 0.044) = √0.054 ≈ 0.23；|P′C| = √(0.81+7.8) ≈ 2.93。最近仍是 B（猫）⟹ 判<strong>猫</strong>。<br>
+          ④ 本题两法结果一致（都是猫），但<em>理由</em>不同：普通最近邻被 P 偏离流形的 0.29 竖直分量干扰了一部分距离；流形约束法先消掉这个"掉下薄片"的分量再判决。若 P 偏得更远（如 (1.1, 3)），普通法会滑向 C（狗），而流形法仍判猫——说明流形约束能免疫"离开流形方向"的噪声，这正是半监督与鲁棒分类想要性质。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l3">L3 建模应用</span>
+        <p>场景：为云南方言语音识别做迁移学习。你有一个在数千小时普通话语音上预训练好的深度声学模型，本地云南方言只有约 5 小时标注录音。① 说明从普通话大模型出发的迁移流程；② 哪些层冻结、哪些层微调，理由是什么；③ 5 小时数据在流程中扮演什么角色，够不够用、怎么判断；④ 可能遇到哪种负迁移，如何检测与缓解？</p>
+      </details>
+      <details>
+        <summary>提示</summary>
+        <p>语音的"底层共享因素"是声学特征（频谱包络、音素单元），"高层"才是口音与词汇映射。把 15.4 的"层级越靠近输入越通用"搬到语音上。负迁移的检测：同一验证集上对比"从零"与"迁移"两条曲线。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p><strong>① 流程：</strong>复制普通话模型的全部权重作为初始化 → 替换输出层（云南方言的音素/字表若不同）→ 用 5 小时方言数据微调 → 在方言验证集上选早停点。<br>
+          <strong>② 冻结与微调：</strong>冻结靠近波形输入的底层（学的是频谱、共振峰等声学通用因素，方言与普通话共享，且 5 小时数据重新学它们是浪费还易过拟合）；微调靠近输出的高层（口音、连读、声调模式是方言特有因素，必须重学）；输出层从头学。<br>
+          <strong>③ 5 小时够不够用：</strong>它的角色是"对齐共享因素"，不是"从零建表示"——可动参数已被冻结策略压小，5 小时通常够让高层收敛。判定方法：画微调曲线，若验证集错误率已平台期且远低于从零基线（从零训 5 小时几乎必败），说明够用；若仍快速下降，则继续采集数据收益大。<br>
+          <strong>④ 负迁移与对策：</strong>若云南方言的声调系统与普通话差异大（声调维度上两任务规律不同），普通话学到的声调表示可能帮倒忙。检测：同验证集对比"冻结底层微调高层"与"从零"的字错率，迁移版更差即为负迁移。缓解：放开声调相关层参与微调、缩小学习率防灾难性遗忘、或用域适应（对齐两域的高层分布）替代硬迁移。</p>
+        </div>
+      </details>
+    </div>
+
+    <!-- ================= 自测 ================= -->
+    <h2><span class="sec-no">✍️</span>本章自测</h2>
+    <p class="quiz-hint">点击选项判分，答错会给出原因。</p>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 1</div>
+      <div class="q-stem">"一张猫的照片 = 品种 × 姿势 × 光照 × 背景纠缠在像素里"——好表示对此做什么？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 把图片压缩成更小的文件，去掉冗余像素</li>
+        <li data-opt="b">B. 把纠缠的变化因素拆成独立维度，每维只对一个因素负责（解耦），且这些因素对不同任务可共享</li>
+        <li data-opt="c">C. 把每个像素映射到一个独立的表示单元，一一对应</li>
+        <li data-opt="d">D. 把图片翻译成文字描述再学习</li>
+      </ul>
+      <div class="quiz-explain">解析：<strong>B 对</strong>——好表示的核心动作是解耦共享因素，像整理抽屉分格放。A 错：压缩是存储目标，不是表示学习目标，压缩完全可以不解耦。C 错：那恰恰是"纠缠不动"的平凡表示，因素依然混在每个单元里。D 错：文字描述只是换了一种可能仍旧纠缠的表象，且丢掉了视觉细节。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="c">
+      <div class="q-no">自测 2</div>
+      <div class="q-stem">"随机生成一张 512×512 的噪声图几乎不可能是人脸"——这个事实最精确地说明了什么？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 说明人脸照片很难拍</li>
+        <li data-opt="b">B. 说明像素空间的维度太高，计算机处理不了</li>
+        <li data-opt="c">C. 说明自然图像在 26 万维像素空间中只占测度为零的低维流形附近——"数据有结构"的精确含义</li>
+        <li data-opt="d">D. 说明随机数生成器质量不好</li>
+      </ul>
+      <div class="quiz-explain">解析：<strong>C 对</strong>——自然图像占比小到测度为零，正是流形假设的内容，也是表示学习可行的前提。A 错：这是采样分布问题，与拍摄难度无关。B 错：维度高不是障碍，恰恰是流形假设让高维问题可解。D 错：用完美随机源结论只会更干净——均匀采样永远落在薄片之外。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="d">
+      <div class="q-no">自测 3</div>
+      <div class="q-stem">n=10 个二值特征，one-hot 与分布式表示的可区分模式数之比是多少？差距的本质来源是？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 10 对 20；来源是分布式用了两倍的单元</li>
+        <li data-opt="b">B. 10 对 100；来源是分布式单元取值更多</li>
+        <li data-opt="c">C. 一样多；表示方式不影响表达能力</li>
+        <li data-opt="d">D. 10 对 1024（2¹⁰）；来源是分布式让每个单元独立参与组合，模式数随 n 指数增长，one-hot 只能线性增长</li>
+      </ul>
+      <div class="quiz-explain">解析：<strong>D 对</strong>——one-hot 每模式独占一单元共 10 种；分布式 10 个单元各取 0/1 共 2¹⁰=1024 种。A 错：单元数没变，都是 10 个。B 错：单元都是二值，取值数相同。C 错：表示方式恰恰决定组合结构，表达能力差两个数量级。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="a">
+      <div class="q-no">自测 4</div>
+      <div class="q-stem">目标域只有 500 张标注、另有一个 ImageNet 预训练模型时，通常最好的策略与其理由是？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 冻结靠近输入的底层、微调高层与分类头——底层是 Gabor 样边缘检测器等通用共享因素，冻结后使可动参数量与 500 张的数据量级匹配</li>
+        <li data-opt="b">B. 从零训练——自己的数据最干净，不受别人偏差影响</li>
+        <li data-opt="c">C. 全量微调——动得越多学得越充分</li>
+        <li data-opt="d">D. 只训练最后一层，其余全冻结——最保险</li>
+      </ul>
+      <div class="quiz-explain">解析：<strong>A 对</strong>——通用底层原样保留，可动参数与数据量级匹配，排序为"冻底层微调高层 &gt; 全量微调 &gt; 从零"。B 错：500 张 ÷ 类别数喂不饱百万参数，从零必过拟合。C 错：小数据拉动全部参数，易把通用特征带偏并引发灾难性遗忘。D 错：冻结过多时高层任务特有因素（如细粒度部件组合）学不出来，欠拟合——"微调高层"与"只练头"差着关键一层。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 5</div>
+      <div class="q-stem">关于半监督与自监督，下列哪句正确？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 未标注数据无用，因为没有标签就无法计算损失</li>
+        <li data-opt="b">B. 未标注数据描绘 p(x) 的形状，使分类边界可穿过低密度区；自监督更进一步，从数据自身挖标签（旋转、掩码、对比）来预学表示</li>
+        <li data-opt="c">C. 自监督学出的表示对任何下游任务都一样好</li>
+        <li data-opt="d">D. 对比学习靠人工标注"哪些样本相似"来训练</li>
+      </ul>
+      <div class="quiz-explain">解析：<strong>B 对</strong>——半监督用 p(x) 约束 p(y|x)，自监督自造标签，二者都是"标注稀缺世界"的表示学习路线。A 错：损失可以从重建、对比、伪标签等多种无标注目标算出。C 错：表示只记住代理任务需要的因素，选代理任务=选记住什么。D 错：对比学习的"同类"由同一样本的两种增强自动产生，零人工标注。</div>
+    </div>
+
+    <!-- ================= 三句话复述 ================= -->
+    <div class="retell">
+      <h3>🗣️ 用自己的话，三句话讲完本章</h3>
+      <p>对着空气（或室友）说出这三句。说卡壳的那句，回去重读对应小节。</p>
+      <details>
+        <summary>句1：这章解决什么问题？——</summary>
+        <div class="retell-answer">参考答案：什么算"好表示"、它凭什么能跨任务迁移——答案是：把纠缠在原始输入里的共享变化因素解开（解耦）的表示，就是能迁移的好表示。</div>
+      </details>
+      <details>
+        <summary>句2：核心机制是什么？——</summary>
+        <div class="retell-answer">参考答案：两条腿——流形假设（自然数据躺在高维空间的低维曲面上，几十旋钮扫出全部，所以解得开）与分布式表示（n 个 k 值特征组合出 kⁿ 个区域，参数被样本共享，所以省数据、能泛化）；迁移、半监督、自监督都是这两条腿的落地应用。</div>
+      </details>
+      <details>
+        <summary>句3：它和前后章怎么分工？——</summary>
+        <div class="retell-answer">参考答案：第 13、14 章给了学表示的具体机器（线性因子模型、自编码器），本章给出"好表示"的评判标准与可行性依据；留下的软肋是"表示好坏无法直接度量、只能靠下游检验"，且因素间关系尚缺严格概率语言——由第 16 章结构化概率模型接棒。</div>
+      </details>
+    </div>
+
+    <!-- ================= 复习计划 ================= -->
+    <div class="review-plan">
+      <h3>🔁 间隔复习计划</h3>
+      <p>回忆本身比重读有效 10 倍。到点只做一件事：翻卡 + 重做标记题。</p>
+      <table>
+        <tr><th>时间点</th><th>复习内容</th><th>预计用时</th></tr>
+        <tr><td>第 1 天</td><td>概念卡 1–6 + 回忆 15.1-1/2、15.2-1/2、15.3-1/2、15.4-1/2、15.5-1/2</td><td>12 分钟</td></tr>
+        <tr><td>第 3 天</td><td>概念卡 2、4（流形假设/分布式表示）+ 重做 L2 两题 + 自测错题</td><td>12 分钟</td></tr>
+        <tr><td>第 7 天</td><td>三句话复述 + 回忆 15.4-2、15.5-1 + 重做 L3 云南方言迁移方案提纲</td><td>10 分钟</td></tr>
+        <tr><td>第 15 天</td><td>只做合上书挑战；六条全过则本章毕业，卡哪条回去重读对应节</td><td>15 分钟</td></tr>
+      </table>
+    </div>
+
+    <!-- ================= 合上书挑战 ================= -->
+    <div class="final-challenge">
+      <h3>📕 合上书挑战</h3>
+      <p class="fc-sub">现在关掉这个页面，拿一张纸，凭记忆完成以下任务。全部做完再回来核对——这是本章真正的毕业考试。</p>
+      <ol id="challenge-list">
+        <li><span class="fc-check"></span>用"整理抽屉"的人话向外行解释：什么是变化因素、纠缠、解耦与共享因素，并用猫照片举例。</li>
+        <li><span class="fc-check"></span>默写流形假设，画地球仪类比图，并复述"26 万维空间中人脸占比测度为零"的完整论证（四步）。</li>
+        <li><span class="fc-check"></span>手算：n=6、k=3 时 one-hot 与分布式各区分多少模式，写出 kⁿ 与 k·n 的一般式并解释差距来源。</li>
+        <li><span class="fc-check"></span>默写"国王−男人+女人≈女王"的例子，并逐维度解释这笔算术为什么成立。</li>
+        <li><span class="fc-check"></span>写出 500 张标注下三种策略（从零/全量微调/冻底层微调高层）的预期排序与各自理由，再默写迁移失败的三个模式。</li>
+        <li><span class="fc-check"></span>一句话回答本章主线问题：什么样的表示才算"好表示"？它凭什么能跨任务、跨领域迁移？</li>
+      </ol>
+    </div>
+
+    <div class="complete-zone">
+      <button class="btn-complete" id="btn-complete" onclick="markDone()">✓ 我已完成本章（含合上书挑战）</button>
+    </div>
+
+    <div class="chapter-nav">
+      <a href="chapter-14.html"><span class="nav-dir">← 上一章</span>第14章 自编码器</a>
+      <a href="chapter-16.html" class="next"><span class="nav-dir">下一章 →</span>第16章 深度学习的结构化概率模型</a>
+    </div>
+
+  </div>
+</div>
+
+<footer class="footer">
+  <div class="wrap">第15章 表示学习 · 深度学习互动讲义 · 基于 Goodfellow, Bengio &amp; Courville (2016)</div>
+</footer>
+
+<script src="/lectures-assets/mermaid.min.js"></script>
+<script>
+mermaid.initialize({
+  startOnLoad: true,
+  theme: "base",
+  themeVariables: {
+    primaryColor: "#e3edf7",
+    primaryBorderColor: "#1d5f9e",
+    primaryTextColor: "#1d5f9e",
+    lineColor: "#5c554b",
+    secondaryColor: "#fbeedd",
+    tertiaryColor: "#f5f1e8",
+    fontFamily: "-apple-system, PingFang SC, sans-serif",
+    fontSize: "14px"
+  },
+  flowchart: { curve: "linear", htmlLabels: false }
+});
+</script>
+<script>
+// 自测题判分（原样复用，勿改）
+document.querySelectorAll(".quiz-block").forEach(block => {
+  const answer = block.dataset.answer;
+  const explain = block.querySelector(".quiz-explain");
+  block.querySelectorAll(".quiz-opts li").forEach(li => {
+    li.addEventListener("click", () => {
+      const opts = block.querySelectorAll(".quiz-opts li");
+      opts.forEach(o => o.classList.add("disabled"));
+      if (li.dataset.opt === answer) {
+        li.classList.add("correct");
+      } else {
+        li.classList.add("wrong");
+        block.querySelector(`[data-opt="${answer}"]`).classList.add("correct");
+      }
+      explain.classList.add("show");
+    });
+  });
+});
+
+// 合上书清单打勾（原样复用，勿改）
+document.querySelectorAll("#challenge-list li").forEach(li => {
+  li.addEventListener("click", () => li.classList.toggle("checked"));
+});
+
+// 完成标记 → localStorage（深度学习讲义：key = dl_progress_v1，本章章号 15）
+const KEY = "dl_progress_v1";
+function loadProgress() {
+  try { return JSON.parse(localStorage.getItem(KEY)) || {}; } catch (e) { return {}; }
+}
+const progress = loadProgress();
+const btn = document.getElementById("btn-complete");
+if (progress[15] && progress[15].done) {
+  btn.textContent = "✓ 已完成 · 再次点击重置";
+  btn.classList.add("done");
+}
+function markDone() {
+  const p = loadProgress();
+  if (p[15] && p[15].done) {
+    delete p[15];
+    btn.textContent = "✓ 我已完成本章（含合上书挑战）";
+    btn.classList.remove("done");
+  } else {
+    p[15] = { done: true, completedAt: Date.now(), reviewsDone: 0 };
+    btn.textContent = "✓ 已完成 · 复习提醒已开启";
+    btn.classList.add("done");
+  }
+  localStorage.setItem(KEY, JSON.stringify(p));
+}
+</script>
+
+</body>
+</html>

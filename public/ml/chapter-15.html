@@ -1,0 +1,743 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第15章 规则学习 · 机器学习互动讲义</title>
+<link rel="stylesheet" href="/lectures-assets/style.css">
+</head>
+<body>
+
+<nav class="topbar">
+  <div class="topbar-inner">
+    <span class="brand"><a href="index.html" style="color:inherit">← 学习地图</a></span>
+    <span class="crumb">阶段④ · 进阶专题 / 第15章</span>
+  </div>
+</nav>
+
+<div class="wrap">
+
+  <div class="lecture-head">
+    <span class="ch-label">CHAPTER 15 · 进阶专题</span>
+    <h1>规则学习</h1>
+    <p class="lead">黑箱模型再准，也给不出一句人能听懂的理由——本章回答：如何直接从数据中学出可读、可审计的 if-then 规则，并在可读性与精度之间两全。</p>
+  </div>
+
+  <!-- ===== 章首四件套之 1：全书定位 ===== -->
+  <div class="position-bar">
+    <strong>本章在主线上的位置：</strong>第14章用图与条件独立把概率分布变成了「结构化的表示」，但落到一次具体预测，它给出的仍是一个概率数字——监管、医生、客户要的不是数字，而是一句人话理由 → <u>本章回到符号主义：用人类可读的 if-then 规则做学习，序贯覆盖逐条学、自顶向下逐字长、剪枝防过拟合、一阶逻辑补表达</u> → 第16章强化学习将从「学表示、学预测」转向「学动作」，全书收官。<br>
+    第15章回答主线上的一个问题：<strong>规则学习如何做到既学得准、又能被人读懂——可读性与精度怎么两全？</strong>
+    <div class="map-inline">
+      <span class="node">Ch14 概率图模型（结构化的概率黑箱）</span><span class="arrow">→</span>
+      <span class="node here">Ch15 规则学习</span><span class="arrow">→</span>
+      <span class="node">Ch16 强化学习（从学表示转向学动作）</span><span class="arrow">→</span>
+      <span class="node">index 全书完（回到学习地图）</span>
+    </div>
+  </div>
+
+  <!-- ===== 章首四件套之 2：学习目标 ===== -->
+  <div class="objectives">
+    <h4>🎯 学完本章，合上书你应该能：</h4>
+    <ol>
+      <li>说出规则、文字、覆盖、默认规则的定义，以及规则集与决策树在结构上的本质差别（可重叠、不保证互斥完备）；</li>
+      <li>写出序贯覆盖的三步流程与增益公式 Gain = m₊·(log₂(m₊/(m₊+m₋)) − log₂ p₀)，并在 8 样本西瓜风格数据集上手算选文字、逐轮学出规则列表直到收尾；</li>
+      <li>说出预剪枝（统计显著性）与后剪枝 REP 的差别，写出 REP 的删除判据，并手算一次微型剪枝决策；</li>
+      <li>写出 FOIL 增益公式，说明它与命题规则增益的两处差别，并手算两个候选文字的增益、选出更优者；</li>
+      <li>解释为什么命题规则表达不了「关系」，说出最小一般泛化（LGG）与逆归结各自的角色。</li>
+    </ol>
+  </div>
+
+  <div class="lecture">
+
+    <!-- ===== 章首四件套之 3：推导主线图 ===== -->
+    <div class="figure">
+      <div class="mermaid">
+flowchart LR
+  A["黑箱模型 无法向人解释"] --> B["规则：可读的 if-then"]
+  B --> C["规则集怎么学"]
+  B --> D["单条规则怎么长"]
+  C --> C1["序贯覆盖：学一条 删正例 再学下一条"]
+  D --> D1["自顶向下加文字 增益挑选 CN2"]
+  C1 --> E["学得太细 过拟合"]
+  D1 --> E
+  E --> E1["剪枝 REP 与 IREP"]
+  E1 --> F["属性值表达不了关系"]
+  F --> F1["一阶规则 FOIL 与 ILP"]
+  F1 --> G["代价：搜索空间巨大 对噪声敏感"]
+  classDef hot fill:#fbeedd,stroke:#c4651f,stroke-width:2.5px,color:#c4651f;
+  classDef danger fill:#fae9e7,stroke:#b03a2e,stroke-width:2.5px,color:#b03a2e;
+  class F1 hot;
+  class G danger;
+      </div>
+      <div class="caption">本章推导主线：黑箱之痛逼出规则；「规则集怎么学」长出序贯覆盖，「单条规则怎么长」长出自顶向下特化；过拟合逼出剪枝，表达力不够逼出一阶规则——每一步都回答「为什么需要下一步」。</div>
+    </div>
+
+    <!-- ===== 15.1 ===== -->
+    <h2><span class="sec-no">15.1</span>为什么是规则：可读性就是价值</h2>
+
+    <p>第14章把不确定性画成了图，但图模型给出的答案仍是一个概率数字。很多场景里，数字本身不构成「理由」：银行的信贷审批要向监管解释<strong>每一条</strong>拒绝理由——「综合评分 0.31，故拒绝」过不了审计；「申请人 征信记录=差 且 收入负债比&gt;0.6 → 拒绝」才是可以提交、可以复核、可以追责的条款。本章的主角<span class="term">规则</span>（rule）就是为此而生的表示。</p>
+
+    <p>一条规则形如 <strong>结论 ← 文字₁ ∧ 文字₂ ∧ …</strong>：箭头右侧是前提，由若干<span class="term">文字</span>（literal）合取而成，每个文字是一个原子判断，如「色泽=青绿」；箭头左侧是结论，如「好瓜」。一个样本满足前提中的全部文字，就称这条规则<span class="term">覆盖</span>（cover）该样本。多条规则组成<span class="term">规则集</span>（rule set）。</p>
+
+    <p>规则集使用时有两个工程问题。其一是<strong>冲突</strong>：多条规则可能同时覆盖同一样本而结论不同，需要冲突消解（投票、按规则精度排序等）。其二是<strong>兜底</strong>：可能没有任何规则命中某样本，于是加一条<span class="term">默认规则</span>（default rule）——前提为空、覆盖一切，给出兜底结论。若把规则排成<span class="term">有序规则列表</span>（rule list，又称 decision list），按顺序逐条匹配、第一条命中的规则直接生效，则天然免去了冲突消解，「排在前面」本身就是优先级。</p>
+
+    <p>规则和决策树是什么关系？决策树中每条「根→叶」路径都可以读成一条规则，所以<strong>任何决策树都能无损地转成等价规则集</strong>。但反过来不成立：本章 15.2 的序贯覆盖学出的规则可以互相重叠、不保证互斥也不保证完备——树一旦沿某属性划分，子空间就被切开、再也回不去；规则却没有这种硬结构，两条规则覆盖同一样本完全合法。这份「回不去 vs 可重叠」的差别，正是规则学习比决策树灵活的地方。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>规则的全部价值在「可读」二字：每条规则独立成句，命中即适用，人能逐条审查、增删、质疑。把它想成法律条文——法庭上引用的从来不是「神经网络的第 37 号神经元」，而是「第几条第几款」。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>以为「规则学习 = 决策树的另一种画法」。错。决策树学出的是对样本空间的<strong>互斥且完备</strong>的划分，每个样本恰好落在一个叶子里；序贯覆盖学出的规则集没有这层约束——规则可重叠、覆盖靠默认规则兜底。二者表示能力不等价，学习算法更不一样。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 15.1-1</div>
+              <div class="q-text">一条规则的前提由什么构成？什么叫一条规则「覆盖」一个样本？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              前提由若干文字（literal，形如「属性=值」的原子判断）合取而成。样本满足前提中的全部文字，即被该规则覆盖（cover）。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 15.1-2</div>
+              <div class="q-text">规则集与有序规则列表在冲突处理上有什么差别？默认规则干什么用？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              规则集遇到多条规则命中且结论冲突时，需投票或排序等冲突消解；有序规则列表按序匹配、命中即停，天然免消解。默认规则前提为空、覆盖一切，为未被任何规则命中的样本兜底。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===== 15.2 ===== -->
+    <h2><span class="sec-no">15.2</span>序贯覆盖与自顶向下特化：规则怎么从数据里长出来</h2>
+
+    <p>知道了规则长什么样，下一个问题自然是：怎么从数据里把一组好规则学出来？直接「一次性搜索整个规则集」空间太大，于是规则学习的主流框架选择分治——<span class="term">序贯覆盖</span>（Sequential Covering）：<strong>学一条规则 → 从训练集中删去它覆盖的正例 → 在剩余数据上再学下一条</strong>，如此反复，直到正例被删光，最后补上默认规则。每条规则只需「尽量纯地」盖住一批当前剩余的正例，不必管全局。</p>
+
+    <p>框架定了，单条规则怎么学？最常见的策略是<span class="term">自顶向下</span>（general-to-specific）：从<strong>空规则</strong>（前提为空，覆盖全部样本）出发，逐个添加文字，每加一个字覆盖范围就缩小一圈——这是一个不断「特化」的过程。每一步该加哪个文字？用增益来挑。设空规则（或当前规则）覆盖样本的正例比例为 p₀，候选文字加入后覆盖 m₊ 个正例、m₋ 个负例，则该文字的增益为：</p>
+
+    <div class="formula">Gain = <span class="var">m</span><sub>+</sub> · ( log₂ <span class="frac"><span class="num-part"><span class="var">m</span><sub>+</sub></span><span class="den-part"><span class="var">m</span><sub>+</sub> + <span class="var">m</span><sub>−</sub></span></span> − log₂ <span class="var">p</span>₀ )</div>
+
+    <p>括号里衡量「纯度提升」（新正例率的对数减去基准对数），乘数 m₊ 奖励「提纯后仍然保住较多正例」的文字。增益越大，文字越值得加入。下面用一个完整的小例子把全流程算一遍。</p>
+
+    <p><strong>【手算例 1】西瓜风格小数据集，8 个样本（4 正 4 负）。</strong>属性：色泽 ∈ {青绿, 乌黑, 浅白}，根蒂 ∈ {蜷缩, 稍蜷, 硬挺}；标签：好瓜（正）/ 坏瓜（负）。</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>编号</th><th>色泽</th><th>根蒂</th><th>类别</th></tr>
+        <tr><td>1</td><td>青绿</td><td>蜷缩</td><td>好瓜</td></tr>
+        <tr><td>2</td><td>青绿</td><td>稍蜷</td><td>好瓜</td></tr>
+        <tr><td>3</td><td>青绿</td><td>蜷缩</td><td>好瓜</td></tr>
+        <tr><td>4</td><td>乌黑</td><td>蜷缩</td><td>好瓜</td></tr>
+        <tr><td>5</td><td>乌黑</td><td>蜷缩</td><td>坏瓜</td></tr>
+        <tr><td>6</td><td>浅白</td><td>硬挺</td><td>坏瓜</td></tr>
+        <tr><td>7</td><td>乌黑</td><td>稍蜷</td><td>坏瓜</td></tr>
+        <tr><td>8</td><td>浅白</td><td>硬挺</td><td>坏瓜</td></tr>
+      </table>
+    </div>
+
+    <p><strong>第 1 轮：学 R1。</strong>空规则覆盖全部 8 个样本，4 正 4 负，基准正例率 p₀ = 4/8 = 0.5，log₂ 0.5 = −1。逐个评估候选文字：</p>
+    <p>① 候选「色泽=青绿」：覆盖样本 1、2、3，共 3 正 0 负。新正例率 = 3/(3+0) = 1，log₂ 1 = 0。<br>
+    Gain = 3 × (log₂ 1 − log₂ 0.5) = 3 × (0 − (−1)) = 3 × 1 = <strong>3</strong>。</p>
+    <p>② 候选「根蒂=蜷缩」：覆盖样本 1、3、4、5，共 3 正 1 负。新正例率 = 3/(3+1) = 0.75，log₂ 0.75 = −0.415。<br>
+    Gain = 3 × (log₂ 0.75 − log₂ 0.5) = 3 × (−0.415 − (−1)) = 3 × (−0.415 + 1) = 3 × 0.585 = <strong>1.755</strong>。</p>
+    <p>③ 其余文字更差（「根蒂=稍蜷」增益为 0，「色泽=乌黑」增益为负，完整计算见本章习题 L2-1）。</p>
+    <p>比较：3 &gt; 1.755 &gt; …，选「色泽=青绿」。得到规则 <strong>R1：好瓜 ← 色泽=青绿</strong>。R1 覆盖了 3 个正例（样本 1、2、3）且 0 负例，已经很纯，不再加字。<strong>执行序贯覆盖的删除步：删去 R1 覆盖的正例 1、2、3。</strong></p>
+
+    <p><strong>第 2 轮：学 R2。</strong>剩余样本：4（好瓜）、5、6、7、8（均坏瓜），1 正 4 负。新的基准 p₀ = 1/5 = 0.2，log₂ 0.2 = −2.32。候选文字：</p>
+    <p>① 「根蒂=蜷缩」：覆盖样本 4、5，共 1 正 1 负。新正例率 = 1/2 = 0.5，log₂ 0.5 = −1。<br>
+    Gain = 1 × (log₂ 0.5 − log₂ 0.2) = 1 × (−1 − (−2.32)) = 1 × (−1 + 2.32) = <strong>1.32</strong>。</p>
+    <p>② 「色泽=乌黑」：覆盖样本 4、5、7，共 1 正 2 负。新正例率 = 1/3，log₂ (1/3) = −1.585。<br>
+    Gain = 1 × (−1.585 − (−2.32)) = 1 × (−1.585 + 2.32) = <strong>0.735</strong>。</p>
+    <p>③ 「色泽=浅白」「根蒂=硬挺」「根蒂=稍蜷」覆盖的正例数 m₊ = 0，增益为 0 且规则毫无意义，直接跳过。</p>
+    <p>比较：1.32 &gt; 0.735，选「根蒂=蜷缩」。得到规则 <strong>R2：好瓜 ← 根蒂=蜷缩</strong>。R2 盖住了正例 4（删去），但也<strong>误盖了负例 5</strong>——在剩余属性上已无法再把 4 和 5 区分开（它们色泽、根蒂全同），接受这条不纯的规则。删去正例 4 后，剩余正例数为 0，序贯覆盖停止。</p>
+
+    <p><strong>收尾：加默认规则。</strong>最终学到有序规则列表：</p>
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>顺序</th><th>规则</th><th>覆盖情况</th></tr>
+        <tr><td>R1</td><td>好瓜 ← 色泽=青绿</td><td>3 正 0 负</td></tr>
+        <tr><td>R2</td><td>好瓜 ← 根蒂=蜷缩</td><td>1 正 1 负（误盖负例 5）</td></tr>
+        <tr><td>默认</td><td>坏瓜 ←（空前缀，覆盖一切）</td><td>兜底</td></tr>
+      </table>
+    </div>
+
+    <p>对偶的方向是<span class="term">自底向上</span>（specific-to-general）：从某个具体样本的完整描述出发，逐个删文字、扩大覆盖——单样本起步方差大，实践中用得少。另外，贪心地每步只留「增益最大」的 1 个文字容易陷入局部最优，CN2 的做法是用<span class="term">束搜索</span>（beam search）：每步保留增益最高的 b 个候选前缀并行生长，显著缓解贪心之弊。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>序贯覆盖 = 分治：「学一组规则」太难，就「一次只消灭一批正例」；自顶向下特化 = 漏斗：先罩住全部，再一层层收窄，每一层用增益挑最值得加的那块滤网。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>以为增益括号里的对数差为正就够了。错。乘数 m₊ 同样关键：一个把正例率从 0.5 提到 1.0 却只覆盖 1 个正例的文字（增益 1×1=1），不如把正例率提到 0.9 但覆盖 8 个正例的文字（增益约 8×0.85=6.8）——规则既要有精度，也要有「覆盖面」。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 15.2-1</div>
+              <div class="q-text">序贯覆盖的三步循环是什么？什么时候停止？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              学一条规则 → 删去它覆盖的正例 → 在剩余数据上再学下一条；直到正例被删光，最后补一条默认规则。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 15.2-2</div>
+              <div class="q-text">自顶向下学单条规则时，候选文字的增益公式是什么？乘数 m₊ 起什么作用？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              Gain = m₊·(log₂(m₊/(m₊+m₋)) − log₂ p₀)。括号是对数纯度提升，乘数 m₊ 奖励提纯后仍保住较多正例的文字，防止「纯但只盖一两个人」的文字胜出。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===== 15.3 ===== -->
+    <h2><span class="sec-no">15.3</span>剪枝：规则学得太细，就要敢于删</h2>
+
+    <p>15.2 的手算例其实埋了一颗雷：R2「好瓜 ← 根蒂=蜷缩」误盖了负例 5，我们却把它收下了。真实数据里噪声更多：特化一路走下去，规则会越来越长、覆盖越来越少，最后连噪声的「巧合模式」也被学成规则——<strong>规则越多、越细，越容易过拟合</strong>。对策与决策树同族：<span class="term">预剪枝</span>（pre-pruning）在加字之前就叫停，<span class="term">后剪枝</span>（post-pruning）先让规则长完再回头删。</p>
+
+    <p>预剪枝的代表是 CN2 的统计显著性检验：每加一个文字，用<span class="term">似然比统计量</span>（Likelihood Ratio Statistic, LRS）检验「该文字带来的类别分布变化是否显著异于随机」，不显著就停止生长——一句话：没有统计证据支撑的特化，宁可不要。</p>
+
+    <p>后剪枝的代表是<span class="term">减错剪枝</span>（Reduced Error Pruning, REP）：留出一份独立的<strong>剪枝集</strong>（不参与规则学习），对已学成的规则，逐个尝试删去某个文字（乃至整条规则）；<strong>只要删除后规则在剪枝集上的精度不下降，就执行删除</strong>。判据用的不是训练集——过拟合的规则在训练集上表现很好，根本剪不动；只有没见过训练数据的剪枝集才能识别「哪些细节是多余的」。REP 的增量版<span class="term">增量减错剪枝</span>（Incremental REP, IREP）把剪枝嵌入序贯覆盖：每学成一条规则，立即在剪枝集上试剪，剪完再学下一条；著名的 RIPPER 系统即以此为基础。</p>
+
+    <p><strong>【手算例 2】一次微型 REP 剪枝决策。</strong>假设已学成规则「好瓜 ← 色泽=青绿 ∧ 根蒂=蜷缩」，它在独立剪枝集上覆盖 2 正 1 负。</p>
+    <p>① 基准精度：2/(2+1) = 2/3 ≈ <strong>0.667</strong>。</p>
+    <p>② 列出可删文字：ⓐ 色泽=青绿；ⓑ 根蒂=蜷缩。逐个试删。</p>
+    <p>③ 试删 ⓑ「根蒂=蜷缩」：规则变为「好瓜 ← 色泽=青绿」，在剪枝集上覆盖 3 正 1 负，新精度 = 3/(3+1) = 3/4 = <strong>0.75</strong>。</p>
+    <p>④ 比较：0.75 &gt; 0.667，精度不降反升，满足 REP 删除判据 → <strong>执行删除</strong>。</p>
+    <p>⑤ 剪后规则：「好瓜 ← 色泽=青绿」。（REP 的实际流程会尝试所有单文字删除并选精度提升最大者；重复此过程，直到任何删除都不再提升精度为止。）</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>剪枝集是「没见过世面的裁判」：训练集看着规则长大，会溺爱它的细枝末节；只有没参与学习的剪枝集，才能冷静地说「这个文字没用，删了」。REP 的全部智慧就一句——<strong>删了不掉精度，就说明它是多余的</strong>。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>以为「规则越多越准」。错。规则数量增长带来的是对训练集（含噪声）的过度贴合：特化太狠、每条覆盖太少，泛化精度反而下降。规则学习必须配剪枝——预剪枝（如 LRS 显著性）或后剪枝（REP/IREP），二选一不可省。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 15.3-1</div>
+              <div class="q-text">REP 后剪枝的删除判据是什么？为什么必须用独立的剪枝集而不是训练集？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              判据：删去某文字/整条规则后，规则在剪枝集上的精度不下降即执行删除。过拟合的规则在训练集上精度虚高、剪不动，只有没参与学习的剪枝集能识别多余细节。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 15.3-2</div>
+              <div class="q-text">预剪枝与后剪枝各举一个代表机制；IREP 相对 REP 改了什么？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              预剪枝：CN2 用似然比统计量（LRS）做显著性检验，增益不显著就停止加字。后剪枝：REP 用剪枝集精度判据删字。IREP 把 REP 嵌入序贯覆盖——每学成一条立即试剪，剪完再学下一条。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===== 15.4 ===== -->
+    <h2><span class="sec-no">15.4</span>一阶规则学习：当「属性=值」说不出「关系」</h2>
+
+    <p>到目前为止，所有文字都是「属性=值」的形式——这是命题逻辑的语言。但很多知识本质是<strong>关系</strong>：「父亲(X,Y) ← 儿子(Y,X)」涉及两个对象 X、Y 之间的关系，命题文字没有变量、没有谓词，无论堆多少「属性=值」也写不出「谁是谁的父亲」这种可推广的模式。出路是把文字升级为一阶逻辑：<span class="term">一阶规则</span>（first-order rule）的前提可以含<strong>变量</strong>，还可以引用<span class="term">背景知识</span>（background knowledge）里已有的谓词（如「根蒂更蜷(X,Y)」由领域专家预先定义）。</p>
+
+    <p>一阶规则学习的代表系统是 <span class="term">FOIL</span>（First Order Inductive Learner），骨架与 15.2 相同——序贯覆盖 + 自顶向下加文字；差别在增益公式。设当前规则覆盖 m₊ 个正例、m₋ 个负例，加入某候选一阶文字后覆盖 m̂₊ 个正例、m̂₋ 个负例，则 <span class="term">FOIL 增益</span>为：</p>
+
+    <div class="formula">Gain = <span class="var">m̂</span><sub>+</sub> · ( log₂ <span class="frac"><span class="num-part"><span class="var">m̂</span><sub>+</sub></span><span class="den-part"><span class="var">m̂</span><sub>+</sub> + <span class="var">m̂</span><sub>−</sub></span></span> − log₂ <span class="frac"><span class="num-part"><span class="var">m</span><sub>+</sub></span><span class="den-part"><span class="var">m</span><sub>+</sub> + <span class="var">m</span><sub>−</sub></span></span> )</div>
+
+    <p>与命题版的两处关键差别：① 乘数用<strong>加文字后</strong>的正例覆盖数 m̂₊（而非 m₊），直接奖励「提纯后仍保住更多正例」的特化；② 有一条硬约束——加文字后的规则<strong>仍须至少覆盖 1 个正例</strong>（m̂₊ ≥ 1），否则增益无意义。</p>
+
+    <p><strong>【手算例 3】学规则「更好(X,Y)」，在两个候选一阶文字中做选择。</strong>当前规则「更好(X,Y) ←（空）」覆盖 m₊ = 10 个正例、m₋ = 5 个负例，当前正例率 = 10/15 ≈ 0.667，log₂ 0.667 = −0.585。</p>
+    <p>① 候选「敲声更沉(X,Y)」：加入后覆盖 m̂₊ = 8 正、m̂₋ = 1 负。新正例率 = 8/9 ≈ 0.889，log₂ (8/9) = −0.170。<br>
+    Gain = 8 × (log₂ (8/9) − (−0.585)) = 8 × (−0.170 + 0.585) = 8 × 0.415 = <strong>3.32</strong>。</p>
+    <p>② 候选「色泽更绿(X,Y)」：加入后覆盖 m̂₊ = 9 正、m̂₋ = 3 负。新正例率 = 9/12 = 0.75，log₂ 0.75 = −0.415。<br>
+    Gain = 9 × (−0.415 + 0.585) = 9 × 0.170 = <strong>1.53</strong>。</p>
+    <p>③ 比较：3.32 &gt; 1.53，且两个候选都满足 m̂₊ ≥ 1 的约束 → <strong>选「敲声更沉(X,Y)」</strong>。注意候选②保住的正例更多（9 &gt; 8），但带入的负例也多（3 &gt; 1），纯度惩罚盖过了正例收益——这正是对数项存在的意义。</p>
+
+    <p>FOIL 是自顶向下的代表；自底向上方向的代表属于更大的领域——<span class="term">归纳逻辑程序设计</span>（Inductive Logic Programming, ILP），它用一阶逻辑统一表示数据、背景知识与假设。其经典算子是<span class="term">最小一般泛化</span>（Least General Generalization, LGG）：取两条具体事实，保留共同文字、删去不共同的文字、把常量换成变量，得到刚好同时涵盖二者的最具体一般规则。例如：</p>
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>输入</th><th>规则</th></tr>
+        <tr><td>事实 1</td><td>更好(瓜A, 瓜B) ← 根蒂更蜷(瓜A, 瓜B) ∧ 敲声更沉(瓜A, 瓜B)</td></tr>
+        <tr><td>事实 2</td><td>更好(瓜C, 瓜D) ← 根蒂更蜷(瓜C, 瓜D) ∧ 敲声更沉(瓜C, 瓜D) ∧ 色泽更绿(瓜C, 瓜D)</td></tr>
+        <tr><td>LGG</td><td>更好(X, Y) ← 根蒂更蜷(X, Y) ∧ 敲声更沉(X, Y)（共同文字保留，「色泽更绿」不共同故删去，常量换成变量）</td></tr>
+      </table>
+    </div>
+    <p>ILP 的另一条路线是<span class="term">逆归结</span>（inverse resolution）：把逻辑学里「由前提推出结论」的归结原理反过来用，由结论和背景知识反推出可能的前提规则。无论哪条路线，一阶规则学习都背着两块沉重的代价：<strong>假设空间爆炸</strong>（文字含变量，候选组合远多于命题版）与<strong>对噪声敏感</strong>（逻辑的硬匹配容不得脏数据）。这两条遗留问题直接催生了后续把概率图模型与一阶逻辑联姻的方向——<span class="term">统计关系学习</span>（Statistical Relational Learning）：给一阶规则配上概率，让「关系」与「不确定性」共存。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>命题逻辑到一阶逻辑的跨越，本质是「从描述一个对象，到描述对象之间的关系」。一旦有了变量，一条规则就能同时谈论千万对 (X, Y)——表达力暴涨的代价，是搜索空间同样暴涨，FOIL 增益就是那个在爆炸空间里 guiding 贪心的罗盘。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>把 FOIL 增益当成命题增益的简单换名。错。命题版乘数是加字<strong>前</strong>的正例数 m₊，FOIL 换成了加字<strong>后</strong>的正例数 m̂₊，并附加「m̂₊ ≥ 1」的硬约束——一阶文字会引入变量绑定，加字后正例可能大量流失，用 m̂₊ 做乘数才能惩罚「提纯了但正例也跑光了」的文字。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 15.4-1</div>
+              <div class="q-text">为什么命题规则写不出「父亲(X,Y) ← 儿子(Y,X)」？一阶文字多了哪两样东西？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              命题文字是「属性=值」的原子判断，没有变量、没有谓词，表达不了对象间的关系。一阶文字引入变量（X、Y…）并可引用背景知识谓词，于是能谈论任意对象对之间的关系。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 15.4-2</div>
+              <div class="q-text">FOIL 增益公式是什么？LGG 的自底向上路线是怎么从两条具体事实得到一般规则的？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              Gain = m̂₊·(log₂(m̂₊/(m̂₊+m̂₋)) − log₂(m₊/(m₊+m₋)))，要求加字后仍覆盖 ≥1 个正例。LGG：保留两条事实的共同文字、删去不共同文字、常量换成变量，得到刚好涵盖二者的最小一般规则。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===== 章末五件套之 1：概念卡 ===== -->
+    <h2><span class="sec-no">🃏</span>概念卡：本章概念的一分钟画像</h2>
+    <p>翻面前先自问：这个概念我能用一句话讲清楚吗？</p>
+    <div class="flip-grid">
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 1</div>
+            <div class="q-text">规则与覆盖（Rule &amp; Coverage）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">规则 = 「结论 ← 文字合取」；样本满足前提全部文字，即被该规则覆盖。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">把学到的知识表示成人能逐条阅读、审计的 if-then 条款。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">法律条文：每条独立可读，命中即适用。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为覆盖必须「正例独占」；规则可误盖负例，靠后续规则与默认规则兜底。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">任何需要向人解释预测理由的场景：信贷、医疗、内容审核。</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 2</div>
+            <div class="q-text">序贯覆盖（Sequential Covering）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">学一条规则 → 删去它覆盖的正例 → 重复直到正例删光，最后加默认规则。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">把「学整个规则集」的大搜索分解为「逐条学单规则」的小问题。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">吃苹果：一口一口来，每咬一口就把那口拿走。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为删除的是全部覆盖样本；只删正例，负例留给后续规则与默认规则。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">CN2、RIPPER 等主流规则学习器的总框架。</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 3</div>
+            <div class="q-text">自顶向下特化（General-to-Specific）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">从覆盖一切的空规则出发，逐个添加文字缩小覆盖，用增益挑选每个文字。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">单条规则的搜索：把指数级的文字组合变成可走的贪心路径。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">漏斗：先罩住全部，再一层层收窄。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为贪心必达最优；局部最优会错过组合效应，CN2 用束搜索（保留 b 个候选）缓解。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">CN2 的单规则学习；对偶方向是自底向上泛化。</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 4</div>
+            <div class="q-text">REP 剪枝（Reduced Error Pruning）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">留出独立剪枝集；删去某文字/整条规则后剪枝集精度不降，即执行删除。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">规则在训练集上过拟合：特化太狠、覆盖太少、把噪声当规律。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">请「没见过世面的裁判」决定哪些细节多余。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">用训练集做剪枝判据——过拟合规则在训练集上表现很好，根本剪不掉。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">RIPPER 的核心步骤（IREP 是其增量版）；与决策树后剪枝同族。</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 5</div>
+            <div class="q-text">FOIL 增益（FOIL Gain）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">Gain = m̂₊·(log₂(m̂₊/(m̂₊+m̂₋)) − log₂(m₊/(m₊+m₋)))，乘数是加字后的正例覆盖数，且要求 m̂₊ ≥ 1。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">在一阶文字的爆炸式假设空间里评估候选，偏好「保住更多正例」的特化。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">既看纯度提升多少，也看提纯后还剩多少正例——剩得越多越值得。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">直接搬命题增益公式；命题版乘数是 m₊，FOIL 换成了 m̂₊。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">FOIL 学一阶规则选文字时：关系数据、递归规则、知识库补全。</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 6</div>
+            <div class="q-text">归纳逻辑程序设计（ILP）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">用一阶逻辑统一表示数据、背景知识与假设，归纳出逻辑程序（一阶规则集）。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">命题表示无法表达关系与变量时的规则学习。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">不但学规律，还允许「引用词典」——背景知识里的谓词都能进规则。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为只是 FOIL 的别名；ILP 是整片领域，含自底向上的 LGG、逆归结等多条路线。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">分子结构、家谱、社交网络等关系数据；后续演化为统计关系学习。</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===== 章末五件套之 2：分层习题 ===== -->
+    <h2><span class="sec-no">📝</span>分层习题</h2>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>判断正误并说明理由：「序贯覆盖学出的规则集与决策树一样，各规则覆盖的样本互不重叠，且全体规则合起来恰好覆盖所有样本。」</div>
+      <details>
+        <summary>提示</summary>
+        <p>回想序贯覆盖每轮删除的是什么；再想「覆盖所有样本」这件事是谁负责的。决策树的互斥完备来自什么结构约束？</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer"><strong>错。</strong>① 不互斥：序贯覆盖每轮只删除被覆盖的<strong>正例</strong>，不同规则完全可能覆盖同一个（负）样本，规则可重叠；② 完备性不靠规则间划分，而靠<strong>默认规则</strong>兜底未被命中的样本。决策树的互斥且完备来自「树一旦划分就回不去」的硬结构——每个样本恰落入一个叶子；规则学习没有这层约束，这正是它比树灵活的原因。把规则集当成「决策树的另一种画法」是本章最常见的误解。</div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>规则列表（rule list）与规则集（rule set），哪一个需要额外的冲突消解机制？为什么？默认规则在二者中扮演什么角色？</div>
+      <details>
+        <summary>提示</summary>
+        <p>想想「按顺序匹配、命中即停」这一使用方式本身解决了什么问题。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer"><strong>规则集需要</strong>：多条规则可能同时覆盖同一样本而结论冲突，必须靠投票、按精度排序等机制消解。<strong>有序规则列表不需要</strong>：它按顺序逐条匹配、第一条命中的规则直接生效，「排在前面」本身就是优先级，冲突在结构上被消解。默认规则对两者作用相同：前提为空、覆盖一切，为未被任何规则命中的样本兜底结论。</div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>在 15.2 手算例的 8 样本数据集上（基准 p₀ = 4/8 = 0.5，log₂ 0.5 = −1），换一个候选文字重新计算：求「根蒂=稍蜷」与「色泽=乌黑」的增益，并与「色泽=青绿」（3.000）、「根蒂=蜷缩」（1.755）一起按增益排序。</div>
+      <details>
+        <summary>提示</summary>
+        <p>先数清每个文字覆盖哪些编号、几个正几个负，再套 Gain = m₊·(log₂(m₊/(m₊+m₋)) − log₂ p₀)。注意：增益可以为 0，也可以为负。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+        ① 「根蒂=稍蜷」：覆盖样本 2（好瓜）、7（坏瓜）→ m₊ = 1，m₋ = 1。新正例率 = 1/(1+1) = 0.5，log₂ 0.5 = −1。<br>
+        Gain = 1 × (−1 − (−1)) = 1 × 0 = <strong>0</strong>。<br>
+        ② 「色泽=乌黑」：覆盖样本 4（好瓜）、5（坏瓜）、7（坏瓜）→ m₊ = 1，m₋ = 2。新正例率 = 1/3，log₂ (1/3) = −1.585。<br>
+        Gain = 1 × (−1.585 − (−1)) = 1 × (−1.585 + 1) = <strong>−0.585</strong>。<br>
+        ③ 排序：色泽=青绿（3.000）&gt; 根蒂=蜷缩（1.755）&gt; 根蒂=稍蜷（0）&gt; 色泽=乌黑（−0.585）。<br>
+        结论：增益为 0 表示加了等于没加；增益为负表示该文字让规则比空规则还「不纯」，绝不该选——贪心搜索自动把这类文字淘汰。
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>FOIL 增益计算：当前规则覆盖 m₊ = 12 正、m₋ = 6 负。候选文字 A 加入后覆盖 10 正 2 负，候选文字 B 加入后覆盖 11 正 4 负。分别计算增益并选出更优者，步骤写全。</div>
+      <details>
+        <summary>提示</summary>
+        <p>先算当前正例率的对数：12/18 = 2/3 ≈ 0.667。两个候选都满足 m̂₊ ≥ 1 的约束吗？</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+        当前正例率 = 12/18 ≈ 0.667，log₂ (12/18) = log₂ 0.667 = −0.585。<br>
+        候选 A：m̂₊ = 10，m̂₋ = 2，新正例率 = 10/12 ≈ 0.833，log₂ (10/12) = −0.263。<br>
+        Gain(A) = 10 × (−0.263 − (−0.585)) = 10 × (−0.263 + 0.585) = 10 × 0.322 = <strong>3.22</strong>。<br>
+        候选 B：m̂₊ = 11，m̂₋ = 4，新正例率 = 11/15 ≈ 0.733，log₂ (11/15) = −0.448。<br>
+        Gain(B) = 11 × (−0.448 + 0.585) = 11 × 0.137 = <strong>1.51</strong>。<br>
+        比较：3.22 &gt; 1.51，且两者均满足 m̂₊ ≥ 1 → <strong>选 A</strong>。注意 B 保住的正例更多（11 &gt; 10），但带入的负例也更多（4 &gt; 2），纯度惩罚盖过了正例收益——只看 m̂₊ 大小会误选 B。
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l3">L3 建模应用</span>场景：你要设计一套<strong>反欺诈交易审核系统</strong>，业务硬要求是「每一条拦截都必须能向审核员和用户解释理由」。请选择命题规则还是一阶规则，说明序贯覆盖该如何配剪枝，并画出整体流程图。</div>
+      <details>
+        <summary>提示</summary>
+        <p>欺诈模式是「单条交易的属性异常」多，还是「多个实体之间的关系异常」（账户—设备—收款方共用、环形转账）多？规则学得太细会在历史个案上过拟合——剪枝放在哪一步、用什么数据？</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+        <p><strong>① 选一阶规则。</strong>欺诈模式的本质是关系模式：「账户 X 与账户 Y 共用同一设备」「X→Y→Z→X 环形转账」——命题的「属性=值」表达不了对象之间的关系。方案：FOIL/ILP + 背景知识谓词（共用设备(X,Y)、转账(X,Y,Z)、同批次注册(X,Y)…），让规则直接引用关系。</p>
+        <p><strong>② 序贯覆盖配剪枝。</strong>外层序贯覆盖：学一条拦截规则 → 删去它覆盖的欺诈正例 → 再学下一条，直到正例删光；每学成一条，立即用 IREP 在<strong>独立剪枝集</strong>上试剪（防过拟合历史个案的偶然模式），剪完再学下一条；收尾加默认规则「放行」。学出的规则按精度与风险排成<strong>有序规则列表</strong>，命中即拦截并把该条规则原文出示给审核员——可解释性由表示本身保证。</p>
+        <p><strong>③ 整体流程：</strong></p>
+        <div class="mermaid">
+flowchart TB
+  A["历史欺诈案件 + 背景知识谓词"] --> B["序贯覆盖：FOIL 逐条学拦截规则"]
+  B --> C["每学一条 立即在剪枝集上 IREP 试剪"]
+  C --> D["规则按精度与风险排序成规则列表"]
+  D --> E["加默认规则：放行"]
+  E --> F["新交易命中规则 → 拦截并出示该规则作解释"]
+  F --> G["审核员复核结果回流 增补正负例"]
+  G --> B
+        </div>
+        <p>要点复核：用一阶规则是因为「关系」；用剪枝集而非训练集剪枝；规则列表的有序性天然消解冲突；解释不是事后附加的模块，而是规则的副产品。</p>
+        </div>
+      </details>
+    </div>
+
+    <!-- ===== 章末五件套之 3：自测 ===== -->
+    <h2><span class="sec-no">✍️</span>本章自测</h2>
+    <p class="quiz-hint">点击选项判分，答错会给出原因。</p>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 1</div>
+      <div class="q-stem">序贯覆盖每学成一条规则后，标准动作是？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 删除它覆盖的全部样本（正例、负例都删）</li>
+        <li data-opt="b">B. 删除它覆盖的正例，然后在剩余数据上再学下一条</li>
+        <li data-opt="c">C. 删除它覆盖的负例</li>
+        <li data-opt="d">D. 不删任何样本，直接再学下一条</li>
+      </ul>
+      <div class="quiz-explain">B 对：序贯覆盖的不变量是「逐条消灭正例」——每条规则盖一批正例、删一批，直到删光再加默认规则。A 错：若连误盖的负例也删，后续规则就「看不见」它，它会落进默认规则被错分。C 错：删负例会让后面的规则失去反面教材，越学越松。D 错：不删除就无法分解问题，后续规则会重复覆盖同一批正例，规则集冗余膨胀。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="c">
+      <div class="q-no">自测 2</div>
+      <div class="q-stem">关于规则学习与决策树的关系，下列哪项正确？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 序贯覆盖学出的规则一定互斥且完备，和决策树叶子一样</li>
+        <li data-opt="b">B. 决策树无法转换成规则集</li>
+        <li data-opt="c">C. 决策树可等价转成规则集，但序贯覆盖的规则可以重叠、不必互斥完备</li>
+        <li data-opt="d">D. 规则学习只能处理二分类问题</li>
+      </ul>
+      <div class="quiz-explain">C 对：树每条根→叶路径就是一条规则，转换无损；但反过来不成立——树「一旦划分就回不去」，子空间互斥，而序贯覆盖的规则可重叠，完备性靠默认规则兜底。A 错：互斥完备是树的结构属性，不是规则集的。B 错：路径即规则，转换是平凡的。D 错：序贯覆盖对每类分别当作正例学习即可处理多分类，与类别数无关。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="c">
+      <div class="q-no">自测 3</div>
+      <div class="q-stem">REP 后剪枝删除某个文字的判据是？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 删除后规则的前提变得更短</li>
+        <li data-opt="b">B. 删除后规则在训练集上的精度不下降</li>
+        <li data-opt="c">C. 删除后规则在独立剪枝集上的精度不下降</li>
+        <li data-opt="d">D. 删除后规则覆盖的样本数变多</li>
+      </ul>
+      <div class="quiz-explain">C 对：REP 的判据是「剪枝集精度不降即删」——删了不掉精度，说明该文字是多余的。A 错：规则变短是结果不是判据，短不等于泛化好。B 错：过拟合的规则在训练集上精度虚高，任何删除几乎都让训练精度下降，用训练集判据什么也剪不掉。D 错：删字后覆盖通常变多，但「覆盖变多」不保证「精度不降」，判据看的始终是精度。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 4</div>
+      <div class="q-stem">FOIL 增益与命题规则增益的关键区别是？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. FOIL 增益不使用对数</li>
+        <li data-opt="b">B. FOIL 用加文字后的正例覆盖数 m̂₊ 作乘数，且要求新规则仍至少覆盖一个正例</li>
+        <li data-opt="c">C. FOIL 增益不能为负</li>
+        <li data-opt="d">D. FOIL 增益只能用于二分类</li>
+      </ul>
+      <div class="quiz-explain">B 对：命题版乘数是加字前的 m₊，FOIL 换成加字后的 m̂₊，并附加 m̂₊ ≥ 1 的硬约束——一阶文字引入变量绑定，加字后正例可能大量流失，用 m̂₊ 才能惩罚「提纯了但正例跑光了」的文字。A 错：FOIL 增益照样是对数纯度差。C 错：候选文字让纯度下降时增益照样为负。D 错：增益公式与类别数无关，只数正负例。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 5</div>
+      <div class="q-stem">为什么命题规则学不出「父亲(X,Y) ← 儿子(Y,X)」这类知识？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 命题规则的前提不支持多个文字的合取</li>
+        <li data-opt="b">B. 命题文字是「属性=值」的原子判断，没有变量，表达不了对象之间的关系</li>
+        <li data-opt="c">C. 因为训练集太小</li>
+        <li data-opt="d">D. 因为增益公式在关系数据上失效</li>
+      </ul>
+      <div class="quiz-explain">B 对：这是表达能力的硬伤——命题逻辑没有变量与谓词，「谁是谁的父亲」这种可推广的关系模式必须靠一阶文字（含变量、可引用背景知识）。A 错：命题规则前提本来就是合取，问题不在合取。C 错：换再大的数据集也补不上表达能力的缺口。D 错：FOIL 增益正是为关系数据设计的，公式没有失效。</div>
+    </div>
+
+    <!-- ===== 章末五件套之 4：三句话复述 ===== -->
+    <div class="retell">
+      <h3>🗣️ 用自己的话，三句话讲完本章</h3>
+      <p>对着空气（或室友）说出这三句。说卡壳的那句，回去重读对应小节。</p>
+      <details>
+        <summary>句1：这章解决什么问题？——</summary>
+        <div class="retell-answer">参考答案：黑箱模型无法向人解释决策理由，本章解决「如何从数据中学出人类可读、可审计的 if-then 规则，同时保持精度」——即可读性与精度两全的问题。</div>
+      </details>
+      <details>
+        <summary>句2：核心机制是什么？——</summary>
+        <div class="retell-answer">参考答案：序贯覆盖逐条学规则（学一条、删正例、再学下一条，最后加默认规则）；每条规则自顶向下加文字、用增益挑选；过拟合用预剪枝（LRS 显著性）或后剪枝（REP/IREP，剪枝集精度不降即删）处理；命题表示不够时升级为一阶规则，FOIL 用 m̂₊ 版增益选字，ILP 用 LGG、逆归结自底向上泛化。</div>
+      </details>
+      <details>
+        <summary>句3：它和前后章怎么分工？——</summary>
+        <div class="retell-answer">参考答案：第14章用概率图表示不确定性，但给出的仍是数字；本章回到符号表示，把「可解释性」本身当作学习目标，代价是搜索空间爆炸与噪声敏感（由统计关系学习接续）。下一章强化学习从「学表示、学预测」转向「学动作」，处理序贯决策问题。</div>
+      </details>
+    </div>
+
+    <!-- ===== 章末五件套之 5：间隔复习计划 ===== -->
+    <div class="review-plan">
+      <h3>🔁 间隔复习计划</h3>
+      <p>回忆本身比重读有效 10 倍。到点只做一件事：翻卡 + 重做标记题。</p>
+      <table>
+        <tr><th>时间点</th><th>复习内容</th><th>预计用时</th></tr>
+        <tr><td>第 1 天</td><td>概念卡 1–6 全翻 + 回忆卡 15.1-1 至 15.4-2（共 8 张）</td><td>12 分钟</td></tr>
+        <tr><td>第 3 天</td><td>概念卡 2、4、5（序贯覆盖 / REP / FOIL 增益）+ 重做 L2-1、L2-2 两道手算</td><td>10 分钟</td></tr>
+        <tr><td>第 7 天</td><td>三句话复述 + 自测错题重做 + 默写两个增益公式</td><td>10 分钟</td></tr>
+        <tr><td>第 15 天</td><td>只做合上书挑战；能全过就毕业</td><td>15 分钟</td></tr>
+      </table>
+    </div>
+
+    <!-- 合上书挑战 -->
+    <div class="final-challenge">
+      <h3>📕 合上书挑战</h3>
+      <p class="fc-sub">现在关掉这个页面，拿一张纸，凭记忆完成以下任务。全部做完再回来核对——这是本章真正的毕业考试。</p>
+      <ol id="challenge-list">
+        <li><span class="fc-check"></span>写出规则、文字、覆盖的定义，说明规则集与有序规则列表在冲突处理上的差别</li>
+        <li><span class="fc-check"></span>默写序贯覆盖三步流程与增益公式 Gain = m₊·(log₂(m₊/(m₊+m₋)) − log₂ p₀)</li>
+        <li><span class="fc-check"></span>手算：空规则基准 p₀ = 0.5 时，覆盖 3 正 0 负的候选文字增益是多少？（= 3）</li>
+        <li><span class="fc-check"></span>写出 FOIL 增益公式，说清它与命题增益的两处差别（乘数 m̂₊、硬约束 m̂₊ ≥ 1）</li>
+        <li><span class="fc-check"></span>画出本章推导主线图（黑箱 → 规则 → 序贯覆盖 + 自顶向下 → 剪枝 → 一阶规则 → 代价）</li>
+        <li><span class="fc-check"></span>一句话回答本章的主线问题：规则学习如何做到既学得准、又能被人读懂——可读性与精度怎么两全？</li>
+      </ol>
+    </div>
+
+    <div class="complete-zone">
+      <button class="btn-complete" id="btn-complete" onclick="markDone()">✓ 我已完成本章（含合上书挑战）</button>
+    </div>
+
+    <div class="chapter-nav">
+      <a href="chapter-14.html"><span class="nav-dir">← 上一章</span>第14章 概率图模型</a>
+      <a href="chapter-16.html" class="next"><span class="nav-dir">下一章 →</span>第16章 强化学习</a>
+    </div>
+
+  </div>
+</div>
+
+<footer class="footer">
+  <div class="wrap">第15章 规则学习 · 机器学习互动讲义 · 基于周志华《机器学习》</div>
+</footer>
+
+<script src="/lectures-assets/mermaid.min.js"></script>
+<script>
+mermaid.initialize({
+  startOnLoad: true,
+  theme: "base",
+  themeVariables: {
+    primaryColor: "#e3edf7",
+    primaryBorderColor: "#1d5f9e",
+    primaryTextColor: "#1d5f9e",
+    lineColor: "#5c554b",
+    secondaryColor: "#fbeedd",
+    tertiaryColor: "#f5f1e8",
+    fontFamily: "-apple-system, PingFang SC, sans-serif",
+    fontSize: "14px"
+  },
+  flowchart: { curve: "linear", htmlLabels: false }
+});
+</script>
+<script>
+// 自测题判分（原样复用，勿改）
+document.querySelectorAll(".quiz-block").forEach(block => {
+  const answer = block.dataset.answer;
+  const explain = block.querySelector(".quiz-explain");
+  block.querySelectorAll(".quiz-opts li").forEach(li => {
+    li.addEventListener("click", () => {
+      const opts = block.querySelectorAll(".quiz-opts li");
+      opts.forEach(o => o.classList.add("disabled"));
+      if (li.dataset.opt === answer) {
+        li.classList.add("correct");
+      } else {
+        li.classList.add("wrong");
+        block.querySelector(`[data-opt="${answer}"]`).classList.add("correct");
+      }
+      explain.classList.add("show");
+    });
+  });
+});
+
+// 合上书清单打勾（原样复用，勿改）
+document.querySelectorAll("#challenge-list li").forEach(li => {
+  li.addEventListener("click", () => li.classList.toggle("checked"));
+});
+
+// 完成标记 → localStorage（章号 15）
+const KEY = "ml_progress_v1";
+function loadProgress() {
+  try { return JSON.parse(localStorage.getItem(KEY)) || {}; } catch (e) { return {}; }
+}
+const progress = loadProgress();
+const btn = document.getElementById("btn-complete");
+if (progress[15] && progress[15].done) {
+  btn.textContent = "✓ 已完成 · 再次点击重置";
+  btn.classList.add("done");
+}
+function markDone() {
+  const p = loadProgress();
+  if (p[15] && p[15].done) {
+    delete p[15];
+    btn.textContent = "✓ 我已完成本章（含合上书挑战）";
+    btn.classList.remove("done");
+  } else {
+    p[15] = { done: true, completedAt: Date.now(), reviewsDone: 0 };
+    btn.textContent = "✓ 已完成 · 复习提醒已开启";
+    btn.classList.add("done");
+  }
+  localStorage.setItem(KEY, JSON.stringify(p));
+}
+</script>
+
+</body>
+</html>

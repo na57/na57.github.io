@@ -1,0 +1,889 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第9章 聚类 · 机器学习互动讲义</title>
+<link rel="stylesheet" href="/lectures-assets/style.css">
+</head>
+<body>
+
+<nav class="topbar">
+  <div class="topbar-inner">
+    <span class="brand"><a href="index.html" style="color:inherit">← 学习地图</a></span>
+    <span class="crumb">阶段③ · 无监督与理论 / 第9章</span>
+  </div>
+</nav>
+
+<div class="wrap">
+
+  <div class="lecture-head">
+    <span class="ch-label">CHAPTER 09 · 无监督与理论</span>
+    <h1>聚类</h1>
+    <p class="lead">没有标签时，怎么自己定义"相似"、把数据分成一簇一簇，并在没有标准答案的情况下评价分得对不对。</p>
+  </div>
+
+  <div class="position-bar">
+    <strong>本章在主线上的位置：</strong>前两段（Ch1–8）的每个样本都带标签 y，学的是"从例子到规则"的监督学习；本章开始标签消失了，"什么叫相似、什么叫一簇"都要自己定义——聚类给出三条路线（原型/密度/层次）和一个概率统一视角（GMM），为第10章降维与第11章特征选择提供"无监督"的共同语言。<br>
+    第9章回答主线上的第9个问题：<strong>没有标签时，什么叫"相似"、什么叫"一簇"？不同的簇假设如何把同一堆数据分成不同的簇？</strong>
+    <div class="map-inline">
+      <span class="node">① 基础与评估<br>Ch1 绪论 · Ch2 模型评估与选择</span><span class="arrow">→</span>
+      <span class="node">② 经典模型<br>Ch3 线性模型 · Ch4 决策树 · Ch5 神经网络 · Ch6 支持向量机 · Ch7 贝叶斯分类器 · Ch8 集成学习</span><span class="arrow">→</span>
+      <span class="node here">③ 无监督与理论<br><strong>Ch9 聚类</strong> · Ch10 降维与度量学习 · Ch11 特征选择与稀疏学习 · Ch12 计算学习理论</span><span class="arrow">→</span>
+      <span class="node">④ 进阶专题<br>Ch13 半监督学习 · Ch14 概率图模型 · Ch15 规则学习 · Ch16 强化学习</span>
+    </div>
+  </div>
+
+  <div class="objectives">
+    <h4>🎯 学完本章，合上书你应该能：</h4>
+    <ol>
+      <li>说出距离度量的四条公理，并对两个给定点手算 p=1、p=2、p=∞ 三种闵可夫斯基距离；</li>
+      <li>对给定的参考划分与聚类结果，数出 a、b、c、d 四个样本对计数，算出 Jaccard、FM、Rand 三个外部指数；</li>
+      <li>对 6 个二维点和指定初始中心，手算 k-means 的完整一次迭代（距离表、分配、新中心），并说出停止条件；</li>
+      <li>对给定点集与 (ε, MinPts)，逐点数邻域、判定核心/边界/噪声点，沿密度可达链拉出每个簇；</li>
+      <li>对给定距离矩阵，用最小距离（single linkage）写出 AGNES 的完整合并序并画出树状图；</li>
+      <li>解释 GMM 与 k-means 的关系：软分配 vs 硬分配，以及"协方差收缩为标量且趋 0"时 GMM 退化为 k-means。</li>
+    </ol>
+  </div>
+
+  <div class="lecture">
+
+    <div class="figure">
+      <div class="mermaid">
+flowchart TB
+  A["没有标签"] --> B["只能自己定义相似: 距离 密度 层次"]
+  B --> C["原型路线 k-means: 簇是一团球"]
+  B --> D["密度路线 DBSCAN: 簇是连片稠密区"]
+  B --> E["层次路线 AGNES: 簇有嵌套结构"]
+  C --> F["概率视角统一: GMM 用 EM 软分配"]
+  D --> F
+  E --> F
+  F --> G["没有标准答案怎么评: 外部指标与内部指标"]
+  G --> H["代价: 簇结构是假设不是事实 结果依赖假设与 k"]
+  classDef hot fill:#fbeedd,stroke:#c4651f,stroke-width:2.5px,color:#c4651f;
+  classDef danger fill:#fae9e7,stroke:#b03a2e,stroke-width:2.5px,color:#b03a2e;
+  class H danger;
+      </div>
+      <div class="caption">本章推导主线：没有标签逼出"自定义相似"，三条簇假设各给一种分法，GMM 在概率视角下统一它们，最后落到评价难题与"假设即代价"。</div>
+    </div>
+
+    <h2><span class="sec-no">9.1</span>没有标签，凭什么分组：先把"相似"定义出来</h2>
+
+    <p>前八章的每个样本都写成 (x, y)，标签 y 是老师；本章把老师撤走，手里只剩样本集 D = {x₁, x₂, …, x_m}。<span class="term">聚类</span>（Clustering）要做的，是把 D 分成 k 个互不相交的簇 {C₁, C₂, …, C_k}，希望同一簇里的点彼此相似、不同簇的点彼此不相似。但"相似"不是一个客观存在的东西——它必须先被定义，而定义的工具就是<span class="term">距离度量</span>（Distance Measure）。</p>
+
+    <h3>距离度量的四条公理</h3>
+    <p>一个函数 dist(·,·) 能叫"距离"，必须满足四条基本性质：</p>
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>公理</th><th>数学表述</th><th>一句话含义</th></tr>
+        <tr><td>非负性</td><td>dist(xᵢ, xⱼ) ≥ 0</td><td>距离不能是负数</td></tr>
+        <tr><td>同一性</td><td>dist(xᵢ, xⱼ) = 0 当且仅当 xᵢ = xⱼ</td><td>距离为 0 只因为自己跟自己</td></tr>
+        <tr><td>对称性</td><td>dist(xᵢ, xⱼ) = dist(xⱼ, xᵢ)</td><td>A 到 B 与 B 到 A 一样远</td></tr>
+        <tr><td>直递性</td><td>dist(xᵢ, xⱼ) ≤ dist(xᵢ, xₖ) + dist(xₖ, xⱼ)</td><td>三角不等式：抄近路不会更远</td></tr>
+      </table>
+    </div>
+
+    <h3>闵可夫斯基距离：一个参数 p 装下一族距离</h3>
+    <p>对 n 维连续属性，最常用的是<span class="term">闵可夫斯基距离</span>（Minkowski Distance）：</p>
+    <div class="formula">dist(xᵢ, xⱼ) = ( ∑<sub>u=1</sub><sup>n</sup> |x<sub>iu</sub> − x<sub>ju</sub>|<sup>p</sup> )<sup>1/p</sup></div>
+    <p>参数 p 取不同值就得到不同的"远近观"。用两个点 A = (1, 2)、B = (4, 6) 各算一遍（坐标差为 3 和 4）：</p>
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>p</th><th>名称</th><th>代入计算</th><th>结果</th></tr>
+        <tr><td>p = 1</td><td><span class="term">曼哈顿距离</span>（Manhattan Distance）</td><td>|1−4| + |2−6| = 3 + 4</td><td><strong>7</strong></td></tr>
+        <tr><td>p = 2</td><td><span class="term">欧氏距离</span>（Euclidean Distance）</td><td>√(3² + 4²) = √(9 + 16) = √25</td><td><strong>5</strong></td></tr>
+        <tr><td>p → ∞</td><td>切比雪夫距离（Chebyshev Distance）</td><td>max(3, 4)（只取最大的坐标差）</td><td><strong>4</strong></td></tr>
+      </table>
+    </div>
+    <p>同一对点，三种距离给出 7、5、4 三个答案——"多远"取决于你选哪把尺子。直觉上：p=1 像在街区里沿马路走，p=2 是直线飞行，p=∞ 只看差距最大的那个维度（像国际象棋里王的最少步数）。</p>
+
+    <h3>属性不都是连续数</h3>
+    <p>连续属性（身高、价格）可以直接做减法，称为<span class="term">有序属性</span>（Ordinal / Numerical Attribute）；而颜色、国籍这类<span class="term">无序属性</span>（Nominal Attribute）不能相减——"红色 − 蓝色"没有意义。对无序属性常用 <span class="term">VDM</span>（Value Difference Metric）：按两个取值在各类别上的分布差异来定义距离，分布越像距离越小；混合属性则把两类距离加权合并（MinkowskiDM）。细节知道"有这套办法"即可，本章后面都假设属性已转成可减的连续数。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>距离度量是聚类的"宪法"：先立宪（选定 dist），再分组（一切算法都在这把尺子下运作）。换一把尺子，"谁和谁像"就全变了，后面任何算法给出的簇也随之改变。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>"距离是数据的客观属性"——错。距离是你选的假设。最隐蔽的坑是量纲：一个属性取值 0~100000、另一个 0~1，欧氏距离几乎完全被前者主导。聚类前通常要做归一化（min-max 或 z-score），否则"相似"被一个属性绑架。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 9.1-1</div>
+              <div class="q-text">距离度量的四条公理是什么？"对称差值只取绝对值之和"违反其中哪条？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              非负性、同一性（dist=0 ⟺ 自身）、对称性、直递性（三角不等式 dist(xᵢ,xⱼ) ≤ dist(xᵢ,xₖ)+dist(xₖ,xⱼ)）。曼哈顿距离四条全满足，是合法距离；若只取某一维之差（如 dist=|x₁−y₁|），则违反同一性——不同的点距离可为 0。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 9.1-2</div>
+              <div class="q-text">对 A=(1,2)、B=(4,6)，默算 p=1、p=2、p=∞ 的闵可夫斯基距离，并各说一个直觉。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              p=1：3+4=7（街区绕行）；p=2：√(9+16)=5（直线）；p=∞：max(3,4)=4（只看最大坐标差）。p 越大，越由"差距最大的维度"说了算。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <h2><span class="sec-no">9.2</span>分得好不好谁说了算：外部指标与内部指标</h2>
+
+    <p>上一节定义了"相似"，但它立刻带出一个尴尬问题：聚类没有标签，也就没有标准答案——分完一堆簇，凭什么说分得好？<span class="term">性能度量</span>（Performance Measure）分两种处境：手里恰好有一份参考划分时，用<span class="term">外部指标</span>（External Index）"对答案"；什么都没有时（这才是常态），用<span class="term">内部指标</span>（Internal Index）"看体型"。</p>
+
+    <h3>外部指标：把样本两两配对，数四种情况</h3>
+    <p>设参考划分为 S，聚类结果为 C。遍历全部 m(m−1)/2 个样本对，按"在 C 里同不同簇 × 在 S 里同不同类"数四个计数：</p>
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>计数</th><th>含义</th><th>名字</th></tr>
+        <tr><td>a</td><td>在 C 中同簇，且在 S 中同类</td><td>同-同（都对）</td></tr>
+        <tr><td>b</td><td>在 C 中同簇，但在 S 中不同类</td><td>同-异（误并）</td></tr>
+        <tr><td>c</td><td>在 C 中不同簇，但在 S 中同类</td><td>异-同（误拆）</td></tr>
+        <tr><td>d</td><td>在 C 中不同簇，且在 S 中不同类</td><td>异-异（都对）</td></tr>
+      </table>
+    </div>
+    <div class="formula">a + b + c + d = <span class="frac"><span class="num-part">m(m−1)</span><span class="den-part">2</span></span>，JC = <span class="frac"><span class="num-part">a</span><span class="den-part">a + b + c</span></span>，FM = √( <span class="frac"><span class="num-part">a</span><span class="den-part">a + b</span></span> · <span class="frac"><span class="num-part">a</span><span class="den-part">a + c</span></span> )，RI = <span class="frac"><span class="num-part">2(a + d)</span><span class="den-part">m(m − 1)</span></span></div>
+    <p>三个指数都在 [0, 1] 内、越大越好：<span class="term">Jaccard 系数</span>（Jaccard Coefficient）只认"同簇且同类"的样本对占所有"至少一边同"的比例；<span class="term">FM 指数</span>（Fowlkes–Mallows Index）是查准与查回的几何平均；<span class="term">Rand 指数</span>（Rand Index）把"双双不同"的 d 也算作得分。</p>
+
+    <h3>完整手算：6 个样本、两簇、有参考划分</h3>
+    <p>样本 x₁…x₆。参考划分 S：{x₁, x₂, x₃} 与 {x₄, x₅, x₆}；聚类结果 C：{x₁, x₂, x₄} 与 {x₃, x₅, x₆}。共 6×5/2 = 15 个样本对。</p>
+    <p><strong>第一步：列出两边各自的"同"对。</strong>在 C 中同簇的对有 6 个：(1,2)、(1,4)、(2,4)、(3,5)、(3,6)、(5,6)；在 S 中同类的对也有 6 个：(1,2)、(1,3)、(2,3)、(4,5)、(4,6)、(5,6)。</p>
+    <p><strong>第二步：数四个计数。</strong></p>
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>计数</th><th>数法</th><th>值</th></tr>
+        <tr><td>a（C同 且 S同）</td><td>两列的交集：{(1,2), (5,6)}</td><td>2</td></tr>
+        <tr><td>b（C同 但 S异）</td><td>C 同簇对去掉交集：{(1,4), (2,4), (3,5), (3,6)}</td><td>4</td></tr>
+        <tr><td>c（C异 但 S同）</td><td>S 同类对去掉交集：{(1,3), (2,3), (4,5), (4,6)}</td><td>4</td></tr>
+        <tr><td>d（C异 且 S异）</td><td>15 − 2 − 4 − 4</td><td>5</td></tr>
+      </table>
+    </div>
+    <p><strong>第三步：代入公式。</strong></p>
+    <div class="formula">JC = <span class="frac"><span class="num-part">2</span><span class="den-part">2 + 4 + 4</span></span> = <span class="frac"><span class="num-part">2</span><span class="den-part">10</span></span> = 0.2　　FM = √( <span class="frac"><span class="num-part">2</span><span class="den-part">6</span></span> · <span class="frac"><span class="num-part">2</span><span class="den-part">6</span></span> ) = <span class="frac"><span class="num-part">1</span><span class="den-part">3</span></span> ≈ 0.333　　RI = <span class="frac"><span class="num-part">2 × (2 + 5)</span><span class="den-part">6 × 5</span></span> = <span class="frac"><span class="num-part">14</span><span class="den-part">30</span></span> ≈ 0.467</div>
+    <p>三个数差异很大（0.2 vs 0.47）：JC 对误并、误拆都敏感所以最苛刻；RI 把 5 对"双双不同"也算分，所以最宽松。报指标时必须说是哪一个。</p>
+
+    <h3>内部指标：没有答案可看，就看"体型"</h3>
+    <p>没有参考划分时，总原则只有一句话：<strong>簇内要紧，簇间要松</strong>。定义四个辅助量：avg(C) 簇内平均距离、diam(C) 簇内最远点对距离、d_min(Cᵢ, Cⱼ) 两簇最近点对距离、d_cen(μᵢ, μⱼ) 两簇中心距离。两个代表：</p>
+    <div class="formula">DB 指数 = <span class="frac"><span class="num-part">1</span><span class="den-part">k</span></span> ∑<sub>i=1</sub><sup>k</sup> max<sub>j≠i</sub> ( <span class="frac"><span class="num-part">avg(Cᵢ) + avg(Cⱼ)</span><span class="den-part">d_cen(μᵢ, μⱼ)</span></span> )　　<span class="term">DB 指数</span>（Davies–Bouldin Index）<strong>越小越好</strong></div>
+    <div class="formula">Dunn 指数 = min<sub>i≠j</sub> { <span class="frac"><span class="num-part">d_min(Cᵢ, Cⱼ)</span><span class="den-part">max<sub>l</sub> diam(C<sub>l</sub>)</span></span> }　　<span class="term">Dunn 指数</span>（Dunn Index）<strong>越大越好</strong></div>
+    <p>直觉：DB 用"簇内胖瘦之和 ÷ 中心距离"衡量两个簇有多难分开，取最糟糕的一对再平均，所以越小越好；Dunn 用"最近簇间距 ÷ 最胖簇直径"衡量最不利的分离度，所以越大越好。方向相反，别记反。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>外部指标是"对答案"（需要参考划分，只在评测算法时用得上）；内部指标是"看体型"（不需要任何标签，是真实场景里唯一可用的裁判）。两者的灵魂是同一条：簇内紧、簇间松。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>"Rand 指数 0.8 就说明聚类好"——不一定。RI 的分子里 d（双双不同）通常占大头，参考划分越碎、d 越多，随便聚类也能刷出高 RI；而且 RI 没有减去"随机划分也能拿到的基线分"。严谨报告常用做过随机校正的 ARI（Adjusted Rand Index），或干脆同时报 JC 与 FM。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 9.2-1</div>
+              <div class="q-text">a、b、c、d 四个计数怎么定义？JC、FM、RI 各用哪几个计数？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              对 m(m−1)/2 个样本对：a 同簇且同类，b 同簇异类，c 异簇同类，d 异簇异类。JC = a/(a+b+c)（不用 d）；FM = √(a/(a+b)·a/(a+c))；RI = 2(a+d)/(m(m−1))（用 d）。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 9.2-2</div>
+              <div class="q-text">内部指标的总原则是什么？DB 指数和 Dunn 指数哪个越大越好？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              总原则：簇内紧、簇间松。DB 指数越小越好（最糟一对簇的"胖瘦和/中心距"取平均）；Dunn 指数越大越好（最近簇间距/最胖簇直径）。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <h2><span class="sec-no">9.3</span>原型聚类 k-means：假设簇是一团球</h2>
+
+    <p>评价有了裁判，现在进入算法。第一条路线假设：每个簇都是一团"球"，球心是一个<span class="term">原型</span>（Prototype）——簇的均值向量 μᵢ。这就是 <span class="term">k-means</span>（k 均值）：给定簇数 k，把划分做到让<span class="term">平方误差</span>（Sum of Squared Errors）最小：</p>
+    <div class="formula">E = ∑<sub>i=1</sub><sup>k</sup> ∑<sub>x∈Cᵢ</sub> ‖x − μᵢ‖²，其中 μᵢ = <span class="frac"><span class="num-part">1</span><span class="den-part">|Cᵢ|</span></span> ∑<sub>x∈Cᵢ</sub> x</div>
+    <p>E 越小，各点离自己簇中心越近，"簇内紧"。直接枚举所有划分是 NP 难的，k-means 用贪心迭代逼近：<strong>① 初始化</strong> k 个中心；<strong>② 分配</strong>：每个点归入离它最近的中心所在簇；<strong>③ 更新</strong>：每个簇重算均值作为新中心；<strong>④ 重复</strong> ②③，直到中心（或划分）不再变化。②固定中心优化分配、③固定分配优化中心，每一步都让 E 不增，而划分方案有限，所以必然在有限步内停（停在局部极小）。</p>
+
+    <h3>完整手算：6 个点、k=2、指定初始中心，跑一轮迭代</h3>
+    <p>样本：P₁=(1,1)，P₂=(2,1)，P₃=(1,2)，P₄=(6,4)，P₅=(7,5)，P₆=(6,5)。取初始中心 μ₁ = (1,1)（即 P₁）、μ₂ = (6,4)（即 P₄）。</p>
+    <p><strong>第一步：逐点算到两个中心的欧氏距离</strong>（列出精确根式与小数）：</p>
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>点</th><th>d(·, μ₁=(1,1))</th><th>d(·, μ₂=(6,4))</th><th>分配</th></tr>
+        <tr><td>P₁=(1,1)</td><td>0</td><td>√(25+9) = √34 ≈ 5.831</td><td>C₁</td></tr>
+        <tr><td>P₂=(2,1)</td><td>1</td><td>√(16+9) = √25 = 5</td><td>C₁</td></tr>
+        <tr><td>P₃=(1,2)</td><td>1</td><td>√(25+4) = √29 ≈ 5.385</td><td>C₁</td></tr>
+        <tr><td>P₄=(6,4)</td><td>√(25+9) = √34 ≈ 5.831</td><td>0</td><td>C₂</td></tr>
+        <tr><td>P₅=(7,5)</td><td>√(36+16) = √52 = 2√13 ≈ 7.211</td><td>√(1+1) = √2 ≈ 1.414</td><td>C₂</td></tr>
+        <tr><td>P₆=(6,5)</td><td>√(25+16) = √41 ≈ 6.403</td><td>√(0+1) = 1</td><td>C₂</td></tr>
+      </table>
+    </div>
+    <p><strong>第二步：分配。</strong>C₁ = {P₁, P₂, P₃}，C₂ = {P₄, P₅, P₆}。</p>
+    <p><strong>第三步：重算中心（各坐标取均值）。</strong></p>
+    <div class="formula">μ₁′ = ( <span class="frac"><span class="num-part">1+2+1</span><span class="den-part">3</span></span>, <span class="frac"><span class="num-part">1+1+2</span><span class="den-part">3</span></span> ) = ( <span class="frac"><span class="num-part">4</span><span class="den-part">3</span></span>, <span class="frac"><span class="num-part">4</span><span class="den-part">3</span></span> ) ≈ (1.333, 1.333)　　μ₂′ = ( <span class="frac"><span class="num-part">6+7+6</span><span class="den-part">3</span></span>, <span class="frac"><span class="num-part">4+5+5</span><span class="den-part">3</span></span> ) = ( <span class="frac"><span class="num-part">19</span><span class="den-part">3</span></span>, <span class="frac"><span class="num-part">14</span><span class="den-part">3</span></span> ) ≈ (6.333, 4.667)</div>
+    <p>此时平方误差 E = 4/3 + 4/3 = <span class="frac"><span class="num-part">8</span><span class="den-part">3</span></span> ≈ 2.667（每个簇内三项贡献分别为 2/9、5/9、5/9）。</p>
+    <p><strong>第四步：再迭代一轮。</strong>对新中心重算全部距离：P₁ 距 μ₁′ 为 √2/3 ≈ 0.471，P₂、P₃ 各为 √5/3 ≈ 0.745；P₄、P₅ 距 μ₂′ 各为 √5/3 ≈ 0.745，P₆ 为 √2/3 ≈ 0.471——所有点归属<strong>不变</strong>，中心也不再移动，停止。这就是 k-means 的停止条件：中心不再变化（实际工程里也常用"变化小于阈值"或"达到最大轮数"提前停）。</p>
+
+    <h3>初始化不是小事：k-means++</h3>
+    <p>上面的例子故意把初始中心选在两头；若两个初始中心挤在同一团里，迭代会收敛到很差的局部极小。<span class="term">k-means++</span> 的改进只有一句话：选初始中心时让"离已选中心越远的点越优先被选中"，把 k 个种子尽量撒开，再跑标准迭代。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>k-means 是"选举—改选"循环：先按现任中心给所有点划分选区，再按选区重选中心，直到没人想换区。它隐含的簇假设是：每个簇是以均值为中心的球（各向同性、大小相近）。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>"k-means 收敛了，所以找到了最优划分"——错。E 对划分而言非凸，迭代只保证 E 单调不增并停在<strong>局部</strong>极小，不同初始中心可能给出完全不同的结果。实践上多换几组初始化（或用 k-means++）取 E 最小的一次；k 本身也要外部给定，算法不会替你发现"该分几簇"。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 9.3-1</div>
+              <div class="q-text">写出 k-means 的目标函数 E，并说出"分配"与"更新"两步各在优化什么。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              E = ∑ᵢ∑ₓ∈Cᵢ‖x − μᵢ‖²，μᵢ 为簇均值。分配步固定中心、给每点选最近中心使 E 不增；更新步固定分配、把中心移到簇均值（平方误差下均值最优）。两步交替直到中心不动。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 9.3-2</div>
+              <div class="q-text">k-means 为什么一定在有限步内停？停在哪？k-means++ 改了哪一步？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              划分方案有限且每轮 E 单调不增，故必停；停在 E 的局部极小，不保证全局最优。k-means++ 只改初始化：让新种子以"离已选中心越远概率越大"的方式产生，避免种子挤成一团。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <h2><span class="sec-no">9.4</span>密度聚类 DBSCAN：假设簇是连片的稠密区</h2>
+
+    <p>k-means 的球假设一旦不成立——比如数据呈月牙形、环形，或混着离群点——分出来的簇就面目全非。第二条路线换假设：簇不是"离某个中心近"，而是<strong>连片的稠密区域</strong>，簇之间由稀疏地带隔开。这就是 <span class="term">DBSCAN</span>（Density-Based Spatial Clustering of Applications with Noise），它只问一个问题：每个点身边有没有足够多的邻居？</p>
+
+    <h3>五个核心概念</h3>
+    <p>给定两个参数：邻域半径 ε 和密度阈值 MinPts。</p>
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>概念</th><th>定义</th></tr>
+        <tr><td><span class="term">ε-邻域</span>（ε-Neighborhood）</td><td>N_ε(x) = { xⱼ ∈ D | dist(x, xⱼ) ≤ ε }（含 x 自身）</td></tr>
+        <tr><td><span class="term">核心对象</span>（Core Object）</td><td>|N_ε(x)| ≥ MinPts 的点</td></tr>
+        <tr><td><span class="term">边界点</span>（Border Point）</td><td>自身非核心，但落在某个核心点的 ε-邻域内</td></tr>
+        <tr><td><span class="term">噪声点</span>（Noise Point）</td><td>既不是核心点也不是边界点</td></tr>
+        <tr><td>密度直达 / 可达 / 相连</td><td>密度直达（Directly Density-Reachable）：xⱼ 在核心点 xᵢ 的邻域内；<span class="term">密度可达</span>（Density-Reachable）：存在核心点链把两点串起来；<span class="term">密度相连</span>（Density-Connected）：两点被同一个核心点可达</td></tr>
+      </table>
+    </div>
+    <p>算法一句话：任取一个未访问的核心点，从它出发把所有密度可达的点收成一个簇；再找下一个未访问核心点，直到核心点用尽。剩下的非核心点若能挂靠到某簇核心点邻域内就是边界点，否则是噪声。</p>
+
+    <h3>完整手算：10 个点、ε = 1.5、MinPts = 3</h3>
+    <p>样本：x₁=(1,1)，x₂=(1,2)，x₃=(2,1)，x₄=(2,2)，x₅=(3,2)，x₆=(4,2)，x₇=(8,8)，x₈=(9,8)，x₉=(8,9)，x₁₀=(15,15)。逐点用欧氏距离数 ε-邻域（≤1.5 的点，含自己）：</p>
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>点</th><th>ε-邻域成员（距离 ≤ 1.5）</th><th>|N_ε|</th><th>判定</th></tr>
+        <tr><td>x₁=(1,1)</td><td>x₁, x₂(d=1), x₃(d=1), x₄(d=√2≈1.414)</td><td>4 ≥ 3</td><td>核心</td></tr>
+        <tr><td>x₂=(1,2)</td><td>x₂, x₁(d=1), x₃(d=√2), x₄(d=1)</td><td>4 ≥ 3</td><td>核心</td></tr>
+        <tr><td>x₃=(2,1)</td><td>x₃, x₁(1), x₂(√2), x₄(1), x₅(√2)</td><td>5 ≥ 3</td><td>核心</td></tr>
+        <tr><td>x₄=(2,2)</td><td>x₄, x₁(√2), x₂(1), x₃(1), x₅(1)</td><td>5 ≥ 3</td><td>核心</td></tr>
+        <tr><td>x₅=(3,2)</td><td>x₅, x₃(√2), x₄(1), x₆(1)</td><td>4 ≥ 3</td><td>核心</td></tr>
+        <tr><td>x₆=(4,2)</td><td>x₆, x₅(1)</td><td>2 &lt; 3</td><td>非核心，但在核心点 x₅ 邻域内 → <strong>边界</strong></td></tr>
+        <tr><td>x₇=(8,8)</td><td>x₇, x₈(1), x₉(1)</td><td>3 ≥ 3</td><td>核心</td></tr>
+        <tr><td>x₈=(9,8)</td><td>x₈, x₇(1), x₉(√2)</td><td>3 ≥ 3</td><td>核心</td></tr>
+        <tr><td>x₉=(8,9)</td><td>x₉, x₇(1), x₈(√2)</td><td>3 ≥ 3</td><td>核心</td></tr>
+        <tr><td>x₁₀=(15,15)</td><td>只有 x₁₀ 自己</td><td>1 &lt; 3</td><td>非核心，且不在任何核心点邻域内 → <strong>噪声</strong></td></tr>
+      </table>
+    </div>
+    <p><strong>沿密度可达链拉簇。</strong>从核心点 x₁ 出发：x₂、x₃、x₄ 在 N_ε(x₁) 内（密度直达）；x₅ 在核心点 x₃（或 x₄）邻域内，经链 x₁→x₃→x₅ 密度可达；x₆ 在核心点 x₅ 邻域内，经链 x₁→x₃→x₅→x₆ 密度可达（x₆ 自身非核心，是链条末端）。于是 C₁ = {x₁, x₂, x₃, x₄, x₅, x₆}。从核心点 x₇ 出发收齐 C₂ = {x₇, x₈, x₉}。x₁₀ 是噪声点，不属于任何簇。</p>
+    <div class="figure">
+      <div class="mermaid">
+flowchart LR
+  subgraph C1["簇 C1: 核心 x1 x2 x3 x4 x5 + 边界 x6"]
+    x1 --- x2
+    x1 --- x3
+    x2 --- x4
+    x3 --- x4
+    x3 --- x5
+    x4 --- x5
+    x5 --- x6
+  end
+  subgraph C2["簇 C2: 核心 x7 x8 x9"]
+    x7 --- x8
+    x7 --- x9
+    x8 --- x9
+  end
+  x10["x10 噪声"]
+      </div>
+      <div class="caption">图 9.1 DBSCAN 结果：连线表示"距离 ≤ ε = 1.5"。x₁…x₅ 互相连成稠密片，x₆ 只吊在 x₅ 上是边界点；x₁₀ 孤立为噪声。</div>
+    </div>
+    <p>对比 k-means 就能看出 DBSCAN 的两个长处：<strong>不用预先定 k</strong>（簇数由密度结构自己冒出来）；<strong>能发现非球形簇</strong>（只要稠密片连续，月牙、环形都照收），而且噪声点会被明确标记而不是硬塞进某个簇。代价是参数敏感：ε 太小则一大片被判成噪声，太大则所有簇连成一团；数据密度不均匀时，一组 (ε, MinPts) 很难两头兼顾。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>k-means 问"你离哪个球心近"，DBSCAN 问"你身边邻居够不够多、你连着谁"。前者产出 k 个球，后者产出任意形状的稠密片加一份噪声名单——簇假设不同，同一份数据的分法就不同。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>"|N_ε(x)| 不数 x 自己"——错，邻域含自身，MinPts 的计数包含自己（所以本例 MinPts=3 时 x₇ 恰好达标）。另一个高频错误是认为"边界点可以同时属于两个簇"：若它同时落在两簇核心点的邻域内，那两簇经由它密度相连，本应合并成一簇——所以一个边界点恰好属于一个簇。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 9.4-1</div>
+              <div class="q-text">核心点、边界点、噪声点各自的判定条件（用 ε 与 MinPts 表述）？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              核心点：|N_ε(x)| ≥ MinPts（邻域含自身）。边界点：非核心，但落在某核心点的 ε-邻域内，恰好属于一个簇。噪声点：既非核心也非边界，不属于任何簇。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 9.4-2</div>
+              <div class="q-text">密度直达、密度可达、密度相连三个关系，哪个不对称、哪个对称？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              密度直达不对称：核心点 xᵢ 的邻域里可以有非核心 xⱼ，但 xⱼ"发"不出去。密度可达沿核心点链单向传递。密度相连（同被某核心点可达）是对称关系，同簇点两两密度相连。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <h2><span class="sec-no">9.5</span>层次聚类 AGNES 与高斯混合模型：从硬划分到软分配</h2>
+
+    <p>前两条路线都把数据拍平成一层簇，层次关系（小簇套大簇）看不见；而且每个点"非此即彼"，叫硬分配。本节做两件事：先用 <span class="term">AGNES</span>（AGglomerative NESting，凝聚式层次聚类）把"谁在什么距离上合并"的历史完整保留下来，再用<span class="term">高斯混合模型</span>（Gaussian Mixture Model, GMM）把硬分配软化成概率。</p>
+
+    <h3>AGNES：自底向上，每次合并最近的两簇</h3>
+    <p>规则：每个点起初自成一簇，然后反复合并"距离最近"的两簇，直到只剩一簇（或达到预设簇数）。关键在"簇间距离"怎么定义，三种常用口径：</p>
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>口径</th><th>定义</th><th>别名与性格</th></tr>
+        <tr><td>最小距离 d_min(Cᵢ, Cⱼ) = min dist(x, z)</td><td>两簇最近点对</td><td><span class="term">单链接</span>（Single Linkage）：容易被中间点"搭桥"，产生链式长簇</td></tr>
+        <tr><td>最大距离 d_max(Cᵢ, Cⱼ) = max dist(x, z)</td><td>两簇最远点对</td><td>全链接（Complete Linkage）：偏好紧凑的小球簇</td></tr>
+        <tr><td>平均距离 d_avg(Cᵢ, Cⱼ) = 平均 dist(x, z)</td><td>所有跨簇点对的均值</td><td>平均链接（Average Linkage）：折中</td></tr>
+      </table>
+    </div>
+
+    <h4>完整手算：5 个点、最小距离，写出全部合并序</h4>
+    <p>样本：p₁=(0,0)，p₂=(0,2)，p₃=(5,0)，p₄=(5,2)，p₅=(9,0)。先算欧氏距离矩阵（对称，只列上三角）：</p>
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>dist</th><th>p₁</th><th>p₂</th><th>p₃</th><th>p₄</th><th>p₅</th></tr>
+        <tr><th>p₁</th><td>0</td><td>2</td><td>5</td><td>√29 ≈ 5.385</td><td>9</td></tr>
+        <tr><th>p₂</th><td></td><td>0</td><td>√29 ≈ 5.385</td><td>5</td><td>√85 ≈ 9.220</td></tr>
+        <tr><th>p₃</th><td></td><td></td><td>0</td><td>2</td><td>4</td></tr>
+        <tr><th>p₄</th><td></td><td></td><td></td><td>0</td><td>√20 = 2√5 ≈ 4.472</td></tr>
+        <tr><th>p₅</th><td></td><td></td><td></td><td></td><td>0</td></tr>
+      </table>
+    </div>
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>步</th><th>当前最小簇间距离</th><th>合并</th><th>新簇间距离（单链接 = 取跨簇点对最小值）</th></tr>
+        <tr><td>1</td><td>d(p₁,p₂) = 2 与 d(p₃,p₄) = 2 并列最小，先取 {p₁,p₂}</td><td>{p₁}, {p₂} → {p₁,p₂}</td><td>d({p₁,p₂}, p₃) = min(5, 5.385) = 5；d({p₁,p₂}, p₄) = 5；d({p₁,p₂}, p₅) = 9</td></tr>
+        <tr><td>2</td><td>d(p₃,p₄) = 2 仍最小</td><td>{p₃}, {p₄} → {p₃,p₄}</td><td>d({p₃,p₄}, p₅) = min(4, 4.472) = 4；d({p₁,p₂}, {p₃,p₄}) = min(5, 5.385, 5.385, 5) = 5</td></tr>
+        <tr><td>3</td><td>d({p₃,p₄}, p₅) = 4 最小</td><td>{p₃,p₄}, {p₅} → {p₃,p₄,p₅}</td><td>d({p₁,p₂}, {p₃,p₄,p₅}) = min(5, 5.385, 5.385, 5, 9, 9.220) = 5</td></tr>
+        <tr><td>4</td><td>只剩两簇，距离 5</td><td>合并为全集</td><td>结束</td></tr>
+      </table>
+    </div>
+    <div class="figure">
+      <div class="mermaid">
+flowchart TB
+  R["距离 5 最终合并: 全集"] --> A["距离 2 合并: p1 p2"]
+  R --> B["距离 4 并入 p5: p3 p4 p5"]
+  B --> C["距离 2 合并: p3 p4"]
+  B --> P5["p5"]
+  A --> P1["p1"]
+  A --> P2["p2"]
+  C --> P3["p3"]
+  C --> P4["p4"]
+      </div>
+      <div class="caption">图 9.2 树状图（Dendrogram）：横看"合并发生的距离"。在 4 与 5 之间水平切一刀，得到两簇 {p₁,p₂} 与 {p₃,p₄,p₅}，与坐标的自然分组一致。</div>
+    </div>
+    <p>树状图是 AGNES 的核心产物：它不替你选簇数，而是给出"在任意距离尺度上该怎么切"的全景——切的横线越高簇越少越粗，越低簇越多越细。</p>
+
+    <h3>高斯混合模型：把"属于"换成"有多大概率属于"</h3>
+    <p>换个概率视角看聚类：假设数据由 k 个高斯分布混合生成，每个点先以概率 αᵢ 抽中第 i 个成分，再从 𝒩(μᵢ, Σᵢ) 中采样：</p>
+    <div class="formula">p(x) = ∑<sub>i=1</sub><sup>k</sup> αᵢ · 𝒩(x | μᵢ, Σᵢ)，αᵢ &gt; 0 且 ∑<sub>i</sub> αᵢ = 1</div>
+    <p>参数 {αᵢ, μᵢ, Σᵢ} 用第 7 章见过的 <span class="term">EM 算法</span>（Expectation-Maximization）迭代求解，直觉是两步循环：<strong>E 步</strong>——用当前参数算每个点属于第 i 个成分的后验概率（隶属度）：</p>
+    <div class="formula">γ(x, i) = <span class="frac"><span class="num-part">αᵢ · 𝒩(x | μᵢ, Σᵢ)</span><span class="den-part">∑<sub>j=1</sub><sup>k</sup> αⱼ · 𝒩(x | μⱼ, Σⱼ)</span></span></div>
+    <p><strong>M 步</strong>——用 γ 作权重重估参数：μᵢ = ∑γ(x,i)·x / ∑γ(x,i)（加权均值），αᵢ = ∑γ(x,i) / m，Σᵢ 取加权协方差。来回迭代直到对数似然不再上升。</p>
+
+    <h3>GMM 与 k-means 的关系：软化的极限就是硬化</h3>
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>对照</th><th>k-means</th><th>GMM</th></tr>
+        <tr><td>分配方式</td><td><span class="term">硬分配</span>（Hard Assignment）：每点恰属一簇</td><td><span class="term">软分配</span>（Soft Assignment）：每点对各簇有隶属度 γ，Σᵢ γ = 1</td></tr>
+        <tr><td>簇的形状</td><td>球（到中心等距即同簇）</td><td>椭球（协方差 Σᵢ 控制方向与胖瘦）</td></tr>
+        <tr><td>中心更新</td><td>簇内算术均值</td><td>按 γ 加权的均值</td></tr>
+        <tr><td>求解</td><td>分配—更新交替</td><td>EM 的 E—M 交替</td></tr>
+      </table>
+    </div>
+    <p>深刻的一句：<strong>k-means 是 GMM 的退化情形</strong>。令各成分协方差都收缩为同一个标量矩阵 σ²I 且 σ² → 0，同时各混合系数相等（αᵢ = 1/k），则后验 γ(x, i) 变成"离哪个中心最近就取 1、其余全 0"——软分配被挤成硬分配，EM 的 E 步退化为 k-means 的分配步、M 步退化为重算均值。所以 9.3 说"k-means 假设簇是球"，在 GMM 语言里就是"等协方差、等权重、方差趋零"的极限假设。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>三条路线的统一视角：k-means 用"离中心近"定义相似，DBSCAN 用"邻居够多"定义相似，AGNES 用"合并历史"定义相似；GMM 则说它们都是概率生成模型的特例——簇结构从来是你假设的生成方式，不是数据里写着的事实。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>"GMM 给出了概率，所以它找到的簇更真实"——错。γ 是<strong>在当前模型下</strong>的后验概率，模型假设（k 个高斯）本身就可能是错的；EM 同样只保证收敛到似然的局部极大。成分数 k 仍需外部给定或用 BIC 等准则另选，EM 不会替你决定有几个簇。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 9.5-1</div>
+              <div class="q-text">AGNES 三种簇间距离各怎么定义？单链接有什么典型毛病？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              最小距离（跨簇最近点对，单链接）、最大距离（最远点对，全链接）、平均距离（全部跨簇点对均值）。单链接容易被两簇之间的一串中间点"搭桥"，产生链式拉长簇（chaining 效应）。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 9.5-2</div>
+              <div class="q-text">GMM 与 k-means 的两层关系：分配方式之差，以及什么极限条件下 GMM 退化为 k-means？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              k-means 硬分配（每点一簇），GMM 软分配（隶属度 γ）。当各成分等权（αᵢ=1/k）、协方差同为 σ²I 且 σ²→0 时，后验退化为"最近者取 1"，EM 退化为 k-means 的分配—更新循环。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <h2><span class="sec-no">🃏</span>概念卡：本章概念的一分钟画像</h2>
+    <p>翻面前先自问：这个概念我能用一句话讲清楚吗？</p>
+    <div class="flip-grid">
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 1</div>
+            <div class="q-text">k 均值（k-means）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">以 k 个簇均值（原型）为中心，迭代"分配最近中心—重算均值"最小化平方误差 E = ∑∑‖x−μ‖²。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">最直接的向量量化/球状簇划分工具，快、好解释、好实现。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">选举—改选：按现任中心划选区，再按选区重选中心，直到没人换区。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为收敛即全局最优——只到局部极小；结果依赖初始化与 k，且只能发现球形簇。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">客户分群、图像量化、作为 GMM/谱聚类的初始化；第 10 章降维后常再接 k-means。</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 2</div>
+            <div class="q-text">DBSCAN（密度聚类）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">由 (ε, MinPts) 定义核心/边界/噪声点，从核心点出发把密度可达的点收成簇。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">发现任意形状（非球形）的簇，自动标噪声，且不需要预先给 k。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">簇是"人挤人的连片街区"，稀疏地带是街区的边界，孤零零的是流动人口（噪声）。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为邻域不数自己（要数）；以为边界点可属两簇（那样两簇已密度相连应合并）。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">空间数据、异常检测、形状不规则的簇；密度不均时考虑 OPTICS/HDBSCAN。</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 3</div>
+            <div class="q-text">AGNES（层次聚类）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">自底向上：每点自成一簇，反复合并距离最近的两簇，产出树状图。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">给出"任意尺度上怎么切"的全景嵌套结构，簇数事后在树状图上切出来。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">族谱：先并最亲的，再并次亲的，合并距离就是辈分高度。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为 linkage 随便选——单链接易被中间点搭桥拉成长链，全链接偏好紧凑小球。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">需要层级结构（生物分类、文档主题树）；小规模数据（合并代价 O(m³) 级别）。</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 4</div>
+            <div class="q-text">高斯混合模型（GMM）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">p(x) = ∑ᵢ αᵢ·𝒩(μᵢ, Σᵢ) 的概率生成模型，用 EM 求参数，给出软分配隶属度 γ。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">把"属于哪簇"软化成概率，簇可以是椭球，还能生成数据、算似然。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">每个点是 k 个师傅以不同股份联合做出来的，EM 反推出股份与手艺。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为有概率就"更真实"——γ 依赖模型假设；EM 同样只到局部极大。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">密度估计、软分群、半监督（第13章）生成式半监督学习的基础。</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 5</div>
+            <div class="q-text">距离度量（Distance Measure）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">满足非负、同一、对称、直递四公理的函数；闵可夫斯基族用参数 p 一统常见距离。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">给无标签数据定义"相似"，是一切聚类（与第10章度量学习）的地基。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">选尺子：p=1 沿街区走、p=2 直线飞、p=∞ 只看最大差距维。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为距离是客观事实——它是假设；不归一化时大量纲属性会绑架距离。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">所有聚类/近邻方法；第10章"度量学习"专门学"怎么学出好距离"。</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 6</div>
+            <div class="q-text">簇有效性指标（外部 / 内部）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">外部指标（JC/FM/Rand，需参考划分）与内部指标（DB 小好 / Dunn 大好）两类评价。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">没有标准答案时给聚类结果一个可比较的分数，也用来选 k。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">外部=对答案，内部=看体型（簇内紧、簇间松）。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为 Rand 高就一定好——d 计数占大头且未做随机校正；方向记反（DB 大才好）也常见。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">算法评测（外部）、真实场景选簇数与选参数（内部）。</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <h2><span class="sec-no">📝</span>分层习题</h2>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>DBSCAN 中，一个边界点最多能属于几个簇？如果它同时落在两个簇的核心点的 ε-邻域内，会发生什么？</div>
+      <details>
+        <summary>提示</summary>
+        <p>回想"密度相连"的定义：两个核心点通过同一个点产生联系时，它们的簇还能保持分开吗？</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p><strong>恰好一个簇。</strong>边界点 x 非核心，不能"向外发"密度直达；它属于那个能密度可达它的核心点所在的簇。</p>
+          <p>若 x 同时落在核心点 c₁（属簇 A）与核心点 c₂（属簇 B）的 ε-邻域内，则 c₁ 与 c₂ 经由 x 互相密度可达（c₁→x 直达，c₂→x 直达，两点经公共邻居 x 密度相连），按 DBSCAN 的规则 A 和 B 本应合并成同一个簇——所以"属于两个簇"的情形在算法输出里不会出现。实现上边界点通常被分给先扫描到的那簇，只是实现细节，不影响"一簇"的结论。易错项：以为边界点"属于零个簇"——那是噪声点的定义，张冠李戴。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>"Rand 指数 RI = 0.85，所以这个聚类结果很好"——这句话有什么问题？</div>
+      <details>
+        <summary>提示</summary>
+        <p>看 RI 的分子：a + d 里谁通常占大头？随机乱分能拿到多高的 RI？</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p>两个问题。其一，RI 把 d（在 C 与 S 中都不同对的样本对）也计分，而数据被分得越碎、d 的数量级通常远大于 a，RI 被 d 灌水；参考划分簇数越多，这个效应越明显。其二，RI 没有基线校正：把样本随机切成两半，RI 的期望也在 0.5 附近而不是 0，0.85 里有多少是"超过随机的部分"说不清。</p>
+          <p>正确做法：报做过随机校正的 ARI（Adjusted Rand Index，随机基线被校正到 0），或同时报更苛刻的 JC 与 FM（它们不用 d）；内部指标另算 DB（越小越好）与 Dunn（越大越好）佐证。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>新数据：q₁=(0,0)，q₂=(0,2)，q₃=(4,0)，q₄=(4,2)，k=2，初始中心 μ₁=(0,0)、μ₂=(4,0)。手算 k-means 一次完整迭代：逐点列出两个距离、写出分配、算出新中心，并判断下一轮是否还会变化。</div>
+      <details>
+        <summary>提示</summary>
+        <p>先列表：每个点到 (0,0) 与 (4,0) 的欧氏距离（可保留根式），取小者入簇；新中心 = 簇内各坐标均值。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p>距离表：q₁：d(μ₁)=0，d(μ₂)=√(16+0)=4 → C₁。q₂：d(μ₁)=√(0+4)=2，d(μ₂)=√(16+4)=√20=2√5≈4.472 → C₁。q₃：d(μ₁)=4，d(μ₂)=0 → C₂。q₄：d(μ₁)=√(16+4)=2√5≈4.472，d(μ₂)=√(0+4)=2 → C₂。</p>
+          <p>分配：C₁ = {q₁, q₂}，C₂ = {q₃, q₄}。</p>
+          <p>新中心：μ₁′ = ((0+0)/2, (0+2)/2) = (0, 1)；μ₂′ = ((4+4)/2, (0+2)/2) = (4, 1)。</p>
+          <p>下一轮：q₁ 距 (0,1) 为 1、距 (4,1) 为 √17≈4.123 → 仍 C₁；q₂ 对称仍 C₁；q₃、q₄ 对称仍 C₂。分配不变、中心不动，迭代停止。最终两簇即上下两条边：{q₁,q₂} 与 {q₃,q₄}。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>5 个点 a、b、c、d、e 的距离矩阵：d(a,b)=3，d(a,c)=7，d(a,d)=9，d(a,e)=10，d(b,c)=6，d(b,d)=8，d(b,e)=9，d(c,d)=2，d(c,e)=5，d(d,e)=4。用<strong>最大距离（complete linkage）</strong>写出 AGNES 的完整合并序（每步合并谁、新簇间距离怎么算）。</div>
+      <details>
+        <summary>提示</summary>
+        <p>每步先找当前矩阵里最小的簇间距离合并；合并后新距离取"跨簇点对的最大值"，与单链接正好相反。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p>第 1 步：矩阵最小值 d(c,d)=2 → 合并为 {c,d}。更新（取最大）：d({c,d},a) = max(7,9) = 9；d({c,d},b) = max(6,8) = 8；d({c,d},e) = max(5,4) = 5。</p>
+          <p>第 2 步：当前距离 {a,b}=3、{a,e}=10、{b,e}=9、{a,{c,d}}=9、{b,{c,d}}=8、{e,{c,d}}=5，最小为 d(a,b)=3 → 合并为 {a,b}。更新：d({a,b},{c,d}) = max(9,8) = 9；d({a,b},e) = max(10,9) = 10。</p>
+          <p>第 3 步：当前 {c,d}–e = 5、{a,b}–{c,d} = 9、{a,b}–e = 10，最小为 5 → 合并 {c,d} 与 e 为 {c,d,e}。更新：d({a,b},{c,d,e}) = max(9, 10) = 10。</p>
+          <p>第 4 步：只剩两簇，在距离 10 处合并为全集。</p>
+          <p>合并序汇总：{c,d}@2 → {a,b}@3 → {c,d,e}@5 → 全集@10。在 5 与 10 之间切一刀得两簇 {a,b} 与 {c,d,e}。对照单链接（9.5 节例子是另一组坐标，但方法相同）：complete linkage 每步取最大值，合并更"保守"，簇更紧凑。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l3">L3 建模应用</span>电商要给 10 万用户做分群运营：每个用户有三个特征（最近消费距今天数 R、年消费次数 F、年消费金额 M）。请在 k-means / DBSCAN / AGNES 三类算法中做选型，说出每类算法隐含的簇假设，并给出评估方案。</div>
+      <details>
+        <summary>提示</summary>
+        <p>考虑：数据规模、簇形状预期、是否要给运营一个明确的"分几群"、有没有刷单的离群用户、怎么验证分群有用。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p>① 预处理：R、F、M 量纲悬殊（天数、次数、金额），先做 z-score 或 min-max 归一化——否则距离被金额绑架（呼应 9.1）。</p>
+          <p>② 选型：<strong>主力用 k-means</strong>。理由：10 万点规模下它最快；运营需要"明确分 k 群、每群一个画像"的硬划分；RFM 空间里的高价值/活跃/沉睡人群大致呈团块状，符合"簇是以均值为中心的球"的假设。初始化用 k-means++，多组种子取 E 最小。</p>
+          <p>③ <strong>DBSCAN 做复核与补充</strong>：它的簇假设是"连片的稠密区"，不用定 k，还能把孤立点标成噪声——正好用来识别刷单/异常账号（噪声点名单即风控线索）；若 DBSCAN 发现主人群被切成许多碎簇，说明密度不均，k-means 的球假设可疑。</p>
+          <p>④ <strong>AGNES 只做小样探索</strong>：O(m³) 级别的合并代价扛不住 10 万点；抽 500 个代表用户跑全链接，看树状图了解"分几群比较自然"（在最大间隙处切），给 k 的选择提供参考。</p>
+          <p>⑤ 评估：无参考划分，用内部指标——对 k = 2…8 各跑一次 k-means，算 DB（越小越好）与 Dunn（越大越好）并结合业务可解释性（每群 R/F/M 画像是否讲得通）选 k；上线后用业务指标（各群对差异化运营的响应率差异）做终极验证。这就闭环了本章主线：选算法 = 选簇假设，评估 = 在该假设下检验"簇内紧、簇间松"加业务价值。</p>
+        </div>
+      </details>
+    </div>
+
+    <h2><span class="sec-no">✍️</span>本章自测</h2>
+    <p class="quiz-hint">点击选项判分，答错会给出原因。</p>
+
+    <div class="quiz-block" data-answer="d">
+      <div class="q-no">自测 1</div>
+      <div class="q-stem">下列哪一条<strong>不是</strong>距离度量必须满足的公理？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 非负性：dist(xᵢ, xⱼ) ≥ 0</li>
+        <li data-opt="b">B. 同一性：dist(xᵢ, xⱼ) = 0 当且仅当 xᵢ = xⱼ</li>
+        <li data-opt="c">C. 对称性：dist(xᵢ, xⱼ) = dist(xⱼ, xᵢ)</li>
+        <li data-opt="d">D. 单调性：坐标差越大，dist 的增长率必须越来越大</li>
+      </ul>
+      <div class="quiz-explain">解析：D 对——距离只要求非负、同一、对称、直递（三角不等式）四条，对"增长率"没有任何要求；比如 p→∞ 的切比雪夫距离取 max，根本不随差值加速增长。A/B/C 错：它们正是四公理中的三条（第四条直递性 dist(xᵢ,xⱼ) ≤ dist(xᵢ,xₖ)+dist(xₖ,xⱼ) 未列入选项）。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="c">
+      <div class="q-no">自测 2</div>
+      <div class="q-stem">k-means 迭代为什么必然在有限步内停止？停在什么位置？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 因为 E 是凸函数，所以收敛到全局最优</li>
+        <li data-opt="b">B. 因为样本数 m 有限，所以中心算两次就不动了</li>
+        <li data-opt="c">C. 每轮 E 单调不增且划分方案有限，停在 E 的局部极小</li>
+        <li data-opt="d">D. 因为 EM 算法保证全局收敛</li>
+      </ul>
+      <div class="quiz-explain">解析：C 对——分配步与更新步都让 E 不增，而 m 个点的 k-划分数量有限，不能无限下降，必停；停在局部极小，不保证全局。A 错：E 对"划分"而言非凸，"凸"是错觉。B 错：m 有限只说明方案有限，"算两次就不动"不是必然，有的数据要很多轮。D 错：k-means 不是 EM（它是 GMM 的退化），且 EM 也只保证局部极大。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 3</div>
+      <div class="q-stem">DBSCAN 中 (ε, MinPts=3)，点 x 的 ε-邻域内连自己在内共 2 个点，但 x 落在核心点 y 的 ε-邻域内。x 是？它属于几个簇？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 核心点，属于一个簇</li>
+        <li data-opt="b">B. 边界点，恰好属于一个簇（y 所在簇）</li>
+        <li data-opt="c">C. 噪声点，不属于任何簇</li>
+        <li data-opt="d">D. 边界点，同时属于 x 能触达的所有簇</li>
+      </ul>
+      <div class="quiz-explain">解析：B 对——|N_ε(x)|=2 &lt; 3 非核心，但在核心点 y 邻域内，是边界点，经 y 密度可达而并入 y 的簇。A 错：核心点要求邻域计数 ≥ MinPts=3。C 错：噪声点要求"不在任何核心点邻域内"，x 在 y 的邻域内。D 错：若它能触达另一簇的核心点，两簇就密度相连应合并——边界点恰好属于一个簇。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="a">
+      <div class="q-no">自测 4</div>
+      <div class="q-stem">什么条件下 GMM 的 EM 迭代会退化为 k-means？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 各成分等权（αᵢ=1/k）、协方差同为 σ²I 且 σ²→0，后验变成"最近者取 1"</li>
+        <li data-opt="b">B. 把协方差矩阵 Σᵢ 取得足够大，覆盖所有样本</li>
+        <li data-opt="c">C. 把混合系数 αᵢ 全部设为 0</li>
+        <li data-opt="d">D. 把成分数 k 设为样本数 m</li>
+      </ul>
+      <div class="quiz-explain">解析：A 对——σ²→0 时各高斯瘦成针尖，后验 γ 被最近中心独占（硬分配），E 步退化为"选最近中心"，M 步退化为"重算均值"，正是 k-means；这也是"k-means 假设簇是等大的球"的概率解释。B 错：σ² 大则隶属度摊平，离硬分配更远。C 错：αᵢ 必须为正且和为 1，全 0 非法。D 错：k=m 是另一个极端（每点一簇），与 k-means 退化无关。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="c">
+      <div class="q-no">自测 5</div>
+      <div class="q-stem">关于 AGNES 的簇间距离（linkage），哪个说法正确？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 单链接用两簇最远点对的距离</li>
+        <li data-opt="b">B. 全链接用两簇最近点对的距离</li>
+        <li data-opt="c">C. 单链接用最近点对，容易被一串中间点"搭桥"产生链式长簇</li>
+        <li data-opt="d">D. 三种 linkage 在任意数据上给出的合并序完全相同</li>
+      </ul>
+      <div class="quiz-explain">解析：C 对——d_min 取跨簇最近点对（single linkage），只要两簇间有一串渐近的中间点就会逐节合并，产生 chaining。A 错：最远点对是全链接（d_max），A 把两者说反了。B 错：同 A，全链接用的是最大距离。D 错：9.5 的例子在单链接下 @4 并入 p₅，换成全链接后合并距离和顺序都会变（本习题 L2-2 就是例证），linkage 选择直接改变簇形态。</div>
+    </div>
+
+    <div class="retell">
+      <h3>🗣️ 用自己的话，三句话讲完本章</h3>
+      <p>对着空气（或室友）说出这三句。说卡壳的那句，回去重读对应小节。</p>
+      <details>
+        <summary>句1：这章解决什么问题？——</summary>
+        <div class="retell-answer">参考答案：没有标签时，"相似"和"一簇"都必须自己定义。聚类在选定的距离/密度/层次假设下，把无标记样本分成簇内紧、簇间松的若干簇，并用外部/内部指标在没有标准答案的情况下评价分法。</div>
+      </details>
+      <details>
+        <summary>句2：核心机制是什么？——</summary>
+        <div class="retell-answer">参考答案：三条路线对应三种簇假设。k-means：簇是球，迭代"分配最近中心—重算均值"最小化平方误差；DBSCAN：簇是连片稠密区，用 (ε, MinPts) 判定核心/边界/噪声点，沿密度可达链拉簇，不用定 k 且能发现非球形簇；AGNES：自底向上按单/全/平均链接合并，产出树状图。GMM 用 EM 把硬分配软化为隶属度 γ，并在"等权、等 σ²I、σ²→0"时退化为 k-means——三条路线在概率视角下统一。</div>
+      </details>
+      <details>
+        <summary>句3：它和前后章怎么分工？——</summary>
+        <div class="retell-answer">参考答案：第 1–8 章是监督学习（有标签）；本章起进入无监督：聚类给出"分组"，第 10 章降维与度量学习接着解决"高维里距离失效、怎么学出好距离"（本章距离度量正由它深化），第 11 章再在无监督框架下做特征选择，第 12 章给这些方法以理论边界。</div>
+      </details>
+    </div>
+
+    <div class="review-plan">
+      <h3>🔁 间隔复习计划</h3>
+      <p>回忆本身比重读有效 10 倍。到点只做一件事：翻卡 + 重做标记题。</p>
+      <table>
+        <tr><th>时间点</th><th>复习内容</th><th>预计用时</th></tr>
+        <tr><td>第 1 天</td><td>概念卡 1–6 全翻一遍 + 回忆卡 9.1-1 至 9.5-2</td><td>10 分钟</td></tr>
+        <tr><td>第 3 天</td><td>概念卡 1、2、4（k-means / DBSCAN / GMM）+ 重做 L2 两题（k-means 迭代、complete linkage 合并序）</td><td>10 分钟</td></tr>
+        <tr><td>第 7 天</td><td>三句话复述 + 自测错题 + 重算 9.2 的 Rand 指数与 9.4 的邻域计数表</td><td>10 分钟</td></tr>
+        <tr><td>第 15 天</td><td>只做合上书挑战；能全过就毕业</td><td>15 分钟</td></tr>
+      </table>
+    </div>
+
+    <div class="final-challenge">
+      <h3>📕 合上书挑战</h3>
+      <p class="fc-sub">现在关掉这个页面，拿一张纸，凭记忆完成以下任务。全部做完再回来核对——这是本章真正的毕业考试。</p>
+      <ol id="challenge-list">
+        <li><span class="fc-check"></span>默写距离度量四公理和闵可夫斯基公式，对 A=(1,2)、B=(4,6) 算出 p=1、p=2、p=∞ 的 7、5、4</li>
+        <li><span class="fc-check"></span>默写 a、b、c、d 定义与 JC/FM/RI 公式，用 9.2 的 6 样本例子重算 a=2、b=4、c=4、d=5 与 RI=7/15</li>
+        <li><span class="fc-check"></span>对 9.3 的 6 个点与初始中心 (1,1)、(6,4)，重做 k-means 一次迭代：距离表、分配、新中心 (4/3, 4/3) 与 (19/3, 14/3)</li>
+        <li><span class="fc-check"></span>对 9.4 的 10 个点（ε=1.5、MinPts=3）重数邻域，判定核心/边界/噪声，写出簇 C₁={x₁…x₆}、C₂={x₇,x₈,x₉} 与噪声 x₁₀</li>
+        <li><span class="fc-check"></span>默画 9.5 的树状图，写出单链接四步合并序（{p₁,p₂}@2、{p₃,p₄}@2、并入 p₅@4、全集@5）</li>
+        <li><span class="fc-check"></span>口头解释：为什么说 k-means 是 GMM 的退化情形（软/硬分配 + σ²→0 的极限）</li>
+        <li><span class="fc-check"></span>一句话回答本章主线问题：没有标签时什么叫"相似"、什么叫"一簇"？——相似由你选定的距离/密度/层次假设定义，"一簇"是该假设下簇内紧、簇间松的群体；k-means 假设簇是球、DBSCAN 假设簇是连片稠密区、AGNES 假设簇有嵌套结构，假设不同，同一堆数据就分出不同的簇。</li>
+      </ol>
+    </div>
+
+    <div class="complete-zone">
+      <button class="btn-complete" id="btn-complete" onclick="markDone()">✓ 我已完成本章（含合上书挑战）</button>
+    </div>
+
+    <div class="chapter-nav">
+      <a href="chapter-08.html"><span class="nav-dir">← 上一章</span>第8章 集成学习</a>
+      <a href="chapter-10.html" class="next"><span class="nav-dir">下一章 →</span>第10章 降维与度量学习</a>
+    </div>
+
+  </div>
+</div>
+
+<footer class="footer">
+  <div class="wrap">第9章 聚类 · 机器学习互动讲义 · 基于周志华《机器学习》</div>
+</footer>
+
+<script src="/lectures-assets/mermaid.min.js"></script>
+<script>
+mermaid.initialize({
+  startOnLoad: true,
+  theme: "base",
+  themeVariables: {
+    primaryColor: "#e3edf7",
+    primaryBorderColor: "#1d5f9e",
+    primaryTextColor: "#1d5f9e",
+    lineColor: "#5c554b",
+    secondaryColor: "#fbeedd",
+    tertiaryColor: "#f5f1e8",
+    fontFamily: "-apple-system, PingFang SC, sans-serif",
+    fontSize: "14px"
+  },
+  flowchart: { curve: "linear", htmlLabels: false }
+});
+</script>
+<script>
+// 自测题判分（原样复用，勿改）
+document.querySelectorAll(".quiz-block").forEach(block => {
+  const answer = block.dataset.answer;
+  const explain = block.querySelector(".quiz-explain");
+  block.querySelectorAll(".quiz-opts li").forEach(li => {
+    li.addEventListener("click", () => {
+      const opts = block.querySelectorAll(".quiz-opts li");
+      opts.forEach(o => o.classList.add("disabled"));
+      if (li.dataset.opt === answer) {
+        li.classList.add("correct");
+      } else {
+        li.classList.add("wrong");
+        block.querySelector(`[data-opt="${answer}"]`).classList.add("correct");
+      }
+      explain.classList.add("show");
+    });
+  });
+});
+// 合上书清单打勾（原样复用，勿改）
+document.querySelectorAll("#challenge-list li").forEach(li => {
+  li.addEventListener("click", () => li.classList.toggle("checked"));
+});
+// 完成标记 → localStorage（章号 "9"）
+const KEY = "ml_progress_v1";
+function loadProgress() {
+  try { return JSON.parse(localStorage.getItem(KEY)) || {}; } catch (e) { return {}; }
+}
+const progress = loadProgress();
+const btn = document.getElementById("btn-complete");
+if (progress["9"] && progress["9"].done) {
+  btn.textContent = "✓ 已完成 · 再次点击重置";
+  btn.classList.add("done");
+}
+function markDone() {
+  const p = loadProgress();
+  if (p["9"] && p["9"].done) {
+    delete p["9"];
+    btn.textContent = "✓ 我已完成本章（含合上书挑战）";
+    btn.classList.remove("done");
+  } else {
+    p["9"] = { done: true, completedAt: Date.now(), reviewsDone: 0 };
+    btn.textContent = "✓ 已完成 · 复习提醒已开启";
+    btn.classList.add("done");
+  }
+  localStorage.setItem(KEY, JSON.stringify(p));
+}
+</script>
+
+</body>
+</html>

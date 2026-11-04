@@ -1,0 +1,942 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第4章 决策树 · 机器学习互动讲义</title>
+<link rel="stylesheet" href="/lectures-assets/style.css">
+</head>
+<body>
+
+<nav class="topbar">
+  <div class="topbar-inner">
+    <span class="brand"><a href="index.html" style="color:inherit">← 学习地图</a></span>
+    <span class="crumb">阶段二 · 经典模型 / 第4章</span>
+  </div>
+</nav>
+
+<div class="wrap">
+
+  <div class="lecture-head">
+    <span class="ch-label">CHAPTER 04 · 经典模型</span>
+    <h1>决策树</h1>
+    <p class="lead">像人一样，一连串"是不是"地问下去，就分出了好坏——本章回答：这棵提问的树，怎么从数据里自动长出来。</p>
+  </div>
+
+  <!-- ===== 章首四件套之 1：全书定位 ===== -->
+  <div class="position-bar">
+    <strong>本章在主线上的位置：</strong>第 3 章的线性模型用一个超平面切分空间，但很多决策并不是"一条线"能切开的——本章引入第一个<strong>非线性、天然可解释</strong>的模型。<br>
+    第 4 章回答主线上的这个问题：<strong>模型如何像人一样，通过一连串"是不是"的提问做出判断，且这棵提问树如何自动生长、如何防止长歪？</strong>
+    <div class="map-inline">
+      <span class="node">① 基础与评估 Ch1–2</span><span class="arrow">→</span>
+      <span class="node here">② 经典模型 Ch3–8</span><span class="arrow">→</span>
+      <span class="node">③ 无监督与理论 Ch9–12</span><span class="arrow">→</span>
+      <span class="node">④ 进阶专题 Ch13–16</span>
+    </div>
+    <br>
+    前驱 Ch2 的过拟合概念在本章剪枝中直接落地 → <u>本章是第一个非线性、可解释的模型</u> → 后继 Ch8 集成学习（随机森林 = 决策树的集成）。
+  </div>
+
+  <!-- ===== 章首四件套之 2：学习目标 ===== -->
+  <div class="objectives">
+    <h4>🎯 学完本章，合上书你应该能：</h4>
+    <ol>
+      <li>说出决策树递归生成的三种停止情形，以及每种情形下叶结点标签怎么定。</li>
+      <li>写出信息熵、信息增益、增益率、基尼指数四个公式，并说明各自的偏好。</li>
+      <li>在一个小数据集上手算 Ent、Gain、Gini_index，并选出最优划分属性。</li>
+      <li>解释信息增益为什么偏好取值多的属性，以及 C4.5 如何用增益率纠偏。</li>
+      <li>用验证集精度判断一次预剪枝"该不该展开"，并说出预剪枝与后剪枝的代价。</li>
+      <li>说明连续属性二分的候选切分点怎么来、缺失值样本如何按权重流入各分支。</li>
+    </ol>
+  </div>
+
+  <div class="lecture">
+
+    <!-- ===== 章首四件套之 3：推导主线图 ===== -->
+    <div class="figure">
+      <div class="mermaid">
+flowchart LR
+  A["分而治之：每一步只问一个属性"] --> Q{"每一步该选哪个属性来问？"}
+  Q --> B1["信息增益：ID3"]
+  Q --> B2["增益率：C4.5"]
+  Q --> B3["基尼指数：CART"]
+  B1 --> O["贪心生长：树疯长，过拟合"]
+  B2 --> O
+  B3 --> O
+  O --> P["剪枝：预剪枝 与 后剪枝"]
+  P --> C["连续值二分 + 缺失值按权重入分支"]
+  C --> L["遗留：单树表达力有限、对扰动敏感，通向 Ch8 集成学习"]
+  classDef hot fill:#fbeedd,stroke:#c4651f,stroke-width:2.5px,color:#c4651f;
+  classDef danger fill:#fae9e7,stroke:#b03a2e,stroke-width:2.5px,color:#b03a2e;
+  class Q hot;
+  class L danger;
+      </div>
+      <div class="caption">图 4.0 本章推导主线：选属性（三种度量）→ 疯长过拟合 → 剪枝 → 连续与缺失 → 单树的局限留给集成学习。</div>
+    </div>
+
+    <!-- ============ 4.1 ============ -->
+    <h2><span class="sec-no">4.1</span>分而治之：决策树是什么</h2>
+
+    <p>挑西瓜时，没人一上来就算一个加权总分。我们天然是这么做的：先看纹理清不清晰，再摸触感硬不硬，再瞧脐部凹不凹……一连串"是不是"问下来，结论就出来了。<span class="term">决策树</span>（Decision Tree）就是把这种"连环提问"变成模型的方法：每个内部结点问一个属性，每条分支是该属性的一个取值，每个叶结点给出最终类别。</p>
+
+    <p>一棵决策树由三种结点构成：</p>
+    <ul>
+      <li><strong>根结点</strong>：包含全部训练样本，问出第一个问题；</li>
+      <li><strong>内部结点</strong>：对应一个属性测试，把流入的样本按属性值分到各子分支；</li>
+      <li><strong>叶结点</strong>：不再提问，直接给出类别判定。</li>
+    </ul>
+
+    <p>决策树的生成是一个递归过程，核心策略叫<span class="term">分而治之</span>（Divide-and-Conquer）：每一步把一个大问题切成几个小问题，递归处理。递归在以下<strong>三种情形</strong>停止：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>情形</th><th>触发条件</th><th>叶结点标签怎么定</th></tr>
+        <tr><td>① 全同类</td><td>当前结点包含的样本全部属于同一类别</td><td>直接标为该类别（无需再分）</td></tr>
+        <tr><td>② 属性用尽</td><td>可用属性集为空，或所有样本在剩余属性上取值完全相同</td><td>标为当前结点样本中的<strong>多数类</strong>（利用当前结点的后验分布）</td></tr>
+        <tr><td>③ 分支为空</td><td>某属性取值下没有任何样本流入</td><td>标为<strong>父结点</strong>样本中的多数类（把父结点的分布当作先验）</td></tr>
+      </table>
+    </div>
+
+    <p>决策树最大的卖点是<strong>可读性</strong>：从根到叶的每条路径，都等价于一条 if-then 规则。例如下图这棵树里，路径"纹理=清晰 → 触感=硬滑"可以读成：<strong>若</strong> 纹理清晰 <strong>且</strong> 触感硬滑，<strong>则</strong> 是好瓜。所有路径合起来是一组互斥且完备的规则集——这正是银行、医院偏爱它的原因：决策过程可以原样展示给监管和病人看。</p>
+
+    <div class="figure">
+      <div class="mermaid">
+flowchart TB
+  R{"纹理？"}
+  R -->|清晰| T{"触感？"}
+  R -->|稍糊| B1["坏瓜（5 个样本中 4 坏）"]
+  R -->|模糊| B2["坏瓜（3 个样本全坏）"]
+  T -->|硬滑| G1["好瓜（6 个样本全好）"]
+  T -->|软粘| G2["还需继续分（2 好 2 坏）"]
+      </div>
+      <div class="caption">图 4.1 一棵基于西瓜数据集的小决策树（示意）：每条从根到叶的路径就是一条 if-then 规则；"软粘"分支尚不纯，还需继续提问。</div>
+    </div>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>决策树的本质：用一系列<strong>与坐标轴平行</strong>的切分，把特征空间切成若干小方块，每个方块贴一个类别标签。提问的顺序，决定了怎么切最省刀。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>误区："决策树一次性比较所有属性组合，选出全局最优树。" 错。决策树是<strong>贪心</strong>算法：每一步只在当前结点选局部最优的划分属性，从不回头看。正因如此它快，也正因如此它不保证全局最优——这为 4.4 的剪枝埋下了伏笔。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 4.1-1</div>
+              <div class="q-text">决策树递归生成有哪三种停止情形？各自的叶结点标签如何确定？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              ① 样本全同类 → 标为该类别；② 属性用尽或样本在属性上取值相同 → 标为当前结点多数类；③ 分支无样本 → 标为父结点多数类。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 4.1-2</div>
+              <div class="q-text">为什么说决策树"天然可解释"？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              每条根到叶的路径等价于一条 if-then 规则，整棵树是一组互斥且完备的规则集，判定过程可以逐条展示给人看。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 4.2 ============ -->
+    <h2><span class="sec-no">4.2</span>纯度与信息增益：ID3 怎么选属性</h2>
+
+    <p>上一节说"每一步选一个属性来问"，但一个结点上有色泽、根蒂、敲声、纹理、脐部、触感六个候选，<strong>凭什么先问纹理、不问触感</strong>？直觉很清楚：选那个"问完之后，各分支里好坏瓜分得更开"的属性——也就是让分支<strong>纯度</strong>提升最多的属性。要把这个直觉变成算法，先得给"纯度"一把尺子。</p>
+
+    <h3>信息熵：给"混乱程度"一把尺子</h3>
+
+    <p><span class="term">信息熵</span>（Information Entropy）度量样本集合的纯度：集合里类别越混杂，熵越大；越纯净，熵越小。设数据集 <span class="var">D</span> 中第 <span class="var">k</span> 类样本所占比例为 p<sub>k</sub>（共 |𝒴| 类），则：</p>
+
+    <div class="formula">Ent(<span class="var">D</span>) = −∑<sub>k=1</sub><sup>|𝒴|</sup> p<sub>k</sub> log₂ p<sub>k</sub></div>
+
+    <p>性质：Ent(<span class="var">D</span>) 最小为 0（所有样本同类），最大为 log₂|𝒴|（各类均匀分布）。二分类且好坏各半时，Ent = 1。</p>
+
+    <h3>手算例 1：根结点的信息熵</h3>
+
+    <p>本章全程使用下面这个西瓜数据集（西瓜书表 4.1 风格，17 个样本：8 好瓜、9 坏瓜）：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>编号</th><th>色泽</th><th>根蒂</th><th>敲声</th><th>纹理</th><th>脐部</th><th>触感</th><th>好瓜</th></tr>
+        <tr><td>1</td><td>青绿</td><td>蜷缩</td><td>浊响</td><td>清晰</td><td>凹陷</td><td>硬滑</td><td>是</td></tr>
+        <tr><td>2</td><td>乌黑</td><td>蜷缩</td><td>沉闷</td><td>清晰</td><td>凹陷</td><td>硬滑</td><td>是</td></tr>
+        <tr><td>3</td><td>乌黑</td><td>蜷缩</td><td>浊响</td><td>清晰</td><td>凹陷</td><td>硬滑</td><td>是</td></tr>
+        <tr><td>4</td><td>青绿</td><td>蜷缩</td><td>沉闷</td><td>清晰</td><td>凹陷</td><td>硬滑</td><td>是</td></tr>
+        <tr><td>5</td><td>浅白</td><td>蜷缩</td><td>浊响</td><td>清晰</td><td>凹陷</td><td>硬滑</td><td>是</td></tr>
+        <tr><td>6</td><td>青绿</td><td>稍蜷</td><td>浊响</td><td>清晰</td><td>稍凹</td><td>软粘</td><td>是</td></tr>
+        <tr><td>7</td><td>乌黑</td><td>稍蜷</td><td>浊响</td><td>稍糊</td><td>稍凹</td><td>软粘</td><td>是</td></tr>
+        <tr><td>8</td><td>乌黑</td><td>稍蜷</td><td>浊响</td><td>清晰</td><td>稍凹</td><td>硬滑</td><td>是</td></tr>
+        <tr><td>9</td><td>乌黑</td><td>稍蜷</td><td>沉闷</td><td>稍糊</td><td>稍凹</td><td>硬滑</td><td>否</td></tr>
+        <tr><td>10</td><td>青绿</td><td>硬挺</td><td>清脆</td><td>清晰</td><td>平坦</td><td>软粘</td><td>否</td></tr>
+        <tr><td>11</td><td>浅白</td><td>硬挺</td><td>清脆</td><td>模糊</td><td>平坦</td><td>硬滑</td><td>否</td></tr>
+        <tr><td>12</td><td>浅白</td><td>蜷缩</td><td>浊响</td><td>模糊</td><td>平坦</td><td>软粘</td><td>否</td></tr>
+        <tr><td>13</td><td>青绿</td><td>稍蜷</td><td>浊响</td><td>稍糊</td><td>凹陷</td><td>硬滑</td><td>否</td></tr>
+        <tr><td>14</td><td>浅白</td><td>稍蜷</td><td>沉闷</td><td>稍糊</td><td>凹陷</td><td>硬滑</td><td>否</td></tr>
+        <tr><td>15</td><td>乌黑</td><td>稍蜷</td><td>浊响</td><td>清晰</td><td>稍凹</td><td>软粘</td><td>否</td></tr>
+        <tr><td>16</td><td>浅白</td><td>蜷缩</td><td>浊响</td><td>模糊</td><td>平坦</td><td>硬滑</td><td>否</td></tr>
+        <tr><td>17</td><td>青绿</td><td>蜷缩</td><td>沉闷</td><td>稍糊</td><td>稍凹</td><td>硬滑</td><td>否</td></tr>
+      </table>
+    </div>
+
+    <p>各属性的取值分布汇总（好/坏）：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>属性</th><th>取值 1</th><th>取值 2</th><th>取值 3</th></tr>
+        <tr><td>色泽</td><td>青绿 6（3 好 3 坏）</td><td>乌黑 6（4 好 2 坏）</td><td>浅白 5（1 好 4 坏）</td></tr>
+        <tr><td>根蒂</td><td>蜷缩 8（5 好 3 坏）</td><td>稍蜷 7（3 好 4 坏）</td><td>硬挺 2（0 好 2 坏）</td></tr>
+        <tr><td>敲声</td><td>浊响 10（6 好 4 坏）</td><td>沉闷 5（2 好 3 坏）</td><td>清脆 2（0 好 2 坏）</td></tr>
+        <tr><td>纹理</td><td>清晰 9（7 好 2 坏）</td><td>稍糊 5（1 好 4 坏）</td><td>模糊 3（0 好 3 坏）</td></tr>
+        <tr><td>脐部</td><td>凹陷 7（5 好 2 坏）</td><td>稍凹 6（3 好 3 坏）</td><td>平坦 4（0 好 4 坏）</td></tr>
+        <tr><td>触感</td><td>硬滑 12（6 好 6 坏）</td><td>软粘 5（2 好 3 坏）</td><td>—</td></tr>
+      </table>
+    </div>
+
+    <p>根结点含全部 17 个样本：好瓜比例 p₁ = 8/17，坏瓜比例 p₂ = 9/17。逐步计算：</p>
+
+    <ul>
+      <li>8/17 ≈ 0.4706 → log₂(0.4706) ≈ −1.0875 → 0.4706 × 1.0875 ≈ <strong>0.5117</strong></li>
+      <li>9/17 ≈ 0.5294 → log₂(0.5294) ≈ −0.9174 → 0.5294 × 0.9174 ≈ <strong>0.4857</strong></li>
+    </ul>
+
+    <div class="formula">Ent(<span class="var">D</span>) = −( 0.4706×(−1.0875) + 0.5294×(−0.9174) ) = 0.5117 + 0.4857 = 0.9974 ≈ <strong>0.998</strong></div>
+
+    <p>根结点几乎"好坏各半"，熵接近二分类最大值 1，符合直觉。</p>
+
+    <h3>信息增益：划分让混乱度降了多少</h3>
+
+    <p>用属性 <span class="var">a</span> 把 <span class="var">D</span> 分成 V 个分支 {D¹, D², …, Dⱽ}，每个分支的熵按样本数加权，<span class="term">信息增益</span>（Information Gain）= 划分前的熵 − 划分后的加权熵：</p>
+
+    <div class="formula">Gain(<span class="var">D</span>, <span class="var">a</span>) = Ent(<span class="var">D</span>) − ∑<sub>v=1</sub><sup>V</sup> <span class="frac"><span class="num-part">|D<sup>v</sup>|</span><span class="den-part">|D|</span></span> · Ent(D<sup>v</sup>)</div>
+
+    <h3>手算例 2：属性"色泽"的信息增益</h3>
+
+    <p>色泽把数据分成三支，分别算各分支熵：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>分支</th><th>比例</th><th>逐项计算</th><th>分支熵</th></tr>
+        <tr><td>青绿（6：3 好 3 坏）</td><td>3/6, 3/6</td><td>−(0.5·log₂0.5 + 0.5·log₂0.5) = 0.5+0.5</td><td><strong>1.000</strong></td></tr>
+        <tr><td>乌黑（6：4 好 2 坏）</td><td>4/6, 2/6</td><td>4/6≈0.6667 → log₂≈−0.5850 → 0.3900；2/6≈0.3333 → log₂≈−1.5850 → 0.5283</td><td><strong>0.918</strong></td></tr>
+        <tr><td>浅白（5：1 好 4 坏）</td><td>1/5, 4/5</td><td>1/5=0.2 → log₂≈−2.3219 → 0.4644；4/5=0.8 → log₂≈−0.3219 → 0.2575</td><td><strong>0.722</strong></td></tr>
+      </table>
+    </div>
+
+    <p>按分支样本数加权：</p>
+
+    <div class="formula">∑<sub>v</sub> <span class="frac"><span class="num-part">|D<sup>v</sup>|</span><span class="den-part">|D|</span></span> Ent(D<sup>v</sup>) = <span class="frac"><span class="num-part">6</span><span class="den-part">17</span></span>×1.000 + <span class="frac"><span class="num-part">6</span><span class="den-part">17</span></span>×0.918 + <span class="frac"><span class="num-part">5</span><span class="den-part">17</span></span>×0.722 = 0.3529 + 0.3241 + 0.2124 ≈ <strong>0.889</strong></div>
+
+    <div class="formula">Gain(<span class="var">D</span>, 色泽) = 0.998 − 0.889 = <strong>0.109</strong></div>
+
+    <p>对六个属性重复同样的计算（ID3 算法的核心循环），得到全书著名的结论表：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>属性</th><th>色泽</th><th>根蒂</th><th>敲声</th><th>纹理</th><th>脐部</th><th>触感</th></tr>
+        <tr><td>信息增益 Gain</td><td>0.109</td><td>0.143</td><td>0.141</td><td><strong>0.381</strong></td><td>0.289</td><td>0.006</td></tr>
+      </table>
+    </div>
+
+    <p><strong>纹理</strong>的信息增益最大，于是根结点选纹理来问——这就是 ID3 算法挑出的第一个问题。再对照汇总表看：纹理=清晰的分支 9 个样本里 7 个好瓜，确实分得最开；而触感两个分支几乎好坏各半，增益只有 0.006，几乎白问。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>信息增益就是<strong>混乱度的下降量</strong>：划分前有多乱、划分后平均还有多乱，差值越大，这个问题问得越值。ID3 在每个结点穷举所有属性，选 Gain 最大的那个。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>信息增益有个系统性偏好：<strong>偏爱取值多的属性</strong>。极端情形：若把"编号"当属性，每个分支只含 1 个样本，分支熵全为 0，增益达到最大——但这棵树毫无泛化能力。纠偏方案是 C4.5 的<span class="term">增益率</span>（Gain Ratio）：</p>
+      <p>Gain_ratio(<span class="var">D</span>, <span class="var">a</span>) = Gain(<span class="var">D</span>, <span class="var">a</span>) / IV(<span class="var">a</span>)，其中<span class="term">固有值</span>（Intrinsic Value）IV(<span class="var">a</span>) = −∑<sub>v</sub> (|D<sup>v</sup>|/|D|)·log₂(|D<sup>v</sup>|/|D|)，取值越多 IV 越大。例如色泽：IV = −(6/17·log₂(6/17)×2 + 5/17·log₂(5/17)) = 0.5304×2 + 0.5194 ≈ <strong>1.580</strong>，于是 Gain_ratio(色泽) = 0.109/1.580 ≈ <strong>0.069</strong>。</p>
+      <p>注意 C4.5 不是直接比增益率（增益率反过来偏好取值少的属性），而是用启发式：<strong>先从候选中挑出信息增益高于平均水平的属性，再在其中比增益率</strong>。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 4.2-1</div>
+              <div class="q-text">写出信息熵公式，并说明其取值范围与"纯度"的关系。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              Ent(D) = −Σₖ pₖ log₂ pₖ。纯度越高熵越小：最小 0（全同类），最大 log₂|𝒴|（各类均匀）。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 4.2-2</div>
+              <div class="q-text">信息增益为什么偏好取值多的属性？增益率如何纠偏？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              取值越多分支越细、分支熵越低，条件熵被压低，增益虚高。增益率 = Gain/IV，用随取值数增大的固有值 IV 做分母惩罚；C4.5 先挑增益超平均者再比增益率。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 4.3 ============ -->
+    <h2><span class="sec-no">4.3</span>基尼指数：换一把纯度的尺子</h2>
+
+    <p>上一节用熵当纯度的尺子，代价是每个分支都要算对数。有没有更便宜的尺子？CART 算法（Classification and Regression Tree）的回答是<span class="term">基尼值</span>（Gini）：</p>
+
+    <div class="formula">Gini(<span class="var">D</span>) = 1 − ∑<sub>k=1</sub><sup>|𝒴|</sup> p<sub>k</sub>²</div>
+
+    <p>基尼值有一个漂亮的解读：<strong>从集合中随机抽两个样本，它们类别不同的概率</strong>。集合越纯，抽两个都是同类的概率越高，基尼值越小。对应地，属性 <span class="var">a</span> 的<span class="term">基尼指数</span>（Gini Index）定义为划分后各分支基尼值的加权平均：</p>
+
+    <div class="formula">Gini_index(<span class="var">D</span>, <span class="var">a</span>) = ∑<sub>v=1</sub><sup>V</sup> <span class="frac"><span class="num-part">|D<sup>v</sup>|</span><span class="den-part">|D|</span></span> · Gini(D<sup>v</sup>)</div>
+
+    <p>选属性时，选基尼指数<strong>最小</strong>的那个（注意方向：信息增益选最大，基尼指数选最小）。</p>
+
+    <h3>手算例 3：同一划分上的对比——色泽 vs 纹理</h3>
+
+    <p>先看根结点基尼值：</p>
+
+    <div class="formula">Gini(<span class="var">D</span>) = 1 − (<span class="frac"><span class="num-part">8</span><span class="den-part">17</span></span>)² − (<span class="frac"><span class="num-part">9</span><span class="den-part">17</span></span>)² = 1 − 0.2215 − 0.2803 ≈ <strong>0.498</strong></div>
+
+    <p>用"色泽"划分，三个分支逐一算：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>分支</th><th>逐项计算</th><th>分支 Gini</th></tr>
+        <tr><td>青绿（3 好 3 坏）</td><td>1 − 0.5² − 0.5²</td><td><strong>0.500</strong></td></tr>
+        <tr><td>乌黑（4 好 2 坏）</td><td>1 − (4/6)² − (2/6)² = 1 − 0.4444 − 0.1111</td><td><strong>0.444</strong></td></tr>
+        <tr><td>浅白（1 好 4 坏）</td><td>1 − 0.2² − 0.8² = 1 − 0.04 − 0.64</td><td><strong>0.320</strong></td></tr>
+      </table>
+    </div>
+
+    <div class="formula">Gini_index(色泽) = <span class="frac"><span class="num-part">6</span><span class="den-part">17</span></span>×0.5 + <span class="frac"><span class="num-part">6</span><span class="den-part">17</span></span>×0.444 + <span class="frac"><span class="num-part">5</span><span class="den-part">17</span></span>×0.32 = 0.1765+0.1569+0.0941 ≈ <strong>0.428</strong>，基尼增益 ≈ 0.498 − 0.428 = <strong>0.070</strong></div>
+
+    <p>再对"纹理"划分做同样的计算：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>分支</th><th>逐项计算</th><th>分支 Gini</th></tr>
+        <tr><td>清晰（7 好 2 坏）</td><td>1 − (7/9)² − (2/9)² = 1 − 0.6049 − 0.0494</td><td><strong>0.346</strong></td></tr>
+        <tr><td>稍糊（1 好 4 坏）</td><td>1 − 0.2² − 0.8²</td><td><strong>0.320</strong></td></tr>
+        <tr><td>模糊（0 好 3 坏）</td><td>1 − 0² − 1²</td><td><strong>0</strong></td></tr>
+      </table>
+    </div>
+
+    <div class="formula">Gini_index(纹理) = <span class="frac"><span class="num-part">9</span><span class="den-part">17</span></span>×0.346 + <span class="frac"><span class="num-part">5</span><span class="den-part">17</span></span>×0.32 + <span class="frac"><span class="num-part">3</span><span class="den-part">17</span></span>×0 = 0.1830+0.0941+0 ≈ <strong>0.277</strong>，基尼增益 ≈ 0.498 − 0.277 = <strong>0.220</strong></div>
+
+    <p>对比结论：<strong>两把尺子都把纹理排在第一</strong>（基尼指数 0.277 远低于色泽的 0.428；信息增益 0.381 远高于色泽的 0.109）。但注意两者量纲不同、数值不可互比，且偏好细节不同——CART 用基尼指数，且它生成的是<strong>二叉树</strong>：对多取值属性，CART 会枚举"二分超集"把取值分成两组，而不是像 ID3 那样一次分出 V 支。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>三种度量（信息增益、增益率、基尼指数）本质上是同一件事：<strong>给"划分后各分支有多纯"打分</strong>，只是纯度的定义不同。实验上它们的排序结论大多一致，差异体现在计算代价与对多取值属性的敏感程度上。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>误区："基尼指数越小越好，所以选属性时直接选 Gini_index 最小的属性就对。"——方向说对了，但别忘了 CART 是二叉树：对取值很多的离散属性，CART 的候选划分是<strong>取值的二分组</strong>而非按取值多路分，直接套多路加权的 Gini_index 公式并不等于 CART 实际评估的对象。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 4.3-1</div>
+              <div class="q-text">写出基尼值公式，并给出它的概率解读。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              Gini(D) = 1 − Σₖ pₖ²。解读：从 D 中随机抽两个样本，其类别不一致的概率；越纯越小。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 4.3-2</div>
+              <div class="q-text">选属性时，信息增益与基尼指数的选择方向有何不同？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              信息增益选<strong>最大</strong>（混乱度下降最多）；基尼指数选<strong>最小</strong>（划分后加权不纯度最低）。两者都是"越纯越好"，只是公式方向相反。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 4.4 ============ -->
+    <h2><span class="sec-no">4.4</span>剪枝：对付过拟合</h2>
+
+    <p>第 2 章讲过<span class="term">过拟合</span>（Overfitting）：模型把训练集的噪声当规律学走。决策树是过拟合的重灾区——只要不停下来，它可以一直分到每个叶结点只剩一个样本，训练精度 100%，新数据却一塌糊涂。<span class="term">剪枝</span>（Pruning）就是给贪心生长踩刹车，分两种时机：</p>
+
+    <ul>
+      <li><span class="term">预剪枝</span>（Pre-pruning）：<strong>边长边剪</strong>。每次准备展开一个结点前，先用验证集评估：若展开后验证精度不升反降，就禁止展开，该结点直接变叶。</li>
+      <li><span class="term">后剪枝</span>（Post-pruning）：<strong>长完再剪</strong>。先让树完整长成，再自底向上逐个尝试把内部结点替换成叶结点，若替换后验证精度不降（或提升），就执行替换。</li>
+    </ul>
+
+    <h3>一笔验证集上的账</h3>
+
+    <p>设验证集有 7 个样本落入某内部结点的辖区。算账：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>方案</th><th>该结点处理方式</th><th>验证集判对数</th><th>验证精度</th><th>决策</th></tr>
+        <tr><td>不展开</td><td>直接变叶，标多数类</td><td>4 / 7</td><td><strong>57.1%</strong></td><td rowspan="2">预剪枝：<strong>禁止展开</strong>（57.1% &gt; 42.9%）</td></tr>
+        <tr><td>展开</td><td>按某属性继续分裂</td><td>3 / 7</td><td>42.9%</td></tr>
+      </table>
+    </div>
+
+    <p>后剪枝同理，只是方向反过来：先看完整树在验证集上的精度，再试剪。例如把某子树替换为叶结点后精度从 57.1% 升到 71.4%（5/7），就确认剪掉。</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th></th><th>预剪枝</th><th>后剪枝</th></tr>
+        <tr><td>时机</td><td>生长过程中</td><td>整棵树长成之后</td></tr>
+        <tr><td>开销</td><td>小（很多分支根本没长出来）</td><td>大（先长完整树再逐一试剪）</td></tr>
+        <tr><td>欠拟合风险</td><td><strong>高</strong>：视野短浅，可能因当前一步不划算而错过其后的大好划分</td><td>低：看过全貌再决定</td></tr>
+        <tr><td>过拟合风险</td><td>低</td><td>低（通常剪得更稳，泛化常优于预剪枝）</td></tr>
+      </table>
+    </div>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>剪枝的判定标准只有一句话：<strong>验证集精度有没有变好</strong>。训练集上的纯度再高都不算数——这是 Ch2"泛化能力才是目标"在决策树上的直接落地。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>误区："预剪枝看到当前划分不提升就剪掉，是理性决策。" 不完全对。贪心停止有<strong>视野短浅</strong>的代价：当前属性的划分可能确实不提升精度，但它展开后的下一层划分却可能大幅提升。预剪枝因此可能欠拟合；后剪枝正是为了补救这一点，代价是训练开销大得多。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 4.4-1</div>
+              <div class="q-text">预剪枝与后剪枝分别在什么时机操作？核心判定标准是什么？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              预剪枝在生长过程中、展开结点前判定；后剪枝在整树长成后自底向上试替换。判定标准同为：验证集精度是否因此不降（提升）。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 4.4-2</div>
+              <div class="q-text">预剪枝的主要风险是什么？为什么后剪枝能缓解？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              预剪枝有欠拟合风险：当前一步不划算可能掩盖其后划分的大收益（视野短浅）。后剪枝先看到完整树再剪，全局信息更充分，通常泛化更好，但训练开销大。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 4.5 ============ -->
+    <h2><span class="sec-no">4.5</span>连续值与缺失值</h2>
+
+    <p>到目前为止，属性都是离散的。但密度、含糖量、收入这类<strong>连续属性</strong>没法按取值分叉——取值有无穷多个。C4.5 的解法简洁：<strong>二分</strong>。把连续属性在样本上的 n 个不同取值排序，候选切分点取<strong>相邻取值的中点</strong>，共 n−1 个；对每个候选点 t，把样本分成 "≤ t" 与 "&gt; t" 两支，算二分类的信息增益，取最大者作为该属性的切分点。</p>
+
+    <h3>小例子：6 个密度值的候选切分点</h3>
+
+    <p>设 6 个样本的密度取值为 {0.243, 0.245, 0.343, 0.360, 0.403, 0.437}（已排序）。候选切分点为相邻中点：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>相邻对</th><th>中点 t</th><th>二分</th></tr>
+        <tr><td>0.243 / 0.245</td><td>0.244</td><td>{0.243} | 其余 5 个</td></tr>
+        <tr><td>0.245 / 0.343</td><td>0.294</td><td>前 2 个 | 后 4 个</td></tr>
+        <tr><td>0.343 / 0.360</td><td>0.3515</td><td>前 3 个 | 后 3 个</td></tr>
+        <tr><td>0.360 / 0.403</td><td>0.3815</td><td>前 4 个 | 后 2 个</td></tr>
+        <tr><td>0.403 / 0.437</td><td>0.420</td><td>前 5 个 | {0.437}</td></tr>
+      </table>
+    </div>
+
+    <p>共 <strong>n−1 = 5 个候选点</strong>。逐点算 Gain(D, 密度, t)，取增益最大的 t 作为该结点用"密度"二分时的阈值；再与离散属性的增益比较，决定这个结点最终用谁。注意：连续属性<strong>可以在一条路径上重复使用</strong>（先用密度≤0.38，深层再用密度≤0.29），这点与离散属性不同——离散属性在一条路径上只用一次。</p>
+
+    <h3>缺失值：不是扔掉，而是按权重分流</h3>
+
+    <p>现实中样本常有缺测（比如某个瓜没测敲声）。思路：缺测样本<strong>不丢弃</strong>，而是以权重同时进入各分支——权重按各分支已知样本的比例分配。一句算术就够：若某样本色泽缺失，而色泽三个取值上的样本比为 6 : 6 : 5，则该样本以权重 6/17、6/17、5/17 分别流入青绿、乌黑、浅白三个分支，后续熵与增益的计算全部改用<strong>加权计数</strong>。预测阶段同理：测试样本属性缺失时，沿各分支按权重走下去，最后按权重合并各叶子的结论。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>连续值处理 = 把"按取值分叉"换成"按阈值二分"，候选阈值只有 n−1 个，完全可以穷举；缺失值处理 = 把"一个样本走一条路"换成"按概率同时走几条路"，所有计数换成加权计数。两处改动都不动算法骨架。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>误区一："连续属性的候选切分点有 n 个。"错，是相邻中点，共 n−1 个。误区二："缺失值的样本直接删掉最省事。"删掉会丢失该样本其他属性的信息，缺测比例高时数据集会被删得七零八落；按权重分流能保住全部信息。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 4.5-1</div>
+              <div class="q-text">连续属性在某结点有 n 个不同取值，C4.5 二分的候选切分点有几个？怎么取？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              n−1 个，取排序后相邻取值的中点；对每个候选点按 "≤t / &gt;t" 二分并算信息增益，取最大者。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 4.5-2</div>
+              <div class="q-text">缺失属性值的样本在决策树训练中如何处理？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              不丢弃：按各分支已知样本比例赋予权重，同时进入多个分支，熵与增益改用加权计数；预测时同样按权重合并各分支结论。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 章末五件套之 1：概念卡 ============ -->
+    <h2><span class="sec-no">🃏</span>概念卡：本章概念的一分钟画像</h2>
+    <p>翻面前先自问：这个概念我能用一句话讲清楚吗？</p>
+    <div class="flip-grid">
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 1</div>
+            <div class="q-text">信息熵（Information Entropy）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">Ent(D) = −Σₖ pₖ log₂ pₖ，度量样本集合纯度的指标。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">没有它，"哪个属性分得更开"无法量化，选属性就无从下手。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">一筐水果的"混乱度"：全是苹果则熵为 0，各半混杂则熵最大。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为熵越大越好——恰恰相反，熵越小纯度越高。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">本章选属性；Ch5 交叉熵损失、后续概率模型中反复出现。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 2</div>
+            <div class="q-text">信息增益（Information Gain）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">Gain(D,a) = Ent(D) − Σᵥ (|Dᵛ|/|D|)·Ent(Dᵛ)，划分带来的熵降。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">ID3 在每个结点选划分属性的打分标准。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">"问完这个问题，我心里有底了多少"。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">忽略它偏好取值多的属性（极端：用编号当属性增益最大）。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">ID3；特征选择里的互信息准则同源。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 3</div>
+            <div class="q-text">增益率（Gain Ratio）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">Gain_ratio = Gain(D,a) / IV(a)，IV(a) 为属性取值的固有值。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">矫正信息增益对多取值属性的偏好（C4.5 的选择准则）。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">给"问题分得细"本身计价：分得太细要付 IV 的税。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">直接比增益率——它反过来偏好取值少的属性，故 C4.5 先筛增益超平均者。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">C4.5 选属性；理解"惩罚项"思想的入门例。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 4</div>
+            <div class="q-text">基尼指数（Gini Index）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">Gini_index(D,a) = Σᵥ (|Dᵛ|/|D|)·Gini(Dᵛ)，Gini(D) = 1 − Σₖ pₖ²。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">CART 选属性的纯度尺子，避开对数运算。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">随机抽俩样本类别不同的概率；越小越纯。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">选属性方向记反——基尼指数选<strong>最小</strong>，信息增益选最大。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">CART；Ch8 随机森林的基学习器正是 CART。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 5</div>
+            <div class="q-text">预剪枝（Pre-pruning）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">生长过程中：展开结点前用验证集评估，精度不升则禁止展开。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">从源头抑制过拟合，同时大幅节省训练开销。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">边盖楼边验收，不合格的楼层直接不盖。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为它总是划算——视野短浅可能错过后续好划分，有欠拟合风险。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">数据大、训练时间紧时；后剪枝的对照组。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 6</div>
+            <div class="q-text">后剪枝（Post-pruning）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">整树长成后，自底向上试把内部结点换成叶，验证精度不降则剪。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">在保留全部生长信息的前提下回头修剪，泛化通常优于预剪枝。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">先把楼盖完，再请验收员从下往上拆多余楼层。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">忽略其代价：先长完整树再逐一试剪，训练开销明显更大。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">追求模型质量、算力充裕时；CART 的代价复杂度剪枝是其代表。</span></div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- ============ 章末五件套之 2：分层习题 ============ -->
+    <h2><span class="sec-no">📝</span>分层习题</h2>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>
+        <p>判断并说明理由："决策树的每个叶结点所含样本必然属于同一类别。"</p>
+      </div>
+      <details>
+        <summary>提示</summary>
+        <p>回到递归停止的三种情形，逐一检查"叶结点是否必然纯净"。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p><strong>错。</strong>只有停止情形①（样本全同类）产生的叶结点必然纯净。情形②（属性用尽但样本仍混杂）会把叶结点标为当前结点多数类，叶中仍含少数类样本；情形③（分支无样本）的叶结点按父结点多数类标记，其"所含样本"为空。反例：本数据集中若某结点 3 好 2 坏且属性已用完，则该叶标"好瓜"，但仍含 2 个坏瓜。易错点：把"算法停止"与"纯度达成"混为一谈——停止有三种原因，只有一种是纯的。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>
+        <p>判断并说明理由："C4.5 用增益率替代信息增益，是因为增益率在任何属性上都不再有偏好。"</p>
+      </div>
+      <details>
+        <summary>提示</summary>
+        <p>想想 IV 随取值数变化的相反方向，以及 C4.5 实际的两步启发式。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p><strong>错。</strong>增益率只是换了个方向的偏好：IV 随取值数增大而增大，于是增益率反过来<strong>偏好取值少的属性</strong>。所以 C4.5 并不直接比较增益率，而是用启发式：先筛出信息增益高于平均水平的候选属性，再在它们当中比增益率。易错点：把"纠偏"误读为"无偏好"——任何打分准则都有自己的偏好，工程上靠组合策略来平衡。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>
+        <p>小型数据集共 8 个样本（4 正 4 负）。属性 A 把它二分为两个分支：分支 1 含（3 正 1 负），分支 2 含（1 正 3 负）。手算：根结点熵、两个分支的熵、以及属性 A 的信息增益。步骤写全。</p>
+      </div>
+      <details>
+        <summary>提示</summary>
+        <p>先写 Ent(根)；两个分支比例结构相同，熵相同；最后 Gain = Ent(根) − 加权分支熵。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p>① 根结点：p₊ = p₋ = 1/2，Ent(根) = −(0.5·log₂0.5 + 0.5·log₂0.5) = 0.5 + 0.5 = <strong>1.000</strong>。</p>
+          <p>② 分支 1（3 正 1 负）：3/4 = 0.75 → log₂0.75 ≈ −0.4150 → 0.3113；1/4 = 0.25 → log₂0.25 = −2 → 0.5000。Ent = 0.3113 + 0.5000 ≈ <strong>0.811</strong>。</p>
+          <p>③ 分支 2（1 正 3 负）：比例互换，熵相同，Ent ≈ <strong>0.811</strong>。</p>
+          <p>④ 加权分支熵 = 4/8 × 0.811 + 4/8 × 0.811 = 0.811。</p>
+          <p>⑤ Gain(根, A) = 1.000 − 0.811 = <strong>0.189</strong>。结论：这次二分让混乱度下降了约 0.19，是一次有效但不完美的划分。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>
+        <p>同上题数据与同一划分（8 样本 4 正 4 负；A 二分为 3正1负 / 1正3负）。改用基尼指数重算：根 Gini、分支 Gini、Gini_index(A)，并与上题信息增益的"该划分是否值得"结论对比。</p>
+      </details>
+      <details>
+        <summary>提示</summary>
+        <p>Gini = 1 − Σp²，无需对数；注意"值得与否"对应的方向：基尼增益 &gt; 0 即纯度提升。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p>① 根：Gini = 1 − 0.5² − 0.5² = <strong>0.500</strong>。</p>
+          <p>② 分支 1：Gini = 1 − (3/4)² − (1/4)² = 1 − 0.5625 − 0.0625 = <strong>0.375</strong>；分支 2 同理 = <strong>0.375</strong>。</p>
+          <p>③ Gini_index(A) = 4/8 × 0.375 + 4/8 × 0.375 = <strong>0.375</strong>。</p>
+          <p>④ 基尼增益 = 0.500 − 0.375 = <strong>0.125</strong> &gt; 0。</p>
+          <p>⑤ 对比：信息增益说"混乱度降了 0.189"，基尼说"不纯度降了 0.125"——<strong>两把尺子对该划分的排序结论一致：值得分</strong>。数值本身不可互比（量纲不同），能比较的是同一准则下不同属性/划分的相对顺序。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l3">L3 建模应用</span>
+        <p>场景：银行做放贷审批，监管要求"每笔拒贷必须能向客户和监管逐条解释理由"。请：① 说明为什么选决策树而不是黑箱模型；② 画出你设计的树骨架（至少 3 层）；③ 写出你的选属性准则、剪枝策略与评估指标。</p>
+      </details>
+      <details>
+        <summary>提示</summary>
+        <p>可解释性 = if-then 规则；骨架用业务上可辩护的属性（征信、收入负债比、抵押物）；评估别忘 Ch2 的指标。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p>① 选决策树的理由：每条根到叶路径是一条 if-then 规则，拒贷结论可直接还原为"征信差 → 拒绝"之类的自然语言条款，满足监管的可解释性要求；黑箱模型（如深层网络）无法逐条给出理由。</p>
+          <p>② 树骨架（示意）：</p>
+          <div class="mermaid">
+flowchart TB
+  R{"征信记录？"}
+  R -->|差| N1["拒绝"]
+  R -->|良好| I{"收入负债比？"}
+  I -->|偏高| N2["拒绝"]
+  I -->|正常| C{"抵押物？"}
+  C -->|不足| M["人工复核"]
+  C -->|足值| Y["批准"]
+          </div>
+          <p>③ 选属性准则：离散属性用增益率（C4.5，避免偏好"客户编号"这类多取值伪属性），连续属性（收入、负债比）先按相邻中点二分再算增益。剪枝策略：后剪枝为主——放贷场景错误代价不对称，先让树充分长，再在验证集上自底向上剪；若训练时间紧则退用预剪枝。评估指标：在验证集上同时看精度与查全率/查准率（Ch2），业务上通常给"坏客户被放行"更高代价，可用代价敏感评估；最终上线前用独立测试集估泛化精度。</p>
+        </div>
+      </details>
+    </div>
+
+    <!-- ============ 章末五件套之 3：本章自测 ============ -->
+    <h2><span class="sec-no">✍️</span>本章自测</h2>
+    <p class="quiz-hint">点击选项判分，答错会给出原因。</p>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 1</div>
+      <div class="q-stem">关于信息熵 Ent(D) = −Σₖ pₖ log₂ pₖ，下列说法正确的是？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 熵越大，样本集合纯度越高</li>
+        <li data-opt="b">B. 熵越小，样本集合纯度越高</li>
+        <li data-opt="c">C. 熵与样本的类别分布无关</li>
+        <li data-opt="d">D. 任何数据集上熵的最大值都是 1</li>
+      </ul>
+      <div class="quiz-explain">解析：B 对——熵度量混乱度，越纯熵越小，全同类时为 0。A 错：方向说反。C 错：熵就是类别分布 pₖ 的函数，分布决定熵。D 错：最大值是 log₂|𝒴|，只有二分类时才是 1；四分类均匀时最大为 2。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="c">
+      <div class="q-no">自测 2</div>
+      <div class="q-stem">ID3 用信息增益选划分属性，会产生什么系统性偏好？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 偏好取值少的属性</li>
+        <li data-opt="b">B. 没有任何偏好</li>
+        <li data-opt="c">C. 偏好取值多的属性</li>
+        <li data-opt="d">D. 偏好连续属性</li>
+      </ul>
+      <div class="quiz-explain">解析：C 对——取值越多分支越细，分支熵被压得更低，增益虚高（极端：用"编号"当属性，每分支一个样本，增益最大）。A 错：那正是增益率的反向偏好。B 错：信息增益的偏好是它的已知缺陷。D 错：偏好与"离散/连续"无关，取决于取值数；连续属性经二分后每属性只出两个分支。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="c">
+      <div class="q-no">自测 3</div>
+      <div class="q-stem">增益率的正确表达是？（IV 为属性固有值）</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. Gain(D,a) × IV(a)</li>
+        <li data-opt="b">B. IV(a) / Gain(D,a)</li>
+        <li data-opt="c">C. Gain(D,a) / IV(a)</li>
+        <li data-opt="d">D. Gain(D,a) − IV(a)</li>
+      </ul>
+      <div class="quiz-explain">解析：C 对——增益率 = Gain/IV，IV 在分母上惩罚多取值属性。A 错：相乘会放大而非惩罚多取值偏好。B 错：分子分母颠倒，且 IV 为 0 时无意义。D 错：相减量纲混乱，且无法体现"比值惩罚"的意图。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 4</div>
+      <div class="q-stem">与后剪枝相比，预剪枝的典型特征是？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 训练开销更大</li>
+        <li data-opt="b">B. 欠拟合风险更大</li>
+        <li data-opt="c">C. 必须使用测试集做判定</li>
+        <li data-opt="d">D. 得到的树一定更深</li>
+      </ul>
+      <div class="quiz-explain">解析：B 对——预剪枝贪心停止、视野短浅，可能因当前一步不提升而错过后续好划分，故欠拟合风险高。A 错：预剪枝让很多分支根本没长出来，开销更小。C 错：两种剪枝都用<strong>验证集</strong>，测试集只能用于最终评估。D 错：预剪枝提前停止，树通常更浅。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 5</div>
+      <div class="q-stem">某连续属性在当前结点样本上有 6 个不同取值，C4.5 二分策略的候选切分点有几个？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 6 个</li>
+        <li data-opt="b">B. 5 个</li>
+        <li data-opt="c">C. 7 个</li>
+        <li data-opt="d">D. 3 个</li>
+      </ul>
+      <div class="quiz-explain">解析：B 对——候选点取排序后<strong>相邻取值的中点</strong>，n 个取值产生 n−1 = 5 个中点。A 错：把取值本身当候选点，没有意识到切分点落在相邻取值之间。C 错：误以为两端也要各加一个边界点，但两端之外无需切分。D 错：无此规则。</div>
+    </div>
+
+    <!-- ============ 章末五件套之 4：三句话复述 ============ -->
+    <div class="retell">
+      <h3>🗣️ 用自己的话，三句话讲完本章</h3>
+      <p>对着空气（或室友）说出这三句。说卡壳的那句，回去重读对应小节。</p>
+      <details>
+        <summary>句1：这章解决什么问题？——</summary>
+        <div class="retell-answer">参考答案：决策树要让模型像人一样靠一连串"是不是"的提问做判断，本章解决这棵树如何自动生长（每一步选哪个属性）以及如何防止长歪（过拟合）的问题。</div>
+      </details>
+      <details>
+        <summary>句2：核心机制是什么？——</summary>
+        <div class="retell-answer">参考答案：分而治之地递归生长——每个结点用纯度准则（信息增益 / 增益率 / 基尼指数）贪心选最优属性划分，三种情形之一触发即停；再用验证集做预剪枝或后剪枝抑制过拟合；连续值按相邻中点二分、缺失值按权重流入各分支。</div>
+      </details>
+      <details>
+        <summary>句3：它和前后章怎么分工？——</summary>
+        <div class="retell-answer">参考答案：Ch2 的过拟合概念在本章剪枝中落地，Ch3 线性模型只能切直线，本章给出第一个非线性、可解释的模型；但单树表达力有限、对数据扰动敏感，这正好由 Ch8 集成学习（随机森林 = 多棵决策树的集成）来补。</div>
+      </details>
+    </div>
+
+    <!-- ============ 章末五件套之 5：复习计划 ============ -->
+    <div class="review-plan">
+      <h3>🔁 间隔复习计划</h3>
+      <p>回忆本身比重读有效 10 倍。到点只做一件事：翻卡 + 重做标记题。</p>
+      <table>
+        <tr><th>时间点</th><th>复习内容</th><th>预计用时</th></tr>
+        <tr><td>第 1 天</td><td>概念卡 1–6 + 全部回忆卡；重算手算例 2（色泽的信息增益）</td><td>12 分钟</td></tr>
+        <tr><td>第 3 天</td><td>概念卡（重点翻错的）+ 回忆 4.2-2、4.4-2；重做 L2①</td><td>10 分钟</td></tr>
+        <tr><td>第 7 天</td><td>三句话复述 + 重做 L2②、自测错题</td><td>10 分钟</td></tr>
+        <tr><td>第 15 天</td><td>只做合上书挑战；能全过就毕业</td><td>15 分钟</td></tr>
+      </table>
+    </div>
+
+    <!-- ============ 合上书挑战 ============ -->
+    <div class="final-challenge">
+      <h3>📕 合上书挑战</h3>
+      <p class="fc-sub">现在关掉这个页面，拿一张纸，凭记忆完成以下任务。全部做完再回来核对——这是本章真正的毕业考试。</p>
+      <ol id="challenge-list">
+        <li><span class="fc-check"></span>写出信息熵、信息增益、增益率、基尼指数四个公式，并标注每个符号含义。</li>
+        <li><span class="fc-check"></span>画出决策树递归生成的流程，写全三种停止情形及叶标签的确定方式。</li>
+        <li><span class="fc-check"></span>手算 17 样本（8 好 9 坏）根结点的熵，步骤写全（精确到 0.998）。</li>
+        <li><span class="fc-check"></span>解释信息增益为何偏好取值多的属性，写出 C4.5 的两步纠偏策略。</li>
+        <li><span class="fc-check"></span>说出预剪枝与后剪枝的时机、判定标准、各自代价；连续属性 n 个取值有几个候选切分点。</li>
+        <li><span class="fc-check"></span>一句话回答本章主线问题：决策树怎么长出来、怎么防止长歪？</li>
+      </ol>
+    </div>
+
+    <div class="complete-zone">
+      <button class="btn-complete" id="btn-complete" onclick="markDone()">✓ 我已完成本章（含合上书挑战）</button>
+    </div>
+
+    <div class="chapter-nav">
+      <a href="chapter-03.html"><span class="nav-dir">← 上一章</span>第3章 线性模型</a>
+      <a href="chapter-05.html" class="next"><span class="nav-dir">下一章 →</span>第5章 神经网络</a>
+    </div>
+
+  </div>
+</div>
+
+<footer class="footer">
+  <div class="wrap">第4章 决策树 · 机器学习互动讲义 · 基于周志华《机器学习》(2016)</div>
+</footer>
+
+<script src="/lectures-assets/mermaid.min.js"></script>
+<script>
+mermaid.initialize({
+  startOnLoad: true,
+  theme: "base",
+  themeVariables: {
+    primaryColor: "#e3edf7",
+    primaryBorderColor: "#1d5f9e",
+    primaryTextColor: "#1d5f9e",
+    lineColor: "#5c554b",
+    secondaryColor: "#fbeedd",
+    tertiaryColor: "#f5f1e8",
+    fontFamily: "-apple-system, PingFang SC, sans-serif",
+    fontSize: "14px"
+  },
+  flowchart: { curve: "linear", htmlLabels: false }
+});
+</script>
+<script>
+// 自测题判分（原样复用，勿改）
+document.querySelectorAll(".quiz-block").forEach(block => {
+  const answer = block.dataset.answer;
+  const explain = block.querySelector(".quiz-explain");
+  block.querySelectorAll(".quiz-opts li").forEach(li => {
+    li.addEventListener("click", () => {
+      const opts = block.querySelectorAll(".quiz-opts li");
+      opts.forEach(o => o.classList.add("disabled"));
+      if (li.dataset.opt === answer) {
+        li.classList.add("correct");
+      } else {
+        li.classList.add("wrong");
+        block.querySelector(`[data-opt="${answer}"]`).classList.add("correct");
+      }
+      explain.classList.add("show");
+    });
+  });
+});
+
+// 合上书清单打勾（原样复用，勿改）
+document.querySelectorAll("#challenge-list li").forEach(li => {
+  li.addEventListener("click", () => li.classList.toggle("checked"));
+});
+
+// 完成标记 → localStorage（章号 4）
+const KEY = "ml_progress_v1";
+function loadProgress() {
+  try { return JSON.parse(localStorage.getItem(KEY)) || {}; } catch (e) { return {}; }
+}
+const progress = loadProgress();
+const btn = document.getElementById("btn-complete");
+if (progress[4] && progress[4].done) {
+  btn.textContent = "✓ 已完成 · 再次点击重置";
+  btn.classList.add("done");
+}
+function markDone() {
+  const p = loadProgress();
+  if (p[4] && p[4].done) {
+    delete p[4];
+    btn.textContent = "✓ 我已完成本章（含合上书挑战）";
+    btn.classList.remove("done");
+  } else {
+    p[4] = { done: true, completedAt: Date.now(), reviewsDone: 0 };
+    btn.textContent = "✓ 已完成 · 复习提醒已开启";
+    btn.classList.add("done");
+  }
+  localStorage.setItem(KEY, JSON.stringify(p));
+}
+</script>
+
+</body>
+</html>

@@ -1,0 +1,728 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第17章 蒙特卡洛方法 · 深度学习互动讲义</title>
+<link rel="stylesheet" href="/lectures-assets/style.css">
+</head>
+<body>
+
+<nav class="topbar">
+  <div class="topbar-inner">
+    <span class="brand"><a href="index.html" style="color:inherit">← 学习地图</a></span>
+    <span class="crumb">阶段④ · 生成模型与前沿 / 第17章</span>
+  </div>
+</nav>
+
+<div class="wrap">
+
+  <div class="lecture-head">
+    <span class="ch-label">CHAPTER 17 · 生成模型与前沿</span>
+    <h1>蒙特卡洛方法</h1>
+    <p class="lead">一句话副标题：第16章留下一笔算不动的账——配分函数与期望都要对 2ⁿ 个状态求和；本章给出最通用的一件武器：枚举不行就抽样，用样本平均近似求和，并解决随之而来的核心问题——目标分布本身怎么采出样本。</p>
+  </div>
+
+  <!-- ===== 章首四件套之 1：全书定位 ===== -->
+  <div class="position-bar">
+    <strong>本章在主线上的位置：</strong>第16章把联合分布拆成了因子乘积，代价是引入算不动的配分函数 Z；本章给出对付它的第一类武器——<u>用随机抽样近似一切求和与期望</u>；但 MCMC 采出来的样本相关、收敛慢，第18章将干脆绕开 Z 改目标函数。<br>
+    第17章回答主线上的第17个问题：<strong>求和与期望算不动时，怎样用随机抽样给出足够好的近似？样本又从哪里来？</strong>
+    <div class="map-inline">
+      <span class="node">① 数学与机器学习基础<br>Ch1–5 数学工具与机器学习基础</span><span class="arrow">→</span>
+      <span class="node">② 现代深度网络<br>Ch6–11 前馈 · 卷积 · 序列 · 实践</span><span class="arrow">→</span>
+      <span class="node">③ 表示与推断<br>Ch13 线性因子 · Ch14 自编码器 · Ch15 表示学习 · Ch16 结构化概率模型</span><span class="arrow">→</span>
+      <span class="node here">④ 生成模型与前沿<br><strong>Ch17 蒙特卡洛方法</strong> · Ch18 直面配分函数 · Ch19 近似推断 · Ch20 深度生成模型</span>
+    </div>
+  </div>
+
+  <!-- ===== 章首四件套之 2：学习目标 ===== -->
+  <div class="objectives">
+    <h4>🎯 学完本章，合上书你应该能：</h4>
+    <ol>
+      <li>写出蒙特卡洛估计公式 E[f(x)] ≈ (1/n)Σf(xᵢ)，并说明误差随 1/√n 下降、与维度无关</li>
+      <li>用逆变换采样从指数分布采一个点：给定 u 与 λ，算出 x = −ln(1−u)/λ</li>
+      <li>给定未归一化 p̃、提议分布 q 与上界 k，写出拒绝采样的接受规则并手算接受率</li>
+      <li>写出重要性采样估计量 (1/n)Σ(p(xᵢ)/q(xᵢ))f(xᵢ)，对小例子手算一组样本的估计值</li>
+      <li>解释马尔可夫链为什么能收敛到平稳分布，并手算 Metropolis-Hastings 一步的接受率</li>
+      <li>写出 Gibbs 采样一步的条件分布更新，并说出它与 MH 的关系（接受率恒为 1）</li>
+    </ol>
+  </div>
+
+  <div class="lecture">
+
+    <!-- ===== 章首四件套之 3：推导主线图 ===== -->
+    <div class="figure">
+      <div class="mermaid">
+flowchart TB
+  A["第16章：图模型拆开了大表 却留下配分函数 Z"] -->|"Z 与期望都要对 2 的 n 次方个状态求和"| B["核心想法：枚举不行就抽样 样本平均近似期望"]
+  B -->|"前提：能从目标分布采到样本"| C["简单分布：逆变换采样 拒绝采样"]
+  C -->|"目标分布复杂 采不动"| D["重要性采样：换个好采的 q 再配权重"]
+  D -->|"q 与 p 差太远 权重爆炸"| E["MCMC：造一条马尔可夫链 让它收敛到目标分布"]
+  E -.->|"样本相关 收敛慢 偏差难诊断"| F["代价：近似误差与混合时间 第18章干脆绕开 Z"]
+  classDef hot fill:#fbeedd,stroke:#c4651f,stroke-width:2.5px,color:#c4651f;
+  classDef danger fill:#fae9e7,stroke:#b03a2e,stroke-width:2.5px,color:#b03a2e;
+  class C hot;
+  class E hot;
+  class F danger;
+      </div>
+      <div class="caption">本章推导主线：从"求和算不动"出发，每引入一种采样方法都回答上一个方法够不着的场景；末端红框是全部采样方法共同的代价——近似有误差、链要时间混合，这直接引出第18章。</div>
+    </div>
+
+    <!-- ================= 17.1 ================= -->
+    <h2><span class="sec-no">17.1</span>求和算不动，就用样本平均：蒙特卡洛估计</h2>
+
+    <p>第16章的结尾我们算过账：无向模型的配分函数 Z = Σₓ p̃(x) 要对全部 2ⁿ 个状态求和，n = 100 就是 10³⁰ 项。同样的问题出现在期望上：训练梯度里的负相 ∇log Z = E_{x∼p}[∇log p̃(x)] 也是一个全状态求和。<strong>凡是"对指数多个状态求和"的运算，精确计算都死了。</strong>出路是统计学里最古老也最通用的一招：<span class="term">蒙特卡洛方法</span>（Monte Carlo Method）——<strong>不枚举所有状态，只随机抽 n 个样本，用样本平均代替精确求和</strong>。</p>
+
+    <p>要算期望 E_{x∼p}[f(x)] = Σₓ p(x)f(x)，从 p 中独立采 n 个样本 x⁽¹⁾, …, x⁽ⁿ⁾，则：</p>
+
+    <div class="formula">E<sub>x∼p</sub>[f(x)] ≈ <span class="frac"><span class="num-part">1</span><span class="den-part">n</span></span> ∑<sub>i=1</sub><sup>n</sup> f(x⁽ⁱ⁾)</div>
+
+    <p>这个估计有两个好性质。第一，<strong>无偏</strong>：样本平均的期望恰好等于真期望，平均而言不高估也不低估。第二，误差可控：由大数定律，估计的方差为</p>
+
+    <div class="formula">Var[估计量] = <span class="frac"><span class="num-part">Var[f(x)]</span><span class="den-part">n</span></span>，标准误差 ∝ <span class="frac"><span class="num-part">1</span><span class="den-part">√n</span></span></div>
+
+    <p>看一组具体数字：设 f 在某分布下的真实期望是 1.4，方差 Var[f] = 0.24。采 n = 100 个样本，估计的标准差是 √(0.24/100) ≈ 0.049——误差大约 ±0.05。想再精确一位，误差降到 0.005，样本要增加到 n = 10 000：<strong>精度提高 10 倍，样本量要翻 100 倍</strong>。这就是 1/√n 的含义：蒙特卡洛不贵，但要很精确时也不便宜。</p>
+
+    <p>最关键的一点藏在公式背后：<strong>收敛速度 1/√n 与问题的维度无关</strong>。100 维空间里的期望和 1 维空间里的期望，同样 n 个样本给出同样量级的误差。这正是蒙特卡洛能统治高维问题的原因——网格法在 d 维里要 m^d 个点，蒙特卡洛永远只要 n 个点。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>把"求和"换成"平均"：期望本来就是概率加权平均，而一次随机抽样就是按概率抽签——抽得多了，样本里各状态出现的频率自然逼近概率。蒙特卡洛不是发明新数学，而是<strong>让随机性替我们枚举</strong>。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>以为蒙特卡洛估计"样本量够大就精确"。只对一半：n 越大误差越小，但永不为零，且以 1/√n 的龟速缩小。另一个更深的坑：上述好性质的前提是<strong>样本真的来自分布 p</strong>——如果采样本身有系统偏差（17.4 的链没收敛），样本再多也收敛到错误答案。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 17.1-1</div>
+              <div class="q-text">写出蒙特卡洛估计公式，并说明标准误差随 n 如何变化。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              E[f(x)] ≈ (1/n)Σᵢ f(x⁽ⁱ⁾)，x⁽ⁱ⁾ 独立采自 p。Var = Var[f]/n，标准误差 ∝ 1/√n——精度提高 10 倍需 100 倍样本。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 17.1-2</div>
+              <div class="q-text">蒙特卡洛相对网格法的决定性优势是什么？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              收敛速度 1/√n 与维度无关：d 维网格要 m^d 个点，蒙特卡洛在高维里仍然只要 n 个样本就达到同样误差量级。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ================= 17.2 ================= -->
+    <h2><span class="sec-no">17.2</span>简单分布怎么采：逆变换采样与拒绝采样</h2>
+
+    <p>上一节的公式有个前提：得能从 p 采到样本。这一节解决两个最基础的采样器。先看只有一个随机数发生器（均匀分布 U[0,1]）时怎么办。</p>
+
+    <p><span class="term">逆变换采样</span>（Inverse Transform Sampling）：若目标分布的累积分布函数 F(x) = P(X ≤ x) 有解析的反函数，先采 u ∼ U[0,1]，再令 x = F⁻¹(u)，得到的 x 就服从目标分布。道理很直白：F 把 x 轴上的概率质量映射到 [0,1] 上的均匀位置，逆映射就把均匀随机数翻译回样本。</p>
+
+    <p>完整手算一个例子：指数分布 p(x) = λe^(−λx)（x ≥ 0），其 CDF 为 F(x) = 1 − e^(−λx)。解 u = 1 − e^(−λx) 得：</p>
+
+    <div class="formula">x = F⁻¹(u) = <span class="frac"><span class="num-part">−ln(1 − u)</span><span class="den-part">λ</span></span></div>
+
+    <p>取 λ = 2，抽到均匀随机数 u = 0.8：x = −ln(1−0.8)/2 = −ln(0.2)/2 = 1.609/2 ≈ <strong>0.805</strong>。重复此过程，每个均匀数换一个指数分布样本——整个采样器只有一行公式。</p>
+
+    <p>但逆变换要求 F⁻¹ 有解析式，多数分布没有。<span class="term">拒绝采样</span>（Rejection Sampling）放宽要求：只需能对未归一化的 p̃(x) 求值，再找一个好采样的提议分布 q(x) 和常数 k，满足 p̃(x) ≤ k·q(x) 处处成立。算法两步：</p>
+
+    <ol>
+      <li>从 q 采一个候选点 x；</li>
+      <li>以概率 p̃(x) / (k·q(x)) 接受它，否则拒绝重抽。</li>
+    </ol>
+
+    <p>完整手算接受率。目标 p̃(x) = x(2−x)（x ∈ [0,1]，最大值 1 在 x = 1 处），取 q = U[0,1]、k = 1（恰好满足 p̃ ≤ kq）。每个候选的接受概率是 p̃(x)，整体接受率等于 p̃ 曲线下的面积占提议框面积的比例：</p>
+
+    <div class="formula">接受率 = ∫₀¹ x(2−x) dx = [x² − x³/3]₀¹ = 1 − <span class="frac"><span class="num-part">1</span><span class="den-part">3</span></span> = <span class="frac"><span class="num-part">2</span><span class="den-part">3</span></span></div>
+
+    <p>即平均抽 3 个候选接受 2 个。<strong>接受率 = Z_p / (k·Z_q)</strong>——注意分子正是未归一化质量的总和，拒绝采样还顺手把配分函数估计了出来。</p>
+
+    <div class="box insight">
+      <span class="box-tag">✅ 判定规则</span>
+      <p>拒绝采样的死穴在高维：kq 要能罩住 p̃，k 往往随维度指数增长，接受率随之指数崩塌。一维里 2/3 的接受率，到 100 维可能变成 10⁻³⁰。所以拒绝采样只用于低维或作为大机器的零件，高维主战场属于 17.4 的 MCMC。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>忘记 k 必须满足 p̃(x) ≤ k·q(x) <strong>处处</strong>成立。只要存在一个点被漏罩，采出来的分布就系统性地少了那一块——不是误差变大的问题，是答案本身就错。选 k 时留足余量，但 k 越大接受率越低，这是拒绝采样的根本张力。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 17.2-1</div>
+              <div class="q-text">逆变换采样的两个步骤是什么？对指数分布写出采样公式。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              采 u ∼ U[0,1]，令 x = F⁻¹(u)。指数分布：x = −ln(1−u)/λ（u=0.8、λ=2 时 x≈0.805）。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 17.2-2</div>
+              <div class="q-text">拒绝采样的接受规则是什么？接受率由什么决定？为什么高维会崩？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              以 p̃(x)/(k·q(x)) 的概率接受。接受率 = Z_p/(k·Z_q)。高维里罩住 p̃ 所需的 k 指数增长，接受率指数崩塌。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ================= 17.3 ================= -->
+    <h2><span class="sec-no">17.3</span>不能从 p 采，就从 q 采再配权重：重要性采样</h2>
+
+    <p>上一节的两个方法都要求"能直接采"或"能找到罩住的 q"。现实里更常见的处境是：p 根本采不动，但手头有个好采的 q。<span class="term">重要性采样</span>（Importance Sampling）的思路是：<strong>样本从 q 采，每个样本配一个权重纠正分布差异</strong>。推导只有一步恒等式：</p>
+
+    <div class="formula">E<sub>x∼p</sub>[f(x)] = ∑<sub>x</sub> p(x)f(x) = ∑<sub>x</sub> q(x) <span class="frac"><span class="num-part">p(x)</span><span class="den-part">q(x)</span></span> f(x) = E<sub>x∼q</sub>[ <span class="frac"><span class="num-part">p(x)</span><span class="den-part">q(x)</span></span> f(x) ]</div>
+
+    <p>于是从 q 采 n 个样本，估计量为：</p>
+
+    <div class="formula">E<sub>p</sub>[f] ≈ <span class="frac"><span class="num-part">1</span><span class="den-part">n</span></span> ∑<sub>i=1</sub><sup>n</sup> <span class="frac"><span class="num-part">p(x⁽ⁱ⁾)</span><span class="den-part">q(x⁽ⁱ⁾)</span></span> f(x⁽ⁱ⁾)，权重 w⁽ⁱ⁾ = <span class="frac"><span class="num-part">p(x⁽ⁱ⁾)</span><span class="den-part">q(x⁽ⁱ⁾)</span></span></div>
+
+    <p>完整手算一个离散例子。两个状态 {A, B}，目标 p = (0.6, 0.4)，函数 f = (1, 2)，真期望 E_p[f] = 0.6×1 + 0.4×2 = 1.4。提议 q 取均匀分布 (0.5, 0.5)，采 8 个样本恰好 4 个 A、4 个 B。权重：w(A) = 0.6/0.5 = 1.2，w(B) = 0.4/0.5 = 0.8。估计值：</p>
+
+    <div class="formula"><span class="frac"><span class="num-part">1</span><span class="den-part">8</span></span>(4 × 1.2 × 1 + 4 × 0.8 × 2) = <span class="frac"><span class="num-part">1</span><span class="den-part">8</span></span>(4.8 + 6.4) = <span class="frac"><span class="num-part">11.2</span><span class="den-part">8</span></span> = 1.4 ✓</div>
+
+    <p>恰好命中真值（这个小例子里样本频率刚好等于 q，权重又恰好把 q 扳回 p）。直觉很直白：<strong>q 采多了的地方就降权，采少了的地方就加权</strong>——重要性采样是用记账的方式把 q 的样本改造成 p 的样本。</p>
+
+    <p>但记账有代价。若 q 在 p 的重要区域概率太小，权重 p/q 会在少数样本上爆炸，估计的方差随之爆炸：100 个样本里 99 个权重几乎为零，估计实际上只由 1 个样本决定。判定规则：q 的尾巴必须比 p 厚，且两者形状越接近方差越小。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>重要性采样把"采样问题"转化为"加权问题"：不用服从 p，只要能给 p/q 求值就行。第20章里用采样的模型对比、第19章变分推断里的期望改造，用的都是这同一个恒等式。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>以为"q 随便选，反正权重会纠正"。理论上 q 只要在 p &gt; 0 处非零就无偏，但实践里 q 与 p 差太远时方差大到不可用——无偏不等于可用。另一个版本：只知道未归一化的 p̃ 时，需用自归一化重要性采样（权重先归一再用），它引入小偏差但通常方差更小。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 17.3-1</div>
+              <div class="q-text">写出重要性采样的估计量与权重公式，一句话解释权重的直觉。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              (1/n)Σᵢ (p(x⁽ⁱ⁾)/q(x⁽ⁱ⁾)) f(x⁽ⁱ⁾)，w = p/q。直觉：q 采多了的降权、采少了的加权，把 q 的样本记账改造成 p 的样本。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 17.3-2</div>
+              <div class="q-text">重要性采样什么时候方差爆炸？对 q 的选择有什么硬性要求？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              q 在 p 的重要区域概率太小时，少数样本权重爆炸、方差爆炸。要求：p&gt;0 处 q&gt;0，q 的尾巴要比 p 厚，形状尽量接近 p。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ================= 17.4 ================= -->
+    <h2><span class="sec-no">17.4</span>从复杂分布采样：马尔可夫链蒙特卡洛</h2>
+
+    <p>前三节的方法在高维复杂分布面前全部失效：逆变换没有解析式，拒绝采样的接受率指数崩塌，重要性采样找不到像样的 q。<span class="term">马尔可夫链蒙特卡洛</span>（Markov Chain Monte Carlo, MCMC）换了思路：<strong>不直接采，而是造一条马尔可夫链，让链的平稳分布恰好是目标分布 p，然后跑链、把跑出来的状态当样本</strong>。</p>
+
+    <p>马尔可夫链是一个状态间的随机游走：下一步只依赖当前状态。若链满足两个条件——从任何状态能到达任何状态（不可约）、不会周期性打转（非周期）——则无论从哪里出发，走足够多步后，状态分布都收敛到唯一的<span class="term">平稳分布</span>（Stationary Distribution）π。设计者的任务：让 π = p。最常用的构造是 <span class="term">Metropolis-Hastings</span>（MH）算法：</p>
+
+    <ol>
+      <li>在当前状态 x，从提议分布 q(x′|x) 采一个候选 x′；</li>
+      <li>以概率 A = min(1, p̃(x′)q(x|x′) / [p̃(x)q(x′|x)]) 接受，接受则搬到 x′，否则原地不动；</li>
+      <li>重复，链上的状态序列就是 p 的（相关）样本。</li>
+    </ol>
+
+    <p>注意公式里只需要 p̃ 的比值——<strong>配分函数 Z 在分子分母里约掉了</strong>，这正是 MCMC 能对付无向模型的原因。</p>
+
+    <p>完整手算一步 MH。三个状态 {1, 2, 3}，p̃ = (1, 2, 3)（即 p ∝ (1,2,3)），提议均匀对称：从当前状态等概率提议另外两个之一。设当前在状态 3，提议到状态 2：</p>
+
+    <div class="formula">A = min(1, <span class="frac"><span class="num-part">p̃(2)</span><span class="den-part">p̃(3)</span></span>) = min(1, <span class="frac"><span class="num-part">2</span><span class="den-part">3</span></span>) = <span class="frac"><span class="num-part">2</span><span class="den-part">3</span></span></div>
+
+    <p>即以 2/3 概率接受、1/3 概率留在 3。（对称提议下 q 的两项约掉，只剩 p̃ 之比。）反过来从 2 提议到 3 时 A = min(1, 3/2) = 1，必接受——链天然地从低概率区往高概率区爬，又偶尔下山，长期频率恰好复现 p。</p>
+
+    <p>第二个构造是 <span class="term">Gibbs 采样</span>（Gibbs Sampling）：每次只更新一个变量，固定其余变量，从条件分布 p(xᵢ | x₋ᵢ) 采样。手算一步：两个二值变量，势能表 φ(0,0)=1，φ(0,1)=2，φ(1,0)=3，φ(1,1)=4。当前状态 (0,0)，轮到更新 x₂：</p>
+
+    <div class="formula">p(x₂=1 | x₁=0) = <span class="frac"><span class="num-part">φ(0,1)</span><span class="den-part">φ(0,0)+φ(0,1)</span></span> = <span class="frac"><span class="num-part">2</span><span class="den-part">3</span></span></div>
+
+    <p>即以 2/3 概率把 x₂ 翻成 1，1/3 保持 0。Gibbs 可以看作提议来自条件分布的 MH，且接受率恒等于 1——每步必走，从不浪费。第20章训练 RBM 用的正是这一招：可见层与隐藏层交替做 Gibbs。</p>
+
+    <div class="box insight">
+      <span class="box-tag">✅ 判定规则</span>
+      <p>MCMC 样本的两个先天缺陷：①<strong>相关</strong>——相邻样本只差一步，等效独立样本数远小于链长，1/√n 的误差公式要打折扣；②<strong>要暖机</strong>——链的前段还带着出发点的痕迹（burn-in），必须扔掉。判断链是否"混合"（遍历了整个分布）没有完美办法，实践中靠多条链对比与目视轨迹。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>以为"链跑了很久 = 收敛了"。错。多峰分布里链可能困在一个峰里跑了十万步，看起来稳得很，其实另一个峰从未到访——混合失败的链给出的是自信的错误答案。这也是第18章对比散度敢用"只跑 k 步的短链"的原因之一：既然长链也未必可信，不如用便宜的有偏近似换训练效率。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 17.4-1</div>
+              <div class="q-text">写出 MH 的接受率公式，并说明为什么它能绕开配分函数。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              A = min(1, p̃(x′)q(x|x′) / [p̃(x)q(x′|x)])。只含 p̃ 的比值，Z 分子分母约掉，所以无需知道归一化常数。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 17.4-2</div>
+              <div class="q-text">Gibbs 采样一步做什么？它与 MH 的关系是什么？MCMC 样本的两个缺陷？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              固定其余变量，从条件分布 p(xᵢ|x₋ᵢ) 更新一个变量。Gibbs 是接受率恒为 1 的特例 MH。缺陷：样本相关、需要 burn-in 且混合是否充分难诊断。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===== 章末五件套之 1：概念卡 ===== -->
+    <h2><span class="sec-no">🃏</span>概念卡：本章概念的一分钟画像</h2>
+    <p>翻面前先自问：这个概念我能用一句话讲清楚吗？</p>
+    <div class="flip-grid">
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 1</div>
+            <div class="q-text">蒙特卡洛估计（Monte Carlo Estimation）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">用样本平均近似期望：E[f] ≈ (1/n)Σf(x⁽ⁱ⁾)，x⁽ⁱ⁾ 采自 p。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">指数级求和（Z、期望、梯度负相）的通用近似方案。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">枚举不动就抽签，抽多了频率即概率。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为样本能无限精确——误差 1/√n，精度 10 倍要 100 倍样本。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">第18章负相估计、第19/20章一切期望的近似计算。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 2</div>
+            <div class="q-text">逆变换采样（Inverse Transform Sampling）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">采 u∼U[0,1]，输出 x = F⁻¹(u)，F 是目标的累积分布函数。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">CDF 反函数有解析式时的一行式采样器。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">把均匀数翻译回概率轴上的位置。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为通用——多数分布的 F⁻¹ 没有闭式，高维更无从下手。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">指数/柯西等简单分布；VAE 重参数化里 ε∼N(0,1) 的一步。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 3</div>
+            <div class="q-text">拒绝采样（Rejection Sampling）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">从罩住 p̃ 的 kq 采候选，以 p̃/(kq) 概率接受。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">只会对 p̃ 求值、没有解析反函数时的精确采样。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">在罩子里撒点，削掉高出 p̃ 的部分。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">k 没罩全而不自知——漏罩的区域被系统性删去，答案直接错。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">低维精确采样；接受率还顺手估计配分函数之比。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 4</div>
+            <div class="q-text">重要性采样（Importance Sampling）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">从 q 采样，按 w = p/q 加权估计 p 下的期望。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">p 采不动、只能求值时，用好采的 q 间接算 p 的期望。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">记账改造：采多了降权，采少了加权。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为无偏就可用——q 太偏时方差爆炸，99% 样本权重近零。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">模型间似然比较；第20章 VAE 重要性加权下界（IWAE）。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 5</div>
+            <div class="q-text">马尔可夫链与平稳分布（Markov Chain &amp; Stationary Distribution）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">下一步只依赖当前状态的随机游走；不可约非周期链收敛到唯一平稳分布 π。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">把"从 p 采样"转化为"造一条平稳分布是 p 的链并跑它"。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">_shuffle 得够久的牌堆：顺序信息洗没，只剩分布。_</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">把"跑了很久"当"已收敛"——困在单峰的链看着也稳。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">一切 MCMC 的理论地基；第18章 CD-k 的"k 步链"。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 6</div>
+            <div class="q-text">Metropolis-Hastings 算法</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">提议 q(x′|x) + 接受率 min(1, p̃′q反/p̃q正)，构造平稳分布为 p 的链。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">只需能对 p̃ 求比值，即可从任意复杂分布采样。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">上坡必走、下坡抽签——长期频率自动复现地形高度。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">提议步长随便设——太大接受率低，太小走得慢，都要调。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">通用 MCMC 骨架；条件分布好采时退化为 Gibbs。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 7</div>
+            <div class="q-text">Gibbs 采样（Gibbs Sampling）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">逐变量从条件分布 p(xᵢ|x₋ᵢ) 更新的 MCMC。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">条件分布好算（图模型的邻居结构保证）时零拒绝采样。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">轮流问每个变量："给定其他人，你该取什么？"</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">变量强相关时链几乎原地踏步——单点更新的先天短板。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">第20章 RBM 的块 Gibbs（可见层⇄隐藏层交替）、DBM 采样。</span></div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- ===== 章末五件套之 2：分层习题 ===== -->
+    <h2><span class="sec-no">📝</span>分层习题</h2>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>判断对错：蒙特卡洛估计的误差随样本量线性下降，样本翻倍误差减半。</div>
+      <details>
+        <summary>提示</summary>
+        <p>回忆估计量的方差公式 Var[f]/n，标准差是方差的什么运算？</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer"><strong>错。</strong>方差随 1/n 下降，但衡量误差的标准差是其平方根，随 1/√n 下降：样本翻倍，误差只缩到原来的 1/√2 ≈ 0.71 倍；想让误差减半，样本要变成 4 倍。把方差速度与标准差速度混为一谈是最常见的口误。</div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>判断对错：MCMC 链条跑得足够长，样本就相互独立，可以直接套用独立样本的 1/√n 误差公式。</div>
+      <details>
+        <summary>提示</summary>
+        <p>链上相邻两个状态之间差几步？相隔很远的两个样本才近似独立——中间的样本提供了多少新信息？</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer"><strong>错。</strong>MCMC 样本天然相关：相邻状态只差一步提议，一条 n 步链携带的信息量远少于 n 个独立样本（等效独立样本数 = n/自相关时间）。误差仍按 1/√n_eff 下降，但 n_eff ≪ n。直接套独立公式会严重低估误差——这是 MCMC 实践中最贵的错觉。</div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>用拒绝采样从 p̃(x) = x(2−x)（x∈[0,1]）采样，q = U[0,1]，k = 1。(a) 验证 k 合法；(b) 求整体接受率；(c) 若候选点为 x = 0.5，它被接受的概率是多少？</div>
+      <details>
+        <summary>提示</summary>
+        <p>(a) 找 p̃ 的最大值；(b) 接受率 = p̃ 曲线下面积 ÷ 罩子面积；(c) 直接套接受规则。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          (a) p̃(x) = x(2−x)，求导 2−2x = 0 得 x = 1，最大值 p̃(1) = 1 ≤ k·q(x) = 1，处处成立 ✓；<br>
+          (b) 接受率 = ∫₀¹ x(2−x)dx / (k·1) = [x² − x³/3]₀¹ = 1 − 1/3 = <strong>2/3</strong>；<br>
+          (c) p̃(0.5) = 0.5×1.5 = 0.75，接受概率 = 0.75/(1×1) = <strong>0.75</strong>。<br>
+          对照直觉：x 越靠近 1 越易被接受，采出的样本自然偏向右端——正是 p̃ 的形状。
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>MH 链状态 {1,2,3}，p̃ = (1,2,3)，对称均匀提议。(a) 当前在状态 1，提议到 2，接受率？(b) 当前在状态 2，提议到 1，接受率？(c) 用这两个数验证细致平衡在 1↔2 间成立。</div>
+      <details>
+        <summary>提示</summary>
+        <p>对称提议下 A = min(1, p̃′/p̃)。细致平衡：p(i)·T(i→j) = p(j)·T(j→i)，注意 T = 提议概率 × 接受率，p = p̃/Z。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          (a) A = min(1, 2/1) = <strong>1</strong>（向更高概率必接受）；<br>
+          (b) A = min(1, 1/2) = <strong>1/2</strong>；<br>
+          (c) 左：p(1)·T(1→2) = (1/6)·(1/2)·1 = 1/12；右：p(2)·T(2→1) = (2/6)·(1/2)·(1/2) = 1/12。两边相等 ✓。<br>
+          细致平衡 ⇒ p 是平稳分布——MH 的全部正确性就藏在这两个 1/12 里。
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l3">L3 建模应用</span>你要估计一个 784 维二值向量（MNIST 像素）在某个无向能量模型下的期望 E[∇log p̃]（即第16章梯度里的负相）。请从本章四件武器中选一件，说明为什么其他三件不行，并描述执行流程与两个实践风险。</div>
+      <details>
+        <summary>提示</summary>
+        <p>逐件检查：逆变换需要什么？拒绝采样的 k 在 2⁷⁸⁴ 个状态上意味着什么？重要性采样的 q 要覆盖一个什么样的空间？MCMC 的条件分布好不好算？</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          选 <strong>MCMC（块 Gibbs）</strong>。<br>
+          排除：①逆变换——2⁷⁸⁴ 个状态的联合分布没有可用 CDF 反函数；②拒绝采样——罩住高维能量景观的 k 天文数字，接受率实际为零；③重要性采样——找不到与模型分布形状接近又能采的 q，权重方差爆炸。<br>
+          MCMC 流程：从数据点出发初始化可见层 → 块 Gibbs 交替采样隐藏层与可见层（RBM 结构下条件分布是逐个 sigmoid，好算）→ 跑 k 步后取状态算 ∇log p̃ → 多样本平均即负相估计。这就是第18章 CD-k 的采样内核。<br>
+          两个风险：①链只跑 k 步，样本有偏（未收敛到模型分布）；②多峰能量面上链可能困在局部，负相被系统性低估。
+        </div>
+      </details>
+    </div>
+
+    <!-- ===== 章末五件套之 3：自测 ===== -->
+    <h2><span class="sec-no">✍️</span>本章自测</h2>
+    <p class="quiz-hint">点击选项判分，答错会给出原因。</p>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 1</div>
+      <div class="q-stem">蒙特卡洛估计的标准误差随样本量 n 如何变化？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 随 1/n 下降</li>
+        <li data-opt="b">B. 随 1/√n 下降，且与维度无关</li>
+        <li data-opt="c">C. 随 1/√n 下降，但维度越高越慢</li>
+        <li data-opt="d">D. 随维度指数恶化（维度灾难）</li>
+      </ul>
+      <div class="quiz-explain">解析：B 对——Var = Var[f]/n，标准差 ∝ 1/√n，且公式里没有维度 d，这是蒙特卡洛统治高维的根本原因。A 把方差速度当成了标准差速度；C 和 D 描述的是网格法的维度灾难，恰好是蒙特卡洛被发明出来要避开的东西。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="c">
+      <div class="q-no">自测 2</div>
+      <div class="q-stem">指数分布 p(x) = λe^(−λx)，用逆变换采样，抽到 u = 0.8，λ = 2，样本 x 约为？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. −ln(0.8)/2 ≈ 0.112</li>
+        <li data-opt="b">B. −ln(0.8)×2 ≈ 0.446</li>
+        <li data-opt="c">C. −ln(0.2)/2 ≈ 0.805</li>
+        <li data-opt="d">D. ln(0.2)/2 ≈ −0.805</li>
+      </ul>
+      <div class="quiz-explain">解析：C 对——x = −ln(1−u)/λ = −ln(0.2)/2 = 1.609/2 ≈ 0.805。A 错在把 1−u 写成 u（虽然 1−u 与 u 同分布，结果分布不变，但按公式推导是 1−u）；B 把除以 λ 写成乘 λ，量纲直接错；D 忘了负号，指数分布的样本不可能是负数。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="a">
+      <div class="q-no">自测 3</div>
+      <div class="q-stem">拒绝采样在高维失效的根本原因是？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 罩住 p̃ 所需的 k 随维度指数增长，接受率指数崩塌</li>
+        <li data-opt="b">B. 高维里无法定义均匀提议分布</li>
+        <li data-opt="c">C. 高维里 p̃ 无法求值</li>
+        <li data-opt="d">D. 接受规则 min(1, ·) 在高维不再适用</li>
+      </ul>
+      <div class="quiz-explain">解析：A 对——接受率 = Z_p/(kZ_q)，高维里 p̃ 的质量集中在很小的典型集，罩子 kq 不得不巨大无比。B 错：高维均匀分布（单位立方体上）照样好采；C 错：拒绝采样本就只要求能对 p̃ 逐点求值，这与维度无关；D 错：接受规则本身没有维度限制，崩的是接受率不是规则。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="d">
+      <div class="q-no">自测 4</div>
+      <div class="q-stem">重要性采样中，提议分布 q 选择不当（在 p 的重要区域概率太小）会导致？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 估计量变成有偏的</li>
+        <li data-opt="b">B. 估计量恒等于零</li>
+        <li data-opt="c">C. 样本被拒绝的比例升高</li>
+        <li data-opt="d">D. 少数样本权重爆炸，估计方差爆炸</li>
+      </ul>
+      <div class="quiz-explain">解析：D 对——权重 w = p/q，q 小而 p 大时 w 巨大，估计被极少数样本绑架，方差爆炸。A 错：只要 p&gt;0 处 q&gt;0，重要性采样永远无偏——问题是方差不是偏差；B 错：没有任何机制让它恒为零；C 错：重要性采样没有"拒绝"环节，那是拒绝采样的概念，张冠李戴。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 5</div>
+      <div class="q-stem">Gibbs 采样相对一般 Metropolis-Hastings 的特点是？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 样本相互独立，无需 burn-in</li>
+        <li data-opt="b">B. 接受率恒为 1，每步必走，但强相关变量间混合慢</li>
+        <li data-opt="c">C. 不需要知道任何条件分布</li>
+        <li data-opt="d">D. 适用于连续变量但不适用于离散变量</li>
+      </ul>
+      <div class="quiz-explain">解析：B 对——Gibbs 是提议取条件分布的 MH 特例，接受率恒 1；但一次只动一个变量，强相关变量（如相邻像素）要很多步才能联合变化。A 错：Gibbs 样本照样相关、照样要 burn-in；C 恰好说反：Gibbs 的全部前提就是条件分布 p(xᵢ|x₋ᵢ) 好采；D 错：Gibbs 在离散（RBM 二值单元）和连续上都用。</div>
+    </div>
+
+    <!-- ===== 章末五件套之 4：三句话复述 ===== -->
+    <div class="retell">
+      <h3>🗣️ 用自己的话，三句话讲完本章</h3>
+      <p>对着空气（或室友）说出这三句。说卡壳的那句，回去重读对应小节。</p>
+      <details>
+        <summary>句1：这章解决什么问题？——</summary>
+        <div class="retell-answer">参考答案：第16章的配分函数和训练梯度里的期望都要对 2ⁿ 个状态求和，精确计算不可能；本章用随机抽样近似这些求和，并解决"样本从哪里来"的问题。</div>
+      </details>
+      <details>
+        <summary>句2：核心机制是什么？——</summary>
+        <div class="retell-answer">参考答案：样本平均近似期望（误差 1/√n、与维度无关）；样本来源四件套——逆变换（F⁻¹ 有解析式）、拒绝采样（kq 罩住 p̃）、重要性采样（从 q 采按 p/q 加权）、MCMC（造一条平稳分布为 p 的马尔可夫链，MH 用接受率、Gibbs 逐变量更新）。</div>
+      </details>
+      <details>
+        <summary>句3：它和前后章怎么分工？——</summary>
+        <div class="retell-answer">参考答案：第16章提出问题（Z 算不动），本章给第一把武器（采样近似）；但 MCMC 样本相关、收敛慢，第18章索性绕开 Z 改目标函数（伪似然、CD、得分匹配），而 CD-k 内部的采样器正是本章的 Gibbs。</div>
+      </details>
+    </div>
+
+    <!-- ===== 章末五件套之 5：间隔复习计划 ===== -->
+    <div class="review-plan">
+      <h3>🔁 间隔复习计划</h3>
+      <p>回忆本身比重读有效 10 倍。到点只做一件事：翻卡 + 重做标记题。</p>
+      <table>
+        <tr><th>时间点</th><th>复习内容</th><th>预计用时</th></tr>
+        <tr><td>第 1 天</td><td>全部概念卡 + 回忆卡 17.1 至 17.4</td><td>10 分钟</td></tr>
+        <tr><td>第 3 天</td><td>概念卡 1、4、6（MC 估计/重要性采样/MH）+ 重做 L2 两题</td><td>10 分钟</td></tr>
+        <tr><td>第 7 天</td><td>三句话复述 + 自测错题 + 默写 MH 接受率与 Gibbs 更新式</td><td>10 分钟</td></tr>
+        <tr><td>第 15 天</td><td>只重做合上书挑战；能全过就毕业</td><td>15 分钟</td></tr>
+      </table>
+    </div>
+
+    <!-- 合上书挑战 -->
+    <div class="final-challenge">
+      <h3>📕 合上书挑战</h3>
+      <p class="fc-sub">现在关掉这个页面，拿一张纸，凭记忆完成以下任务。全部做完再回来核对——这是本章真正的毕业考试。</p>
+      <ol id="challenge-list">
+        <li><span class="fc-check"></span>写出蒙特卡洛估计公式与误差公式，解释"精度 10 倍、样本 100 倍"</li>
+        <li><span class="fc-check"></span>手算逆变换采样一例：指数分布 λ=2、u=0.8</li>
+        <li><span class="fc-check"></span>手算拒绝采样接受率一例：p̃=x(2−x)、q 均匀、k=1，并说出高维崩塌的原因</li>
+        <li><span class="fc-check"></span>写出重要性采样估计量与权重，手算 p=(0.6,0.4)、q 均匀、8 样本的估计值</li>
+        <li><span class="fc-check"></span>写出 MH 接受率公式，手算 p̃=(1,2,3) 从 3 提议到 2 的接受率，并解释 Z 为什么消失</li>
+        <li><span class="fc-check"></span>用势能表 φ=(1,2,3,4) 手算一步 Gibbs：p(x₂=1|x₁=0)</li>
+        <li><span class="fc-check"></span>回答本章的主线问题：求和算不动时采样为什么可行，样本从哪里来，代价是什么？（一句话）</li>
+      </ol>
+    </div>
+
+    <div class="complete-zone">
+      <button class="btn-complete" id="btn-complete" onclick="markDone()">✓ 我已完成本章（含合上书挑战）</button>
+    </div>
+
+    <div class="chapter-nav">
+      <a href="chapter-16.html"><span class="nav-dir">← 上一章</span>第16章 结构化概率模型</a>
+      <a href="chapter-18.html" class="next"><span class="nav-dir">下一章 →</span>第18章 直面配分函数</a>
+    </div>
+
+  </div>
+</div>
+
+<footer class="footer">
+  <div class="wrap">第17章 蒙特卡洛方法 · 深度学习互动讲义 · 基于 Goodfellow et al.《深度学习》(2016)</div>
+</footer>
+
+<script src="/lectures-assets/mermaid.min.js"></script>
+<script>
+mermaid.initialize({
+  startOnLoad: true,
+  theme: "base",
+  themeVariables: {
+    primaryColor: "#e3edf7",
+    primaryBorderColor: "#1d5f9e",
+    primaryTextColor: "#1d5f9e",
+    lineColor: "#5c554b",
+    secondaryColor: "#fbeedd",
+    tertiaryColor: "#f5f1e8",
+    fontFamily: "-apple-system, PingFang SC, sans-serif",
+    fontSize: "14px"
+  },
+  flowchart: { curve: "linear", htmlLabels: false }
+});
+</script>
+<script>
+// 自测题判分
+document.querySelectorAll(".quiz-block").forEach(block => {
+  const answer = block.dataset.answer;
+  const explain = block.querySelector(".quiz-explain");
+  block.querySelectorAll(".quiz-opts li").forEach(li => {
+    li.addEventListener("click", () => {
+      const opts = block.querySelectorAll(".quiz-opts li");
+      opts.forEach(o => o.classList.add("disabled"));
+      if (li.dataset.opt === answer) {
+        li.classList.add("correct");
+      } else {
+        li.classList.add("wrong");
+        block.querySelector(`[data-opt="${answer}"]`).classList.add("correct");
+      }
+      explain.classList.add("show");
+    });
+  });
+});
+
+// 合上书清单打勾
+document.querySelectorAll("#challenge-list li").forEach(li => {
+  li.addEventListener("click", () => li.classList.toggle("checked"));
+});
+
+// 完成标记 → localStorage（本系列键 dl_progress_v1，章号为字符串 "17"）
+const KEY = "dl_progress_v1";
+function loadProgress() {
+  try { return JSON.parse(localStorage.getItem(KEY)) || {}; } catch (e) { return {}; }
+}
+const progress = loadProgress();
+const btn = document.getElementById("btn-complete");
+if (progress["17"] && progress["17"].done) {
+  btn.textContent = "✓ 已完成 · 再次点击重置";
+  btn.classList.add("done");
+}
+function markDone() {
+  const p = loadProgress();
+  if (p["17"] && p["17"].done) {
+    delete p["17"];
+    btn.textContent = "✓ 我已完成本章（含合上书挑战）";
+    btn.classList.remove("done");
+  } else {
+    p["17"] = { done: true, completedAt: Date.now(), reviewsDone: 0 };
+    btn.textContent = "✓ 已完成 · 复习提醒已开启";
+    btn.classList.add("done");
+  }
+  localStorage.setItem(KEY, JSON.stringify(p));
+}
+</script>
+
+</body>
+</html>

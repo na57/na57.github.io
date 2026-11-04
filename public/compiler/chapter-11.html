@@ -1,0 +1,790 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第11章 并行性与局部性优化 · 编译原理互动讲义</title>
+<link rel="stylesheet" href="/lectures-assets/style.css">
+</head>
+<body>
+
+<nav class="topbar">
+  <div class="topbar-inner">
+    <span class="brand"><a href="index.html" style="color:inherit">← 学习地图</a></span>
+    <span class="crumb">阶段③ · 后端与优化 / 第11章</span>
+  </div>
+</nav>
+
+<div class="wrap">
+
+  <div class="lecture-head">
+    <span class="ch-label">CHAPTER 11 · 后端与优化</span>
+    <h1>并行性与局部性优化</h1>
+    <p class="lead">第10章在一个核里把指令级并行榨到了头，本章把循环拆到多个核上跑，并回答真正决定速度的那个问题：数据离计算有多近。</p>
+  </div>
+
+  <!-- ===== 章首四件套之 1：全书定位 ===== -->
+  <div class="position-bar">
+    <strong>本章在主线上的位置：</strong>第10章给了单核内 ILP 的天花板 → <u>本章把并行粒度抬到线程级，用依赖分析判定可并行循环，用分块压住 cache 缺失</u> → 第12章因此能回头审视这一切背后的理论地基与边界。<br>
+    第11章回答主线上的最后一个技术问题：<strong>大循环怎么拆给多个核并行跑，又让 cache 不抖？</strong>
+    <div class="map-inline">
+      <span class="node">Ch1–4 前端：词法与语法</span><span class="arrow">→</span>
+      <span class="node">Ch5–7 语义与中间代码</span><span class="arrow">→</span>
+      <span class="node here">Ch8–11 后端与优化 ← 本章 Ch11</span><span class="arrow">→</span>
+      <span class="node">Ch12 全书收束（理论回顾）</span>
+    </div>
+  </div>
+
+  <!-- ===== 章首四件套之 2：学习目标 ===== -->
+  <div class="objectives">
+    <h4>🎯 学完本章，合上书你应该能：</h4>
+    <ol>
+      <li>说出单核 ILP 见顶的原因，以及共享内存多核模型的基本假设与代价。</li>
+      <li>对给定两层嵌套循环，写出全部依赖距离向量，并逐层判定是否 DOALL。</li>
+      <li>手算 N×N 矩阵乘在不分块与分块两种形态下的 cache miss 量级与具体数值。</li>
+      <li>给定 cache 容量 C 与行大小 L，推出分块大小 B 的上界并取定具体值。</li>
+      <li>解释行优先布局下把循环换成 i-k-j 序为什么能消除按列访问。</li>
+      <li>用一句话说明仿射变换如何统一循环交换、分块与倾斜，以及变换合法的条件。</li>
+    </ol>
+  </div>
+
+  <div class="lecture">
+
+    <!-- ===== 章首四件套之 3：推导主线图 ===== -->
+    <div class="figure">
+      <div class="mermaid">
+flowchart TB
+  subgraph S1["第一层：算得动吗"]
+    direction LR
+    A["单核 ILP 见顶：功耗墙"] --> B["多核 + 共享内存：线程级并行"]
+    B --> C["问题：循环哪些迭代能同时跑"]
+  end
+  subgraph S2["第二层：跑得对吗"]
+    direction LR
+    D["依赖分析：距离向量"] --> E["DOALL 判定：无跨迭代依赖才可拆"]
+  end
+  subgraph S3["第三层：跑得快吗"]
+    direction LR
+    F["并行后数据量翻倍：cache 顶不住"] --> G["循环分块：让三个块同时驻留"]
+    G --> H["仿射变换：统一调度迭代空间"]
+    H --> I["代价：指针别名让依赖分析变保守"]
+  end
+  C --> D
+  E --> F
+  classDef hot fill:#fbeedd,stroke:#c4651f,stroke-width:2.5px,color:#c4651f;
+  classDef danger fill:#fae9e7,stroke:#b03a2e,stroke-width:2.5px,color:#b03a2e;
+  class I danger;
+      </div>
+      <div class="caption">图 11.1 本章推导主线：先问能不能拆（依赖），再问拆完快不快（局部性），最后落到分析能力的极限。</div>
+    </div>
+
+    <!-- ============================================================
+      11.1 为什么单核见顶
+    ============================================================ -->
+    <h2><span class="sec-no">11.1</span>为什么单核见顶：从指令级并行到线程级并行</h2>
+
+    <p>第10章给了我们一整套在<strong>一个核内部</strong>榨取并行的办法：流水线、超标量、乱序执行、软件流水。但它们共享一个天花板——指令窗口里能同时找到的独立指令终究有限，分支与访存延迟又不断吃掉收益。更硬的约束来自物理：<strong>功耗墙</strong>——频率每提一档，功耗近似按立方上涨，2005 年前后单核频率基本停摆。同样的晶体管预算，与其堆一个更快的核，不如放<strong>多个核</strong>。</p>
+
+    <p>于是并行粒度从指令级抬到<span class="term">线程级并行</span>（Thread-Level Parallelism, TLP）：程序显式或半显式地分成多个执行流，跑在不同核上。本章假设最主流的硬件模型——<span class="term">共享内存</span>（Shared Memory）多核：所有核看到同一个地址空间，通信靠读写共享变量，天然省事；代价是写同一数据时需要同步（锁、栅栏），否则结果出错。</p>
+
+    <p><strong>最小例子：向量加。</strong>对 <span class="var">for i = 0..N−1: C[i] = A[i] + B[i]</span>，4 个核各拿连续的四分之一区间，互不需要通信，干完汇合即可。这类循环是 11.2 要正式判定的"天然可并行"形态。</p>
+
+    <p>但"能拆"不等于"快 p 倍"。<span class="term">阿姆达尔定律</span>（Amdahl's Law）给出加速比上界：设程序中必须串行执行的部分占 <span class="var">f<sub>s</sub></span>，用 <span class="var">p</span> 个核，则</p>
+
+    <div class="formula">S(p) = <span class="frac"><span class="num-part">1</span><span class="den-part">f<sub>s</sub> + (1 − f<sub>s</sub>) / p</span></span></div>
+
+    <p><strong>手算一遍：</strong>设 f<sub>s</sub> = 5% = 0.05，p = 64。分母 = 0.05 + 0.95 / 64 = 0.05 + 0.0148 = 0.0648，S(64) = 1 / 0.0648 ≈ 15.4 倍。就算 p → ∞，上界也只有 1 / 0.05 = 20 倍。结论：串行部分不消灭，堆核没用。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>并行不是"让同一批人跑快点"，而是"把一件事换成一群人同时做"。前提是这件事<strong>能拆</strong>——拆的合法性由 11.2 的依赖分析裁决，拆完快不快由 11.3 的局部性裁决。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>以为开 p 个线程就近乎快 p 倍。错：Amdahl 定律说明加速比被串行部分死死压住（5% 串行 ⇒ 64 核也只有约 15 倍）。此外还有同步开销、负载不均、伪共享（false sharing）——两个核写同一 cache 行的不同字节，也会互相把对方的行挤掉。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 11.1-1</div>
+              <div class="q-text">单核性能为什么在 2005 年前后基本停止增长？本章因此把并行粒度从什么抬到什么？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              ILP 天花板 + 功耗墙（频率提升带来超线性功耗）。粒度从<strong>指令级并行（ILP）</strong>抬到<strong>线程级并行（TLP）</strong>，硬件形态是共享内存多核。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 11.1-2</div>
+              <div class="q-text">写出 Amdahl 定律公式。串行部分占 5% 时，64 核的加速比约是多少？理论上界呢？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              S(p) = 1 / (f<sub>s</sub> + (1−f<sub>s</sub>)/p)。f<sub>s</sub>=0.05、p=64 时 ≈ 15.4 倍；p→∞ 时上界 20 倍。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============================================================
+      11.2 循环并行化与依赖
+    ============================================================ -->
+    <h2><span class="sec-no">11.2</span>哪些迭代能同时跑：迭代空间与依赖距离向量</h2>
+
+    <p>上一节说"能拆才能快"，这一节给出"能不能拆"的判官。科学计算与大循环是并行化的主战场，而循环的迭代天然成千上万，是线程级并行最肥的肉。问题：哪些循环可以原样切开分给多核？</p>
+
+    <p>先把循环变成几何对象。d 层嵌套循环的所有迭代构成<span class="term">迭代空间</span>（Iteration Space）：每个迭代用下标向量 (i₁, i₂, …, i<sub>d</sub>) 表示，是 ℤ<sup>d</sup> 中的一个整点；两层循环就是一张二维网格，每个格子是一次迭代。执行顺序按字典序（先行后列）。</p>
+
+    <p>迭代之间的冲突用<span class="term">依赖</span>（Dependence）刻画：若迭代 I₁ 先于 I₂ 执行，且两者访问同一内存位置、至少一次是写，则 I₂ 依赖 I₁。写后读（RAW）是<span class="term">流依赖</span>（flow dependence），是真正的数据传递；写后读之外还有反依赖（WAR）与输出依赖（WAW），理论上可通过改名消除，本章聚焦流依赖。</p>
+
+    <p>把依赖量化：<span class="term">依赖距离向量</span>（Dependence Distance Vector）。若迭代 (i₁, j₁) 写入的位置被迭代 (i₂, j₂) 读取，则距离向量 d = (i₂ − i₁, j₂ − j₁)。因为读必然发生在写之后（字典序），合法的距离向量必须<strong>字典序非负</strong>（第一个非零分量为正）。</p>
+
+    <p>有了距离向量，可并行性变成一行判定：<span class="term">DOALL 循环</span>（DOALL Loop）指所有迭代互不依赖、可以任意顺序同时执行的循环。对嵌套循环的第 k 层：</p>
+
+    <div class="box insight">
+      <span class="box-tag">✅ 判定规则</span>
+      <p>若所有依赖距离向量的第 k 个分量都为 0，则第 k 层循环是 DOALL，可以把该层迭代切块分给多个核；只要存在一个距离向量第 k 分量非零，该层就携带依赖，不能原样并行。</p>
+    </div>
+
+    <p><strong>例1（两层都是 DOALL）：逐元素矩阵加。</strong></p>
+
+    <div class="formula">for i = 1..N<br>&nbsp;&nbsp;for j = 1..N<br>&nbsp;&nbsp;&nbsp;&nbsp;C[i][j] = A[i][j] + B[i][j]</div>
+
+    <p>一步步查依赖：① 写 C[i][j]：每个 (i, j) 恰好写一次，不存在两次迭代写同一位置 → 无输出依赖。② A、B 在整个循环里只读不写 → 读的双方永远不会和写冲突。③ 结论：依赖集为空，距离向量集合为空集 → 空集上"所有第 k 分量为 0"平凡成立 → 内外两层都是 DOALL。4 个核按 i 切成 4 段即可，零通信。</p>
+
+    <p><strong>例2（因跨迭代依赖而不可并行）：递推。</strong></p>
+
+    <div class="formula">for i = 2..N<br>&nbsp;&nbsp;for j = 2..N<br>&nbsp;&nbsp;&nbsp;&nbsp;A[i][j] = A[i−1][j] + A[i][j−1]</div>
+
+    <p>距离向量手算，不跳步：</p>
+    <ol>
+      <li>写 A[i][j] 与读 A[i−1][j]：同一位置 ⟺ (i, j) = (i′ − 1, j′)，即 i′ = i + 1, j′ = j。源 (i, j) → 汇 (i+1, j)，距离 d₁ = (1, 0)。</li>
+      <li>写 A[i][j] 与读 A[i][j−1]：同一位置 ⟺ (i, j) = (i″, j″ − 1)，即 i″ = i, j″ = j + 1。源 (i, j) → 汇 (i, j+1)，距离 d₂ = (0, 1)。</li>
+      <li>距离向量集 D = {(1, 0), (0, 1)}，均字典序非负，合法。</li>
+      <li>判 i 层（k=1）：d₁ 的第一分量是 1 ≠ 0 → i 层携带依赖，<strong>不可并行</strong>。</li>
+      <li>判 j 层（k=2）：d₂ 的第二分量是 1 ≠ 0 → j 层也携带依赖，<strong>不可并行</strong>。</li>
+    </ol>
+
+    <p>两个例子对照：例1 没有跨迭代依赖，随便拆；例2 每个迭代都要等"上一行同一列"和"同一行前一列"算完，逐行逐列都串行。</p>
+
+    <div class="figure">
+      <div class="mermaid">
+flowchart TB
+  subgraph R1["i = 1"]
+    direction LR
+    A["(1,1)"] --> B["(1,2)"] --> C["(1,3)"]
+  end
+  subgraph R2["i = 2"]
+    direction LR
+    D["(2,1)"] --> E["(2,2)"] --> F["(2,3)"]
+  end
+  A --> D
+  B --> E
+  C --> F
+      </div>
+      <div class="caption">图 11.2 例2 的迭代空间与依赖：横向箭头是距离 (0,1)，纵向箭头是距离 (1,0)。注意对角线 (1,1)、(2,2)、(3,3) 之间没有箭头——这是 11.4 波前并行的伏笔。</div>
+    </div>
+
+    <p>再看一个粒度更细的对照：把例2 改成 <span class="var">A[i][j] = A[i−1][j] + 1</span>。距离向量只剩 {(1, 0)}：i 层不可并行，但所有向量的第二分量都是 0 → <strong>j 层是 DOALL</strong>。也就是说，固定一行，行内 N 个元素可以同时算；行与行之间排队。并行化不必"全有或全无"，逐层判定才有意义。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>距离向量就是"这次写，多久之后被读"的网格坐标差。分量为 0 的那一层，写和读永远落在同一迭代行上，那一层就是自由的。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>看到语句里出现 A[i−1] 就断言"整个循环不可并行"。错：A[i−1][j] 只产生距离 (1, 0)，它锁死的是 i 层，j 层仍然 DOALL。必须写出<strong>全部</strong>距离向量再逐层判定，不能凭下标里有没有减号下结论。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 11.2-1</div>
+              <div class="q-text">什么是迭代空间？依赖距离向量怎么定义？合法距离向量必须满足什么符号条件？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              d 层嵌套循环的迭代 = ℤ<sup>d</sup> 中的整点集合。距离向量 = 汇迭代下标 − 源迭代下标。必须字典序非负（读在写之后）。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 11.2-2</div>
+              <div class="q-text">写出 DOALL 的逐层判定规则，并对 A[i][j] = A[i−1][j] + A[i][j−1] 给出两层各自的结论。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              所有距离向量第 k 分量为 0 ⟹ 第 k 层 DOALL。该例 D = {(1,0), (0,1)}，两层都带非零分量，故两层都不可并行。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============================================================
+      11.3 数据局部性（核心例题）
+    ============================================================ -->
+    <h2><span class="sec-no">11.3</span>数据离计算有多近：矩阵乘的 cache 账</h2>
+
+    <p>11.2 解决了"跑得对吗"，但一个 DOALL 循环拆到 64 核，若每个核都在等内存，就是 64 份等待。现代机器一次 L1 命中约 1 纳秒，一次主存访问约 100 纳秒——<strong>访存比计算慢两个数量级</strong>。所以并行化之后，真正的速度由<span class="term">数据局部性</span>（Data Locality）决定。局部性分两种：<span class="term">时间局部性</span>（Temporal Locality）：同一数据短期内被反复用；<span class="term">空间局部性</span>（Spatial Locality）：相邻数据被连着用。cache 以"行"为单位搬运，正是押注这两种局部性。</p>
+
+    <p>本节核心例题：N×N 矩阵乘 C = A × B（i-j-k 序），把 cache 账算到底。机器参数：cache 容量 C 字节、行大小 L 字节、元素为 8 字节 double，每行 cache 行装 L/8 个元素；数组按<span class="term">行优先</span>（Row-Major）存储——A[i][j] 与 A[i][j+1] 在内存中相邻。</p>
+
+    <div class="formula">for i = 1..N<br>&nbsp;&nbsp;for j = 1..N<br>&nbsp;&nbsp;&nbsp;&nbsp;for k = 1..N<br>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;C[i][j] += A[i][k] × B[k][j]</div>
+
+    <p><strong>不分块版本，逐数组算 miss（设 L = 64 字节，即每行 8 个元素）：</strong></p>
+    <ol>
+      <li><strong>B[k][j]</strong>：内层循环是 k，固定 (i, j)。行优先下 B[k][j] 与 B[k+1][j] 相距一整行 = N×8 字节 → 内层每次访问落在不同 cache 行，<strong>每次访问都 miss</strong>。每个 (i, j) 对内层执行 N 次 → miss 数 = N² × N = N³。跨 i 也无复用：两次使用 B[k][j] 之间，内层扫过整列 N 个元素，涉及 N × N×8 字节 ≫ C，早被挤出。</li>
+      <li><strong>A[i][k]</strong>：内层步长为 1（连续），一行 cache 行服务 8 次访问 → 每 8 次访问 miss 1 次 → miss 数 = N³ / 8。跨 j 能否复用第 i 行？行大小 N×8 = 8 KB（N=1024），看似能留在 32 KB 的 L1 里；但两次使用之间扫过 B 的一整列（8 MB 的访问面），把 A 的行也挤掉了 → 保持 N³/8。</li>
+      <li><strong>C[i][j]</strong>：内层固定引用同一元素，N 次访问至多 miss 1 次；全部 (i, j) 对共 N² 个，按行连续 → miss ≈ N²/8，相对 N³ 可忽略。</li>
+    </ol>
+
+    <div class="formula">miss<sub>不分块</sub> ≈ N³（B 按列）+ <span class="frac"><span class="num-part">N³</span><span class="den-part">8</span></span>（A 按行）+ <span class="frac"><span class="num-part">N²</span><span class="den-part">8</span></span>（C）≈ <span class="frac"><span class="num-part">9</span><span class="den-part">8</span></span> N³</div>
+
+    <p><strong>分块（tiling / blocking）版本。</strong><span class="term">循环分块</span>（Loop Tiling，又称 blocking）把 i、j、k 各切成 N/B 段，先固定三个块下标 (ii, jj, kk)，再算块内 B³ 的局部乘加。关键是：每个内层块计算需要 A、B、C 各一个 B×B 子块<strong>同时驻留</strong>在 cache，于是块大小受约束：</p>
+
+    <div class="formula">3 × B² × 8 ≤ C</div>
+
+    <p><strong>代入数字求 B：</strong>C = 32 KB = 32768 字节（典型 L1），则 B² ≤ 32768 / 24 ≈ 1365.3，B ≤ 36.9。取 2 的幂方便地址计算 → <strong>B = 32</strong>。验证：3 × 32² × 8 = 24576 ≤ 32768 ✓；而 B = 37 时 3 × 37² × 8 = 32856 &gt; 32768 ✗（B = 36 也可行，但 32 对地址计算更友好）。</p>
+
+    <p><strong>分块版 miss 账：</strong>每个块三元组 (ii, jj, kk) 需要装载 A 块与 B 块各一次。一个 B×B 块：块内每行 B 个连续元素 = B×8 字节 = B/8 个 cache 行，共 B 行 → 每块 miss B²/8 次。两块合计 B²/4。块三元组总数 = (N/B)³。于是</p>
+
+    <div class="formula">miss<sub>分块</sub> ≈ <span class="frac"><span class="num-part">N³</span><span class="den-part">B³</span></span> × <span class="frac"><span class="num-part">B²</span><span class="den-part">4</span></span> = <span class="frac"><span class="num-part">N³</span><span class="den-part">4B</span></span></div>
+
+    <p>从 O(N³) 压到 O(N³/B)——每把块放大一倍，miss 减半，而块的上界由 cache 容量卡死。</p>
+
+    <p><strong>N = 1024 的具体数字对比（C = 32 KB，L = 64 B，元素 8 B）：</strong></p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>方案</th><th>A 的 miss</th><th>B 的 miss</th><th>C 的 miss</th><th>合计（约）</th></tr>
+        <tr><td>不分块（i-j-k）</td><td>N³/8 = 134,217,728</td><td>N³ = 1,073,741,824</td><td>N²/8 = 131,072</td><td>1.208 × 10⁹</td></tr>
+        <tr><td>分块 B = 32</td><td colspan="2">合计 N³/(4B) = 8,388,608</td><td>N²/8 = 131,072</td><td>8.52 × 10⁶</td></tr>
+      </table>
+    </div>
+
+    <p>比值：1.208 × 10⁹ / 8.52 × 10⁶ ≈ <strong>142 倍</strong>。同一份代码、同一个编译器，只因循环结构不同，访存开销差两个数量级——这就是局部性优化的分量。</p>
+
+    <p><strong>数据布局与循环序：不动数据也能救。</strong>若不能改存储，还有一个零成本手段：把循环换成 <strong>i-k-j 序</strong>——</p>
+
+    <div class="formula">for i = 1..N<br>&nbsp;&nbsp;for k = 1..N<br>&nbsp;&nbsp;&nbsp;&nbsp;for j = 1..N<br>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;C[i][j] += A[i][k] × B[k][j]</div>
+
+    <p>内层变成 j：B[k][j] 步长 1 ✓（按行连续），C[i][j] 步长 1 ✓，A[i][k] 是内层不变量 ✓（可放寄存器）。三个数组全部空间局部性拉满，miss 从 9N³/8 降到约 N³/8（B）+ N³/8（C）= N³/4，一行数据布局都不用改。反过来，若语言是<span class="term">列优先</span>（Column-Major，Fortran/MATLAB），A[i][j] 与 A[i+1][j] 相邻，同样的 i-j-k 序里遭殃的就是 A——<strong>同一行代码在不同布局下快慢相反</strong>，<span class="term">数据布局</span>（Data Layout）决定了哪个下标方向是"免费"的。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>cache 优化的全部要义只有一句：让"下一次要用的数据"此刻已经在 cache 里。分块是把<strong>时间局部性</strong>捏出来（三个小块反复用，直到用完再扔）；换循环序是把<strong>空间局部性</strong>顺出来（让步长全部变成 1）。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>以为块越大越好。错：块超过 3B²×8 ≤ C 的容量线，三个块互相挤压，miss 立刻反弹回 O(N³)。分块的全部艺术在于贴着容量线取最大可用 B，而不是越大越豪迈。另外别忘了 TLB 与多级 cache：L2、L3 各有自己的最优块大小，工程上常做两级分块。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 11.3-1</div>
+              <div class="q-text">不分块矩阵乘里，为什么 B 的 miss 是 N³ 而 A 只有 N³/8？（从访问步长回答）</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              行优先下内层 k 对 B 是按列访问，步长 N×8 字节，每次落在新 cache 行 → 每次 miss；A 按行访问步长 1，一行服务 8 次 → 每 8 次 miss 1 次。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 11.3-2</div>
+              <div class="q-text">写出分块大小约束 3B²×8 ≤ C 的来历，并对 C = 32 KB 推出可用的 B。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              内层块计算需 A、B、C 三个 B×B 块同时驻留，每块 B² 个 8 字节元素。B² ≤ 32768/24 ≈ 1365 → B ≤ 36.9，取 B = 32。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============================================================
+      11.4 仿射变换与空间分割
+    ============================================================ -->
+    <h2><span class="sec-no">11.4</span>仿射变换：把循环变换统一成线性代数</h2>
+
+    <p>前三节看似给了三个互不相干的技巧：循环交换（治布局）、循环分块（治容量）、循环倾斜（治依赖）。本节把它们收进同一个数学框架。每个循环迭代是 ℤ<sup>d</sup> 里的整点，那么一切循环变换无非是对迭代空间做一次<span class="term">仿射变换</span>（Affine Transformation）：i′ = M·i + c，其中 M 是整数矩阵。编译器据此为每个语句寻找一个仿射调度，把迭代空间切成可并行的片——这套机制称为<span class="term">仿射分割</span>（Affine Partitioning），是龙书第11章的"终极机器"。</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>变换</th><th>矩阵 M</th><th>效果</th></tr>
+        <tr><td>交换（interchange）</td><td>M = [[0,1],[1,0]]，即 i′=j, j′=i</td><td>内外层互换，把按列访问变成按行访问（11.3 的 i-k-j 即两次交换）</td></tr>
+        <tr><td>分块（tiling）</td><td>引入块下标 ⌊i/B⌋，坐标重塑</td><td>大迭代空间切成小块，块内数据驻留 cache（11.3）</td></tr>
+        <tr><td>倾斜（skewing）</td><td>M = [[1,1],[0,1]]，即 s=i+j, t=j</td><td>把 11.2 例2 变成沿反对角线的波前并行</td></tr>
+      </table>
+    </div>
+
+    <p><strong>倾斜的手算（接续例2）：</strong>对 D = {(1,0), (0,1)} 施加 M：d₁′ = M·(1,0) = (1, 0)，d₂′ = M·(0,1) = (1, 1)。变换后所有距离向量的第一维都 ≥ 1——意味着每条依赖都跨越不同的 s = i+j；换言之，<strong>同一反对角线 s 上的迭代互不依赖</strong>，可以同时跑。原本完全串行的例2，倾斜后获得"按波前推进"的并行形态：第 s 条对角线上的所有格子一批算完，再推进到 s+1。</p>
+
+    <p>变换不能乱做，合法性条件一句话：<strong>对每个依赖距离向量 d，M·d 必须仍然字典序非负</strong>——读不能跑到写之前。在此约束下搜索"让某层分量全为 0"的 M，就是自动并行化编译器每天在做的事。</p>
+
+    <p><strong>本章的终点，也是全书的暗线：</strong>这套机器的正确性完全押在依赖分析的精确性上。而 C 语言里两个指针是否指向同一位置（<span class="term">指针别名</span>，Pointer Alias）无法精确判定——分析只能保守地说"可能相等"，于是一条本可并行的循环被判成串行。理论上可行与工程上可做之间的这道缝，正是第12章要从"可判定性"高度回看的东西。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>循环变换 = 迭代空间上的矩阵乘法。把"换序、分块、倾斜"背成三个技巧，不如记住一张图：网格旋转/剪切一下，依赖箭头全部指向"外面"，自由的维度就露出来了。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>以为仿射变换总能把串行循环变并行。错：若依赖本身把迭代串成一条链（如 A[i] = A[i−1] + A[i−2] 这类强递推），任何合法矩阵都变不出 DOALL 层。仿射框架能做的只是在合法变换空间里<strong>搜索最优</strong>，不能无中生有。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 11.4-1</div>
+              <div class="q-text">仿射变换统一了哪三种循环变换？变换合法的判定条件是什么？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              交换、分块、倾斜。合法性：对所有依赖距离向量 d，M·d 字典序非负（读不得先于写）。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 11.4-2</div>
+              <div class="q-text">为什么指针别名会让并行化变保守？这暴露了理论与工程之间的什么张力？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              "两指针是否指向同一位置"不可精确判定，分析只能假设"可能别名"→ 假设存在依赖 → 放弃并行。张力：理论上存在的并行性，工程上因分析能力极限而够不着。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===== 章末五件套之 1：概念卡 ===== -->
+    <h2><span class="sec-no">🃏</span>概念卡：本章概念的一分钟画像</h2>
+    <p>翻面前先自问：这个概念我能用一句话讲清楚吗？</p>
+    <div class="flip-grid">
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 1</div>
+            <div class="q-text">迭代空间（Iteration Space）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">d 层嵌套循环全部迭代下标向量构成的 ℤ<sup>d</sup> 整点集合。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">把"循环执行"变成几何对象，依赖与变换才谈得上精确。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">一张网格纸，每个格子是一次迭代。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为它只是计数工具——它是依赖分析与仿射变换的舞台。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">11.2 判依赖、11.4 做变换，凡谈循环并行都要先画出它。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 2</div>
+            <div class="q-text">依赖距离向量（Dependence Distance Vector）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">汇迭代下标减去源迭代下标得到的向量，须字典序非负。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">把"有没有依赖"量化成"依赖跨几个迭代"，才能逐层判并行。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">这次写，隔几个格子被读。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">看语句里有 i−1 就判死刑；须写出全部向量再逐层判定。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">DOALL 判定、仿射变换合法性检查。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 3</div>
+            <div class="q-text">DOALL 循环（DOALL Loop）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">所有迭代互不依赖、可任意顺序同时执行的循环（层）。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">给出"可以安全拆给多核"的精确判据：距离向量该层分量全为 0。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">一桌互不同桌吃饭的人，上菜顺序随便。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为整个嵌套循环要么全可并行要么全不行——DOALL 是逐层性质。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">自动并行化、OpenMP 加 pragma 前的自查。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 4</div>
+            <div class="q-text">循环分块（Loop Tiling / Blocking）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">把每层循环切成 N/B 段，先按块迭代再在块内计算，使工作集驻留 cache。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">工作集大于 cache 时复用全失；分块把 miss 从 O(N³) 压到 O(N³/B)。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">大桌子擦不完，就分成能hold住的小方格反复擦。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">块越大越好——超过 3B²×8 ≤ C 容量线反而更糟。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">矩阵乘、 stencil、深度学习算子库的核心手段。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 5</div>
+            <div class="q-text">时间局部性（Temporal Locality）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">同一数据在短期内被反复访问的性质。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">它是 cache 存在的理由之一：留住常客的收益最大。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">常用的工具放手边。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为有复用就够——复用间隔内若扫过大量数据，cache 照样留不住。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">分块的本质就是把复用间隔压缩到 cache 寿命之内。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 6</div>
+            <div class="q-text">空间局部性（Spatial Locality）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">相邻地址的数据被接连访问的性质。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">cache 以行为单位搬运；步长为 1 时一行顶 8 次访问。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">买一送七：取一个数顺便把邻居都捎上。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为换数据结构才行——很多时候换个循环顺序就顺出来了。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">i-k-j 换序、数组布局选择（行/列优先）。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 7</div>
+            <div class="q-text">数据布局（Data Layout）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">多维数组在线性内存中的排布方式：行优先或列优先。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">布局决定哪个下标方向步长为 1，即哪个方向访问免费。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">书是按行排还是按列排，决定横着翻快还是竖着翻快。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为只是语言约定——C 行优先、Fortran 列优先，同代码两语言快慢相反。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">跨语言调库（如 C 调 BLAS）、循环序设计前必查。</span></div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- ===== 章末五件套之 2：分层习题 ===== -->
+    <h2><span class="sec-no">📝</span>分层习题</h2>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>判断：只要外层循环存在跨迭代依赖，整个嵌套循环就彻底不可并行，任何层都不能拆。这句话对吗？</div>
+      <details>
+        <summary>提示</summary>
+        <p>回到 DOALL 的逐层判定规则：依赖距离向量是"逐分量"看的。想想 11.2 里 A[i][j] = A[i−1][j] + 1 这个变体。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">错。DOALL 是逐层性质：判定第 k 层只看所有距离向量的第 k 分量。A[i][j] = A[i−1][j] + 1 的距离向量只有 (1, 0)，i 层不可并行，但 j 层所有分量都是 0，j 层是 DOALL——固定一行，行内元素可以同时算。把"外层有依赖"直接等同于"整个循环不可并行"，是因为没把依赖量化到分量级别。</div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>循环分块主要利用的是时间局部性还是空间局部性？换循环序（i-k-j）呢？</div>
+      <details>
+        <summary>提示</summary>
+        <p>分块前后，数据的"复用间隔"发生了什么变化？换序前后，内层循环的"访问步长"发生了什么变化？</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">分块主要利用<strong>时间局部性</strong>：它不改变访问顺序的相邻关系，而是把"同一个 B 块两次被用"之间的间隔压缩到块内 B³ 步，使三个小块在被挤出 cache 前被反复用完。换循环序主要利用<strong>空间局部性</strong>：i-k-j 序把内层对 B、C 的访问步长从 N 变成 1，让每行 cache 行服务 8 次访问。易错点：说"分块也改善了空间局部性"——块内行本来就是连续的，分块没有创造连续性，它创造的是复用窗口。</div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>对循环 for i = 1..N, for j = 2..N: A[i][j] = A[i][j−1] + B[i][j]，写出全部依赖距离向量，并逐层判定是否 DOALL。</div>
+      <details>
+        <summary>提示</summary>
+        <p>先列出"写 A[i][j]"可能与哪些读冲突：读 A[i][j−1]（B 只读不写，不参与依赖）。然后解"写者下标 = 读者下标"的方程。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          ① B[i][j] 全程只读，不产生依赖。② 写 A[i][j] 与读 A[i][j−1]：同一位置 ⟺ (i, j) = (i′, j′ − 1)，即 i′ = i，j′ = j + 1。源 (i, j) → 汇 (i, j+1)，距离 d = (0, 1)。③ 没有其他读写对。距离向量集 D = {(0, 1)}，字典序非负，合法。④ 判 i 层：唯一向量的第一分量是 0 → <strong>i 层 DOALL</strong>：可以把行分给多个核，每核独立处理若干行。⑤ 判 j 层：第二分量是 1 ≠ 0 → j 层携带依赖，行内必须从左到右串行。结论：按行切块并行，行内顺序执行。
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>某机器 cache 容量 C = 16 KB、行大小 L = 32 字节，矩阵元素为 4 字节 float，N = 512。分别计算 i-j-k 序不分块版本与最优分块版本的 cache miss 量级与具体数值。</div>
+      <details>
+        <summary>提示</summary>
+        <p>先算每行 cache 行装几个元素；不分块照搬 9N³/8 的推导（注意 N 与 C 的相对大小，N×4 = 2 KB ≤ 16 KB 也别被迷惑——两次复用之间扫过的是 B 的整列访问面 N²×4 = 1 MB）。分块先解 3B²×4 ≤ 16384。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          ① 每行元素数 = 32 / 4 = 8 个。② 不分块：B 按列访问，步长 N×4 = 2 KB，每次访问新行 → miss = N³ = 512³ = 134,217,728；A 按行，每 8 次 miss 1 次 → N³/8 = 16,777,216；C ≈ N²/8 = 32,768。合计 ≈ 134,217,728 + 16,777,216 + 32,768 = 151,027,712 ≈ 1.51 × 10⁸ 次。③ 分块：3 × B² × 4 ≤ 16384 ⟹ B² ≤ 1365.3 ⟹ B ≤ 36.9，取 B = 32（验证：3 × 32² × 4 = 12,288 ≤ 16,384 ✓）。④ 分块 miss ≈ N³/(4B) = 134,217,728 / 128 = 1,048,576；加 C 块 N²/8 = 32,768，合计 ≈ 1,081,344 ≈ 1.08 × 10⁶ 次。⑤ 比值 ≈ 151,027,712 / 1,081,344 ≈ 140 倍。
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l3">L3 建模应用</span>一台 4 核服务器，每核私有 L1 = 32 KB（L = 64 B），要跑 1024×1024 的 double 矩阵乘。请给出"并行 + 分块"的组合方案：怎么切迭代、块大小取多少、每核 miss 量级多少；并指出方案之外还必须担心的一个多核访存陷阱。</div>
+      <details>
+        <summary>提示</summary>
+        <p>先判定哪层是 DOALL 决定怎么切核；再按 3B²×8 ≤ C 定 B；每核只承担 1/4 的块三元组。陷阱往"多个核写同一 cache 行"上想。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          ① 可并行性：矩阵乘 C[i][j] += A[i][k]×B[k][j] 中每个 C 元素独立累加（不同 (i,j) 写不同位置），最外层 i 是 DOALL（亦可在块层切）。方案：外层块循环按 ii 切成 4 份，每核负责 N/4 行带。② 块大小：3B²×8 ≤ 32768 ⟹ B = 32（与正文一致）。③ 每核 miss：全机合计 ≈ N³/(4B) = 8,388,608 次，4 核均分 → 每核 ≈ 2.1 × 10⁶ 次；加各自 C 块装载 N²/32 ≈ 32,768，量级不变。④ 陷阱：<strong>伪共享</strong>（false sharing）——C 的某行 cache 行 64 B = 8 个元素，若切分边界不按 8 的倍数对齐，两个核会写同一 cache 行的不同元素，行的所有权在两核间来回弹跳，性能崩塌。对策：切分边界按 cache 行对齐，或让每个核先写私有缓冲再合并。
+        </div>
+      </details>
+    </div>
+
+    <!-- ===== 章末五件套之 3：自测 ===== -->
+    <h2><span class="sec-no">✍️</span>本章自测</h2>
+    <p class="quiz-hint">点击选项判分，答错会给出原因。</p>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 1</div>
+      <div class="q-stem">循环 for i = 2..N, for j = 1..N: A[i][j] = A[i−1][j] + 1 的依赖距离向量集合是？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. {(0, 1)}</li>
+        <li data-opt="b">B. {(1, 0)}</li>
+        <li data-opt="c">C. {(1, 1)}</li>
+        <li data-opt="d">D. {(0, 0)}</li>
+      </ul>
+      <div class="quiz-explain">解析：写 A[i][j] 与读 A[i−1][j] 同位置 ⟺ 汇 = (i+1, j)，距离 (1, 0)，B 对。A 错：(0, 1) 意味着读的是同一行前一列，而语句读的是上一行同一列。C 错：没有 (i−1, j−1) 这种引用。D 错：(0, 0) 是迭代内读写，不构成跨迭代依赖，谈不上距离向量。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 2</div>
+      <div class="q-stem">上一题的循环，哪一层可以并行？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. i 层</li>
+        <li data-opt="b">B. j 层</li>
+        <li data-opt="c">C. 两层都可以</li>
+        <li data-opt="d">D. 两层都不行</li>
+      </ul>
+      <div class="quiz-explain">解析：唯一距离向量 (1, 0) 的第一分量非零 → i 层携带依赖，不能拆；第二分量全为 0 → j 层 DOALL，B 对。A 错在把"有依赖"的方向看反；C 错在忽略了 i 层的携带依赖；D 错在"一有依赖就全盘否定"——DOALL 是逐层判定。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 3</div>
+      <div class="q-stem">分块约束 3B²×8 ≤ C 里的因子 3 来自哪里？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 矩阵乘是三重循环</li>
+        <li data-opt="b">B. A、B、C 三个 B×B 块必须同时驻留 cache</li>
+        <li data-opt="c">C. 依赖分三种：RAW、WAR、WAW</li>
+        <li data-opt="d">D. cache 是三路组相联</li>
+      </ul>
+      <div class="quiz-explain">解析：内层块计算每一步都要同时摸到 A 块、B 块、C 块，三者任何一个被挤出都会产生额外 miss，所以容量必须装下 3 个 B²×8 字节，B 对。A 错：循环重数与驻留块数无必然关系（若语句只用两个数组，因子就是 2）。C 错：依赖种类是 11.2 的概念，与容量无关。D 错：相联度影响冲突 miss，但不是这个式子的来源。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 4</div>
+      <div class="q-stem">行优先存储下，i-j-k 序不分块矩阵乘中 miss 最多的是哪个数组？为什么？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. A，因为它每行有 N 个元素</li>
+        <li data-opt="b">B. B，因为内层对它按列访问，步长为 N×8 字节</li>
+        <li data-opt="c">C. C，因为它被反复累加 N 次</li>
+        <li data-opt="d">D. 三个一样多，访问次数都是 N³</li>
+      </ul>
+      <div class="quiz-explain">解析：B 对：内层 k 固定列号，B[k][j] 与 B[k+1][j] 相距一整行，每次访问都落在新 cache 行 → N³ 次 miss，而 A 按行访问只有 N³/8。A 错：A 的步长是 1，局部性最好。C 错：C 的内层引用固定，N 次访问至多 miss 一次。D 错：访问次数确实同为 O(N³)，但 miss 数由步长与复用决定，二者不能混为一谈。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="c">
+      <div class="q-no">自测 5</div>
+      <div class="q-stem">指针别名为什么会削弱自动并行化的效果？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 别名会让程序执行变慢，抵消并行收益</li>
+        <li data-opt="b">B. 别名会占满 cache，使分块失效</li>
+        <li data-opt="c">C. 两指针是否指向同一位置不可精确判定，依赖分析只能保守假设"可能依赖"</li>
+        <li data-opt="d">D. 编译器不支持带指针的循环</li>
+      </ul>
+      <div class="quiz-explain">解析：C 对：依赖分析的前提是知道两次访问是否同一位置；别名不可精确判定，分析只能宁可信其有，把本可并行的循环判成串行。A 错：别名本身不产生运行时开销，它伤的是编译期分析精度。B 错：别名与 cache 容量无关。D 错：编译器处理指针循环很正常，只是优化变保守。</div>
+    </div>
+
+    <!-- ===== 章末五件套之 4：三句话复述 ===== -->
+    <div class="retell">
+      <h3>🗣️ 用自己的话，三句话讲完本章</h3>
+      <p>对着空气（或室友）说出这三句。说卡壳的那句，回去重读对应小节。</p>
+      <details>
+        <summary>句1：这章解决什么问题？——</summary>
+        <div class="retell-answer">参考答案：单核 ILP 见顶后，怎样把大循环安全地拆给多个核并行执行，同时让 cache 的局部性跟得上翻倍的算力。</div>
+      </details>
+      <details>
+        <summary>句2：核心机制是什么？——</summary>
+        <div class="retell-answer">参考答案：用依赖距离向量逐层判定 DOALL（分量为 0 的层可并行）；用循环分块把 miss 从 O(N³) 压到 O(N³/B)，块大小由 3B²×8 ≤ C 卡出上界；交换、分块、倾斜统一为迭代空间上的仿射变换。</div>
+      </details>
+      <details>
+        <summary>句3：它和前后章怎么分工？——</summary>
+        <div class="retell-answer">参考答案：第10章管核内的指令级并行，本章管核间的线程级并行与访存局部性；而"依赖分析为何必须保守"这个不可判定的幽灵，交给第12章从形式语言与自动机的理论高度收束。</div>
+      </details>
+    </div>
+
+    <!-- ===== 章末五件套之 5：间隔复习计划 ===== -->
+    <div class="review-plan">
+      <h3>🔁 间隔复习计划</h3>
+      <p>回忆本身比重读有效 10 倍。到点只做一件事：翻卡 + 重做标记题。</p>
+      <table>
+        <tr><th>时间点</th><th>复习内容</th><th>预计用时</th></tr>
+        <tr><td>第 1 天</td><td>概念卡 1–7 + 回忆 11.1-1 至 11.4-2 全部翻一遍</td><td>12 分钟</td></tr>
+        <tr><td>第 3 天</td><td>概念卡 2、4（距离向量、分块）+ 重做两道 L2 + 自测错题</td><td>10 分钟</td></tr>
+        <tr><td>第 7 天</td><td>三句话复述 + 重算 11.3 的 N=1024 对比表 + 合上书挑战</td><td>12 分钟</td></tr>
+        <tr><td>第 15 天</td><td>只做合上书挑战；能默出 9N³/8 与 N³/(4B) 两个量级就毕业</td><td>15 分钟</td></tr>
+      </table>
+    </div>
+
+    <!-- 合上书挑战 -->
+    <div class="final-challenge">
+      <h3>📕 合上书挑战</h3>
+      <p class="fc-sub">现在关掉这个页面，拿一张纸，凭记忆完成以下任务。全部做完再回来核对——这是本章真正的毕业考试。</p>
+      <ol id="challenge-list">
+        <li><span class="fc-check"></span>写出依赖距离向量的定义、合法性条件，以及 DOALL 的逐层判定规则。</li>
+        <li><span class="fc-check"></span>对 A[i][j] = A[i−1][j] + A[i][j−1] 写出全部距离向量，并判定 i、j 两层各自是否可并行。</li>
+        <li><span class="fc-check"></span>默写分块约束 3B²×8 ≤ C 的来历，并对 C = 32 KB 推出最大可用块大小（写出验证步骤）。</li>
+        <li><span class="fc-check"></span>手算 N = 1024 时，不分块矩阵乘 A、B、C 三个数组各自的 miss 数与总量级。</li>
+        <li><span class="fc-check"></span>解释行优先布局下 i-k-j 序为什么有效：三个数组在内层各自的访问形态分别是什么。</li>
+        <li><span class="fc-check"></span>说出仿射变换统一了哪三种循环变换、变换合法的条件，并举倾斜把例2 变成波前并行的结果。</li>
+        <li><span class="fc-check"></span>一句话回答本章的主线问题：大循环怎么拆给多个核并行跑，又让 cache 不抖？</li>
+      </ol>
+    </div>
+
+    <div class="complete-zone">
+      <button class="btn-complete" id="btn-complete" onclick="markDone()">✓ 我已完成本章（含合上书挑战）</button>
+    </div>
+
+    <div class="chapter-nav">
+      <a href="chapter-10.html"><span class="nav-dir">← 上一章</span>第10章 指令级并行</a>
+      <a href="chapter-12.html" class="next"><span class="nav-dir">下一章 →</span>第12章 理论回顾</a>
+    </div>
+
+  </div>
+</div>
+
+<footer class="footer">
+  <div class="wrap">第11章 并行性与局部性优化 · 编译原理互动讲义 · 基于 Aho, Lam, Sethi &amp; Ullman《编译原理》(第2版)</div>
+</footer>
+
+<script src="/lectures-assets/mermaid.min.js"></script>
+<script>
+mermaid.initialize({
+  startOnLoad: true,
+  theme: "base",
+  themeVariables: {
+    primaryColor: "#e3edf7",
+    primaryBorderColor: "#1d5f9e",
+    primaryTextColor: "#1d5f9e",
+    lineColor: "#5c554b",
+    secondaryColor: "#fbeedd",
+    tertiaryColor: "#f5f1e8",
+    fontFamily: "-apple-system, PingFang SC, sans-serif",
+    fontSize: "14px"
+  },
+  flowchart: { curve: "linear", htmlLabels: false }
+});
+</script>
+<script>
+// 自测题判分（原样复用，勿改）
+document.querySelectorAll(".quiz-block").forEach(block => {
+  const answer = block.dataset.answer;
+  const explain = block.querySelector(".quiz-explain");
+  block.querySelectorAll(".quiz-opts li").forEach(li => {
+    li.addEventListener("click", () => {
+      const opts = block.querySelectorAll(".quiz-opts li");
+      opts.forEach(o => o.classList.add("disabled"));
+      if (li.dataset.opt === answer) {
+        li.classList.add("correct");
+      } else {
+        li.classList.add("wrong");
+        block.querySelector(`[data-opt="${answer}"]`).classList.add("correct");
+      }
+      explain.classList.add("show");
+    });
+  });
+});
+
+// 合上书清单打勾（原样复用，勿改）
+document.querySelectorAll("#challenge-list li").forEach(li => {
+  li.addEventListener("click", () => li.classList.toggle("checked"));
+});
+
+// 完成标记 → localStorage（章号：11）
+const KEY = "comp_progress_v1";
+function loadProgress() {
+  try { return JSON.parse(localStorage.getItem(KEY)) || {}; } catch (e) { return {}; }
+}
+const progress = loadProgress();
+const btn = document.getElementById("btn-complete");
+if (progress[11] && progress[11].done) {
+  btn.textContent = "✓ 已完成 · 再次点击重置";
+  btn.classList.add("done");
+}
+function markDone() {
+  const p = loadProgress();
+  if (p[11] && p[11].done) {
+    delete p[11];
+    btn.textContent = "✓ 我已完成本章（含合上书挑战）";
+    btn.classList.remove("done");
+  } else {
+    p[11] = { done: true, completedAt: Date.now(), reviewsDone: 0 };
+    btn.textContent = "✓ 已完成 · 复习提醒已开启";
+    btn.classList.add("done");
+  }
+  localStorage.setItem(KEY, JSON.stringify(p));
+}
+</script>
+
+</body>
+</html>

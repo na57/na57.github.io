@@ -1,0 +1,939 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第3章 线性模型 · 机器学习互动讲义</title>
+<link rel="stylesheet" href="/lectures-assets/style.css">
+</head>
+<body>
+
+<nav class="topbar">
+  <div class="topbar-inner">
+    <span class="brand"><a href="index.html" style="color:inherit">← 学习地图</a></span>
+    <span class="crumb">阶段二 · 经典模型 / 第3章</span>
+  </div>
+</nav>
+
+<div class="wrap">
+
+  <div class="lecture-head">
+    <span class="ch-label">CHAPTER 03 · 经典模型</span>
+    <h1>线性模型</h1>
+    <p class="lead">最简单也最长寿的模型族：给每个特征打分，加权求和。本章回答：一条直线 / 一个平面，究竟能走多远。</p>
+  </div>
+
+  <!-- ===== 章首四件套之 1：全书定位 ===== -->
+  <div class="position-bar">
+    <strong>本章在主线上的位置：</strong>第 2 章给了"评估一把模型好坏"的尺子，但从本章起才遇到第一批可被评估的模型——线性模型是第一个可以<strong>全程手算</strong>的模型族。<br>
+    第 3 章回答主线上的这个问题：<strong>用"特征加权求和"这一条直线（超平面）做预测，能走多远？走不动时怎么办？</strong>
+    <div class="map-inline">
+      <span class="node">① 基础与评估 Ch1–2</span><span class="arrow">→</span>
+      <span class="node here">② 经典模型 Ch3–8</span><span class="arrow">→</span>
+      <span class="node">③ 无监督与理论 Ch9–12</span><span class="arrow">→</span>
+      <span class="node">④ 进阶专题 Ch13–16</span>
+    </div>
+    <br>
+    前驱 Ch2 给出评估尺子（误差、过拟合、验证集） → <u>本章给出第一个可手算的模型族</u> → 后继 Ch5 神经网络 = 线性模型的堆叠与非线性化；Ch6 支持向量机 = 带间隔要求的线性模型。
+  </div>
+
+  <!-- ===== 章首四件套之 2：学习目标 ===== -->
+  <div class="objectives">
+    <h4>🎯 学完本章，合上书你应该能：</h4>
+    <ol>
+      <li>写出一元线性回归的最小二乘闭式解公式，并在 4 个点的数据上手算出 w 和 b。</li>
+      <li>写出多元线性回归的矩阵解 ŵ = (XᵀX)⁻¹Xᵀy，并解释"均方误差 = 欧氏距离最小化"的直觉。</li>
+      <li>说出正则化的动机，写出岭回归公式，用一个 3 点例子算出 λ 如何把系数拉向 0；解释 LASSO 为何产生稀疏解。</li>
+      <li>写出 sigmoid 函数与对率回归的交叉熵损失，手算一步梯度下降（含 ∂L/∂w = (p−y)x）。</li>
+      <li>写出 LDA 的投影方向公式 w ∝ S_w⁻¹(μ₀−μ₁)，并在一个 2×2 协方差例子上验证"同类投影近、异类投影远"。</li>
+      <li>说出 OvR 与 OvO 各需要多少个分类器，以及类别不平衡的三种处理思路。</li>
+    </ol>
+  </div>
+
+  <div class="lecture">
+
+    <!-- ===== 章首四件套之 3：推导主线图 ===== -->
+    <div class="figure">
+      <div class="mermaid">
+flowchart LR
+  A["要预测连续值：给特征打分加权求和"] --> B["最小二乘：闭式解一步算出 w 与 b"]
+  B --> C{"想预测的是类别，怎么办？"}
+  C --> D1["对率回归 logistic：把线性输出概率化"]
+  C --> D2["LDA：找一个方向投影，类间远类内近"]
+  D1 --> E["多分类策略：OvR 与 OvO"]
+  D2 --> E
+  E --> F["模型太灵活会过拟合"]
+  F --> G["正则化：给系数加惩罚"]
+  G --> H["遗留：数据线性不可分怎么办？通向 Ch5 神经网络 与 Ch6 核方法"]
+  classDef hot fill:#fbeedd,stroke:#c4651f,stroke-width:2.5px,color:#c4651f;
+  classDef danger fill:#fae9e7,stroke:#b03a2e,stroke-width:2.5px,color:#b03a2e;
+  class C hot;
+  class H danger;
+      </div>
+      <div class="caption">图 3.0 本章推导主线：回归 → 闭式解 → 分类的两条岔路（概率化 / 投影）→ 多分类 → 过拟合与正则化 → 线性边界之外的遗留问题。</div>
+    </div>
+
+    <!-- ============ 3.1 ============ -->
+    <h2><span class="sec-no">3.1</span>线性回归与最小二乘：闭式解从哪来</h2>
+
+    <p>第 2 章给了我们评估模型的尺子，但还缺一个被评估的对象。从本章开始登场的，是机器学习里最古老也最长寿的模型族：<span class="term">线性模型</span>（Linear Model）。它的想法朴素到一句话：<strong>给每个特征打一个分数，加权求和，就是预测值</strong>。预测房价，面积重要、楼层次要，那就面积乘一个大一点的数、楼层乘一个小一点的数，加起来。</p>
+
+    <p>先看只有一个特征的情形。给定数据集 {(x₁,y₁), (x₂,y₂), …, (x<sub>m</sub>,y<sub>m</sub>)}，我们要学一条直线：</p>
+
+    <div class="formula">f(<span class="var">x</span>) = <span class="var">w</span><span class="var">x</span> + <span class="var">b</span>，使得 f(x<sub>i</sub>) ≈ y<sub>i</sub></div>
+
+    <p>什么叫"≈"？需要一把尺子衡量这条直线离数据有多远。<span class="term">最小二乘法</span>（Least Square Method）的选择是：<strong>让所有样本的预测值与真实值之差的平方和最小</strong>。平方有两个好处：误差的正负不会抵消；且它恰好对应欧氏几何里的"距离"。</p>
+
+    <div class="formula">(<span class="var">w</span>*, <span class="var">b</span>*) = arg min<sub>(w,b)</sub> ∑<sub>i=1</sub><sup>m</sup> ( y<sub>i</sub> − <span class="var">w</span>x<sub>i</sub> − <span class="var">b</span> )²</div>
+
+    <p>这个目标对 w、b 各求偏导并令其为零，就得到两个方程，解出来是漂亮的<strong>闭式解</strong>（不用迭代、一步算到底）：</p>
+
+    <div class="formula"><span class="var">w</span> = <span class="frac"><span class="num-part">∑<sub>i</sub> (x<sub>i</sub> − x̄)(y<sub>i</sub> − ȳ)</span><span class="den-part">∑<sub>i</sub> (x<sub>i</sub> − x̄)²</span></span> ，&nbsp;&nbsp; <span class="var">b</span> = ȳ − <span class="var">w</span> x̄</div>
+
+    <p>其中 x̄ = (1/m)∑x<sub>i</sub> 是 x 的均值，ȳ 是 y 的均值。w 的分子是"x 与 y 的协同波动"，分母是"x 自身的波动"——y 随 x 同涨同落得越整齐，斜率越大。</p>
+
+    <h3>手算例 1：4 个点，算出这条直线</h3>
+
+    <p>给定 4 个样本：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>样本</th><th>1</th><th>2</th><th>3</th><th>4</th></tr>
+        <tr><td>x</td><td>1</td><td>2</td><td>3</td><td>4</td></tr>
+        <tr><td>y</td><td>2.1</td><td>3.9</td><td>6.2</td><td>7.8</td></tr>
+      </table>
+    </div>
+
+    <p>一步一步算，不许跳步：</p>
+
+    <ul>
+      <li><strong>第 1 步，算均值</strong>：x̄ = (1+2+3+4)/4 = 10/4 = <strong>2.5</strong>；ȳ = (2.1+3.9+6.2+7.8)/4 = 20/4 = <strong>5</strong>。</li>
+      <li><strong>第 2 步，算每个点的偏差</strong>（x<sub>i</sub>−x̄ 与 y<sub>i</sub>−ȳ）：</li>
+    </ul>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>x<sub>i</sub></th><th>y<sub>i</sub></th><th>x<sub>i</sub>−x̄</th><th>y<sub>i</sub>−ȳ</th><th>(x−x̄)(y−ȳ)</th><th>(x−x̄)²</th></tr>
+        <tr><td>1</td><td>2.1</td><td>−1.5</td><td>−2.9</td><td>4.35</td><td>2.25</td></tr>
+        <tr><td>2</td><td>3.9</td><td>−0.5</td><td>−1.1</td><td>0.55</td><td>0.25</td></tr>
+        <tr><td>3</td><td>6.2</td><td>+0.5</td><td>+1.2</td><td>0.60</td><td>0.25</td></tr>
+        <tr><td>4</td><td>7.8</td><td>+1.5</td><td>+2.8</td><td>4.20</td><td>2.25</td></tr>
+        <tr><td colspan="4"><strong>求和</strong></td><td><strong>9.70</strong></td><td><strong>5.00</strong></td></tr>
+      </table>
+    </div>
+
+    <ul>
+      <li><strong>第 3 步，算 w</strong>：w = 9.7 / 5 = <strong>1.94</strong>。</li>
+      <li><strong>第 4 步，算 b</strong>：b = ȳ − w·x̄ = 5 − 1.94×2.5 = 5 − 4.85 = <strong>0.15</strong>。</li>
+      <li><strong>第 5 步，验证</strong>：f(x) = 1.94x + 0.15。代回：f(1)=2.09（真 2.1），f(2)=4.03（真 3.9），f(3)=5.97（真 6.2），f(4)=7.91（真 7.8）——四个残差 −0.01、+0.13、−0.23、+0.11，和约为 0，这正是最小二乘解的必然性质（残差均值为零）。</li>
+    </ul>
+
+    <h3>多元情形：一个矩阵公式打包</h3>
+
+    <p>特征不止一个时（面积、楼层、朝向、房龄……），模型变成 f(<span class="var">x</span>) = wᵀ<span class="var">x</span> + b。把 b 吸收进 w（给每个样本补一个恒为 1 的特征），把所有样本堆成矩阵 X（每行一个样本），所有标记堆成向量 <span class="var">y</span>，同样的"平方误差最小"求导、令导数为零，得到：</p>
+
+    <div class="formula">ŵ = (XᵀX)⁻¹ Xᵀ <span class="var">y</span></div>
+
+    <p>这个式子值得逐块读：XᵀX 是特征与特征两两之间的"内积表"（各维协同波动的汇总），Xᵀ<span class="var">y</span> 是每个特征与标记的协同波动。左乘逆矩阵，相当于"把特征之间互相纠缠的贡献拆解开"，剩下每个特征<strong>干净的</strong>贡献。这正是上面一元公式 w = 协同波动/自身波动 的矩阵版。</p>
+
+    <p>一个直觉：对每个样本，预测 ŷ = Xŵ 其实就是把真实标记向量 <span class="var">y</span> <strong>投影</strong>到所有特征张成的平面上——投影点是平面上离 <span class="var">y</span> 最近的点，所以均方误差最小等价于<strong>欧氏距离最小</strong>。"最小二乘"四个字，几何上就是"找最近的投影"。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>线性回归的全部内容可以压成一句话：<strong>预测值是特征的加权求和，权重由"让总平方误差最小"唯一确定，且有闭式解</strong>。不用迭代、不用调参、一步算出——这就是为什么它是所有人的第一个模型。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>误区一："最小二乘是因为误差服从正态分布才对的。"——因果倒置：几何上它永远对应"最近投影"，与分布无关；只是当误差恰好正态时，它恰好也等于最大似然解，两者互相印证。误区二："XᵀX 总能求逆。"——当特征数多于样本数、或两个特征完全共线（如"面积（平方米）"与"面积（平方英尺）"同时进入模型），XᵀX 不可逆，闭式解失效。这正是 3.2 正则化要解决的问题之一。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 3.1-1</div>
+              <div class="q-text">写出一元线性回归中 w 和 b 的闭式解，并说明 w 的分子分母各自代表什么。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              w = Σ(xᵢ−x̄)(yᵢ−ȳ) / Σ(xᵢ−x̄)²，b = ȳ − w·x̄。分子 = x 与 y 的协同波动，分母 = x 自身的波动。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 3.1-2</div>
+              <div class="q-text">多元线性回归的矩阵解是什么？它在几何上意味着什么？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              ŵ = (XᵀX)⁻¹Xᵀy。几何上：预测向量 ŷ = Xŵ 是真实标记 y 在特征张成平面上的投影，均方误差最小 ⟺ 欧氏距离最小。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 3.2 ============ -->
+    <h2><span class="sec-no">3.2</span>过拟合与正则化：给系数戴上嚼子</h2>
+
+    <p>上一节的闭式解干净利落，但藏着一个隐患。第 2 章说过<span class="term">过拟合</span>（Overfitting）：模型把训练集里的噪声当规律学走。线性模型也会过拟合——尤其当特征很多、样本很少时，闭式解可以把每个系数调得极大，让直线穿过每一个训练点，训练误差为零，新数据却完全失灵。另一个隐患上一节末尾提过：XᵀX 不可逆时，闭式解直接不存在。</p>
+
+    <p>两个隐患，同一个药方：<strong>别让系数太放肆</strong>。在损失函数里加一项对系数的惩罚，这就是<span class="term">正则化</span>（Regularization）。</p>
+
+    <h3>岭回归：平方惩罚，把系数整体往回收</h3>
+
+    <p><span class="term">岭回归</span>（Ridge Regression）在均方误差后面加上系数的平方和（L2 范数的平方），λ ≥ 0 控制惩罚力度：</p>
+
+    <div class="formula">min<sub>w</sub> ‖ X<span class="var">w</span> − <span class="var">y</span> ‖² + λ ‖<span class="var">w</span>‖²</div>
+
+    <p>同样求导令其为零，闭式解还在，只是括号里多了一块：</p>
+
+    <div class="formula">ŵ = ( XᵀX + λI )⁻¹ Xᵀ <span class="var">y</span></div>
+
+    <p>λI 是 λ 乘单位矩阵——它像给 XᵀX 的主对角线垫高了一截，<strong>保证矩阵可逆</strong>（"岭"这个名字正来自对角线上这道"山脊"）。λ = 0 时退化回普通最小二乘；λ 越大，系数被压得越小。</p>
+
+    <h3>手算例 2：一个 λ 如何把 w 从 1 压到 0.5</h3>
+
+    <p>用一个能口算的一维例子看惩罚项怎么起作用。3 个样本，直线过原点（无截距）：x : 1, 2, 3；y : 1, 2, 3。</p>
+
+    <ul>
+      <li><strong>不加正则</strong>（λ = 0）：损失 = Σ(y<sub>i</sub> − w·x<sub>i</sub>)²。对 w 求导：−2Σ x<sub>i</sub>(y<sub>i</sub> − w·x<sub>i</sub>) = 0，得 w = Σx<sub>i</sub>y<sub>i</sub> / Σx<sub>i</sub>²。</li>
+      <li>算分子：Σx<sub>i</sub>y<sub>i</sub> = 1×1 + 2×2 + 3×3 = 1 + 4 + 9 = <strong>14</strong>；算分母：Σx<sub>i</sub>² = 1 + 4 + 9 = <strong>14</strong>。</li>
+      <li>于是无正则解 w = 14/14 = <strong>1</strong>。完美拟合，毫不意外——数据本来就在直线 y = x 上。</li>
+      <li><strong>加岭正则</strong>（λ = 14）：一维情形下公式退化为 w = Σx<sub>i</sub>y<sub>i</sub> / (Σx<sub>i</sub>² + λ)。</li>
+      <li>代入：w = 14 / (14 + 14) = 14/28 = <strong>0.5</strong>。</li>
+    </ul>
+
+    <p>看清发生了什么：数据本身毫无噪声，完美落在 y = x 上，可仅仅因为加了惩罚，系数就被<strong>从 1 拉向 0，拉到了 0.5</strong>。λ 越大，拉力越强。这就是正则化的全部机制：<strong>用一点点训练集上的偏差，换系数的大幅收缩，从而换来新数据上的稳定</strong>（偏差-方差权衡，Ch2 的老朋友）。</p>
+
+    <h3>LASSO：换一种惩罚，顺带做特征选择</h3>
+
+    <p>把平方惩罚换成绝对值惩罚（L1 范数），就得到 <span class="term">LASSO</span>（Least Absolute Shrinkage and Selection Operator）：</p>
+
+    <div class="formula">min<sub>w</sub> ‖ X<span class="var">w</span> − <span class="var">y</span> ‖² + λ ∑<sub>j</sub> |w<sub>j</sub>|</div>
+
+    <p>差别在几何上：L2 的可行域是个光滑的圆（高维是球），误差等高线与圆相切的点几乎不可能恰好在坐标轴上；而 L1 的可行域是个<strong>菱形</strong>（高维是多面体），顶点恰好都戳在坐标轴上——等高线最先碰到的往往就是这些顶点，<strong>顶点处某些系数恰为 0</strong>。于是 LASSO 会把不重要特征的系数直接清零，顺带完成了特征选择，给出的解是<strong>稀疏</strong>的。</p>
+
+    <div class="figure">
+      <div class="mermaid">
+flowchart TB
+  A["误差等高线（同心椭圆）"] --> B{"与惩罚区域首次相切在哪？"}
+  B -->|L2：圆形区域| C["切点在圆周四处皆可 → 系数普遍变小但不为零"]
+  B -->|L1：菱形区域| D["切点易落在坐标轴顶点 → 部分系数恰好为零"]
+  classDef hot fill:#fbeedd,stroke:#c4651f,stroke-width:2.5px,color:#c4651f;
+  class D hot;
+      </div>
+      <div class="caption">图 3.2 岭回归与 LASSO 的几何差别：圆 vs 菱形，"普遍缩小" vs "恰好清零"。</div>
+    </div>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>正则化 = 给学习立一条家规：<strong>系数想变大，必须拿出足够的数据证据来换</strong>。L2 让系数普遍变小，L1 让没证据的系数直接归零。λ 是家规的严厉程度，用验证集来挑（Ch2 的工具）。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>误区："λ 越大越好，惩罚越狠越不容易过拟合。"错。λ 过大会把<strong>所有</strong>系数都压向 0，模型变成一条水平线，什么都不学——从过拟合一头栽进欠拟合。λ 是超参数，没有理论最优值，只能在验证集上调：这正是 Ch2"评估尺子"在本章的第一次实战。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 3.2-1</div>
+              <div class="q-text">写出岭回归的目标函数与闭式解；λI 解决了什么矩阵问题？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              min ‖Xw − y‖² + λ‖w‖²，解 ŵ = (XᵀX + λI)⁻¹Xᵀy。λI 垫高主对角线，保证矩阵可逆（治 XᵀX 不可逆）。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 3.2-2</div>
+              <div class="q-text">为什么 L1 惩罚（LASSO）能产生稀疏解而 L2（岭回归）不能？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              L1 可行域是菱形，顶点恰在坐标轴上，误差等高线首次相切常落在顶点 → 部分系数恰为 0；L2 是圆，切点任意，系数只缩小不清零。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 3.3 ============ -->
+    <h2><span class="sec-no">3.3</span>对率回归：把线性输出变成概率</h2>
+
+    <p>前两节都在预测连续值。可生活中更多的是分类问题：这个瓜好不好、这封邮件是不是垃圾。能不能让线性模型直接输出类别？最直接的补丁是：把 z = wᵀ<span class="var">x</span> + b 扔进一个阶跃函数，z &gt; 0 判正类，z &lt; 0 判负类。但阶跃函数在零点不可导，整条学习链断在那里。我们需要一个长得像阶跃、却处处光滑可导的替代品——<span class="term">对数几率函数</span>（Logistic Function，即 sigmoid）：</p>
+
+    <div class="formula">σ(<span class="var">z</span>) = <span class="frac"><span class="num-part">1</span><span class="den-part">1 + e<sup>−z</sup></span></span></div>
+
+    <p>它把任意实数 z 压扁到 (0, 1) 区间：z → −∞ 时 σ → 0，z = 0 时 σ = 0.5，z → +∞ 时 σ → 1，且在 z = 0 附近最陡。压扁之后的数可以理直气壮地读作<strong>概率</strong>："样本属于正类的概率是 p = σ(z)"。</p>
+
+    <p>为什么名字叫"对数几率"？把式子倒过来解出 z：z = ln( p / (1−p) )。p/(1−p) 叫<span class="term">几率</span>（Odds，正类概率与负类概率之比），取对数就是"对数几率"。所以这个名字的本义是：<strong>用线性模型去拟合对数几率</strong>。</p>
+
+    <div class="formula"><span class="term">对率回归</span>（Logistic Regression）：p = P(y=1 | <span class="var">x</span>) = σ(wᵀ<span class="var">x</span> + b)</div>
+
+    <h3>损失函数：不用平方误差，用交叉熵</h3>
+
+    <p>p 是概率，怎么衡量"预测得准不准"？用<span class="term">极大似然</span>（Maximum Likelihood）：让每个样本的真实标签在模型下出现的概率尽量大。对单个样本，"出现得对不对"可以写成一个紧凑式子，取负对数就是<span class="term">交叉熵损失</span>（Cross-Entropy Loss）：</p>
+
+    <div class="formula">L = − [ <span class="var">y</span> · ln p + (1 − <span class="var">y</span>) · ln(1 − p) ]</div>
+
+    <p>读法：y = 1 时只剩 −ln p（p 越接近 1 损失越小）；y = 0 时只剩 −ln(1−p)（p 越接近 0 损失越小）。一个式子，两种情况自动切换。</p>
+
+    <p>交叉熵对 w 求导，会得到一个惊人地干净的结论（推导略，结论是本章最重要的口粮公式）：</p>
+
+    <div class="formula"><span class="frac"><span class="num-part">∂L</span><span class="den-part">∂w</span></span> = (p − y) · <span class="var">x</span> ，&nbsp;&nbsp; <span class="frac"><span class="num-part">∂L</span><span class="den-part">∂b</span></span> = p − y</div>
+
+    <p>梯度 = （预测概率 − 真实标签）× 输入。<strong>预测得越离谱，步子迈得越大；预测对了，梯度自动归零。</strong>这正是 sigmoid 与交叉熵"天作之合"的地方——e 的指数、对数全部约掉了。</p>
+
+    <h3>手算例 3：一步梯度下降，看清损失怎么降</h3>
+
+    <p>单特征、单样本：x = 1，y = 1。初始参数 w₀ = 0，b₀ = 0，学习率 η = 0.1。</p>
+
+    <ul>
+      <li><strong>第 1 步，前向算概率</strong>：z₀ = w₀·x + b₀ = 0×1 + 0 = 0；p₀ = σ(0) = 1/(1+e⁰) = 1/2 = <strong>0.5</strong>。模型完全没把握，五五分。</li>
+      <li><strong>第 2 步，算当前损失</strong>：L₀ = −[1·ln 0.5 + 0] = −ln 0.5 = ln 2 ≈ <strong>0.693</strong>。</li>
+      <li><strong>第 3 步，算梯度</strong>：∂L/∂w = (p₀ − y)·x = (0.5 − 1)×1 = <strong>−0.5</strong>；∂L/∂b = p₀ − y = <strong>−0.5</strong>。</li>
+      <li><strong>第 4 步，更新参数</strong>（沿梯度反方向）：w₁ = w₀ − η·∂L/∂w = 0 − 0.1×(−0.5) = <strong>0.05</strong>；b₁ = 0 − 0.1×(−0.5) = <strong>0.05</strong>。</li>
+      <li><strong>第 5 步，验证损失真的降了</strong>：新的 z₁ = 0.05×1 + 0.05 = 0.1；p₁ = σ(0.1) = 1/(1+e<sup>−0.1</sup>) = 1/(1+0.9048) ≈ 1/1.9048 ≈ <strong>0.525</strong>。</li>
+      <li>新损失 L₁ = −ln 0.525 ≈ <strong>0.644</strong> &lt; 0.693。一步之后，概率从 0.500 涨到 0.525，损失从 0.693 降到 0.644——梯度下降确实在干活。</li>
+    </ul>
+
+    <p>照此迭代几百上千步，w、b 会持续增大，p → 1，损失 → 0。这就是对率回归训练的全过程：<strong>前向算概率、算梯度、反向更新</strong>，循环往复。第 5 章神经网络的反向传播，骨架与此一模一样。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>为什么叫"回归"却干分类的活？因为它<strong>回归的对象是概率</strong>（确切说，是对数几率 z）：先用线性模型回归出一个连续的概率值，再用阈值（通常 0.5）把概率切成类别。名字里的"回归"说的是中间那一步，"分类"说的是最后那一步。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>误区一："对率回归用均方误差当损失也行。"理论上能算，但平方误差下 σ 的指数与对数约不掉，梯度变得又小又别扭，训练极慢；交叉熵让梯度恰好等于 (p−y)x，干净利落。误区二："输出 0.8 就是 80% 把握这个瓜好。"方向对，但要记住这个概率是<strong>模型自己打分</strong>，它是否真值得信任（校准好不好）是另一回事——评估它还得回到 Ch2 的尺子。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 3.3-1</div>
+              <div class="q-text">写出 sigmoid 函数；它把 z 压到什么区间？"对数几率"这个名字怎么来的？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              σ(z) = 1/(1+e⁻ᶻ)，把任意实数压到 (0,1)。反解得 z = ln(p/(1−p))，即用线性模型拟合"对数几率"，故名。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 3.3-2</div>
+              <div class="q-text">写出对率回归的交叉熵损失及其对 w 的梯度；这个梯度有什么"自动"的好处？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              L = −[y·ln p + (1−y)·ln(1−p)]；∂L/∂w = (p−y)x。预测越离谱步子越大，预测对则梯度自动归零。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 3.4 ============ -->
+    <h2><span class="sec-no">3.4</span>线性判别分析 LDA：找个方向投影</h2>
+
+    <p>对率回归的思路是"给线性输出裹一层概率"。还有一条完全不同的岔路：<strong>不纠结输出形式，直接在几何上动手</strong>。想象二维平面上两类点，<span class="term">线性判别分析</span>（Linear Discriminant Analysis，LDA）的想法是：找一根合适的直线，把所有样本<strong>投影</strong>上去，让投影点"同类抱团、异类远离"——降维之后，一个阈值就把两类切开。</p>
+
+    <p>把这句话拆成两个可计算的指标。设两类的均值向量为 μ₀、μ₁，类内散布（各样本离自己类均值的偏离）汇总成类内散度矩阵 S<sub>w</sub>。好方向 w 要同时满足：</p>
+
+    <ul>
+      <li><strong>类间远</strong>：两类均值的投影离得尽量开，即 wᵀ(μ₀−μ₁) 的绝对值尽量大；</li>
+      <li><strong>类内近</strong>：每类自己的投影尽量抱团，即 wᵀS<sub>w</sub>w 尽量小。</li>
+    </ul>
+
+    <p>"分子大、分母小"的最优方向有闭式解：</p>
+
+    <div class="formula"><span class="var">w</span> ∝ S<sub>w</sub><sup>−1</sup> ( μ₀ − μ₁ )</div>
+
+    <p>读法：先取"两均值之差"这个方向（它们当然隔得开），再用 S<sub>w</sub><sup>−1</sup> 修正——若某个方向类内散布很大，就把它压一压。（∝ 表示"正比于"：方向最重要，长度无所谓，反正最后只看投影值的相对位置。）</p>
+
+    <h3>手算例 4：两个类、四个点，算出投影方向并验证分开</h3>
+
+    <p>类 0 两个样本：(1,2)、(3,4)；类 1 两个样本：(3,2)、(5,0)。一步步来：</p>
+
+    <p><strong>第 1 步，算两类均值</strong>：</p>
+    <ul>
+      <li>μ₀ = ( (1+3)/2, (2+4)/2 ) = (2, 3)；</li>
+      <li>μ₁ = ( (3+5)/2, (2+0)/2 ) = (4, 1)。</li>
+    </ul>
+
+    <p><strong>第 2 步，算各样本对自己类均值的偏差</strong>：</p>
+    <ul>
+      <li>类 0：(1,2)−(2,3) = (−1,−1)；(3,4)−(2,3) = (+1,+1)。</li>
+      <li>类 1：(3,2)−(4,1) = (−1,+1)；(5,0)−(4,1) = (+1,−1)。</li>
+    </ul>
+
+    <p><strong>第 3 步，算类内散度（偏差的外积求和，不除以样本数）</strong>。外积 uvᵀ 的含义：若偏差为 (a,b)，外积就是 [[a², ab],[ab, b²]]。</p>
+
+    <ul>
+      <li>类 0 第一项：(−1,−1) 的外积 = [[(−1)², (−1)(−1)],[(−1)(−1), (−1)²]] = [[1, 1],[1, 1]]；第二项 (+1,+1) 的外积同样是 [[1, 1],[1, 1]]。相加得 Σ₀ = [[2, 2],[2, 2]]。</li>
+      <li>类 1 第一项：(−1,+1) 的外积 = [[1, −1],[−1, 1]]；第二项 (+1,−1) 的外积同样是 [[1, −1],[−1, 1]]。相加得 Σ₁ = [[2, −2],[−2, 2]]。</li>
+      <li>类内散度矩阵 S<sub>w</sub> = Σ₀ + Σ₁ = [[2+2, 2−2],[2−2, 2+2]] = <strong>[[4, 0],[0, 4]] = 4I</strong>。</li>
+    </ul>
+
+    <p><strong>第 4 步，求投影方向</strong>。S<sub>w</sub> = 4I 是单位阵的倍数，它的逆就是自身除以 4：S<sub>w</sub><sup>−1</sup> = (1/4)I。而 (1/4)I 乘任何向量都不改变方向，所以：</p>
+
+    <div class="formula"><span class="var">w</span> ∝ S<sub>w</sub><sup>−1</sup>(μ₀−μ₁) = <span class="frac"><span class="num-part">1</span><span class="den-part">4</span></span> · (μ₀−μ₁) ∝ μ₀−μ₁ = (2−4, 3−1) = (−2, +2)，即方向 <strong>(−1, +1)</strong></div>
+
+    <p>这个例子故意构造得干净：两类的类内散布（一个沿"左上-右下"散开，一个沿"左下-右上"散开）恰好互相抵消，S<sub>w</sub> 变成纯粹的球（4I），于是最优方向就是均值连线方向，不用修正。</p>
+
+    <p><strong>第 5 步，投影验证</strong>：投影值 = 样本向量与 w 的内积（取 w = (−1, 1)）：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>类别</th><th>样本</th><th>投影值 wᵀx = (−1)·x₁ + (1)·x₂</th></tr>
+        <tr><td rowspan="2">类 0</td><td>(1, 2)</td><td>−1 + 2 = <strong>+1</strong></td></tr>
+        <tr><td>(3, 4)</td><td>−3 + 4 = <strong>+1</strong></td></tr>
+        <tr><td rowspan="2">类 1</td><td>(3, 2)</td><td>−3 + 2 = <strong>−1</strong></td></tr>
+        <tr><td>(5, 0)</td><td>−5 + 0 = <strong>−5</strong></td></tr>
+      </table>
+    </div>
+
+    <p>看结果：类 0 两点投影<strong>同为 +1</strong>（完全抱团），类 1 两点为 −1、−5（类均值投影恰为 −3，与类 0 相距 4）。两类投影区间 [+1,+1] 与 [−5,−1] 零重叠——投影之后<strong>完全分开</strong>，阈值取 0 即可全对。LDA 承诺的"类内近、类间远"在这个例子上分毫不差。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>LDA 把分类问题翻译成了几何问题：<strong>分类 = 降维 + 阈值</strong>。方向 w 负责把高维样本压到一条线上，压的时候兼顾"同类近、异类远"；压完以后，分类只需要在这条线上找一个分界点。它也是"降维"思想的第一次正式登场（Ch10 还会再见）。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>误区一："最优方向就是 μ₀−μ₁，不用管 S<sub>w</sub>。"只有像本例这样类内散布呈球形（S<sub>w</sub> ∝ I）时才成立；一旦类内散布有方向性（某方向很散），S<sub>w</sub><sup>−1</sup> 会把方向往"散布小的轴"上拧。误区二："LDA 的 w 长什么样都行。"在 w 与 −w 上投影只是正负对调，分类效果相同——学的是<strong>方向</strong>，不是向量本身。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 3.4-1</div>
+              <div class="q-text">LDA 找投影方向的两条标准是什么？写出闭式解。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              类间远（|wᵀ(μ₀−μ₁)| 大）且类内近（wᵀS_w w 小）。解 w ∝ S_w⁻¹(μ₀−μ₁)。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 3.4-2</div>
+              <div class="q-text">什么时候最优投影方向恰好就是 μ₀−μ₁ 本身，不需要修正？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              当类内散度矩阵呈球形（S_w ∝ I，各方向散布相同）时，S_w⁻¹ 不改变方向，w ∝ μ₀−μ₁。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 3.5 ============ -->
+    <h2><span class="sec-no">3.5</span>多分类与类别不平衡：二分世界的出口</h2>
+
+    <p>对率回归和 LDA 都只会做二分类：好瓜/坏瓜、垃圾邮件/正常邮件。可现实标签常常有更多取值——手写数字有 10 类、水果有几十种。怎么让二分类器干多分类的活？思路是<span class="term">拆解</span>：把多分类问题拆成若干个二分类问题，训练多个分类器，最后投票汇总。两种经典拆法：</p>
+
+    <ul>
+      <li><span class="term">一对其余</span>（One-vs-Rest，OvR）：每类各训练一个分类器，第 k 个分类器回答"是第 k 类、还是其余所有类？"。N 个类别需要 <strong>N 个</strong>分类器。预测时让 N 个分类器都打分（对率回归正好给出概率），选得分最高的那一类。</li>
+      <li><span class="term">一对一</span>（One-vs-One，OvO）：每两个类别之间训练一个分类器，只区分"是 A 还是 B"。N 个类别需要 N(N−1)/2 个分类器。预测时全体投票，得票最多的类胜出。</li>
+    </ul>
+
+    <h3>算一笔账：4 个类别要训几个分类器</h3>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th></th><th>OvR 一对其余</th><th>OvO 一对一</th></tr>
+        <tr><td>分类器个数（N 类）</td><td>N</td><td>N(N−1)/2</td></tr>
+        <tr><td>N = 4 时</td><td><strong>4 个</strong>（"是1?"、"是2?"、"是3?"、"是4?"）</td><td><strong>6 个</strong>（1v2、1v3、1v4、2v3、2v4、3v4）</td></tr>
+        <tr><td>每个分类器用多少数据</td><td>全部 m 个样本</td><td>只用过两类的样本（更少）</td></tr>
+        <tr><td>训练总开销</td><td>小</td><td>类多时大（但单个快）</td></tr>
+        <tr><td>预测开销</td><td>小（N 次打分）</td><td>类多时大（N(N−1)/2 次投票）</td></tr>
+      </table>
+    </div>
+
+    <p>N = 4 时 OvO 已经是 6 个分类器；N = 10（手写数字）时 OvR 10 个、OvO 45 个。类别越多，两者差距越悬殊——但 OvO 每个分类器只用两类数据、问题更简单，投票机制还能互相纠错，实际精度常常更好。没有免费午餐，按数据量与类别数权衡着选。</p>
+
+    <h3>类别不平衡：当一类淹没另一类</h3>
+
+    <p>还有一个现实刺头：<strong>两类样本数量悬殊</strong>。99 封正常邮件对 1 封垃圾邮件，分类器把所有邮件都判"正常"就有 99% 精度——可这模型毫无用处（Ch2 警告过：此时精度是骗人的尺子）。三种处理思路，一句话版本：</p>
+
+    <ul>
+      <li><strong>欠采样</strong>：从多数类里删掉一些样本，让两类数量相当（代价：丢弃信息）；</li>
+      <li><strong>过采样</strong>：给少数类"复制"或插值出新样本（代价：可能放大噪声）；</li>
+      <li><strong>再缩放</strong>：不改数据，改决策——预测时用"观测几率 ÷ 训练集原始几率"做校正，相当于把分类阈值向多数类方向挪。</li>
+    </ul>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>多分类的核心思想是<strong>拆解与汇总</strong>：复杂的 N 类问题拆成一堆简单的二分类，再把多个判决汇总成最终结论。这个"拆-合"范式后面会反复出现——Ch8 集成学习本质上也是它的亲戚。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>误区一："OvR 和 OvO 只是实现细节，效果一样。"类数大时训练开销、预测开销、精度都可能拉开差距。误区二："类别不平衡时看精度就知道模型好不好。"99:1 的数据上"全猜多数类"也有 99% 精度——不平衡数据要换尺子（查准率、查全率、AUC，回 Ch2 查），或者先处理不平衡再谈精度。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 3.5-1</div>
+              <div class="q-text">N 个类别时，OvR 与 OvO 各需训练多少个分类器？N = 4 时分别是几个？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              OvR 需 N 个，OvO 需 N(N−1)/2 个。N = 4 时：OvR 4 个，OvO 6 个。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 3.5-2</div>
+              <div class="q-text">类别不平衡的三种处理思路是什么？为什么不能只看精度？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              欠采样、过采样、再缩放（阈值校正）。不平衡时"全猜多数类"精度虚高，须换查准率/查全率/AUC 等尺子。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 章末五件套之 1：概念卡 ============ -->
+    <h2><span class="sec-no">🃏</span>概念卡：本章概念的一分钟画像</h2>
+    <p>翻面前先自问：这个概念我能用一句话讲清楚吗？</p>
+    <div class="flip-grid">
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 1</div>
+            <div class="q-text">最小二乘（Least Square Method）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">让预测值与真实值之差的平方和最小，从而定出 w 与 b 的方法。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">给"直线离数据有多远"一把可求导的尺子，换来闭式解。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">把真实标记投影到特征平面上，找最近的投影点。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为它依赖正态假设——几何上它与分布无关；XᵀX 不可逆时它失效。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">一切回归问题的基线；Ch5 网络输出层回归时的默认损失。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 2</div>
+            <div class="q-text">正则化：岭回归 / LASSO</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">在损失上加系数惩罚项：L2（Σw²，岭回归）或 L1（Σ|w|，LASSO）。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">治过拟合；岭回归顺带让 XᵀX+λI 必可逆；LASSO 顺带做特征选择。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">给系数立家规：想变大，拿数据证据来换。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为 λ 越大越好——过大会欠拟合；λ 须在验证集上调。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">特征多、样本少时；后续所有模型的损失函数常客（权重衰减）。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 3</div>
+            <div class="q-text">对率回归（Logistic Regression）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">p = σ(wᵀx + b)，用线性模型拟合对数几率，输出正类概率做分类。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">让线性模型从"预测连续值"跨界到"输出概率做分类"。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">先回归出一个概率，再用 0.5 一刀切出类别。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">被名字骗了——它"回归"的是概率，干的活是分类。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">二分类基线；Ch5 神经网络每个神经元的雏形。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 4</div>
+            <div class="q-text">sigmoid / 对数几率函数</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">σ(z) = 1/(1+e⁻ᶻ)，把任意实数光滑地压进 (0,1)。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">替代不可导的阶跃函数，让"输出概率"可以求导、可以梯度下降。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">一根光滑的 S 形台阶：远离 0 处平缓，z=0 附近最陡。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">忘了它与交叉熵配套才有干净梯度 ∂L/∂w=(p−y)x；配平方误差则又慢又钝。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">对率回归；Ch5 经典激活函数（后被 ReLU 部分替代）。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 5</div>
+            <div class="q-text">线性判别分析（LDA）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">找投影方向 w ∝ S_w⁻¹(μ₀−μ₁)，使同类投影近、异类投影远。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">从纯几何角度做二分类：分类 = 降维到一条线 + 阈值。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">顺着两堆点的"质心连线"打光，影子最分开；影子太散就把方向往散得小的轴上拧。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">忽略 S_w⁻¹ 的修正——只有类内散布呈球形时 w 才恰好是 μ₀−μ₁。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">二分类与监督降维；Ch10 降维思想的先声。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 6</div>
+            <div class="q-text">OvR 与 OvO</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">多分类拆解：OvR 每类对其余（N 个分类器）；OvO 两两配对（N(N−1)/2 个）。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">让只会二分类的模型处理 N 类问题。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">OvR 是"每人认领一类"，OvO 是"两两单挑再投票"。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为只是实现细节——类数大时开销与精度都会拉开差距。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">任何二分类器（含 Ch6 SVM）扩展到多分类的标准做法。</span></div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- ============ 章末五件套之 2：分层习题 ============ -->
+    <h2><span class="sec-no">📝</span>分层习题</h2>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>
+        <p>判断并说明理由："对率回归（Logistic Regression）是一种回归模型，因为它预测一个 0 到 1 之间的连续值。"</p>
+      </div>
+      <details>
+        <summary>提示</summary>
+        <p>区分"中间步骤做什么"与"最终任务是什么"；想想它输出之后那个 0.5 阈值。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p><strong>错。</strong>对率回归是<strong>分类</strong>模型。它中间的连续输出 p 是正类的<strong>概率估计</strong>，最终判定要靠阈值（通常 0.5）把概率切成 0/1 类别。"回归"指它用线性模型拟合对数几率这个中间量，而不是指任务类型。易错点：把中间步骤的"回归概率"误当成最终任务——判别标准是输出最终被用作什么。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>
+        <p>判断并说明理由："岭回归中 λ 越大，模型越不容易过拟合，所以实践中应把 λ 调得尽量大。"</p>
+      </div>
+      <details>
+        <summary>提示</summary>
+        <p>想想 λ → ∞ 时模型变成什么样；过拟合的对立面是什么。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p><strong>错。</strong>λ 控制的是偏差-方差权衡：λ 大确实压低方差（抗过拟合），但同时抬高偏差。λ → ∞ 时所有系数被压到 0，模型退化为常数预测——彻底欠拟合，训练集都拟合不了。正确做法是把 λ 当超参数，在验证集上选出泛化误差最小的值（Ch2 方法）。易错点：把"正则化有益"推成"正则化越强越有益"，忽略了它是权衡而非单向好事。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>
+        <p>给定 3 个样本：x : 0, 1, 2；y : 1, 3, 5。用最小二乘闭式解手算一元线性回归的 w 和 b，步骤写全。</p>
+      </div>
+      <details>
+        <summary>提示</summary>
+        <p>先算 x̄ 和 ȳ，再列偏差表算 Σ(x−x̄)(y−ȳ) 与 Σ(x−x̄)²，最后 w 与 b。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p>① 均值：x̄ = (0+1+2)/3 = <strong>1</strong>；ȳ = (1+3+5)/3 = 9/3 = <strong>3</strong>。</p>
+          <p>② 偏差表：x=0：x−x̄=−1，y−ȳ=−2，乘积 2，平方 1；x=1：0，0，乘积 0，平方 0；x=2：+1，+2，乘积 2，平方 1。</p>
+          <p>③ 求和：Σ(x−x̄)(y−ȳ) = 2+0+2 = <strong>4</strong>；Σ(x−x̄)² = 1+0+1 = <strong>2</strong>。</p>
+          <p>④ w = 4/2 = <strong>2</strong>；b = ȳ − w·x̄ = 3 − 2×1 = <strong>1</strong>。</p>
+          <p>⑤ 验证：f(x) = 2x+1 → f(0)=1，f(1)=3，f(2)=5，三点全部命中（数据本就在直线 y=2x+1 上，残差全为 0）。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>
+        <p>对率回归单样本一步更新：x = 2，y = 0，当前 w₀ = 0.5，b₀ = 0，学习率 η = 0.1。手算：前向概率 p₀、梯度 ∂L/∂w 与 ∂L/∂b、更新后的 w₁ 与 b₁。（σ(1) = 1/(1+e⁻¹) ≈ 0.731）</p>
+      </div>
+      <details>
+        <summary>提示</summary>
+        <p>z = wx + b；p = σ(z)；梯度公式 ∂L/∂w = (p−y)x，∂L/∂b = p−y；沿负梯度方向走一步。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p>① 前向：z₀ = w₀·x + b₀ = 0.5×2 + 0 = <strong>1</strong>；p₀ = σ(1) = 1/(1+e⁻¹) ≈ 1/(1+0.3679) ≈ <strong>0.731</strong>。真实标签是 0，模型却给了 0.731 的正类概率——错得不轻。</p>
+          <p>② 梯度：∂L/∂w = (p₀ − y)·x = (0.731 − 0)×2 = <strong>1.462</strong>；∂L/∂b = p₀ − y = <strong>0.731</strong>。</p>
+          <p>③ 更新：w₁ = w₀ − η·∂L/∂w = 0.5 − 0.1×1.462 = 0.5 − 0.1462 ≈ <strong>0.354</strong>；b₁ = 0 − 0.1×0.731 ≈ <strong>−0.073</strong>。</p>
+          <p>④ 验证方向：新 z₁ = 0.354×2 + (−0.073) = 0.635，p₁ = σ(0.635) ≈ 0.654 &lt; 0.731——正类概率下降，朝正确答案 0 靠近，损失同步下降。方向对了。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l3">L3 建模应用</span>
+        <p>西瓜场景：你手上有 200 个瓜的数据，每个瓜有"密度"（连续）和"含糖率"（连续），以及专家标注的"好/坏"。三个任务：① 预测一个<strong>新瓜的含糖率数值</strong>；② 判断新瓜<strong>好不好</strong>；③ 若好瓜只占 3%，评估第②问的模型时该注意什么。请为每个任务选模型/方法并给出理由，评估指标要接上 Ch2。</p>
+      </div>
+      <details>
+        <summary>提示</summary>
+        <p>任务①的输出是连续值还是类别？任务②的两个候选模型各给什么额外信息（概率？几何分界面？）？任务③回想 Ch2 哪个指标在 99:1 下会骗人。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p>① <strong>线性回归</strong>：输出是连续数值，正是最小二乘的主场。用密度（可加其他特征）做特征，含糖率为 y，闭式解一步出参数。评估用<strong>均方误差 / 平均绝对误差</strong>（回归尺子）。</p>
+          <p>② <strong>对率回归或 LDA</strong>，两者都行，差别在附带产物：对率回归给出"好瓜概率"，便于设定不同阈值（如更保守地少错杀好瓜）；LDA 给出几何分界面与降维后的投影值，便于可视化和解释"沿哪个方向分开"。评估不能只看精度——见③。</p>
+          <p>③ 好瓜仅 3% 即严重类别不平衡："全判坏瓜"也有 97% 精度，精度尺子失灵。应换用 Ch2 的<strong>查准率、查全率、F1 或 AUC</strong>；训练上可做欠采样/过采样/再缩放（阈值校正）；最终结论须在按同样比例或分层采样的测试集上报告。</p>
+        </div>
+      </details>
+    </div>
+
+    <!-- ============ 章末五件套之 3：本章自测 ============ -->
+    <h2><span class="sec-no">✍️</span>本章自测</h2>
+    <p class="quiz-hint">点击选项判分，答错会给出原因。</p>
+
+    <div class="quiz-block" data-answer="c">
+      <div class="q-no">自测 1</div>
+      <div class="q-stem">关于最小二乘法，下列说法正确的是？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 它要求误差必须服从正态分布，否则解没有意义</li>
+        <li data-opt="b">B. 它通过梯度下降迭代逼近最优解</li>
+        <li data-opt="c">C. 它最小化预测值与真实值之差的平方和，几何上等于找最近投影</li>
+        <li data-opt="d">D. 它的解总能由 (XᵀX)⁻¹Xᵀy 算出</li>
+      </ul>
+      <div class="quiz-explain">解析：C 对——平方和最小 ⟺ 欧氏距离最小 ⟺ 最近投影，这是定义层面的事实。A 错：因果倒置，正态假设只是让它恰好等于最大似然，不是前提。B 错：线性回归有闭式解，一步算出，无需迭代。D 错：XᵀX 不可逆（特征共线或特征数多于样本数）时闭式解失效，需加 λI 等处理。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 2</div>
+      <div class="q-stem">岭回归与 LASSO 的关键差别是？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 岭回归用于分类，LASSO 用于回归</li>
+        <li data-opt="b">B. LASSO 的 L1 惩罚易产生系数恰为 0 的稀疏解，岭回归的 L2 只缩小不清零</li>
+        <li data-opt="c">C. 岭回归没有闭式解，LASSO 有</li>
+        <li data-opt="d">D. LASSO 的惩罚力度不受 λ 控制</li>
+      </ul>
+      <div class="quiz-explain">解析：B 对——L1 可行域是菱形，顶点在坐标轴上，等高线先碰到顶点 → 系数清零（稀疏解，顺带特征选择）；L2 是圆，切点任意，只缩小。A 错：两者都是回归的正则化。C 错：恰好相反，岭回归有闭式解 (XᵀX+λI)⁻¹Xᵀy，LASSO 因 L1 不可导而没有。D 错：两者的惩罚力度都由 λ 控制。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 3</div>
+      <div class="q-stem">对率回归中，交叉熵损失对 w 的梯度是？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. (y − p) · x</li>
+        <li data-opt="b">B. (p − y) · x</li>
+        <li data-opt="c">C. p · (1 − p) · x</li>
+        <li data-opt="d">D. −ln(p) · x</li>
+      </ul>
+      <div class="quiz-explain">解析：B 对——sigmoid 与交叉熵配套求导，e 与 ln 全部约掉，剩 (p−y)x。A 错：符号反了，用它更新会让参数朝错误方向走（梯度上升）。C 错：p(1−p) 是 sigmoid 自身的导数 σ′(z)，单独对 z 求导时才出现，配上交叉熵后被约掉。D 错：那是损失函数的形状，不是梯度。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="d">
+      <div class="q-no">自测 4</div>
+      <div class="q-stem">LDA 选择投影方向 w ∝ S_w⁻¹(μ₀−μ₁) 的目标是？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 让所有样本的投影值尽量接近 0</li>
+        <li data-opt="b">B. 让两类均值投影尽量远即可，类内散布无所谓</li>
+        <li data-opt="c">C. 让投影方向与 μ₀−μ₁ 垂直，避免过拟合</li>
+        <li data-opt="d">D. 让同类投影尽量抱团、异类投影尽量远离</li>
+      </ul>
+      <div class="quiz-explain">解析：D 对——"类内近、类间远"是 LDA 的全部目标，S_w⁻¹ 正是为压制类内散布大的方向而存在。A 错：投影值的具体位置不重要，重要的是两类是否分开。B 错：只看均值会选出类内散布极大的方向，投影后两类仍混作一团。C 错：恰恰相反，方向以 μ₀−μ₁ 为基础做修正，绝非垂直。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="c">
+      <div class="q-no">自测 5</div>
+      <div class="q-stem">某数据集有 10000 封正常邮件和 100 封垃圾邮件。某模型把所有邮件都判为"正常"，精度 99.01%。下列说法正确的是？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 99.01% 精度说明该模型很优秀，可以上线</li>
+        <li data-opt="b">B. 这是过拟合的典型表现，用 L2 正则化即可解决</li>
+        <li data-opt="c">C. 类别不平衡下精度尺子失灵，应换查准率/查全率/AUC，并用采样或再缩放处理不平衡</li>
+        <li data-opt="d">D. 该模型查全率很高，只是查准率略低</li>
+      </ul>
+      <div class="quiz-explain">解析：C 对——99:1 下"全猜多数类"也能拿 99% 精度，精度失效；须换尺子（查准率/查全率/F1/AUC），并用欠采样、过采样或再缩放处理不平衡。A 错：该模型连一封垃圾邮件都没抓到过，毫无用处。B 错：这不是过拟合问题，是评估指标与数据分布问题，正则化帮不上。D 错：它对垃圾邮件的查全率是 0%（一封没抓到），说反了。</div>
+    </div>
+
+    <!-- ============ 章末五件套之 4：三句话复述 ============ -->
+    <div class="retell">
+      <h3>🗣️ 用自己的话，三句话讲完本章</h3>
+      <p>对着空气（或室友）说出这三句。说卡壳的那句，回去重读对应小节。</p>
+      <details>
+        <summary>句1：这章解决什么问题？——</summary>
+        <div class="retell-answer">参考答案：给特征打分、加权求和这一条直线（超平面）能做多远的预测——能回归连续值，也能经由概率化或投影做分类；以及它在哪里会撞墙（过拟合、XᵀX 不可逆、线性不可分）。</div>
+      </details>
+      <details>
+        <summary>句2：核心机制是什么？——</summary>
+        <div class="retell-answer">参考答案：回归用最小二乘闭式解 ŵ=(XᵀX)⁻¹Xᵀy；分类有两条岔路——对率回归用 σ(z) 把线性输出压成概率、以交叉熵为损失做梯度下降（梯度干净地等于 (p−y)x），LDA 找方向 w∝S_w⁻¹(μ₀−μ₁) 让类内近类间远；多分类靠 OvR/OvO 拆解投票；过拟合靠 L2（岭回归）或 L1（LASSO）正则化压住系数。</div>
+      </details>
+      <details>
+        <summary>句3：它和前后章怎么分工？——</summary>
+        <div class="retell-answer">参考答案：Ch2 给了评估尺子（验证集、过拟合、查准率），本章是第一个被这套尺子评估的模型族，也是唯一能全程手算的；它切不动的地方（线性不可分）正是 Ch5 神经网络（线性模型堆叠+非线性化）和 Ch6 支持向量机（带间隔、可配核技巧）登场的理由。</div>
+      </details>
+    </div>
+
+    <!-- ============ 章末五件套之 5：复习计划 ============ -->
+    <div class="review-plan">
+      <h3>🔁 间隔复习计划</h3>
+      <p>回忆本身比重读有效 10 倍。到点只做一件事：翻卡 + 重做标记题。</p>
+      <table>
+        <tr><th>时间点</th><th>复习内容</th><th>预计用时</th></tr>
+        <tr><td>第 1 天</td><td>概念卡 1–6 + 全部回忆卡；重算手算例 1（4 点最小二乘）</td><td>12 分钟</td></tr>
+        <tr><td>第 3 天</td><td>概念卡（重点翻错的）+ 回忆 3.2-2、3.3-2；重做 L2①</td><td>10 分钟</td></tr>
+        <tr><td>第 7 天</td><td>三句话复述 + 重做 L2②、手算例 4（LDA 投影）+ 自测错题</td><td>12 分钟</td></tr>
+        <tr><td>第 15 天</td><td>只做合上书挑战；能全过就毕业</td><td>15 分钟</td></tr>
+      </table>
+    </div>
+
+    <!-- ============ 合上书挑战 ============ -->
+    <div class="final-challenge">
+      <h3>📕 合上书挑战</h3>
+      <p class="fc-sub">现在关掉这个页面，拿一张纸，凭记忆完成以下任务。全部做完再回来核对——这是本章真正的毕业考试。</p>
+      <ol id="challenge-list">
+        <li><span class="fc-check"></span>写出一元线性回归 w、b 的闭式解，以及多元情形 ŵ = (XᵀX)⁻¹Xᵀy，并说明 XᵀX 何时不可逆、怎么补救。</li>
+        <li><span class="fc-check"></span>手算 x:1,2,3,4 / y:2.1,3.9,6.2,7.8 的最小二乘直线（w=1.94，b=0.15），步骤写全。</li>
+        <li><span class="fc-check"></span>写出 sigmoid 与交叉熵损失，推导（或默写）梯度 ∂L/∂w=(p−y)x，并在 x=1,y=1,w=0,b=0,η=0.1 上走出一步（w₁=b₁=0.05）。</li>
+        <li><span class="fc-check"></span>写出 LDA 投影方向公式，并在类 0：(1,2),(3,4) 与类 1：(3,2),(5,0) 上验证投影分开（方向 (−1,1)，投影 +1,+1 对 −1,−5）。</li>
+        <li><span class="fc-check"></span>说出 OvR 与 OvO 的分类器个数公式（N 与 N(N−1)/2）、4 类时各几个，以及类别不平衡的三种处理与评估陷阱。</li>
+        <li><span class="fc-check"></span>一句话回答本章主线问题：线性模型能做什么、边界在哪？</li>
+      </ol>
+    </div>
+
+    <div class="complete-zone">
+      <button class="btn-complete" id="btn-complete" onclick="markDone()">✓ 我已完成本章（含合上书挑战）</button>
+    </div>
+
+    <div class="chapter-nav">
+      <a href="chapter-02.html"><span class="nav-dir">← 上一章</span>第2章 模型评估与选择</a>
+      <a href="chapter-04.html" class="next"><span class="nav-dir">下一章 →</span>第4章 决策树</a>
+    </div>
+
+  </div>
+</div>
+
+<footer class="footer">
+  <div class="wrap">第3章 线性模型 · 机器学习互动讲义 · 基于周志华《机器学习》(2016)</div>
+</footer>
+
+<script src="/lectures-assets/mermaid.min.js"></script>
+<script>
+mermaid.initialize({
+  startOnLoad: true,
+  theme: "base",
+  themeVariables: {
+    primaryColor: "#e3edf7",
+    primaryBorderColor: "#1d5f9e",
+    primaryTextColor: "#1d5f9e",
+    lineColor: "#5c554b",
+    secondaryColor: "#fbeedd",
+    tertiaryColor: "#f5f1e8",
+    fontFamily: "-apple-system, PingFang SC, sans-serif",
+    fontSize: "14px"
+  },
+  flowchart: { curve: "linear", htmlLabels: false }
+});
+</script>
+<script>
+// 自测题判分（原样复用，勿改）
+document.querySelectorAll(".quiz-block").forEach(block => {
+  const answer = block.dataset.answer;
+  const explain = block.querySelector(".quiz-explain");
+  block.querySelectorAll(".quiz-opts li").forEach(li => {
+    li.addEventListener("click", () => {
+      const opts = block.querySelectorAll(".quiz-opts li");
+      opts.forEach(o => o.classList.add("disabled"));
+      if (li.dataset.opt === answer) {
+        li.classList.add("correct");
+      } else {
+        li.classList.add("wrong");
+        block.querySelector(`[data-opt="${answer}"]`).classList.add("correct");
+      }
+      explain.classList.add("show");
+    });
+  });
+});
+
+// 合上书清单打勾（原样复用，勿改）
+document.querySelectorAll("#challenge-list li").forEach(li => {
+  li.addEventListener("click", () => li.classList.toggle("checked"));
+});
+
+// 完成标记 → localStorage（章号 3）
+const KEY = "ml_progress_v1";
+function loadProgress() {
+  try { return JSON.parse(localStorage.getItem(KEY)) || {}; } catch (e) { return {}; }
+}
+const progress = loadProgress();
+const btn = document.getElementById("btn-complete");
+if (progress[3] && progress[3].done) {
+  btn.textContent = "✓ 已完成 · 再次点击重置";
+  btn.classList.add("done");
+}
+function markDone() {
+  const p = loadProgress();
+  if (p[3] && p[3].done) {
+    delete p[3];
+    btn.textContent = "✓ 我已完成本章（含合上书挑战）";
+    btn.classList.remove("done");
+  } else {
+    p[3] = { done: true, completedAt: Date.now(), reviewsDone: 0 };
+    btn.textContent = "✓ 已完成 · 复习提醒已开启";
+    btn.classList.add("done");
+  }
+  localStorage.setItem(KEY, JSON.stringify(p));
+}
+</script>
+
+</body>
+</html>

@@ -1,0 +1,700 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第18章 直面配分函数 · 深度学习互动讲义</title>
+<link rel="stylesheet" href="/lectures-assets/style.css">
+</head>
+<body>
+
+<nav class="topbar">
+  <div class="topbar-inner">
+    <span class="brand"><a href="index.html" style="color:inherit">← 学习地图</a></span>
+    <span class="crumb">阶段④ · 生成模型与前沿 / 第18章</span>
+  </div>
+</nav>
+
+<div class="wrap">
+
+  <div class="lecture-head">
+    <span class="ch-label">CHAPTER 18 · 生成模型与前沿</span>
+    <h1>直面配分函数</h1>
+    <p class="lead">一句话副标题：第17章用采样去逼近 Z 与负相，但 MCMC 要烧时间、样本相关、收敛难诊断；本章换一条思路——不再硬算 Z，而是改造目标函数本身：伪似然把联合拆成一排便宜的条件，对比散度用 k 步短链换训练效率，得分匹配干脆让 Z 在梯度里自动消失。</p>
+  </div>
+
+  <!-- ===== 章首四件套之 1：全书定位 ===== -->
+  <div class="position-bar">
+    <strong>本章在主线上的位置：</strong>第17章给了对付配分函数的第一类武器——采样近似；但 MCMC 贵且有偏，训练循环里每步都跑长链不现实。本章给出第二类武器——<u>改造目标函数本身，绕开精确计算 Z</u>；第19章将沿着"换目标"的思路走得更远，用变分推断把推断本身也变成优化。<br>
+    第18章回答主线上的第18个问题：<strong>训练含配分函数的模型时，怎样不算 Z 也能拿到好用的梯度信号？</strong>
+    <div class="map-inline">
+      <span class="node">① 数学与机器学习基础<br>Ch1–5 数学工具与机器学习基础</span><span class="arrow">→</span>
+      <span class="node">② 现代深度网络<br>Ch6–11 前馈 · 卷积 · 序列 · 实践</span><span class="arrow">→</span>
+      <span class="node">③ 表示与推断<br>Ch13 线性因子 · Ch14 自编码器 · Ch15 表示学习 · Ch16 结构化概率模型</span><span class="arrow">→</span>
+      <span class="node here">④ 生成模型与前沿<br>Ch17 蒙特卡洛方法 · <strong>Ch18 直面配分函数</strong> · Ch19 近似推断 · Ch20 深度生成模型</span>
+    </div>
+  </div>
+
+  <!-- ===== 章首四件套之 2：学习目标 ===== -->
+  <div class="objectives">
+    <h4>🎯 学完本章，合上书你应该能：</h4>
+    <ol>
+      <li>写出对数似然梯度分解 ∇log p = ∇log p̃ − ∇log Z，并说出正相与负相各自的含义与来源</li>
+      <li>对单变量二态模型手算一步正相、负相与总梯度</li>
+      <li>写出伪似然目标 Σᵢ log p(xᵢ|x₋ᵢ)，说明它为什么把全局 Z 换成局部可算的归一化</li>
+      <li>手算 CD-1：从数据点出发跑一步 Gibbs 得到幻想粒子，写出 CD 梯度并与精确梯度对比</li>
+      <li>解释得分匹配为什么让 Z 消失（∇log Z 对 x 的梯度为零），对手写高斯例子推出最优参数</li>
+      <li>一句话说清 NCE：把密度估计改写成"真样本 vs 噪声样本"的二分类问题，Z 变成可学习参数</li>
+    </ol>
+  </div>
+
+  <div class="lecture">
+
+    <!-- ===== 章首四件套之 3：推导主线图 ===== -->
+    <div class="figure">
+      <div class="mermaid">
+flowchart TB
+  A["第17章：MCMC 能近似负相 但链要烧时间且难收敛"] -->|"训练循环每步都要梯度 长链太贵"| B["核心想法：不算精确 Z 改目标函数"]
+  B -->|"把联合拆成一排条件"| C["伪似然：每个条件只含单变量求和 Z 局部可算"]
+  B -->|"负相用短链近似"| D["对比散度 CD-k：从数据点跑 k 步 Gibbs 得幻想粒子"]
+  B -->|"匹配 score 而非密度"| E["得分匹配：Z 对 x 的梯度为零 自动消失"]
+  B -->|"把估计改成分类"| F["NCE：真样本 vs 噪声 Z 变成可学习参数"]
+  C -.->|"目标不再是似然 渐近性质需论证"| G["代价：都是有偏或间接的目标 第19章走向变分推断"]
+  D -.-> G
+  E -.-> G
+  F -.-> G
+  classDef hot fill:#fbeedd,stroke:#c4651f,stroke-width:2.5px,color:#c4651f;
+  classDef danger fill:#fae9e7,stroke:#b03a2e,stroke-width:2.5px,color:#b03a2e;
+  class D hot;
+  class E hot;
+  class G danger;
+      </div>
+      <div class="caption">本章推导主线：从"MCMC 太贵"出发，四条岔路都回答同一个问题——怎样绕开精确 Z 拿到训练信号；末端红框是共同代价：目标被改造过，不再是纯似然，这直接引出第19章的变分思路。</div>
+    </div>
+
+    <!-- ================= 18.1 ================= -->
+    <h2><span class="sec-no">18.1</span>梯度里的两只拳头：正相与负相</h2>
+
+    <p>第17章的结尾我们留下一句话：MCMC 能近似负相，但每一步训练都跑一条长链太贵。要看清贵在哪、以及后面三节的替代方案为什么可行，得先把对数似然的梯度拆开来看。对无向模型 p(x) = p̃(x)/Z，对数似然对参数 θ 的梯度是：</p>
+
+    <div class="formula">∇<sub>θ</sub> log p(x) = ∇<sub>θ</sub> log p̃(x) − ∇<sub>θ</sub> log Z</div>
+
+    <p>第一项叫<span class="term">正相</span>（Positive Phase）：只涉及当前数据点，直接对未归一化能量求梯度，便宜。第二项叫<span class="term">负相</span>（Negative Phase）：因为 Z = Σₓ p̃(x) 要对全状态求和，可以证明 ∇log Z = E_{x∼p}[∇log p̃(x)]——一个模型分布下的期望，要从模型里采样才能估计，贵得离谱。</p>
+
+    <p>完整手算一个最小例子。单变量二态模型 p̃(x) = e^{θx}，x ∈ {0,1}。配分函数 Z = e^{θ·0} + e^{θ·1} = 1 + e^θ。设 θ = 0，此时 p(0) = p(1) = 1/2，分布均匀。数据点 x = 1：</p>
+
+    <div class="formula">正相： <span class="frac"><span class="num-part">∂ log p̃(x)</span><span class="den-part">∂θ</span></span> = <span class="frac"><span class="num-part">∂(θx)</span><span class="den-part">∂θ</span></span> = x = 1</div>
+
+    <div class="formula">负相： E<sub>p</sub>[x] = 0 · <span class="frac"><span class="num-part">1</span><span class="den-part">2</span></span> + 1 · <span class="frac"><span class="num-part">1</span><span class="den-part">2</span></span> = 0.5</div>
+
+    <div class="formula">总梯度： 1 − 0.5 = <strong>0.5</strong></div>
+
+    <p>三步走完。直觉非常直白：<strong>正相把数据点的能量往下压（让模型更相信见过的样本），负相把模型在全空间上的能量往上抬（防止所有状态的概率一起膨胀），两者相减才是净效果</strong>。梯度 0.5 &gt; 0，说明该增大 θ——正是"让 x=1 更可能"的方向。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>正相与负相是一场拔河：正相只看数据，负相要看遍模型。训练无向模型的全部麻烦都集中在负相那一项——它需要"从当前模型采样"，而当前模型正是我们在训练的东西。后面三节的所有技巧，本质都是在说：<strong>负相这个期望，能不能不算、或者便宜地算？</strong></p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>把负相当成"正则项"或"惩罚项"随便丢掉。错。丢掉负相，模型会让所有状态的 p̃ 一起膨胀、log p̃ 单调上升但 p 永远不变——你训练了个寂寞。负相不是可选项，它是归一化的化身：<strong>正是它逼模型在"抬高数据"与"压低他处"之间做权衡</strong>。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 18.1-1</div>
+              <div class="q-text">写出 ∇log p 的两相分解，并说明为什么负相比正相贵。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              ∇log p = ∇log p̃ − ∇log Z。正相只对当前数据点求梯度；负相 = E_{x∼p}[∇log p̃]，要对模型分布求期望，需要采样，贵。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 18.1-2</div>
+              <div class="q-text">p̃(x) = e^{θx}、x∈{0,1}、θ=0、数据 x=1：正相、负相、总梯度各是多少？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              正相 = x = 1；负相 = E[x] = 0.5；总梯度 = 1 − 0.5 = 0.5。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ================= 18.2 ================= -->
+    <h2><span class="sec-no">18.2</span>伪似然：把联合换成一排条件</h2>
+
+    <p>上一节给了两相分解，但它带出一个问题：负相需要对全空间求和，能不能干脆换一个不含全局 Z 的目标？<span class="term">伪似然</span>（Pseudo-Likelihood）的答案是：不优化联合似然，改为优化每个变量的条件似然之和。</p>
+
+    <div class="formula">log 伪似然 = ∑<sub>i</sub> log p(x<sub>i</sub> | x<sub>−i</sub>)</div>
+
+    <p>关键在于：每个条件分布里只对一个变量求归一化，Z 从"对 2ⁿ 个状态求和"变成"对当前变量的几个取值求和"——二值变量时就是两项相加，便宜到可以解析计算。</p>
+
+    <p>完整手算。两个二值变量 x₁, x₂ ∈ {0,1}，模型 p̃(x₁,x₂) = e^{θx₁x₂}，数据点 (1,1)。条件分布：</p>
+
+    <div class="formula">p(x₁=1 | x₂=1) = <span class="frac"><span class="num-part">e^θ</span><span class="den-part">e^θ + e^0</span></span> = <span class="frac"><span class="num-part">e^θ</span><span class="den-part">1 + e^θ</span></span> = σ(θ)</div>
+
+    <p>σ 是 sigmoid。对 θ 求导：∂log σ(θ)/∂θ = 1 − σ(θ)。θ = 0 时 σ(0) = 0.5，导数为 1 − 0.5 = <strong>0.5</strong>。对称地，p(x₂=1|x₁=1) 那一项也贡献 0.5。伪似然梯度合计 = 0.5 + 0.5 = <strong>1.0</strong>。对比：同一数据点的精确似然梯度是 1 − E[x₁x₂] = 1 − 0.25 = 0.75——<strong>伪似然把同一个数据点用了两次，数值上偏大，但方向一致</strong>。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>伪似然的赌注是：<strong>联合分布难归一，条件分布好归一</strong>。把"这个家像不像真的"拆成 n 个"给定邻居、这间屋子像不像真的"，每个子问题都能解析求解。虽然伪似然不等于似然，但在很多场景下它给出一致估计——n 趋于无穷时收敛到真参数。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>以为伪似然就是似然的另一种写法。不是。伪似然把每个数据点重复使用 n 次，目标函数本身已经换了；它估计出的参数在有限样本下有偏，只是渐近一致。另一个误区：以为伪似然总能替代似然——当变量强耦合、条件分布不能刻画全局结构时，伪似然会给出误导性答案。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 18.2-1</div>
+              <div class="q-text">写出伪似然目标，并说明它为什么把全局 Z 变便宜。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              Σᵢ log p(xᵢ|x₋ᵢ)。每个条件只对该变量的取值求和（二值时是两项），归一化局部可算，无需对 2ⁿ 状态求和。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 18.2-2</div>
+              <div class="q-text">p̃ = e^{θx₁x₂}、数据 (1,1)、θ=0：伪似然梯度是多少？与精确似然梯度对比。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              每项贡献 1−σ(0)=0.5，两项合计 1.0；精确似然梯度 = 1 − E[x₁x₂] = 0.75。伪似然偏大，因同一数据点被用了两次。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ================= 18.3 ================= -->
+    <h2><span class="sec-no">18.3</span>对比散度：只跑 k 步的短链（CD-k）</h2>
+
+    <p>上一节把联合换成了条件，但它带出一个问题：伪似然改变了目标，不是似然了。能不能保留似然目标，只把负相那个 MCMC 近似做得更便宜？<span class="term">对比散度</span>（Contrastive Divergence, CD-k）是 Hinton 的著名赌注：<strong>负相期望用从数据点出发、只跑 k 步的 Gibbs 链得到的样本去估计</strong>。这些没收敛的样本叫<span class="term">幻想粒子</span>（Fantasy Particles）——它们离平稳分布还远，但方向足够对。</p>
+
+    <p>完整手算 CD-1。模型 p̃(x₁,x₂) = e^{θx₁x₂}，数据 (1,1)，θ = 0。从数据点 (1,1) 出发跑一步 Gibbs：</p>
+
+    <ol>
+      <li><strong>第 1 步：固定 x₂=1，更新 x₁。</strong>p(x₁=1|x₂=1) = σ(θ) = σ(0) = 0.5。设随机数让我们采到 x₁=1 → 状态仍 (1,1)；</li>
+      <li><strong>第 2 步：固定 x₁=1，更新 x₂。</strong>p(x₂=1|x₁=1) = σ(0) = 0.5。设这次采到 x₂=0 → 幻想粒子 = (1,0)。</li>
+    </ol>
+
+    <p>CD-1 梯度 = 数据统计 − 幻想粒子统计：</p>
+
+    <div class="formula">∇<sub>θ</sub><sup>CD-1</sup> = x₁<sup>数据</sup>x₂<sup>数据</sup> − x₁<sup>幻想</sup>x₂<sup>幻想</sup> = 1×1 − 1×0 = <strong>1.0</strong></div>
+
+    <p>对比精确负相：θ=0 时四个状态 (0,0),(0,1),(1,0),(1,1) 各 1/4，E[x₁x₂] = 1/4，精确梯度 = 1 − 0.25 = <strong>0.75</strong>。CD-1 给出 1.0——<strong>方向对，数值偏大</strong>。这就是 Hinton 的赌注：训练早期方向对就够，偏差点没关系，反正下一批数据来了还会修正。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>CD 的深刻之处在于重新定义了"好近似"：<strong>不需要链收敛，只需要梯度方向有用</strong>。从数据点出发跑 k 步，样本必然比模型分布更"像数据"——于是负相被低估、梯度被放大，但这个放大恰好指向增大数据似然的方向。训练 RBM 的标准配方就是 CD-1 或 CD-10，便宜到可以塞进深度学习的 SGD 循环。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>以为 CD 是似然梯度的无偏近似。错。除非 k → ∞（链收敛），CD 不是任何似然目标的梯度——它是个有偏但便宜的替代。实践含义：用 CD 训练时不能拿训练似然当收敛指标（它可能上升也可能抖动），要看重建误差或在验证集上的表现。另一个坑：k 太小链走不远，模型分布在远离数据的区域永远得不到负相压制，可能出现"远处概率质量偷偷膨胀"的病态。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 18.3-1</div>
+              <div class="q-text">CD-k 用什么东西近似负相期望？幻想粒子从哪儿出发、跑几步？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              用从数据点出发、跑 k 步 Gibbs 得到的样本（幻想粒子）近似模型分布样本。k 通常 1 或 10，远小于收敛所需步数。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 18.3-2</div>
+              <div class="q-text">p̃ = e^{θx₁x₂}、数据 (1,1)、θ=0，幻想粒子 (1,0)：CD-1 梯度与精确梯度各是多少？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              CD-1 = 1×1 − 1×0 = 1.0；精确 = 1 − E[x₁x₂] = 1 − 0.25 = 0.75。CD 方向对、数值偏大。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ================= 18.4 ================= -->
+    <h2><span class="sec-no">18.4</span>得分匹配与噪声对比估计</h2>
+
+    <p>上一节的 CD 还是要跑链（哪怕短），而且引入了系统性偏差。这一节给两个更激进的方案：<strong>干脆让 Z 在目标函数里彻底消失</strong>。</p>
+
+    <p>第一个是<span class="term">得分匹配</span>（Score Matching）。定义 score 为对数密度对 x 的梯度：∇ₓ log p(x)。注意恒等式：</p>
+
+    <div class="formula">∇<sub>x</sub> log p(x) = ∇<sub>x</sub> log p̃(x) − ∇<sub>x</sub> log Z = ∇<sub>x</sub> log p̃(x)</div>
+
+    <p>为什么第二项是零？<strong>log Z 是常数，对 x 求导恒等于 0</strong>。所以模型的 score 与 Z 无关。得分匹配的目标是最小化模型 score 与数据 score 之间的均方误差：</p>
+
+    <div class="formula">J(θ) = E<sub>x∼p<sub>data</sub></sub>[ ||∇<sub>x</sub> log p<sub>model</sub>(x) − ∇<sub>x</sub> log p<sub>data</sub>(x)||² ]</div>
+
+    <p>问题是我们不知道数据的 score。Hyvärinen 的关键洞察：用分部积分展开上式，交叉项可以改写为只含模型 score 的二阶导，目标等价于</p>
+
+    <div class="formula">J(θ) = E<sub>p<sub>data</sub></sub>[ ½||∇<sub>x</sub> log p<sub>model</sub>||² + tr(∇<sub>x</sub>² log p<sub>model</sub>) ] + 常数</div>
+
+    <p>——只含模型量的期望，Z 彻底消失。</p>
+
+    <p>完整手算一个一维例子。模型是高斯 N(μ, 1)，真实数据均值 μ* = 2。模型的 score 是 ∇ₓ log p(x) = −(x−μ)。真实 score 是 −(x−2)。两者差为 (x−2)−(x−μ) = μ−2，与 x 无关。均方误差 = (μ−2)²，加 ½ 系数：J(μ) = ½(2−μ)²。<strong>最优解 μ = 2，精确恢复真值</strong>，全程没有 Z 出场（尽管高斯的 Z 本来就算得出）。</p>
+
+    <p>第二个是<span class="term">噪声对比估计</span>（Noise Contrastive Estimation, NCE）。思想一句话：<strong>把"估计密度"改写成"区分真样本与噪声样本"的二分类问题</strong>。真样本标签 1（来自 p_data），噪声标签 0（来自一个简单分布 p_noise，如高斯或均匀）。训练一个 logistic 分类器，让它输出 P(标签=1|x)；可以证明当分类器最优时，它隐含的密度比恰好是 p_data/p_noise——把模型密度当作分类器里的未知参数（连带 Z 一起当作可学习的标量参数）训练即可。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>两个方法的共同点：<strong>换一个让 Z 变得无害的目标</strong>。得分匹配利用"Z 对 x 的导数为零"让它在 score 里消失；NCE 把 Z 升级成一个显式参数，让分类任务自己学出它。深度学习里 NCE 的后代无处不在——word2vec 的负采样就是它的简化版。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>得分匹配的代价：目标里有模型的二阶导（Hessian 的迹），高维下计算昂贵——这是它没能取代 CD 成为 RBM 标配的原因。NCE 的坑：<strong>估计质量严重依赖噪声分布选得好不好</strong>——噪声太简单，分类器学到的是平凡特征；噪声太难，又训不动。经验法则：噪声应尽可能接近数据分布但又保持好采样。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 18.4-1</div>
+              <div class="q-text">为什么得分匹配能让 Z 消失？写出关键恒等式。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              ∇ₓ log p = ∇ₓ log p̃ − ∇ₓ log Z，而 log Z 是常数，对 x 的梯度恒为 0，所以 score 与 Z 无关。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 18.4-2</div>
+              <div class="q-text">NCE 把密度估计改写成什么任务？Z 在其中扮演什么角色？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              改写成"真样本 vs 噪声样本"的二分类（logistic 回归）。Z 被当作分类器内部一个可学习的标量参数，随模型一起被训练出来。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===== 章末五件套之 1：概念卡 ===== -->
+    <h2><span class="sec-no">🃏</span>概念卡：本章概念的一分钟画像</h2>
+    <p>翻面前先自问：这个概念我能用一句话讲清楚吗？</p>
+    <div class="flip-grid">
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 1</div>
+            <div class="q-text">正相与负相（Positive &amp; Negative Phase）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">∇log p = ∇log p̃（正相）− ∇log Z（负相）；负相 = E_{x∼p}[∇log p̃]。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">把对数似然梯度拆成"便宜的数据项"与"昂贵的模型项"，定位训练瓶颈。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">正相压低数据的能量，负相抬高全空间的能量，两者相减是净效果。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">把负相当正则项丢掉——丢掉它 p̃ 单调膨胀但 p 不变，训练空转。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">理解一切无向模型（RBM、玻尔兹曼机、能量模型）训练的入口分解。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 2</div>
+            <div class="q-text">伪似然（Pseudo-Likelihood）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">Σᵢ log p(xᵢ|x₋ᵢ)，把联合似然换成一排条件似然之和。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">联合 Z 要对 2ⁿ 状态求和；条件分布只对单变量取值求和，归一化便宜。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">把"整张画像不像"拆成 n 个"给定邻居这块像不像"。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为伪似然就是似然——目标被换了，有限样本有偏，只是渐近一致。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">马尔可夫随机场、条件分布好算的图模型；NLP 里某些词模型。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 3</div>
+            <div class="q-text">对比散度（Contrastive Divergence, CD-k）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">负相期望用从数据点出发跑 k 步 Gibbs 的样本近似；k 常取 1 或 10。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">MCMC 跑到收敛太贵，训练循环里塞不下；CD 用短链换效率。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">不需要链收敛，只需要梯度方向对——从数据出发的短链天然偏向数据。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为 CD 是似然梯度的无偏近似——除非 k→∞，它是有偏的。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">训练 RBM 的标准配方；第20章深度玻尔兹曼机的预训练。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 4</div>
+            <div class="q-text">幻想粒子（Fantasy Particles）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">CD 中从数据点出发、跑 k 步 MCMC 得到的样本，用作模型分布的代理人。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">负相需要"从模型采样"的具体实现——幻想粒子就是那只样本。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">模型的"白日梦"：从现实出发走几步，想象自己会生成什么。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为幻想粒子代表模型真实分布——k 步太短，它离平稳分布还远。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">CD-k、持续对比散度（PCD）里的负相样本来源。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 5</div>
+            <div class="q-text">得分匹配（Score Matching）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">最小化 E||∇ₓ log p_model − ∇ₓ log p_data||²；分部积分后只含模型 score 的平方与二阶导。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">不碰 Z：score 里 ∇ₓ log Z = 0，归一化常数自动消失。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">不匹配密度本身，匹配密度的"坡度"——坡度对了形状就对。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为免费午餐——目标里有 Hessian 的迹，高维下比 CD 更贵。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">连续能量模型；近年扩散模型的去噪得分匹配是它的现代化身。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 6</div>
+            <div class="q-text">噪声对比估计（Noise Contrastive Estimation, NCE）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">把密度估计改写为区分真样本与噪声样本的 logistic 二分类。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">归一化难题：把 Z 升级为分类器内部一个可学习参数，与模型一起训练。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">学不会"长什么样"，就先学会"不像什么"——分类边界隐含密度比。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">噪声分布随便选——噪声太简单分类器学到平凡特征，太难训不动。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">word2vec 负采样、语言模型大词表 softmax 的替代、自监督对比学习的祖先。</span></div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- ===== 章末五件套之 2：分层习题 ===== -->
+    <h2><span class="sec-no">📝</span>分层习题</h2>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>判断对错：对比散度 CD-k 是对数似然梯度的无偏估计，只要样本量够大就能收敛到真梯度。</div>
+      <details>
+        <summary>提示</summary>
+        <p>CD 用跑 k 步的链代替收敛的链。k 有限时，幻想粒子的分布等于模型的平稳分布吗？</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer"><strong>错。</strong>CD 用的是只跑 k 步的短链样本，其分布与模型的平稳分布有系统差异——偏差不会随样本量增加而消失，只会随 k 增大而缩小。除非 k→∞（链真正收敛），CD 不是任何似然目标的梯度。它是有偏但方向有用的近似：Hinton 的赌注是训练早期方向对就够，偏差点由后续批次修正。</div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>判断对错：伪似然之所以便宜，是因为它用一个解析公式逼近联合分布的 Z。</div>
+      <details>
+        <summary>提示</summary>
+        <p>伪似然优化的还是联合似然吗？每个条件分布 p(xᵢ|x₋ᵢ) 的归一化要对多少项求和？</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer"><strong>错。</strong>伪似然根本不逼近 Z——它把目标函数换成了条件似然之和 Σᵢ log p(xᵢ|x₋ᵢ)。便宜的来源是：<strong>每个条件分布只对一个变量的取值求和</strong>（二值变量就是两项），归一化从"对 2ⁿ 个状态"变成"对当前变量的几个取值"，可解析计算。代价是目标不再是似然，同一数据点被重复使用 n 次。</div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>单变量二态模型 p̃(x) = e^{θx}，x∈{0,1}，数据点 x=1。(a) 写出 Z(θ)；(b) 求 θ=0 时的正相、负相、总梯度；(c) 求 θ=1 时的负相（保留两位小数），并解释它为什么变大。</div>
+      <details>
+        <summary>提示</summary>
+        <p>(a) Z = e^{θ·0} + e^{θ·1}；(b) 正相 = x，负相 = E_p[x]；(c) θ 变大时 p(1) 怎么变？</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          (a) Z(θ) = 1 + e^θ；<br>
+          (b) θ=0 时 p(0)=p(1)=1/2。正相 = ∂(θx)/∂θ = x = <strong>1</strong>；负相 = E[x] = 0×0.5 + 1×0.5 = <strong>0.5</strong>；总梯度 = 1 − 0.5 = <strong>0.5</strong>；<br>
+          (c) θ=1 时 p(1) = e/(1+e) ≈ 2.718/3.718 ≈ 0.731，负相 = E[x] = 0×(1−0.731) + 1×0.731 ≈ <strong>0.73</strong>。<br>
+          物理解释：θ 越大模型越相信 x=1，E[x] 越接近 1；总梯度 1−0.73=0.27 比 θ=0 时的 0.5 小——这正是梯度下降的"自我刹车"：参数越接近让模型匹配数据的程度，梯度越小。
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>两个二值变量模型 p̃(x₁,x₂) = e^{θx₁x₂}，θ=0，数据 (1,1)。一次 CD-1：第 1 步固定 x₂=1 更新 x₁，采到 x₁=1；第 2 步固定 x₁=1 更新 x₂，采到 x₂=1。(a) 幻想粒子是什么？(b) 本次 CD-1 梯度是多少？(c) 与课文中采到 x₂=0 的情形（梯度 1.0）对比，说明什么？</div>
+      <details>
+        <summary>提示</summary>
+        <p>(a) k 步 Gibbs 后的状态；(b) 数据统计 − 幻想统计；(c) 两次结果不同——CD 是随机估计量，想想"期望意义下"与"单次实现"。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          (a) 幻想粒子 = <strong>(1, 1)</strong>（两步都没改动，恰好回到数据点）；<br>
+          (b) CD-1 梯度 = x₁<sup>数据</sup>x₂<sup>数据</sup> − x₁<sup>幻想</sup>x₂<sup>幻想</sup> = 1×1 − 1×1 = <strong>0</strong>；<br>
+          (c) 本次梯度 0，课文那次梯度 1.0——<strong>CD 是随机估计量，单次实现波动大</strong>。期望意义下：θ=0 时四个状态各 1/4，E[幻想粒子的 x₁x₂] 介于数据统计与平稳分布之间，平均梯度为正但小于 1.0。这暴露 CD 的实践特点：单样本梯度噪声极大，必须配合小学习率或多幻想粒子平均（PCD/mini-batch）。
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l3">L3 建模应用</span>你要训练一个 784 维二值 RBM（MNIST），手头有第17章的 MCMC 工具箱与本章的四件武器。请为"训练循环里的负相"选一个方案，说明：①选哪个、为什么；②排除其他三个的理由各一句；③给出两个这个方案在 RBM 上的具体实践风险。</div>
+      <details>
+        <summary>提示</summary>
+        <p>逐件检查：伪似然在 784 个变量上的成本？得分匹配的二阶导在 784 维上多大？NCE 的噪声分布要怎么选？CD 的 k 步链在 RBM 的块结构下好不好走？</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          选 <strong>CD-k（块 Gibbs，k=1 或 10）</strong>。<br>
+          排除：①伪似然——784 个条件分布每个都要算一次，虽然每个便宜但总数大，且 RBM 的隐藏单元使条件结构复杂；②得分匹配——目标含 784×784 Hessian 的迹，每个训练步都要算二阶导，成本爆炸；③NCE——要为 784 维二值数据设计一个既接近数据又好采样的噪声分布，没有显然答案。<br>
+          CD 流程：从 mini-batch 数据点初始化可见层 → 块 Gibbs 交替采样隐藏层（p(hⱼ|v) = σ(Wⱼv + bⱼ)）与可见层 → k 步后取状态算幻想统计 → 数据统计 − 幻想统计 = 梯度。<br>
+          两个风险：①k 太小，模型在远离数据的区域概率质量偷偷膨胀（"暗物质"问题），生成样本出现伪影；②单样本梯度噪声极大，需 mini-batch 平均或 PCD（把上批的幻想粒子留作本批起点）稳住训练。
+        </div>
+      </details>
+    </div>
+
+    <!-- ===== 章末五件套之 3：自测 ===== -->
+    <h2><span class="sec-no">✍️</span>本章自测</h2>
+    <p class="quiz-hint">点击选项判分，答错会给出原因。</p>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 1</div>
+      <div class="q-stem">对无向模型 p = p̃/Z，对数似然梯度 ∇log p 中的"负相"指的是？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. −∇log p̃，即对未归一化能量取负</li>
+        <li data-opt="b">B. ∇log Z = E_{x∼p}[∇log p̃]，模型分布下的期望</li>
+        <li data-opt="c">C. 数据分布下 ∇log p̃ 的期望</li>
+        <li data-opt="d">D. 正则化项，防止参数过大</li>
+      </ul>
+      <div class="quiz-explain">解析：B 对——负相 = ∇log Z，而 Z 是 p̃ 的全状态求和，其梯度等于模型分布下的期望，需要从模型采样才能估计。A 错：那是把 p̃ 取负，与 Z 无关；C 错：数据分布下的期望是正相的另一形式，恰好说反；D 错：负相不是正则项，它是归一化的化身，丢掉它训练空转。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="c">
+      <div class="q-no">自测 2</div>
+      <div class="q-stem">伪似然比精确似然便宜的根本原因是？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 它用一个更小的模型近似原模型</li>
+        <li data-opt="b">B. 它丢弃了相关性强的变量</li>
+        <li data-opt="c">C. 每个条件分布的归一化只对单个变量的取值求和，可解析计算</li>
+        <li data-opt="d">D. 它用蒙特卡洛采样近似 Z</li>
+      </ul>
+      <div class="quiz-explain">解析：C 对——伪似然 = Σᵢ log p(xᵢ|x₋ᵢ)，每个条件分布只对 xᵢ 的取值求和（二值时两项），Z 从指数级求和变成几项相加。A 错：模型本身没换；B 错：没有丢变量，每个变量都被轮到；D 错：那是第17章 MCMC 的思路，伪似然恰恰是为了避开采样。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="a">
+      <div class="q-no">自测 3</div>
+      <div class="q-stem">模型 p̃(x₁,x₂) = e^{θx₁x₂}，θ=0，数据 (1,1)，一次 CD-1 得到幻想粒子 (1,0)。本次 CD-1 梯度是？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 1.0</li>
+        <li data-opt="b">B. 0.75</li>
+        <li data-opt="c">C. 0.5</li>
+        <li data-opt="d">D. 0</li>
+      </ul>
+      <div class="quiz-explain">解析：A 对——CD 梯度 = 数据统计 − 幻想统计 = 1×1 − 1×0 = 1.0。B 错：0.75 是精确似然梯度（1 − E[x₁x₂] = 1 − 0.25），那是用收敛分布算的结果，不是 CD-1；C 错：0.5 是伪似然单项的梯度，张冠李戴；D 错：0 对应幻想粒子恰等于数据点的情形（本课习题 L2 第二题），不是这里。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="d">
+      <div class="q-no">自测 4</div>
+      <div class="q-stem">得分匹配能让配分函数 Z 从目标函数中消失，关键是因为？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 它用蒙特卡洛采样估计 Z 并代入</li>
+        <li data-opt="b">B. 它假设 Z 等于 1（自归一化）</li>
+        <li data-opt="c">C. 它把 Z 当作可学习参数，让优化器自己学</li>
+        <li data-opt="d">D. score 里 ∇ₓ log Z = 0——log Z 是常数，对 x 求导恒为零</li>
+      </ul>
+      <div class="quiz-explain">解析：D 对——∇ₓ log p = ∇ₓ log p̃ − ∇ₓ log Z，第二项因 Z 不依赖 x 而恒为零，所以模型的 score 与 Z 无关，匹配 score 就自动绕开了 Z。A 错：那是第17章思路；B 错：自归一化是另一个技巧（且往往不成立），不是得分匹配；C 错：把 Z 当可学习参数是 NCE 的做法，与得分匹配无关。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 5</div>
+      <div class="q-stem">噪声对比估计（NCE）的核心思想是？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 用蒙特卡洛采样估计负相，链跑 k 步</li>
+        <li data-opt="b">B. 把密度估计改写为"区分真样本与噪声样本"的二分类，Z 变成可学习参数</li>
+        <li data-opt="c">C. 用伪似然替代似然，绕开全局归一化</li>
+        <li data-opt="d">D. 用噪声扰动数据，做数据增强</li>
+      </ul>
+      <div class="quiz-explain">解析：B 对——NCE 训练一个 logistic 分类器区分真样本（标签 1）与噪声样本（标签 0），最优分类器隐含密度比 p_data/p_noise，Z 作为分类器内部一个标量参数被一并学出。A 错：那是 CD；C 错：那是伪似然；D 错：数据增强不解决配分函数问题，与 NCE 的思想完全不同。</div>
+    </div>
+
+    <!-- ===== 章末五件套之 4：三句话复述 ===== -->
+    <div class="retell">
+      <h3>🗣️ 用自己的话，三句话讲完本章</h3>
+      <p>对着空气（或室友）说出这三句。说卡壳的那句，回去重读对应小节。</p>
+      <details>
+        <summary>句1：这章解决什么问题？——</summary>
+        <div class="retell-answer">参考答案：训练含配分函数 Z 的无向模型时，负相 ∇log Z 是模型分布下的期望，精确算不动、用第17章的 MCMC 跑长链又太贵——本章解决"怎样不算精确 Z 也能拿到好用的训练梯度"。</div>
+      </details>
+      <details>
+        <summary>句2：核心机制是什么？——</summary>
+        <div class="retell-answer">参考答案：四件武器——伪似然把联合似然换成一排条件似然（Z 局部可算）；对比散度 CD-k 用从数据点出发跑 k 步的短链样本（幻想粒子）近似负相，有偏但方向对；得分匹配改匹配 score，利用 ∇ₓ log Z = 0 让 Z 自动消失；NCE 把密度估计改写成真/噪声二分类，把 Z 升级为可学习参数。</div>
+      </details>
+      <details>
+        <summary>句3：它和前后章怎么分工？——</summary>
+        <div class="retell-answer">参考答案：第17章给的是"采样近似 Z"的通用武器，本章给的是"绕开 Z"的专用武器，其中 CD-k 内部的采样器就是第17章的 Gibbs；但本章的目标都被改造过（伪似然≠似然，CD 有偏，SM/NCE 换了目标），第19章走向更系统的"换目标"——变分推断，把推断也变成优化。</div>
+      </details>
+    </div>
+
+    <!-- ===== 章末五件套之 5：间隔复习计划 ===== -->
+    <div class="review-plan">
+      <h3>🔁 间隔复习计划</h3>
+      <p>回忆本身比重读有效 10 倍。到点只做一件事：翻卡 + 重做标记题。</p>
+      <table>
+        <tr><th>时间点</th><th>复习内容</th><th>预计用时</th></tr>
+        <tr><td>第 1 天</td><td>全部概念卡 + 回忆卡 18.1 至 18.4</td><td>10 分钟</td></tr>
+        <tr><td>第 3 天</td><td>概念卡 1、3、5（正负相/CD/得分匹配）+ 重做 L2 两题</td><td>10 分钟</td></tr>
+        <tr><td>第 7 天</td><td>三句话复述 + 自测错题 + 默写两相分解与 CD 梯度公式</td><td>10 分钟</td></tr>
+        <tr><td>第 15 天</td><td>只重做合上书挑战；能全过就毕业</td><td>15 分钟</td></tr>
+      </table>
+    </div>
+
+    <!-- 合上书挑战 -->
+    <div class="final-challenge">
+      <h3>📕 合上书挑战</h3>
+      <p class="fc-sub">现在关掉这个页面，拿一张纸，凭记忆完成以下任务。全部做完再回来核对——这是本章真正的毕业考试。</p>
+      <ol id="challenge-list">
+        <li><span class="fc-check"></span>写出 ∇log p 的两相分解，并说出负相为什么是模型分布下的期望</li>
+        <li><span class="fc-check"></span>手算 p̃=e^{θx} 在 θ=0、数据 x=1 时的正相、负相、总梯度</li>
+        <li><span class="fc-check"></span>写出伪似然目标，手算 p̃=e^{θx₁x₂}、数据 (1,1)、θ=0 时的伪似然梯度</li>
+        <li><span class="fc-check"></span>手算同一模型的 CD-1：数据 (1,1)、幻想粒子 (1,0)，并与精确梯度 0.75 对比</li>
+        <li><span class="fc-check"></span>写出得分匹配让 Z 消失的关键恒等式，并对 N(μ,1)、μ*=2 推出最优 μ</li>
+        <li><span class="fc-check"></span>一句话说清 NCE：任务怎么改写、Z 扮演什么角色、word2vec 与它的关系</li>
+        <li><span class="fc-check"></span>回答本章的主线问题：训练含 Z 的模型时，怎样不算精确 Z 也能拿到好用的梯度？（一句话）</li>
+      </ol>
+    </div>
+
+    <div class="complete-zone">
+      <button class="btn-complete" id="btn-complete" onclick="markDone()">✓ 我已完成本章（含合上书挑战）</button>
+    </div>
+
+    <div class="chapter-nav">
+      <a href="chapter-17.html"><span class="nav-dir">← 上一章</span>第17章 蒙特卡洛方法</a>
+      <a href="chapter-19.html" class="next"><span class="nav-dir">下一章 →</span>第19章 近似推断</a>
+    </div>
+
+  </div>
+</div>
+
+<footer class="footer">
+  <div class="wrap">第18章 直面配分函数 · 深度学习互动讲义 · 基于 Goodfellow et al.《深度学习》(2016)</div>
+</footer>
+
+<script src="/lectures-assets/mermaid.min.js"></script>
+<script>
+mermaid.initialize({
+  startOnLoad: true,
+  theme: "base",
+  themeVariables: {
+    primaryColor: "#e3edf7",
+    primaryBorderColor: "#1d5f9e",
+    primaryTextColor: "#1d5f9e",
+    lineColor: "#5c554b",
+    secondaryColor: "#fbeedd",
+    tertiaryColor: "#f5f1e8",
+    fontFamily: "-apple-system, PingFang SC, sans-serif",
+    fontSize: "14px"
+  },
+  flowchart: { curve: "linear", htmlLabels: false }
+});
+</script>
+<script>
+// 自测题判分
+document.querySelectorAll(".quiz-block").forEach(block => {
+  const answer = block.dataset.answer;
+  const explain = block.querySelector(".quiz-explain");
+  block.querySelectorAll(".quiz-opts li").forEach(li => {
+    li.addEventListener("click", () => {
+      const opts = block.querySelectorAll(".quiz-opts li");
+      opts.forEach(o => o.classList.add("disabled"));
+      if (li.dataset.opt === answer) {
+        li.classList.add("correct");
+      } else {
+        li.classList.add("wrong");
+        block.querySelector(`[data-opt="${answer}"]`).classList.add("correct");
+      }
+      explain.classList.add("show");
+    });
+  });
+});
+
+// 合上书清单打勾
+document.querySelectorAll("#challenge-list li").forEach(li => {
+  li.addEventListener("click", () => li.classList.toggle("checked"));
+});
+
+// 完成标记 → localStorage（本系列键 dl_progress_v1，章号为字符串 "18"）
+const KEY = "dl_progress_v1";
+function loadProgress() {
+  try { return JSON.parse(localStorage.getItem(KEY)) || {}; } catch (e) { return {}; }
+}
+const progress = loadProgress();
+const btn = document.getElementById("btn-complete");
+if (progress["18"] && progress["18"].done) {
+  btn.textContent = "✓ 已完成 · 再次点击重置";
+  btn.classList.add("done");
+}
+function markDone() {
+  const p = loadProgress();
+  if (p["18"] && p["18"].done) {
+    delete p["18"];
+    btn.textContent = "✓ 我已完成本章（含合上书挑战）";
+    btn.classList.remove("done");
+  } else {
+    p["18"] = { done: true, completedAt: Date.now(), reviewsDone: 0 };
+    btn.textContent = "✓ 已完成 · 复习提醒已开启";
+    btn.classList.add("done");
+  }
+  localStorage.setItem(KEY, JSON.stringify(p));
+}
+</script>
+
+</body>
+</html>

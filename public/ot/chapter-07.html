@@ -1,0 +1,714 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第7章 应用：机器学习中的 OT · 最优传输互动讲义</title>
+<link rel="stylesheet" href="/lectures-assets/style.css">
+</head>
+<body>
+
+<nav class="topbar">
+  <div class="topbar-inner">
+    <span class="brand"><a href="index.html" style="color:inherit">← 学习地图</a></span>
+    <span class="crumb">④ 应用与前沿 / 第7章</span>
+  </div>
+</nav>
+
+<div class="wrap">
+
+  <div class="lecture-head">
+    <span class="ch-label">CHAPTER 07 · 应用与前沿</span>
+    <h1>应用：机器学习中的 OT</h1>
+    <p class="lead">本章回答的核心问题：前六章把 OT 定义好、算得快、还能微分——那它在机器学习里到底解决了什么别人解决不了的问题？答案分两层：生成模型需要"两个分布不重叠时仍给出梯度"的距离（W₁ 经对偶变成可优化的 sup），域适应与形状匹配需要"跨数据集对齐 + 可微对应"（Sinkhorn 软分配与重心）。</p>
+  </div>
+
+  <div class="position-bar">
+    <strong>本章在主线上的位置：</strong>第6章给了连续域的数值引擎（S_ε、SW、半离散） → <u>本章把引擎装进三条机器学习流水线：WGAN（生成模型）、OT 域适应（跨分布对齐）、形状匹配（软对应与插值）</u> → 第8章把框架本身再往外推：不同空间、不守恒质量、多个边际。<br>
+    第7章回答主线上的第7个问题：<strong>OT 怎么变成能反向传播的损失函数，它进了哪些机器学习流水线？</strong>
+    <div class="map-inline">
+      <span class="node">① Ch1–2 问题与定义</span><span class="arrow">→</span>
+      <span class="node">② Ch3–4 离散与算法（Sinkhorn）</span><span class="arrow">→</span>
+      <span class="node">③ Ch5–6 对偶几何与连续引擎</span><span class="arrow">→</span>
+      <span class="node here">④ Ch7 机器学习应用（WGAN / 域适应 / 形状）</span><span class="arrow">→</span>
+      <span class="node">④ Ch8 扩展与前沿</span>
+    </div>
+  </div>
+
+  <div class="objectives">
+    <h4>🎯 学完本章，合上书你应该能：</h4>
+    <ol>
+      <li>对 Dirac 对 δ₀ vs δ_θ 手算 KL、TV、JS、W₁ 四个量（∞ / 1 / log2 / |θ|），并解释为什么只有 W₁ 给出可用梯度；</li>
+      <li>写出 Kantorovich–Rubinstein 对偶 W₁ = sup_{Lip f≤1} E_μf − E_νf，指出它来自第5章 c-变换的哪个特例；</li>
+      <li>说出 WGAN 中 critic 的角色、weight clipping 的两个毛病、gradient penalty 的公式与动机（最优 critic 梯度范数为 1）；</li>
+      <li>手算 mini-batch OT 的偏差：μ=ν=0.5δ₀+0.5δ₁、m=1 时 E[batch OT]=0.5 而真实 OT=0；</li>
+      <li>写出域适应的类感知成本与形状匹配的软对应方案，并用第5章位移插值/重心完成一次插值手算。</li>
+    </ol>
+  </div>
+
+  <div class="lecture">
+
+    <div class="figure">
+      <div class="mermaid">
+flowchart TB
+  A["ML 核心动作：让生成分布逼近真实分布 需要可微的距离"] --> B["老散度集体失灵：支撑不重叠时 KL TV JS 要么无穷要么常数"]
+  B --> C["W₁ 对偶显影：sup 一个 1-Lipschitz 势函数之差"]
+  C --> D["WGAN：神经网络 critic 扮演势函数 生成器最小化它的差"]
+  D --> E["Lipschitz 怎么落实：clip 截断容量 改为 gradient penalty"]
+  C --> F["S_ε 与 SW 作可微损失：域适应对齐特征 软对应做形状匹配"]
+  F --> G["重心与位移插值：把匹配结果变成新形状"]
+  E --> H["代价：critic 容量决定 W₁ 估计紧度 mini-batch 又添偏差"]
+  G --> H
+  classDef hot fill:#fbeedd,stroke:#c4651f,stroke-width:2.5px,color:#c4651f;
+  classDef danger fill:#fae9e7,stroke:#b03a2e,stroke-width:2.5px,color:#b03a2e;
+  class C hot;
+  class H danger;
+      </div>
+      <div class="caption">本章推导主线：ML 需要可微的分布距离 → 老散度在支撑不重叠时失灵 → 第5章的 W₁ 对偶给出 sup 形式 → critic 参数化势函数即成 WGAN → 同样的可微损失驱动域适应与形状匹配 → 账单是 Lipschitz 估计的紧度与 mini-batch 偏差。</div>
+    </div>
+
+    <h2><span class="sec-no">7.1</span>为什么需要 OT 损失：四个散度在一个点上集体失灵</h2>
+
+    <p>生成模型、域适应、密度估计的共同动作是：有一个参数化分布 ν_θ，要让它逼近数据分布 μ，于是需要一把"距离" D(μ, ν_θ) 来对 θ 求梯度。先看一个一维玩具，它同时是 WGAN 论文的动机实验：μ = δ₀ 固定，ν_θ = δ_θ，θ &gt; 0。两个点质量互不重叠。把四种常用"距离"算出来：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>度量</th><th>定义要点</th><th>D(δ₀, δ_θ)，θ &gt; 0</th><th>对 θ 的梯度</th></tr>
+        <tr><td>KL 散度</td><td>∫ log(dμ/dν) dμ</td><td>+∞（支撑不含 0）</td><td>不存在</td></tr>
+        <tr><td>总变差 TV</td><td>sup_A |μ(A) − ν(A)|</td><td>1</td><td>几乎处处为 0</td></tr>
+        <tr><td>JS 散度</td><td>½KL(μ‖m)+½KL(ν‖m)，m=½(μ+ν)</td><td>log 2（常数）</td><td>0</td></tr>
+        <tr><td>W₁</td><td>min ∫|x−y| dπ</td><td>|θ|</td><td>sign(θ)，处处有效</td></tr>
+      </table>
+    </div>
+
+    <div class="box insight">
+      <span class="box-tag">✅ 手算示例：四行各推一遍</span>
+      <p>KL：δ₀ 的支撑 {0} 在 ν_θ 下概率为零，log 比值发散，KL = +∞。</p>
+      <p>TV：取 A = {0}，|μ(A) − ν(A)| = |1 − 0| = 1，已达上确界。</p>
+      <p>JS：m = 0.5δ₀ + 0.5δ_θ。KL(δ₀‖m) = log(1/0.5) = log 2（0 处密度比为 2）；同理 KL(δ_θ‖m) = log 2。JS = log 2，与 θ 无关。</p>
+      <p>W₁：一个点搬到另一个点，唯一耦合就是把全部质量运过距离 θ，W₁ = |θ|。</p>
+      <p>结论：θ 从 0.1 变到 0.001，前三者纹丝不动（∞、1、log2），优化器收到的梯度为零；只有 W₁ 线性地告诉模型"还差多远、往哪边走"。<strong>分布不重叠是高维 ML 的常态</strong>（图像流形几乎必不重叠），这就是 OT 进 ML 的门票。</p>
+    </div>
+
+    <p>但第3章说过 W 是 LP，直接当损失太贵且梯度稀疏。救场的是第5章的对偶：<span class="term">Kantorovich–Rubinstein 对偶</span>（Kantorovich–Rubinstein Duality）——当成本是距离 c(x,y) = d(x,y) 时，第5章的 c-变换把两个势函数压缩成一个，且约束 φ(x) − φ(y) ≤ d(x,y) 正好是"φ 是 1-Lipschitz 函数"，于是</p>
+
+    <div class="formula">W₁(μ, ν) = sup<sub>f : Lip(f) ≤ 1</sub> 𝔼<sub>x~μ</sub>[f(x)] − 𝔼<sub>y~ν</sub>[f(y)]</div>
+
+    <p>用 δ₀ vs δ_θ 验证：sup 在 Lip(f) ≤ 1 下求 f(0) − f(θ)。约束给出 f(0) − f(θ) ≤ |0 − θ| = θ，取 f(x) = −x（斜率 −1，Lip = 1）达到 f(0) − f(θ) = θ。故 W₁ = θ ✓，与耦合视角一致。注意这个 sup 形式里没有任何"联合分布"——只要能在函数类里搜到一个好的 f，就有了 W₁ 的估计，而且它是两个期望之差，天然可以采样本近似、可以反向传播。<strong>这把"最小化 LP"变成了"最大化一个评分差"，这就是下一节 WGAN 的全部机关。</strong></p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>老散度只看"同一点的密度比"，分布错开就瞎；W₁ 看"质量要搬多远"，错开多远都有读数。对偶再把"搬"翻译成"考"：找一个最会区分两分布的评分函数 f（但不能太敏感，Lip ≤ 1），它的平均分差就是距离。距离越真，考官越精。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>以为 JS 散度"平滑一些所以能用"。在 δ 例子里 JS 是严格常数 log 2，梯度恒零——vanilla GAN 训练初期生成器梯度消失的根源就在这里。另一个误区：以为 W₁ 的梯度处处存在；它只在"最优耦合随 θ 光滑变化"时可微，Dirac 例子是幸运的干净情形。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 7.1-1</div>
+              <div class="q-text">μ=δ₀、ν=δ_θ（θ&gt;0）时，KL / TV / JS / W₁ 各等于多少？谁给出非零梯度？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              KL=+∞，TV=1，JS=log2，W₁=|θ|。只有 W₁ 给出 sign(θ) 的有效梯度，其余三个梯度为零或不存在。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 7.1-2</div>
+              <div class="q-text">写出 KR 对偶公式，并指出它从第5章哪个工具退化而来。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              W₁ = sup_{Lip f ≤ 1} E_μf − E_νf。来自第5章对偶在"成本 = 距离"时的 c-变换：ψ = −f、φ = f，约束 φ(x)−φ(y) ≤ d(x,y) 即 1-Lipschitz。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <h2><span class="sec-no">7.2</span>WGAN：把势函数交给神经网络，把 Lipschitz 交给梯度罚</h2>
+
+    <p>7.1 末尾的 sup 需要一个"足够大的 1-Lipschitz 函数类"。<span class="term">WGAN</span>（Wasserstein GAN，Arjovsky et al. 2017）的选择：用神经网络 f_w 参数化它，取名 <span class="term">critic</span>（critic，评分器）——它不再输出"真/假概率"，而是输出无界的评分，角色就是第5章的价格势函数。训练目标是 min-max：</p>
+
+    <div class="formula">min<sub>θ</sub> max<sub>w : Lip(f_w) ≤ 1</sub> 𝔼<sub>x~μ</sub>[f_w(x)] − 𝔼<sub>z~p(z)</sub>[f_w(g_θ(z))]</div>
+
+    <p>内层 max 逼近 W₁(μ, ν_θ)，外层 min 让生成器把这个距离压小。实践节奏：每更新 1 次生成器，先更新 n_critic = 5 次 critic，保证内层 sup 估得足够紧——<strong>critic 不准，生成器收到的就是错误的方向</strong>。</p>
+
+    <p>难点在约束 Lip(f_w) ≤ 1 怎么落到神经网络权重上。原版 WGAN 用 <span class="term">weight clipping</span>（权重截断）：每次更新后把 w 截到 [−c, c] 区间。它能限制 Lipschitz 常数（网络各层斜率之积被界住），但带来两个毛病：</p>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ weight clipping 的两个毛病</span>
+      <p>(i) <strong>容量截断</strong>：c 稍小，critic 只能学成斜率恒定的简单函数（实验里权重全部顶在 ±c 上），sup 估计严重欠拟合——W₁ 被低估，生成器以为已经到位。(ii) <strong>梯度病态</strong>：c 稍大，深层网络斜率之积爆炸或消失，训练不稳定。c 成了需要精调的敏感超参。</p>
+    </div>
+
+    <p>改进版 WGAN-GP（Gulrajani et al. 2017）换掉截断，改用 <span class="term">gradient penalty</span>（梯度惩罚）：</p>
+
+    <div class="formula">L<sub>GP</sub> = λ 𝔼<sub>x̂</sub> ( ‖∇<sub>x̂</sub> f_w(x̂) ‖ − 1 )²，&nbsp;&nbsp;x̂ = εx + (1−ε)g_θ(z)，&nbsp;ε ~ U[0,1]</div>
+
+    <p>动机来自 KR 对偶的最优解结构：在最优 coupling 的搬运路径上，最优势 f* 满足 ‖∇f*‖ = 1（δ 例子里 f*(x) = −x，斜率恒为 −1，范数恒 1 ✓）。真假样本连线 x̂ 正是搬运路径的替身，所以在连线上惩罚"梯度范数偏离 1"。罚的是两侧偏差，不截断函数形状，critic 容量保住了。</p>
+
+    <div class="box insight">
+      <span class="box-tag">✅ 手算示例：gradient penalty 在 δ 例子里是精确的</span>
+      <p>μ = δ₀，ν_θ = δ_θ（θ&gt;0）。KR 最优 f*(x) = −x（7.1 节已验证，Lip = 1）。</p>
+      <p>连线采样：x̂ = ε·0 + (1−ε)·θ = (1−ε)θ。f* 在任意 x̂ 处梯度 ∇f* = −1，范数 = 1，故 (‖∇f‖−1)² = 0——<strong>最优 critic 恰好零惩罚</strong>，惩罚项只在 critic 偏离最优结构时起作用，不自伤。</p>
+      <p>对比 weight clipping：若把 critic 写成 f(x) = wx（一层），clipping 强制 |w| ≤ c。若 c &lt; 1，最优可达斜率只有 c，sup 只能估到 c·θ——W₁ 被系统性低估 1/c 倍，critic 容量直接决定距离估计的紧度。</p>
+    </div>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>WGAN = 第5章对偶的神经网络化。理论给了两件礼物：目标函数（KR 的 sup）与最优解结构（‖∇f*‖ = 1）。weight clipping 只从工程上"卡住"约束，伤了第一件礼物；gradient penalty 直接用第二件礼物当正则——理论结构越清楚，正则项越对症。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 7.2-1</div>
+              <div class="q-text">写出 WGAN 的 min-max 目标，并说明 critic 对应第5章的哪个对象。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              min_θ max_{w:Lip≤1} E_μ f_w − E_z f_w(g_θ(z))。critic 就是 KR 对偶里的 1-Lipschitz 势函数（第5章价格体系的神经网络化身）。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 7.2-2</div>
+              <div class="q-text">写出 gradient penalty 公式、x̂ 的定义，并说出它惩罚的对象为什么取在连线上。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              λE_x̂(‖∇_x̂ f‖−1)²，x̂ = εx+(1−ε)g(z)。最优 f* 在最优耦合的搬运路径上梯度范数恒为 1，连线是路径的替身。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <h2><span class="sec-no">7.3</span>域适应：用 OT 对齐两个数据集，代价是 mini-batch 偏差</h2>
+
+    <p><span class="term">域适应</span>（Domain Adaptation）的标准设定：源域有标签（手写数字 MNIST），目标域无标签（街景门牌 SVHN），想让源域上训的分类器在目标域也能用。特征提取器把两个域映到同一特征空间后，两个经验分布 μ_s、μ_t 仍然错位。OT 给出的方案直接：<strong>在特征空间把源分布搬到目标分布上</strong>，耦合 π_ij 告诉每个源样本该跟哪些目标样本对齐；再按 π 做加权训练或重加权。</p>
+
+    <p>但"把猫搬到狗上"毫无意义——类结构必须保住。于是成本要<span class="term">类感知</span>（class-aware）：</p>
+
+    <div class="formula">M<sub>ij</sub> = c(x_i, x'_j) + η · L(y_i, ŷ'_j)</div>
+
+    <p>第一项是特征距离，第二项惩罚"标签不同还被配对"（目标标签用当前分类器预测 ŷ'_j，或按类分组：类的质心之间先算组级 OT，再在组内对齐）。JDOT（Courty et al.）更进一步：直接最小化 W₁(联合分布 (x,y) 的源 vs (x', f(x')) 的目标)，把分类器 f 也放进 OT 目标里联合优化。</p>
+
+    <p>工程上没人对两个几万样本的数据集跑全量 LP——都是 <span class="term">mini-batch OT</span>（mini-batch OT）：每个训练步抽 m 对样本算一次 Sinkhorn，把梯度当全量 W 的梯度估计用。这一步引入的代价必须算清：</p>
+
+    <div class="box insight">
+      <span class="box-tag">✅ 手算示例：mini-batch OT 是有偏的，全步骤</span>
+      <p>取 μ = ν = 0.5δ₀ + 0.5δ₁（同一分布），成本 |x−y|。真实 OT = 0。</p>
+      <p>第 1 步：m = 1 时，从 μ 抽一点 X，从 ν 抽一点 Y，batch OT = |X − Y|。</p>
+      <p>第 2 步：四种抽法等概 1/4：(0,0)→0，(0,1)→1，(1,0)→1，(1,1)→0。</p>
+      <p>第 3 步：E[batch OT] = (0+1+1+0)/4 = <strong>0.5</strong>。</p>
+      <p>结论：E[OT_m] = 0.5 ≠ 0 = OT(μ,ν)。mini-batch OT 度量的是"两个 m 点经验分布的距离期望"，它把两个相同分布也判成相距 0.5——<strong>偏差恒正（E[OT_m] ≥ OT），m 越小偏差越大</strong>。上例偏差 0.5 恰等于 W₁(μ 与自身一点样本的期望错配)。m 增大偏差缩小，但 m 大到接近全量就失去了省算力的意义——偏差与算力只能二选一。</p>
+    </div>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>mini-batch OT 不是"全量 OT 的无偏蒙特卡洛"——max/min 类泛函的期望不等于期望的泛函（Jensen 方向性）。缓解办法有三：增大 m；改用第6章的 SW（投影后一维排序对采样更友好）；或像域适应文献那样，干脆把 mini-batch OT 当作自己的一套正则来用，同时配合类感知成本防止错配。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>把多个 mini-batch 的 OT 取平均当作"越来越准的 W"。平均只降方差，不降偏差——0.5 的偏差对 m=1 永远在。另一个误区：域适应里省掉类感知项直接对齐边缘分布，结果把不同类的样本对齐到一起，分类边界反而被拖垮（负迁移）。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 7.3-1</div>
+              <div class="q-text">域适应为什么要在成本里加类感知项？写出 M_ij 的形式。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              只对齐边缘分布会把不同类样本配在一起（负迁移）。M_ij = c(x_i, x'_j) + η·L(y_i, ŷ'_j)，标签不一致的配对被加价。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 7.3-2</div>
+              <div class="q-text">mini-batch OT 的偏差方向是什么？用 μ=ν=0.5δ₀+0.5δ₁、m=1 的例子报出两个数。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              恒正偏差：E[OT_m] ≥ OT。例中 E[batch OT] = 0.5，真实 OT = 0——两个相同分布被判成相距 0.5。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <h2><span class="sec-no">7.4</span>形状匹配与图形：软对应、颜色迁移、重心插值</h2>
+
+    <p>图形学的输入常常是两组点云：扫描得到的源形状 X = {x_i} 与模板形状 Y = {y_j}。要找"哪个点对应哪个点"。硬对应（最近邻）不可微且对噪声敏感；OT 给的是<span class="term">软对应</span>（Soft Correspondence）：把两点集视为均匀离散分布，跑 Sinkhorn 得到概率分配 P_ε，P_ij 表示"x_i 以多大比例匹配 y_j"。熵正则保证 P_ε 光滑依赖成本矩阵，于是整个匹配可微——外层可以优化"让模板变形"的参数，梯度穿过 Sinkhorn 传回。</p>
+
+    <div class="box insight">
+      <span class="box-tag">✅ 手算示例：2 点对 2 点的匹配</span>
+      <p>X = {0, 2}，Y = {1, 3}，均匀权重，平方成本。C = [[1, 9], [1, 1]]（C_ij = (x_i − y_j)²）。</p>
+      <p>两个候选硬匹配：平行配 1 + 1 = 2；交叉配 9 + 1 = 10。最优 = 2，P* 为恒等排列。Sinkhorn 在有限 ε 下给出软化版：平行两格概率大、交叉两格被 exp(−9/ε) 压到近零——ε 越小越接近硬匹配，ε 越大越均匀。取极限 ε→0 收回 P*，W₂² = (1/2)(1+1) = <strong>1</strong>。</p>
+      <p>可微性的用场：若 Y = Y(θ) 依赖变形参数（如控制点位移），则 ⟨C(θ), P_ε(θ)⟩ 对 θ 的梯度可直接反向传播，点云对齐、形状配准就这么端到端训出来。</p>
+    </div>
+
+    <p>同一件工具换身衣服就是<span class="term">颜色迁移</span>（Color Transfer）：把两张图的 RGB 直方图各看成三维分布，用第6章的 SW（沿各方向投影、一维分位数映射）逐通道搬运，风格图的"色感"被搬到内容图上，成本只是几十次一维排序。</p>
+
+    <p>第三个应用回到第5章的几何：<span class="term">Wasserstein 重心</span>（Wasserstein Barycenter）——给定 k 个分布 ν₁…ν_k 与权重 λ（Σλ = 1），求</p>
+
+    <div class="formula">min<sub>ρ</sub> ∑<sub>i=1..k</sub> λᵢ W₂²(ρ, νᵢ)</div>
+
+    <p>它是"分布的平均"在 W₂ 几何里的正确定义（均值测度在平直欧氏平均下会模糊，Wasserstein 平均保持形状）。权重 λ 就是<span class="term">重心坐标</span>（barycentric coordinates）：扫动 λ 就在形状流形上插值——两张人脸之间生成一串"几何意义下最省功"的过渡帧，这正是第5章位移插值 μ_t = ((1−t)·id + tT)#μ 的多分布推广。</p>
+
+    <div class="box insight">
+      <span class="box-tag">✅ 手算示例：两个 Dirac 的重心 = 流形上的插值</span>
+      <p>ν₁ = δ₀，ν₂ = δ₁，权重 (1−t, t)。试 ρ = δ_x：W₂²(δ_x, δ₀) = x²，W₂²(δ_x, δ₁) = (x−1)²。</p>
+      <p>目标：min_x (1−t)x² + t(x−1)²。一阶条件：2(1−t)x + 2t(x−1) = 0 ⟹ x = t。</p>
+      <p>重心 = δ_t，目标值 = (1−t)t² + t(t−1)² = t(1−t)。<strong>权重 t 恰好把重心推到坐标 t</strong>——重心坐标在流形上做线性插值，扫 t 从 0 到 1 就是位移插值。对比欧氏平均：(1−t)δ₀ + tδ₁ 是两个不动的峰，永远不会"移动"——Wasserstein 插值在走，欧氏插值在淡入淡出，这就是生成模型里两种插值观感的差别根源。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>用欧氏均值（像素平均）做形状插值。像素平均产生鬼影：两张错位的脸叠出四只眼睛。Wasserstein 重心沿几何搬运，中间帧始终是"一张完整的脸"。代价是计算：离散重心又是一个 LP（多边际结构，第8章会回来收这条线）。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 7.4-1</div>
+              <div class="q-text">什么是软对应？为什么它可微，外层任务因此能做什么？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              软对应 = 两点集间的 Sinkhorn 概率分配 P_ε。P_ε 光滑依赖成本矩阵，故外层可优化变形/位置参数，梯度穿匹配回传（点云配准端到端训练）。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 7.4-2</div>
+              <div class="q-text">写出 Wasserstein 重心定义；δ₀ 与 δ₁ 在权重 (1−t, t) 下的重心是什么？与欧氏平均差别在哪？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              min_ρ ΣλᵢW₂²(ρ,νᵢ)。例中重心 δ_t。欧氏平均是双峰淡入淡出，Wasserstein 重心是质量沿几何移动——流形插值。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <h2><span class="sec-no">🃏</span>概念卡</h2>
+    <p>本章 6 张核心概念卡。先默答再翻面，背面的"何时用"把这章接回全书。</p>
+
+    <div class="flip-grid">
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 1</div>
+            <div class="q-text">Kantorovich–Rubinstein 对偶</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">距离成本下 W₁ = sup_{Lip f≤1} E_μf − E_νf。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">把 LP 最小化变成函数类上的最大化，可采样、可微。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">距离 = 最公正的考官（敏感度 ≤1）给出的最大分差。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">忘记约束是 Lip≤1；去掉它 sup 无界（f 可以无限放大分差）。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">7.2 WGAN 的目标函数；一切"需要 W₁ 梯度"的场景。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 2</div>
+            <div class="q-text">Critic 与 Gradient Penalty</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">critic = 参数化的势函数 f_w；GP = λE_x̂(‖∇f‖−1)²，x̂ 为真假连线点。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">神经网络类上如何落实 Lip≤1 而不伤容量。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">最优考官在搬运路径上斜率恒为 1，偏离就罚。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">weight clipping 也能用；它把权重顶到 ±c，critic 退化成简单斜坡。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">WGAN-GP 训练；任何需要"约束函数类 Lipschitz"的对偶估计。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 3</div>
+            <div class="q-text">mini-batch OT 偏差</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">E[OT_m(â,b̂)] ≥ OT(a,b)：m 点经验分布间 OT 的期望系统偏大。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">解释为什么 mini-batch 训练里的 OT 损失"降不到零"。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">min 的期望 ≥ 期望的 min：每批都重新捡一次"便宜匹配"。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">多批平均能消偏差；平均只降方差，偏差由 m 锁定。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">选 batch 大小、改用 SW 的决策；域适应工程调参。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 4</div>
+            <div class="q-text">类感知成本（Class-aware Cost）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">M_ij = c(x_i,x'_j) + η·L(y_i, ŷ'_j)：标签不一致的配对加价。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">边缘对齐会把不同类配在一起（负迁移）。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">搬家分房间：先按类别分好间，再在同间里谈运费。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">只在成本里加；也可按类分组做组级 OT 再组内对齐。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">一切带标签结构的 OT 对齐：域适应、数据集清洗。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 5</div>
+            <div class="q-text">软对应（Soft Correspondence）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">点集间的 Sinkhorn 概率分配 P_ε，P_ij = x_i 匹配 y_j 的比例。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">硬对应不可微，变形/配准任务拿不到梯度。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">每个点把"自己"按概率摊开寄出，ε 控制摊多开。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">ε→0 一定更好；太硬则梯度消失，要按任务退火。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">点云配准、形状匹配、可微渲染里的对应估计。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 6</div>
+            <div class="q-text">Wasserstein 重心（Barycenter）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">min_ρ ΣλᵢW₂²(ρ,νᵢ)：分布在 W₂ 几何下的加权平均。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">欧氏平均产生鬼影，"平均形状"没有几何意义。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">重心坐标扫动 = 形状沿最省功路径生长/过渡。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">ρ 无需约束；它本身是概率测度，求解是多边际 LP。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">形状插值、模板学习；第8章多边际 OT 的特例。</span></div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+    <h2><span class="sec-no">📝</span>分层习题</h2>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>判断对错：WGAN 中 critic 输出的是"输入为真样本的概率"，因此最后用 sigmoid 激活。</div>
+      <details>
+        <summary>提示</summary>
+        <p>critic 对应第5章的什么对象？势函数有界吗？</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p>错。critic 是 KR 对偶里的 1-Lipschitz 势函数 f，输出是无界评分（"价格/高度"），不是概率——加了 sigmoid 反而把函数类压回 [0,1]，偏离 KR 结构，所以 WGAN 的 critic 最后一层是线性的。判断"真/假"是 vanilla GAN 判别器的事；WGAN 里"分差"本身就是 W₁ 的估计。易错点：名字里都有 GAN 就以为组件角色相同——判别器分类、critic 测距，目标函数与约束完全不同。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>选择：下列关于 mini-batch OT 的说法正确的是（A）E[OT_m] 随批数平均而趋于真实 OT（B）E[OT_m] ≤ OT(a,b)（C）m=1 时 OT_m 退化为随机点对距离的期望（D）mini-batch OT 与真实 OT 相等当 m≥2。</div>
+      <details>
+        <summary>提示</summary>
+        <p>回忆 7.3 手算：m=1 时 E[batch OT] 算出来是多少。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p>C。A 错：批数平均只降方差，E[OT_m] 由 m 决定，恒大于真实 OT（本章例：0.5 vs 0）；B 错：方向反了，min 的期望 ≥ 期望的 min，偏差恒正；D 错：任何有限 m 都有正偏差，只有 m 达到全量样本数才严格相等——但那已不是 mini-batch。易错点：把"蒙特卡洛无偏"的直觉套到带 min 的泛函上。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>(i) 用 KR 对偶手算 W₁(δ_0, δ_2)：写出取得 sup 的 f 并验证。(ii) 若用线性 critic f(x) = wx 配 weight clipping c = 0.5，估计值是多少？低估了多少比例？(iii) 在真假连线 x̂ 上，最优 f 的梯度范数是多少，gradient penalty 取何值？</div>
+      <details>
+        <summary>提示</summary>
+        <p>照搬 7.1/7.2 的 δ 例子；critic 被 clip 后最大可用斜率是多少。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p>(i) sup_{Lip f≤1} f(0) − f(2) ≤ |0−2| = 2，取 f(x) = −x 达到 2，故 W₁ = 2。</p>
+          <p>(ii) f(x) = wx 且 |w| ≤ 0.5，分差 = f(0) − f(2) = −2w，最大在 w = −0.5 处取得：估计值 = 1。低估了 (2−1)/2 = 50%。clipping 常数直接给 W₁ 估计打了对折。</p>
+          <p>(iii) 连线 x̂ = ε·0 + (1−ε)·2 = 2(1−ε)。最优 f*(x) = −x，∇f* = −1，范数 = 1，(‖∇f‖−1)² = 0——最优 critic 处 penalty 为零，惩罚不伤最优解。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>mini-batch 偏差的另一笔账：μ = ν = 0.5δ₀ + 0.5δ₁，成本 |x−y|，m = 2。(i) 列出从各分布抽两点（不计顺序）的三种批型及概率；(ii) 对每种批型算 batch OT（两点对两点的最优配对）；(iii) 求 E[OT_2] 并与 m=1 的 0.5、真实值 0 比较，说明趋势。</div>
+      <details>
+        <summary>提示</summary>
+        <p>批型按"抽到几个 1"分类：{0,0}、{0,1}、{1,1}，概率用二项。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p>(i) 单边批型概率：{0,0} → 1/4，{0,1} → 1/2，{1,1} → 1/4。两边独立。</p>
+          <p>(ii) 各组合的 batch OT（均匀权重 1/2）：同型配对（{0,0}对{0,0} 等）= 0；{0,1} 对 {0,0}：质量 0.5 要从 0 运到 1，OT = 0.5；{0,1} 对 {1,1}：同理 0.5；{0,0} 对 {1,1}：全部质量走 1，OT = 1。</p>
+          <p>(iii) 展开 3×3 = 9 格：对角三格（同型）贡献 0，概率合计 1/4·1/4·2 + 1/2·1/2 = 1/16·2 + 1/4 = 3/8…逐格算：P({0,0}对{1,1}) = 1/4·1/4 = 1/16 贡献 1；反向 1/16 贡献 1；{0,1}对{0,0} 与 {0,0}对{0,1} 各 1/8 贡献 0.5；{0,1}对{1,1} 与 {1,1}对{0,1} 各 1/8 贡献 0.5。E[OT₂] = 2·(1/16)·1 + 4·(1/8)·0.5 = 1/8 + 1/4 = <strong>3/8 = 0.375</strong>。趋势：0.5（m=1）→ 0.375（m=2）→ 0（m→∞），偏差随 m 单调缩小但任何有限 m 都为正。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l3">L3 建模应用</span>你有一批工厂质检图片：白天拍的（源域，带缺陷标签）与夜班红外相机拍的（目标域，无标签）。现有 5 万张源图、3 万张目标图。设计一套基于 OT 的域适应方案：对齐在哪个空间做、成本矩阵怎么构造、用什么算法估计、mini-batch 怎么选、如何验收。并说明为什么不用 WGAN 那套。</div>
+      <details>
+        <summary>提示</summary>
+        <p>类结构怎么保住？5 万 × 3 万的 LP 能不能直接解？</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p>对齐空间：先用源域训练（或自监督预训练）的特征提取器把图映到 d 维特征空间，在该空间对齐，而不是像素空间——像素差（光照）正是要消除的域差。</p>
+          <p>成本：类感知成本 M_ij = ‖φ(x_i) − φ(x'_j)‖² + η·1[y_i ≠ ŷ'_j]，目标标签用当前分类器预测；或按类分组：源域每类质心对目标域类质心做组级 OT，再组内对齐，η 或组间权重用验证集调。</p>
+          <p>算法：5万×3万的全量 LP 不可行——用 mini-batch Sinkhorn divergence S_ε（第6章工具，同修熵偏差），m 取 512–1024，ε 按特征尺度中位数调；分类器与特征提取器联合训练：分类损失 + β·S_ε(batch_s, batch_t)。</p>
+          <p>mini-batch 选择：m 越大偏差越小（本章账：m=1 偏差 0.5、m=2 偏差 0.375），在显存允许下取大；定期用全量 Sinkhorn（或较大 m 的重采样平均）离线估计真实对齐程度，不被在线损失的绝对值误导。</p>
+          <p>验收：目标域留少量人工标注做评测集，指标是目标域缺陷召回率；辅助看类条件对齐（各类的 S_ε 分别下降），防止只对齐边缘分布。</p>
+          <p>为什么不用 WGAN：任务是"对齐两个已存在的分布"，不是"生成新样本"——不需要生成器与对抗训练；S_ε 直接给出可微的对齐损失，比训练一个 critic 再 min-max 稳定得多。WGAN 的用武之地是 7.2 的生成问题。</p>
+        </div>
+      </details>
+    </div>
+
+    <h2><span class="sec-no">✍️</span>本章自测</h2>
+    <p class="quiz-hint">点击选项判分，答错会给出原因。</p>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 1</div>
+      <div class="q-stem">μ = δ₀、ν = δ_θ（θ &gt; 0），下列度量中给出非零梯度、可用于训练 ν_θ 的是：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. KL 散度</li>
+        <li data-opt="b">B. W₁ = |θ|</li>
+        <li data-opt="c">C. JS 散度</li>
+        <li data-opt="d">D. 总变差</li>
+      </ul>
+      <div class="quiz-explain">解析：选 B。A 错：支撑不重叠，KL = +∞ 没有梯度；C 错：JS = log2 是常数，梯度为零——这正是 vanilla GAN 初期梯度消失的机制；D 错：TV = 1 常数。只有 W₁ 随 θ 线性变化，给 sign(θ) 的有效方向。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="c">
+      <div class="q-no">自测 2</div>
+      <div class="q-stem">Kantorovich–Rubinstein 对偶成立的必要前提是：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 两个分布都是离散的</li>
+        <li data-opt="b">B. 使用熵正则</li>
+        <li data-opt="c">C. 成本是距离函数 c(x,y) = d(x,y)</li>
+        <li data-opt="d">D. μ 绝对连续</li>
+      </ul>
+      <div class="quiz-explain">解析：选 C。距离成本让第5章的 c-变换把双势压成单势 f，约束坍缩为 Lip(f) ≤ 1。A 错：对任意分布成立；B 错：熵正则是第4章的算法技巧，与对偶结构无关；D 错：那是 Brenier 定理（第6章）的条件，不是 KR 的。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="d">
+      <div class="q-no">自测 3</div>
+      <div class="q-stem">关于 WGAN 的 Lipschitz 约束实现，正确的是：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. weight clipping 精确保证 Lip(f) = 1</li>
+        <li data-opt="b">B. gradient penalty 在真实样本上惩罚梯度</li>
+        <li data-opt="c">C. weight clipping 使 critic 更富表达力</li>
+        <li data-opt="d">D. gradient penalty 在真假样本连线上惩罚 ‖∇f‖ 偏离 1，动机是最优势在搬运路径上梯度范数恒为 1</li>
+      </ul>
+      <div class="quiz-explain">解析：选 D。A 错：clipping 只给出粗糙的上界，常数既不精确又依赖架构；B 错：罚在插值点 x̂ 上，不是真实样本；C 错：实验显示 clipping 把权重顶到 ±c，critic 退化成简单函数，容量被截断。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="a">
+      <div class="q-no">自测 4</div>
+      <div class="q-stem">μ = ν = 0.5δ₀ + 0.5δ₁、m = 1 时，E[mini-batch OT] 与真实 OT 分别是：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 0.5 与 0</li>
+        <li data-opt="b">B. 0 与 0</li>
+        <li data-opt="c">C. 0.25 与 0</li>
+        <li data-opt="d">D. 0.5 与 0.5</li>
+      </ul>
+      <div class="quiz-explain">解析：选 A。四种抽法等概，只有异型两点对（0,1)、(1,0）贡献 1，期望 0.5；而真实 OT 恒为 0。B 错：忘了 min 的期望 ≠ 期望的 min，偏差恒正；C 错：少算了某一种异型组合；D 错：真实 OT 不可能是 0.5——同一分布的 OT 必为 0。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 5</div>
+      <div class="q-stem">δ₀ 与 δ₁ 在权重 (1−t, t) 下的 Wasserstein 重心（W₂²）是：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. (1−t)δ₀ + tδ₁（两个不动的峰）</li>
+        <li data-opt="b">B. δ_t（随 t 移动的单峰）</li>
+        <li data-opt="c">C. U[0,1] 上的均匀分布</li>
+        <li data-opt="d">D. δ_{0.5}，与 t 无关</li>
+      </ul>
+      <div class="quiz-explain">解析：选 B，min_x (1−t)x² + t(x−1)² 的一阶条件给出 x = t。A 错：那是欧氏（线性）平均，会产生双峰鬼影，正是 Wasserstein 插值要避免的；C 错：没有任何机制把质量摊开；D 错：只有 t = 0.5 时成立，把它当成了普遍答案。</div>
+    </div>
+
+    <div class="retell">
+      <h3>🗣️ 用自己的话，三句话讲完本章</h3>
+      <p>对着空气（或室友）说出这三句。说卡壳的那句，回去重读对应小节。</p>
+      <details>
+        <summary>句1：这章解决什么问题？——</summary>
+        <div class="retell-answer">参考答案：机器学习需要"分布不重叠时仍有梯度"的差异度量，以及"跨数据集、跨形状的可微对齐"——老散度（KL/TV/JS）在支撑错开时全部失灵，OT 恰好补上这两个缺口。</div>
+      </details>
+      <details>
+        <summary>句2：核心机制是什么？——</summary>
+        <div class="retell-answer">参考答案：KR 对偶把 W₁ 写成 1-Lipschitz 势函数的 sup，神经网络化就是 WGAN（critic + gradient penalty）；S_ε/SW 直接作可微损失驱动域适应（加类感知成本）与形状匹配（软对应），Wasserstein 重心用重心坐标做流形插值；代价是 critic 容量决定估计紧度、mini-batch 引入恒正偏差。</div>
+      </details>
+      <details>
+        <summary>句3：它和前后章怎么分工？——</summary>
+        <div class="retell-answer">参考答案：第5、6章造好工具（对偶、S_ε、SW、位移插值），本章把它们组装成三条流水线（生成、对齐、匹配）；第8章处理本章放不下的更一般情形：不同空间的对象（GW）、不守恒的质量（非平衡）、多个分布同时对齐（多边际）。</div>
+      </details>
+    </div>
+
+    <div class="review-plan">
+      <h3>🔁 间隔复习计划</h3>
+      <p>回忆本身比重读有效 10 倍。到点只做一件事：翻卡 + 重做标记题。</p>
+      <table>
+        <tr><th>时间点</th><th>复习内容</th><th>预计用时</th></tr>
+        <tr><td>第 1 天</td><td>概念卡 1–6 全部 + 回忆卡 7.1-1、7.3-2</td><td>12 分钟</td></tr>
+        <tr><td>第 3 天</td><td>概念卡 1、2、3（KR 对偶、GP、mini-batch 偏差）+ 重做 L2 第一题（critic clipping 账）</td><td>12 分钟</td></tr>
+        <tr><td>第 7 天</td><td>三句话复述 + 自测错题 + 默写 KR 对偶与 GP 公式</td><td>10 分钟</td></tr>
+        <tr><td>第 15 天</td><td>只做合上书挑战；能全过就毕业</td><td>15 分钟</td></tr>
+      </table>
+    </div>
+
+    <div class="final-challenge">
+      <h3>📕 合上书挑战</h3>
+      <p class="fc-sub">现在关掉这个页面，拿一张纸，凭记忆完成以下任务。全部做完再回来核对——这是本章真正的毕业考试。</p>
+      <ol id="challenge-list">
+        <li><span class="fc-check"></span>对 δ₀ vs δ_θ 写出 KL/TV/JS/W₁ 四个值并逐个手推，指出谁给梯度、为什么</li>
+        <li><span class="fc-check"></span>写出 KR 对偶，用 f(x)=−x 验证 W₁(δ₀,δ₂)=2，并指出它来自第5章 c-变换的哪个特例</li>
+        <li><span class="fc-check"></span>写出 WGAN 的 min-max 目标与 GP 公式，说出 weight clipping 的两个毛病，手算 c=0.5 时线性 critic 低估 50%</li>
+        <li><span class="fc-check"></span>重算 mini-batch 偏差：μ=ν=0.5δ₀+0.5δ₁，m=1 时 E=0.5、m=2 时 E=0.375、真实值 0，并说出偏差方向</li>
+        <li><span class="fc-check"></span>写出域适应类感知成本与软对应定义；手算 δ₀、δ₁ 在权重 (1−t,t) 下的重心 δ_t，对比欧氏平均</li>
+        <li><span class="fc-check"></span>回答本章的主线问题：OT 怎么变成能反向传播的损失函数，它进了哪些机器学习流水线？（一句话）</li>
+      </ol>
+    </div>
+
+    <div class="complete-zone">
+      <button class="btn-complete" id="btn-complete" onclick="markDone()">✓ 我已完成本章（含合上书挑战）</button>
+    </div>
+
+    <div class="chapter-nav">
+      <a href="chapter-06.html"><span class="nav-dir">← 上一章</span>第6章 连续域与半离散方法</a>
+      <a href="chapter-08.html" class="next"><span class="nav-dir">下一章 →</span>第8章 扩展与前沿：GW、非平衡、多边际</a>
+    </div>
+
+  </div>
+</div>
+
+<footer class="footer">
+  <div class="wrap">第7章 应用：机器学习中的 OT · 最优传输互动讲义 · 基于 Peyré &amp; Cuturi (2019)</div>
+</footer>
+
+<script src="/lectures-assets/mermaid.min.js"></script>
+<script>
+mermaid.initialize({
+  startOnLoad: true,
+  theme: "base",
+  themeVariables: {
+    primaryColor: "#e3edf7",
+    primaryBorderColor: "#1d5f9e",
+    primaryTextColor: "#1d5f9e",
+    lineColor: "#5c554b",
+    secondaryColor: "#fbeedd",
+    tertiaryColor: "#f5f1e8",
+    fontFamily: "-apple-system, PingFang SC, sans-serif",
+    fontSize: "14px"
+  },
+  flowchart: { curve: "linear", htmlLabels: false }
+});
+</script>
+<script>
+// 自测题判分
+document.querySelectorAll(".quiz-block").forEach(block => {
+  const answer = block.dataset.answer;
+  const explain = block.querySelector(".quiz-explain");
+  block.querySelectorAll(".quiz-opts li").forEach(li => {
+    li.addEventListener("click", () => {
+      const opts = block.querySelectorAll(".quiz-opts li");
+      opts.forEach(o => o.classList.add("disabled"));
+      if (li.dataset.opt === answer) {
+        li.classList.add("correct");
+      } else {
+        li.classList.add("wrong");
+        block.querySelector(`[data-opt="${answer}"]`).classList.add("correct");
+      }
+      explain.classList.add("show");
+    });
+  });
+});
+
+// 合上书清单打勾
+document.querySelectorAll("#challenge-list li").forEach(li => {
+  li.addEventListener("click", () => li.classList.toggle("checked"));
+});
+
+// 完成标记 → localStorage
+const KEY = "ot_progress_v1";
+const CH = "7";
+function loadProgress() {
+  try { return JSON.parse(localStorage.getItem(KEY)) || {}; } catch (e) { return {}; }
+}
+const progress = loadProgress();
+const btn = document.getElementById("btn-complete");
+if (progress[CH] && progress[CH].done) {
+  btn.textContent = "✓ 已完成 · 再次点击重置";
+  btn.classList.add("done");
+}
+function markDone() {
+  const p = loadProgress();
+  if (p[CH] && p[CH].done) {
+    delete p[CH];
+    btn.textContent = "✓ 我已完成本章（含合上书挑战）";
+    btn.classList.remove("done");
+  } else {
+    p[CH] = { done: true, completedAt: Date.now(), reviewsDone: 0 };
+    btn.textContent = "✓ 已完成 · 复习提醒已开启";
+    btn.classList.add("done");
+  }
+  localStorage.setItem(KEY, JSON.stringify(p));
+}
+</script>
+
+</body>
+</html>

@@ -1,0 +1,678 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第11章 内点法 · 凸优化互动讲义</title>
+<link rel="stylesheet" href="/lectures-assets/style.css">
+</head>
+<body>
+
+<nav class="topbar">
+  <div class="topbar-inner">
+    <span class="brand"><a href="index.html" style="color:inherit">← 学习地图</a></span>
+    <span class="crumb">阶段④ · 算法 / 第11章（终章）</span>
+  </div>
+</nav>
+
+<div class="wrap">
+
+  <div class="lecture-head">
+    <span class="ch-label">CHAPTER 11 · 算法</span>
+    <h1>内点法</h1>
+    <p class="lead">第10章解决了等式约束，还剩不等式 fᵢ(x)≤0。本章用一堵「对数围墙」把不等式折进目标，再用第9、10章的 Newton 机器沿中心路径逼近最优——并第一次给出「多少步、每步多贵」的完整复杂度保证。</p>
+  </div>
+
+  <div class="position-bar">
+    <strong>本章在主线上的位置：</strong>第9章给了无约束 Newton，第10章把等式约束折进 KKT 系统 → <u>本章用对数障碍吸收不等式约束，组装出内点法</u> → 至此第4–8章建模出的所有凸问题（LP、QP、SVM、实验设计）都有了带多项式保证的解法。<br>
+    第11章回答主线上的第11个问题：<strong>不等式约束怎么吸收进目标函数，使总步数仍是多项式？</strong>
+    <div class="map-inline">
+      <span class="node">Ch10 等式约束 Newton（给了每步机器）</span><span class="arrow">→</span>
+      <span class="node here">Ch11 内点法</span><span class="arrow">→</span>
+      <span class="node">Ch4–8 的凸模型（全部可算了）</span><span class="arrow">→</span>
+      <span class="node">全书收束：认出凸 → 写成凸 → 解出来</span>
+    </div>
+  </div>
+
+  <div class="objectives">
+    <h4>🎯 学完本章，合上书你应该能：</h4>
+    <ol>
+      <li>写出对数障碍函数 φ(x)=−∑log(−fᵢ(x)) 与中心问题 min t·f₀+φ</li>
+      <li>解释中心路径 x*(t) 的定义，并说出对偶间隙上界 m/t 的含义</li>
+      <li>手算一个一维障碍问题的中心点与一条阻尼 Newton 步</li>
+      <li>写出障碍方法的外循环更新 t⁺=μt，并手算需要几轮外循环</li>
+      <li>复述总复杂度账：O(√m·log(m/(t⁰ε))) 步 × 每步 O(n³)</li>
+      <li>用一句话回答全书主线：认出凸 → 写成凸 → 解出来</li>
+    </ol>
+  </div>
+
+  <div class="lecture">
+
+    <div class="figure">
+      <div class="mermaid">
+flowchart LR
+  subgraph row1[ ]
+    direction LR
+    A["不等式 fᵢ(x)≤0<br/>没法直接塞进 Newton"] --> B["指示函数太硬<br/>不可微"]
+    B --> C["对数障碍 −log(−fᵢ)<br/>光滑的围墙"]
+    C --> D["中心问题<br/>min t·f₀ + φ"]
+  end
+  subgraph row2[ ]
+    direction LR
+    E["中心路径 x*(t)<br/>间隙证书 m/t"] --> F["障碍方法<br/>t 乘 μ 外推"]
+    F --> G["Newton 热启动<br/>自和谐阻尼"]
+    G --> H["代价账<br/>√m·log(1/ε) 步"]
+  end
+  D ==> E
+  classDef hot fill:#fbeedd,stroke:#c4651f,stroke-width:2.5px,color:#c4651f;
+  classDef danger fill:#fae9e7,stroke:#b03a2e,stroke-width:2.5px,color:#b03a2e;
+  class D hot;
+  class H danger;
+      </div>
+      <div class="caption">本章推导主线：硬的指示函数换成软的对数围墙，沿中心路径分阶段逼近，最后落到可证明的复杂度账。</div>
+    </div>
+
+    <!-- ============ 11.1 ============ -->
+    <h2><span class="sec-no">11.1</span>对数障碍：把不等式变成一堵光滑的墙</h2>
+
+    <p>约束优化的一般形态：min f₀(x) s.t. fᵢ(x)≤0（i=1..m）、Ax=b。不等式不能直接进 Newton 的机器——第10章只会处理等式。第一步想法：用指示函数把约束写进目标，f₀ + ∑I₋(fᵢ)，其中 I₋(u)=0（u≤0）、+∞（u>0）。约束是吸收了，但指示函数不可微，Newton 无处下嘴。</p>
+
+    <p>第二跳：把「无限硬的墙」换成「光滑但陡的墙」——<span class="term">对数障碍</span>（logarithmic barrier）：</p>
+    <div class="formula">φ(x) = − ∑<sub>i=1..m</sub> log(−fᵢ(x))，&nbsp;&nbsp; 定义域 {x : fᵢ(x) &lt; 0}</div>
+    <p>fᵢ(x)→0⁻（贴向边界）时 φ→+∞；fᵢ(x) 很负（远离边界）时 φ 贡献小。且 fᵢ 凸 ⇒ −log(−fᵢ) 凸（log 障碍保凸），整堵墙仍是凸函数。于是定义<span class="term">中心问题</span>（centering problem）：</p>
+    <div class="formula">min &nbsp; t·f₀(x) + φ(x) &nbsp;&nbsp; s.t. &nbsp;&nbsp; Ax = b</div>
+    <p>t>0 是权重：t 小，障碍主导，解离边界远远的；t 大，目标主导，解被推向真正的最优点。注意它只有等式约束——<strong>正好是第10章会解的形状</strong>。</p>
+
+    <p><strong>完整手算例（全章的主线例子）。</strong>min x s.t. x ≥ 1（即 f₁(x)=1−x≤0，m=1）。中心问题：</p>
+    <div class="formula">min &nbsp; t·x − log(x − 1)</div>
+    <p>一阶条件：t − 1/(x−1) = 0，解出<span class="term">中心点</span>：</p>
+    <div class="formula">x*(t) = 1 + <span class="frac"><span class="num-part">1</span><span class="den-part">t</span></span></div>
+    <p>t→∞ 时 x*(t)→1=x*，中心点沿一条路径滑向最优解。而且由对偶可以证明：中心点的次优间隙满足</p>
+    <div class="formula">f₀(x*(t)) − p* ≤ <span class="frac"><span class="num-part">m</span><span class="den-part">t</span></span></div>
+    <p>本例 m=1：x*(t)−x* = 1/t，间隙恰好就是 m/t=1/t——上界是紧的。t=10⁶ 时误差至多 10⁻⁶，这就是精度控制的来源。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>对数障碍不是「近似代替」指示函数，而是「用 t 调节的软墙」：每个固定的 t 给出一个良态的等式约束问题；让 t→∞ 就把软墙烤硬。把一个大问题换成一族会解的小问题——这是内点法的总开关。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>误区：「直接取一个超大的 t 一步解完不就行了」。不行。t 越大，中心问题的 Hessian 在边界附近越病态，Newton 从远处出发根本不收敛。必须让 t 从小到大渐进，每一步都在上一步的解附近「热启动」。这正是 11.3 障碍方法存在的理由。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 11.1-1</div>
+              <div class="q-text">对数障碍 φ(x) 的定义、凸性依据、以及它替代的是什么函数？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              φ=−∑log(−fᵢ(x))；fᵢ 凸且 −log(·) 凸递减 ⇒ 复合保凸；它替代的是不可微的指示函数 I₋。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 11.1-2</div>
+              <div class="q-text">min x s.t. x≥1 的中心点 x*(t) 是多少？间隙上界 m/t 在这里是多少？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              x*(t)=1+1/t；m=1，间隙恰好为 1/t，上界是紧的。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 11.2 ============ -->
+    <h2><span class="sec-no">11.2</span>中心路径与阻尼 Newton：一步走多远的学问</h2>
+
+    <p>t 连续增大时，x*(t) 描出一条<span class="term">中心路径</span>（central path）——从「解析中心」（11.1 的大 t 小端，近似 Ch8 的解析中心）通向最优解。主线例子里的路径是：</p>
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>t</th><th>x*(t) = 1+1/t</th><th>间隙 1/t</th></tr>
+        <tr><td>1</td><td>2</td><td>1</td></tr>
+        <tr><td>10</td><td>1.1</td><td>0.1</td></tr>
+        <tr><td>100</td><td>1.01</td><td>0.01</td></tr>
+      </table>
+    </div>
+    <p>t 每乘 10，间隙除以 10——<strong>外循环每轮赚一位十进制精度</strong>，这就是多项式时间的微观机制。</p>
+
+    <p>每个中心问题用第9/10章的 Newton 解。但障碍函数在边界附近发疯，裸 Newton 步会冲出定义域——必须<span class="term">阻尼</span>（damping）。<strong>手算一步（t=1，从 x=3 出发）</strong>，解 min x − log(x−1)：</p>
+    <div class="formula">f′(x) = 1 − <span class="frac"><span class="num-part">1</span><span class="den-part">x−1</span></span>，&nbsp;&nbsp; f″(x) = <span class="frac"><span class="num-part">1</span><span class="den-part">(x−1)²</span></span></div>
+    <p>在 x=3：f′=1−1/2=0.5，f″=1/4。裸 Newton 步 Δx=−f′/f″=−2，会落到 x=1——<strong>正好撞在边界上，下一步 −log(0) 爆炸</strong>。怎么办？用第9章的自和谐理论：−log 型函数自和谐，Newton 减量</p>
+    <div class="formula">λ² = <span class="frac"><span class="num-part">(f′)²</span><span class="den-part">f″</span></span> = <span class="frac"><span class="num-part">0.25</span><span class="den-part">0.25</span></span> = 1，&nbsp;&nbsp; λ = 1</div>
+    <p>自和谐阻尼步长取 t<sub>damp</sub> = 1/(1+λ) = 1/2，于是</p>
+    <div class="formula">x⁺ = 3 + <span class="frac"><span class="num-part">1</span><span class="den-part">2</span></span>·(−2) = 2 = x*(1)</div>
+    <p><strong>一步恰好落在中心点上。</strong>这不是巧合：自和谐函数的阻尼 Newton 有「接近中心就二次收敛」的保证，这是内点法所有复杂度证明的地基。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>中心路径是一条「安全走廊」：沿走廊走，每一步离边界都保持安全距离，Newton 永远良态；离开走廊直冲边界（大 t 一步到位），数值上就是灾难。算法设计 = 设计沿走廊的走法。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>误区：「阻尼只是数值保护，理论上可有可无」。错。自和谐性 + 阻尼正是复杂度证明的核心：它保证每个中心问题的 Newton 步数被一个不依赖问题数据的常数控制。没有阻尼理论，√m 步数界就证不出来。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 11.2-1</div>
+              <div class="q-text">中心路径是什么？t 每乘 10，间隙怎么变？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              x*(t) 随 t 增大从解析中心滑向最优解的轨迹；间隙 ≤ m/t，t 乘 10 间隙除以 10。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 11.2-2</div>
+              <div class="q-text">自和谐阻尼步长公式是什么？本节例子里它把 x=3 带到哪？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              t_damp=1/(1+λ)，λ 是 Newton 减量；例中 λ=1、步长 1/2，x：3→2，恰为中心点 x*(1)。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 11.3 ============ -->
+    <h2><span class="sec-no">11.3</span>障碍方法：外循环乘法增长，内循环 Newton 热启动</h2>
+
+    <p>把零件装成整机——<span class="term">障碍方法</span>（barrier method）：</p>
+    <ol>
+      <li>给定严格可行 x⁰、t⁰&gt;0、增长因子 μ&gt;1、精度 ε；</li>
+      <li><strong>外循环</strong>：用 Newton（第10章机器，含等式约束）从当前 x 热启动，解中心问题 min t·f₀+φ，得 x*(t)；</li>
+      <li>若 m/t &lt; ε，停——间隙上界已达标；</li>
+      <li>否则 t ← μt，回第 2 步。</li>
+    </ol>
+
+    <p><strong>手算外循环轮数。</strong>主线例子 m=1，取 t⁰=1、μ=10、ε=10⁻⁴。停机条件是 1/t ≤ 10⁻⁴，即 t ≥ 10⁴。t 的轨迹 1→10→10²→10³→10⁴：</p>
+    <div class="formula">外循环轮数 = ⌈ <span class="frac"><span class="num-part">log(m / (t⁰ε))</span><span class="den-part">log μ</span></span> ⌉ = ⌈ <span class="frac"><span class="num-part">log 10⁴</span><span class="den-part">log 10</span></span> ⌉ = 4</div>
+    <p>4 轮外循环，间隙 1→0.1→0.01→10⁻³→10⁻⁴ 达标。每轮内部 Newton 因为热启动（上轮中心点就在附近）只需几步——理论保证：只要 μ 取得合适，每轮内循环步数是个常数。</p>
+
+    <p>μ 的取舍是一门账：μ 大（如 100），外循环轮数少，但每轮 t 跳得远、热启动差，内循环步数多；μ 小（如 2），外循环多、每轮内循环少。理论最优点在 μ ≈ 1 + 1/√m 附近——这个选择直接导出 11.4 的 √m 总步数界。实践中 μ≈10–20 表现就很好，总 Newton 步数对各类问题稳定在 20–80 步，<strong>几乎不随问题规模增长</strong>——内点法被称为「多项式且在实践中小常数」的算法，原因在此。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>障碍方法 = 「分阶段逼近」思想的最优实现：不一次解难题，而是解一串逐步变难的良态问题，每个问题的解是下一个的起点。log(m/(t⁰ε))/log μ 轮 × 常数内循环 = 总账干净漂亮。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>误区：「内点法每轮都要求精确解出中心问题」。不必。实践中的「不可行/宽松中心」变体只把中心问题解到中等精度就推 t，照样收敛且更快。理论上需要的是「跟住中心路径」，不是「踩死每个中心点」。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 11.3-1</div>
+              <div class="q-text">障碍方法外循环的停机准则和 t 的更新规则是什么？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              停机：m/t &lt; ε；更新：t ← μt。轮数 = ⌈log(m/(t⁰ε))/log μ⌉。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 11.3-2</div>
+              <div class="q-text">μ 取大、取小各自的代价是什么？理论最优大约在哪？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              μ 大：外循环少但内循环热启动差；μ 小：反之。理论最优 μ≈1+1/√m，实践 μ≈10–20。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 11.4 ============ -->
+    <h2><span class="sec-no">11.4</span>复杂度总账与全书收束</h2>
+
+    <p>把所有层乘起来，得到内点法的完整复杂度账：</p>
+    <div class="formula">总 Newton 步数 = O( √m · log<span class="frac"><span class="num-part">m</span><span class="den-part">t⁰ε</span></span> )，&nbsp;&nbsp; 每步代价 = O(n³)（解一次 Newton/KKT 系统）</div>
+    <p>三项各有出处：√m 来自自和谐理论下最优 μ=1+1/√m 的步数界；log 项来自间隙 m/t 的几何收缩；n³ 来自每步的稠密线性代数（有结构时用第10章的 Schur 补还能再省几个数量级）。</p>
+
+    <p><strong>具体数字账。</strong>n=100 个变量、m=200 个不等式、要求 ε=10⁻⁸、取 t⁰=1：</p>
+    <ul>
+      <li>√m ≈ 14.1；log(m/(t⁰ε)) = log(2×10¹⁰) ≈ 23.7（自然对数）；</li>
+      <li>总 Newton 步数 ≈ 14.1 × 23.7 ≈ <strong>340 步</strong>（理论界；实践通常 20–80 步就够）；</li>
+      <li>每步 O(n³)=10⁶ flops ⇒ 总代价 ≈ 3×10⁸ flops，现代笔记本<strong>秒级</strong>。</li>
+    </ul>
+
+    <p>横向对比，才知道这份保证的分量：</p>
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>算法</th><th>迭代次数</th><th>每步代价</th><th>总评</th></tr>
+        <tr><td>椭球法</td><td>O(n²·log(1/ε))</td><td>O(n²)</td><td>多项式但常数巨大，纯理论工具</td></tr>
+        <tr><td>单纯形法（LP 专用）</td><td>最坏指数，实践 ≈m</td><td>≈O(mn)</td><td>实践快但无多项式保证</td></tr>
+        <tr><td>内点法</td><td>O(√m·log(1/ε))</td><td>O(n³)，结构可降</td><td>多项式保证 + 实践小常数</td></tr>
+      </table>
+    </div>
+
+    <p><strong>全书收束。</strong>回望 11 章的三段论——</p>
+    <ol>
+      <li><strong>认出凸</strong>（Ch1–3）：凸集、凸函数、保凸运算，给你一双识别凸性的眼睛；</li>
+      <li><strong>写成凸</strong>（Ch4–8）：LP/QP/SDP 标准形、对偶、最小二乘与正则化、ML 估计、几何问题——把现实翻译成凸模型；</li>
+      <li><strong>解出来</strong>（Ch9–11）：梯度与 Newton、KKT 系统、对数障碍内点法——带多项式保证地把解算出来。</li>
+    </ol>
+    <p>主线闭环：<strong>凸性是可解性的分界线。认出凸、写成凸之后，内点法用 √m·log(1/ε) 步、每步一次线性代数，把最优解算出来。</strong></p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>内点法的历史意义：它把「多项式时间」从理论证书变成了工程现实，让第4–8章建出的所有凸模型（SVM、实验设计、协方差估计……）都能在大规模下真正算出来。理论保证与工程效率第一次站在同一边。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>误区：「有了内点法，凸问题就都解决了」。注意边界：每步 O(n³) 对 n=10⁶ 的超大规模仍然太贵（此时用一阶方法，梯度/近端梯度，每步 O(n) 换步数变多）；且内点法要求问题严格凸且光滑。知道工具的边界，和会用工具同样重要。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 11.4-1</div>
+              <div class="q-text">内点法总复杂度公式的两个因子分别是什么？各自来源？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              步数 O(√m·log(m/(t⁰ε)))：√m 来自自和谐+最优 μ，log 来自间隙几何收缩；每步 O(n³) 来自 Newton/KKT 线性求解。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 11.4-2</div>
+              <div class="q-text">全书三段论「认出凸 → 写成凸 → 解出来」各对应哪几章？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              认出凸：Ch1–3（凸集/凸函数/保凸运算）；写成凸：Ch4–8（标准形/对偶/建模应用）；解出来：Ch9–11（梯度/Newton/KKT/内点法）。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 概念卡 ============ -->
+    <h2><span class="sec-no">🃏</span>概念卡：本章概念的一分钟画像</h2>
+    <p>翻面前先自问：这个概念我能用一句话讲清楚吗？</p>
+    <div class="flip-grid">
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 1</div>
+            <div class="q-text">对数障碍（Logarithmic Barrier）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">φ(x)=−∑log(−fᵢ(x))，定义域为严格可行集内部。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">把不可微的指示函数换成光滑凸围墙，Newton 才能进场。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">离边界越近墙越高，永远撞不出去的弹性护栏。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为它「近似」指示函数；它不靠近似，靠 t→∞ 的极限。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">一切不等式约束凸问题；Ch8 解析中心就是它的特例。</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 2</div>
+            <div class="q-text">中心路径（Central Path）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">中心问题解 x*(t) 随 t 从 0 到 ∞ 描出的轨迹。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">给出一条从内部安全通向最优解的「走廊」。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">走廊里每点都离边界保持安全距离，Newton 永远良态。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为要精确踩在每个中心点上；跟住走廊就够。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">障碍方法外循环的骨架；间隙证书 m/t 挂在路径上。</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 3</div>
+            <div class="q-text">对偶间隙证书 m/t</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">中心点处 f₀(x*(t))−p* ≤ m/t 的可证次优上界。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">提供严格停机准则：m/t&lt;ε 即达标，不靠猜。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">t 是放大镜倍数：乘 10 多看一位精度。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">把上界当误差真值；真误差常远小于 m/t。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">外循环轮数公式 log(m/(t⁰ε))/log μ 的分子。</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 4</div>
+            <div class="q-text">障碍方法（Barrier Method）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">外循环 t←μt 推权重，内循环 Newton 热启动解中心问题。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">把一个大难问题换成一串良态小问题，且每步有章可循。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">沿着中心路径分阶段逼近，像逐档升温退火。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为每个中心问题要解到机器精度；中等精度就够。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">中小规模 LP/QP/SDP 的标配；现代求解器内核。</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 5</div>
+            <div class="q-text">自和谐阻尼（Self-Concordant Damping）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">对自和谐函数用步长 1/(1+λ)（λ 为 Newton 减量）的受控 Newton。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">防止障碍函数旁的裸 Newton 步冲出定义域。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">λ 越大步子越保守，保证留在「Newton 良态区」内。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">当成纯数值技巧；它是 √m 复杂度证明的理论地基。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">内循环每步；Ch9 自和谐理论的直接应用。</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 6</div>
+            <div class="q-text">内点法复杂度界</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">O(√m·log(m/(t⁰ε))) 步 × 每步 O(n³)。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">第一次让凸优化有「多项式且实践小常数」的算法证书。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">步数对规模近乎无感（√m），代价全在每步线性代数。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为它通吃一切；n≈10⁶ 时转向一阶方法。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">全书收束点：Ch4–8 所有模型的统一求解引擎。</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 分层习题 ============ -->
+    <h2><span class="sec-no">📝</span>分层习题</h2>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>判断：「既然 t 越大中心点越接近最优，直接设 t=10¹⁰ 解一次中心问题即可。」对还是错？</div>
+      <details>
+        <summary>提示</summary>
+        <p>想想 Newton 法的收敛前提：起点要离解多远？大 t 时 Hessian 长什么样？</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">错。t 巨大时中心问题的 Hessian 在边界附近极度病态，Newton 从普通起点出发根本不收敛（裸步直接撞墙）。必须让 t 渐进增长、用上一步解做热启动。分阶段逼近不是保守，是 Newton 收敛域的物理限制。</div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>「对数障碍是指示函数的光滑近似，所以内点法只能得到近似解。」这个论断哪半句对、哪半句错？</div>
+      <details>
+        <summary>提示</summary>
+        <p>区分「每个固定 t 的解」与「t→∞ 的极限过程」。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">前半句对：对固定 t，−(1/t)log(−fᵢ) 确实只是指示函数的光滑替代。后半句错：障碍方法不是固定一个 t 求解，而是让 t 几何增长，配合间隙证书 m/t&lt;ε，能以任意指定精度逼近真解——误差是可证可控的，不是「只能近似」。</div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>对 min x s.t. x≥1（m=1），取 t⁰=1、μ=100、ε=10⁻⁶。手算：需要几轮外循环？各轮结束时的间隙上界是多少？</div>
+      <details>
+        <summary>提示</summary>
+        <p>停机准则 m/t≤ε 即 t≥10⁶；t 序列 1, 100, 10⁴, 10⁶。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">轮数 = ⌈log(m/(t⁰ε))/log μ⌉ = ⌈log 10⁶ / log 100⌉ = ⌈6/2⌉ = 3 轮。t：1→10²→10⁴→10⁶；间隙上界 1/t：1→0.01→10⁻⁴→10⁻⁶，第三轮末达标。对比正文 μ=10、ε=10⁻⁴ 的 4 轮：μ 大则轮数少，但每轮内循环 Newton 步数更多——μ 的取舍账。</div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>t=10 时主线例子的中心问题是 min 10x−log(x−1)。从 x=1.2 出发，手算一步带自和谐阻尼的 Newton（先算 f′、f″、λ，再定步长）。</div>
+      <details>
+        <summary>提示</summary>
+        <p>f′=10−1/(x−1)，f″=1/(x−1)²；x=1.2 时 x−1=0.2。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">f′(1.2)=10−5=5；f″(1.2)=1/0.04=25。裸 Newton 步 Δx=−5/25=−0.2，会落到 x=1.0 撞墙。Newton 减量 λ²=25/25=1，λ=1，阻尼步长 1/(1+λ)=1/2。x⁺=1.2−0.1=1.1=x*(10)——又是一步正好落到中心点。自和谐阻尼不是碰运气，是有保证的步长律。</div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l3">L3 建模应用</span>用 Ch8 的最大间隔分类器：n=200 维特征、m=500 个样本约束的 SVM（QP），要求 ε=10⁻⁶。用内点法估算总代价，并判断 n=10⁶ 时还该不该用它。</div>
+      <details>
+        <summary>提示</summary>
+        <p>步数 ≈ √m·log(m/(t⁰ε))，每步解 QP 的 KKT 系统约 O(n³)（此例 n&lt;m，注意变量是 w∈R²⁰⁰）。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">√500≈22.4，log(500×10⁶)≈20（自然对数），步数界 ≈ 22×20 ≈ 440 步（实践 30–60 步）。每步 O(n³)=(200)³=8×10⁶ flops ⇒ 总代价上界约 3.5×10⁹ flops，实践按 40 步算约 3×10⁸，秒级出解。若 n=10⁶：每步 n³=10¹⁸ 完全不可行——改用一阶方法（次梯度/近端梯度/随机坐标），每步 O(n) 换数万步迭代，或先用 Ch6 的随机化降维。工具边界：内点法适合 n≲10⁴–10⁵ 的中等规模、高精度需求场景。</div>
+      </details>
+    </div>
+
+    <!-- ============ 自测 ============ -->
+    <h2><span class="sec-no">✍️</span>本章自测</h2>
+    <p class="quiz-hint">点击选项判分，答错会给出原因。</p>
+
+    <div class="quiz-block" data-answer="c">
+      <div class="q-no">自测 1</div>
+      <div class="q-stem">min x s.t. x≥1 的中心点 x*(t) 与间隙上界分别是？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. x*(t)=1+t，间隙 t</li>
+        <li data-opt="b">B. x*(t)=1+1/t，间隙 m/t=m/t²</li>
+        <li data-opt="c">C. x*(t)=1+1/t，间隙 1/t</li>
+        <li data-opt="d">D. x*(t)=t，间隙 1/t</li>
+      </ul>
+      <div class="quiz-explain">解析：C 对。一阶条件 t−1/(x−1)=0 给 x*=1+1/t；m=1 时间隙上界 m/t=1/t，且本例恰好取等。A 把反比写成线性；B 的间隙多除了一次 t；D 完全颠倒 t 与 x 的关系。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 2</div>
+      <div class="q-stem">为什么不直接取超大 t 一次解中心问题，而要让 t 几何增长？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 因为 t 大时间隙上界失效</li>
+        <li data-opt="b">B. 因为大 t 的中心问题 Hessian 病态，Newton 从远处出发不收敛；热启动是收敛域的硬约束</li>
+        <li data-opt="c">C. 因为 μ 必须小于 2</li>
+        <li data-opt="d">D. 因为对数障碍在 t 大时不再是凸函数</li>
+      </ul>
+      <div class="quiz-explain">解析：B 对。分阶段 + 热启动是 Newton 收敛域限制的必然选择。A 错，间隙 m/t 对任意 t&gt;0 成立；C 错，μ 任意大于 1 都行，只是影响轮数与内循环的平衡；D 错，t·f₀+φ 对一切 t&gt;0 都是凸的——凸性不失效，失效的是 Newton 的起点要求。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="a">
+      <div class="q-no">自测 3</div>
+      <div class="q-stem">障碍方法外循环轮数的公式是？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. ⌈log(m/(t⁰ε)) / log μ⌉</li>
+        <li data-opt="b">B. ⌈√m · log(1/ε)⌉</li>
+        <li data-opt="c">C. ⌈m/(μ·ε)⌉</li>
+        <li data-opt="d">D. ⌈log(1/ε) / μ⌉</li>
+      </ul>
+      <div class="quiz-explain">解析：A 对。t 每轮乘 μ，从 t⁰ 涨到 m/ε 需要 log(m/(t⁰ε))/log μ 轮。B 是总 Newton 步数界的形状（√m 属于内循环步数控制，不属于外循环轮数）；C 把几何增长误当线性；D 漏掉了 m/t⁰ 这个分子因子——初始间隙也要被压掉。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="d">
+      <div class="q-no">自测 4</div>
+      <div class="q-stem">内点法总复杂度 O(√m·log(m/(t⁰ε))) × O(n³) 中，√m 这个因子来自哪里？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 约束个数 m 直接开根号出现在间隙公式里</li>
+        <li data-opt="b">B. KKT 系统的维数是 n+m</li>
+        <li data-opt="c">C. 对数障碍的 Lipschitz 常数</li>
+        <li data-opt="d">D. 自和谐理论下取最优 μ≈1+1/√m 后，内外循环乘积的总 Newton 步数界</li>
+      </ul>
+      <div class="quiz-explain">解析：D 对。√m 不是哪个公式里直接冒出来的，而是「外循环轮数 × 每轮内循环步数」在最优 μ 下配平的结果——这是 Nesterov–Nemirovski 自和谐理论的核心结论。A 错，间隙公式只有 m/t 没有根号；B 混淆了每步代价与步数；C 错，对数障碍没有全局 Lipschitz 常数。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 5</div>
+      <div class="q-stem">全书主线「认出凸 → 写成凸 → 解出来」中，内点法位于哪一环、凭什么收束全书？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 认出凸——它提供了检验凸性的算法</li>
+        <li data-opt="b">B. 解出来——Ch4–8 建出的凸模型，经 Ch9–10 的 Newton 机器加本章的对数障碍，全部获得多项式时间保证</li>
+        <li data-opt="c">C. 写成凸——它把非凸问题改写成凸问题</li>
+        <li data-opt="d">D. 它不属于主线，只是数值实现细节</li>
+      </ul>
+      <div class="quiz-explain">解析：B 对。内点法是「解出来」一环的终点：对数障碍吸收不等式（本章），等式约束进 KKT 系统（Ch10），Newton 提供每步机器（Ch9），三者合成带 √m·log(1/ε) 保证的统一求解器。A 错，检验凸性是 Ch2–3 的保凸运算；C 错，内点法不能把非凸变凸；D 错，多项式复杂度保证恰恰是理论主线的高潮，不是实现细节。</div>
+    </div>
+
+    <!-- ============ 章末五件套之 4：复述 ============ -->
+    <div class="retell">
+      <h3>🗣️ 用自己的话，三句话讲完本章</h3>
+      <p>对着空气（或室友）说出这三句。说卡壳的那句，回去重读对应小节。</p>
+      <details>
+        <summary>句1：这章解决什么问题？——</summary>
+        <div class="retell-answer">第9–10章只会处理等式约束，本章解决不等式约束 fᵢ(x)≤0 怎么进 Newton 机器，并第一次给出完整的多项式复杂度保证。</div>
+      </details>
+      <details>
+        <summary>句2：核心机制是什么？——</summary>
+        <div class="retell-answer">对数障碍把不等式折成光滑凸围墙，中心问题 min t·f₀+φ 的解构成中心路径；障碍方法让 t 几何增长、Newton 热启动沿路径走，间隙证书 m/t 给出严格停机准则。</div>
+      </details>
+      <details>
+        <summary>句3：它和前后章怎么分工？——</summary>
+        <div class="retell-answer">Ch9 给无约束 Newton 与自和谐，Ch10 给等式约束 KKT 机器，本章把不等式折进障碍后，每步仍归结为 Ch10 的 KKT 求解——至此 Ch4–8 的所有凸模型都有了可证多项式的解法，全书闭环。</div>
+      </details>
+    </div>
+
+    <!-- ============ 章末五件套之 5：复习计划 ============ -->
+    <div class="review-plan">
+      <h3>🔁 间隔复习计划</h3>
+      <p>回忆本身比重读有效 10 倍。到点只做一件事：翻卡 + 重做标记题。</p>
+      <table>
+        <tr><th>时间点</th><th>复习内容</th><th>预计用时</th></tr>
+        <tr><td>第 1 天</td><td>全部概念卡 + 回忆卡 11.1-2、11.4-1</td><td>10 分钟</td></tr>
+        <tr><td>第 3 天</td><td>概念卡 1、2、6 + 自测错题</td><td>8 分钟</td></tr>
+        <tr><td>第 7 天</td><td>三句话复述 + 手算 L2 两题（不看书）</td><td>12 分钟</td></tr>
+        <tr><td>第 15 天</td><td>只重做合上书挑战；能全过就毕业（也是全书毕业）</td><td>15 分钟</td></tr>
+      </table>
+    </div>
+
+    <!-- 合上书挑战 -->
+    <div class="final-challenge">
+      <h3>📕 合上书挑战</h3>
+      <p class="fc-sub">现在关掉这个页面，拿一张纸，凭记忆完成以下任务。全部做完再回来核对——这是本章、也是全书真正的毕业考试。</p>
+      <ol id="challenge-list">
+        <li><span class="fc-check"></span>写出对数障碍 φ(x) 与中心问题 min t·f₀+φ，说明它替代了什么、为什么保凸</li>
+        <li><span class="fc-check"></span>手算 min x s.t. x≥1：中心点 x*(t)、t=1/10/100 的中心点与间隙</li>
+        <li><span class="fc-check"></span>写出障碍方法外循环四步 + 停机准则 + 轮数公式，并用 t⁰=1、μ=10、ε=10⁻⁴ 手算轮数</li>
+        <li><span class="fc-check"></span>解释自和谐阻尼步长 1/(1+λ) 的作用，手算 x=3、t=1 的一步阻尼 Newton</li>
+        <li><span class="fc-check"></span>写出总复杂度两因子账，并指出 √m 与 n³ 各自的来源</li>
+        <li><span class="fc-check"></span>回答本章的主线问题：不等式约束怎么吸收进目标函数，使总步数仍是多项式？（一句话）</li>
+      </ol>
+    </div>
+
+    <div class="complete-zone">
+      <button class="btn-complete" id="btn-complete" onclick="markDone()">✓ 我已完成本章（含合上书挑战）</button>
+    </div>
+
+    <div class="chapter-nav">
+      <a href="chapter-10.html"><span class="nav-dir">← 上一章</span>第10章 等式约束极小化</a>
+      <a href="index.html" class="next"><span class="nav-dir">下一章 →</span>回到学习地图（全书完）</a>
+    </div>
+
+  </div>
+</div>
+
+<footer class="footer">
+  <div class="wrap">第11章 内点法 · 凸优化互动讲义 · 基于 Boyd &amp; Vandenberghe《Convex Optimization》整理</div>
+</footer>
+
+<script src="/lectures-assets/mermaid.min.js"></script>
+<script>
+mermaid.initialize({
+  startOnLoad: true,
+  theme: "base",
+  themeVariables: {
+    primaryColor: "#e3edf7",
+    primaryBorderColor: "#1d5f9e",
+    primaryTextColor: "#1d5f9e",
+    lineColor: "#5c554b",
+    secondaryColor: "#fbeedd",
+    tertiaryColor: "#f5f1e8",
+    fontFamily: "-apple-system, PingFang SC, sans-serif",
+    fontSize: "14px"
+  },
+  flowchart: { curve: "linear", htmlLabels: false }
+});
+</script>
+<script>
+// 自测题判分
+document.querySelectorAll(".quiz-block").forEach(block => {
+  const answer = block.dataset.answer;
+  const explain = block.querySelector(".quiz-explain");
+  block.querySelectorAll(".quiz-opts li").forEach(li => {
+    li.addEventListener("click", () => {
+      const opts = block.querySelectorAll(".quiz-opts li");
+      opts.forEach(o => o.classList.add("disabled"));
+      if (li.dataset.opt === answer) {
+        li.classList.add("correct");
+      } else {
+        li.classList.add("wrong");
+        block.querySelector('[data-opt="' + answer + '"]').classList.add("correct");
+      }
+      explain.classList.add("show");
+    });
+  });
+});
+// 合上书挑战打勾
+document.querySelectorAll("#challenge-list li").forEach(li => {
+  li.addEventListener("click", () => li.classList.toggle("done"));
+});
+// 完成进度
+function markDone() {
+  const KEY = "cvx_progress_v1";
+  let progress = {};
+  try { progress = JSON.parse(localStorage.getItem(KEY)) || {}; } catch (e) {}
+  progress[11] = { done: true, completedAt: Date.now(), reviewsDone: (progress[11] && progress[11].reviewsDone) || 0 };
+  localStorage.setItem(KEY, JSON.stringify(progress));
+  const btn = document.getElementById("btn-complete");
+  btn.textContent = "✓ 已完成 · 进度已记录";
+  btn.classList.add("done-state");
+}
+</script>
+
+</body>
+</html>

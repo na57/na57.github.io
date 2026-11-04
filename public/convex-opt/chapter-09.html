@@ -1,0 +1,674 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第9章 无约束极小化 · 凸优化互动讲义</title>
+<link rel="stylesheet" href="/lectures-assets/style.css">
+</head>
+<body>
+
+<nav class="topbar">
+  <div class="topbar-inner">
+    <span class="brand"><a href="index.html" style="color:inherit">← 学习地图</a></span>
+    <span class="crumb">阶段④ · 算法 / 第9章</span>
+  </div>
+</nav>
+
+<div class="wrap">
+
+  <div class="lecture-head">
+    <span class="ch-label">CHAPTER 09 · 算法</span>
+    <h1>无约束极小化</h1>
+    <p class="lead">给一个没有约束的光滑凸函数，迭代算法多快能收敛到最优？</p>
+  </div>
+
+  <div class="position-bar">
+    <strong>本章在主线上的位置：</strong>Ch6–8 造出了一堆光滑凸目标（最小二乘、log 似然、解析中心），本章开始回答「怎么算」。无约束情形是算法的练兵场：<u>线搜索、收敛率、条件数、Newton</u> 这四个概念会在 Ch10–11 反复使用。<br>
+    第9章回答主线上的第9个问题：<strong>迭代法求解无约束凸问题，收敛速度由什么决定？</strong>
+    <div class="map-inline">
+      <span class="node">Ch6–8 应用建模（给出光滑凸目标）</span><span class="arrow">→</span>
+      <span class="node here">Ch9 无约束极小化</span><span class="arrow">→</span>
+      <span class="node">Ch10 等式约束（Newton 嵌进 KKT）</span><span class="arrow">→</span>
+      <span class="node">Ch11 内点法（log 障碍 + 中心路径）</span>
+    </div>
+  </div>
+
+  <div class="objectives">
+    <h4>🎯 学完本章，合上书你应该能：</h4>
+    <ol>
+      <li>写出回溯线搜索的接受条件，并对 f(x)=x² 从 x=2 手算一步完整回溯。</li>
+      <li>说出强凸假设 mI⪯∇²f⪯MI 下梯度法的线性收敛率，并解释条件数 κ 的角色。</li>
+      <li>对 f(x₁,x₂)=½(x₁²+10x₂²) 手算一步精确线搜索，验证收缩因子 (9/11)²。</li>
+      <li>写出 Newton 步 Δx_nt，证明二次函数一步收敛，并对 f(x)=x²+x⁴ 手算三步 Newton 展示二次收敛。</li>
+      <li>区分次线性/线性/二次收敛，各给一个代表算法。</li>
+      <li>算出「迭代次数 × 每步代价」的总账，说明 Newton 何时值得。</li>
+    </ol>
+  </div>
+
+  <div class="lecture">
+
+    <div class="figure">
+      <div class="mermaid">
+flowchart LR
+  A["无约束光滑凸目标"] --> B["迭代格式 x 加 t 乘 Δx"]
+  B --> C["选方向 负梯度 或 Newton"]
+  B --> D["选步长 回溯线搜索"]
+  C --> E["梯度法 线性收敛 速率看 κ"]
+  C --> F["Newton 二次收敛 但每步贵"]
+  D --> E
+  D --> F
+  F --> G["代价 每步解线性系统 且不等式约束未处理"]
+  classDef hot fill:#fbeedd,stroke:#c4651f,stroke-width:2.5px,color:#c4651f;
+  classDef danger fill:#fae9e7,stroke:#b03a2e,stroke-width:2.5px,color:#b03a2e;
+  class G danger;
+      </div>
+      <div class="caption">图 9.0 本章推导主线：方向与步长两个选择决定算法；收敛率由条件数（梯度）或二阶信息（Newton）决定；代价留给 Ch10–11 偿付。</div>
+    </div>
+
+    <h2><span class="sec-no">9.1</span>下降方法与回溯线搜索：每步只要「够好」不要「最好」</h2>
+
+    <p>迭代格式 x⁺ = x + tΔx：方向 Δx 满足 ∇fᵀΔx &lt; 0（<span class="term">下降方向</span>，Descent Direction），步长 t 由线搜索确定。<strong>精确线搜索</strong>（Exact Line Search）解一维问题 min_t f(x+tΔx)；<span class="term">回溯线搜索</span>（Backtracking Line Search，Armijo 规则）只要「足够下降」：</p>
+
+    <div class="formula">接受条件：f(x + tΔx) ≤ f(x) + α·t·∇fᵀΔx，&nbsp;&nbsp; α∈(0, 1/2)；不满足就 t := βt，β∈(0,1)</div>
+
+    <h3>完整手算例：f(x)=x² 的一步回溯</h3>
+    <p>当前 x=2，∇f=4，取最速下降方向 Δx=−4，α=1/4，β=1/2。</p>
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>步</th><th>t</th><th>左端 f(x+tΔx)</th><th>右端 f(x)+αt∇fᵀΔx</th><th>判定</th></tr>
+        <tr><td>① 初试</td><td>1</td><td>f(−2)=4</td><td>4 + (1/4)(1)(−16) = 0</td><td>4 ≤ 0？否 → 回溯</td></tr>
+        <tr><td>② t:=βt</td><td>1/2</td><td>f(0)=0</td><td>4 + (1/4)(1/2)(−16) = 2</td><td>0 ≤ 2 ✓ 接受</td></tr>
+        <tr><td>③ 更新</td><td></td><td colspan="2">x⁺ = 2 + (1/2)(−4)</td><td>x⁺ = 0，一步到最优</td></tr>
+      </table>
+    </div>
+    <p>注意两个要点：① 回溯只评估<strong>函数值</strong>，不需要解任何子问题；② 这个例子里精确线搜索也给 t=1/2（f(2−4t) 极小点在 t=1/2），回溯一次即命中——简单问题上两者差别不大，差别在高维与病态时显现。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>Armijo 条件的几何：右端是一条比真实下降「打点折」的直线（斜率打 α 折）。接受 t 只要真实曲线压过这条打折线即可——α 越小越宽容，β 越小回溯越狠。整个设计哲学：<strong>用可检查的充分条件代替最优条件</strong>，这个思想在 Ch11 的内点法里还会回来。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>「步长越小越安全，所以 t 取很小总没错」——错。过小的步长让收敛慢到不可用（线性收敛的底数 c 接近 1）；回溯的设计恰恰是「先试大、不行再缩」，初试 t=1 在 Newton 方法里甚至是收敛理论的要求（近优解区必须接受全步长才能二次收敛）。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 9.1-1</div>
+              <div class="q-text">写出 Armijo 接受条件，并解释 α 与 β 各自的职责。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              f(x+tΔx) ≤ f(x) + αt∇fᵀΔx。α∈(0,1/2) 控制「要求多大幅度的下降」（宽容度）；β∈(0,1) 控制「不满足时步长缩多快」（回溯力度）。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 9.1-2</div>
+              <div class="q-text">回溯线搜索相比精确线搜索省掉了什么？为什么 Newton 阶段初试必须是 t=1？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              省掉一维子问题的精确求解，只评估函数值。Newton 的二次收敛理论要求近优解区接受全步长 t=1，否则退化为一阶速率。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <h2><span class="sec-no">9.2</span>梯度下降的收敛率：条件数说了算</h2>
+
+    <p>梯度法每一步只花一阶信息，代价比 Newton 低一个量级——值得为它建立精确的速率理论。<span class="term">强凸</span>（Strongly Convex）假设：mI ⪯ ∇²f(x) ⪯ MI（0 &lt; m ≤ M），<span class="term">条件数</span> κ = M/m。结论：</p>
+
+    <div class="formula">f(x⁽ᵏ⁾) − p* ≤ cᵏ (f(x⁽⁰⁾) − p*)，&nbsp;&nbsp; 回溯：c = 1 − m/M；&nbsp; 精确线搜索（二次）：c = ((κ−1)/(κ+1))²</div>
+
+    <p>误差以几何级数收缩——这叫<span class="term">线性收敛</span>（Linear Convergence，指 log 误差随 k 线性下降）。κ 越接近 1（等高线越圆），c 越小，收敛越快；κ 越大（等高线越扁），c→1，梯度法陷入<span class="term">锯齿</span>（Zigzag）爬行。</p>
+
+    <h3>完整手算例：一步精确线搜索命中理论收缩因子</h3>
+    <p>f(x₁,x₂) = ½(x₁² + 10x₂²)，Q = diag(1,10)，κ = 10。起点 x⁽⁰⁾ = (10, 1)。</p>
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>步骤</th><th>计算</th><th>结果</th></tr>
+        <tr><td>① 梯度</td><td>g = Qx = (10, 10)</td><td></td></tr>
+        <tr><td>② 精确步长</td><td>t = gᵀg / gᵀQg = 200 / (100+1000)</td><td>t = 2/11 ≈ 0.1818</td></tr>
+        <tr><td>③ 更新</td><td>x⁽¹⁾ = x⁽⁰⁾ − t·g = (10−20/11·… ) 逐分量算</td><td>x⁽¹⁾ = (90/11, −9/11) ≈ (8.18, −0.82)</td></tr>
+        <tr><td>④ f 值</td><td>f(x⁰) = ½(100+10) = 55；f(x¹) = ½(8100/121 + 10·81/121)</td><td>f(x¹) = 4455/121 ≈ 36.82</td></tr>
+        <tr><td>⑤ 收缩比</td><td>36.82 / 55</td><td>≈ 0.669 = (9/11)² ✓</td></tr>
+      </table>
+    </div>
+    <p>(κ−1)/(κ+1) = 9/11，平方得 0.669——理论值与实际一步的收缩<strong>分毫不差</strong>。再看方向：x₁ 分量从 10 降到 8.18（慢），x₂ 从 1 降到 −0.82（冲过头）——这就是锯齿：梯度方向被长轴「绑架」，在扁椭球的两壁间来回弹。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>梯度法的全部毛病可以归结成一句话：它用的是「局部最陡」方向，而最优解在「全局谷底」方向。条件数 κ 就是这两个方向偏离的度量。Newton 法的本质（9.3）正是用二阶信息把坐标系「揉圆」——等效于把 κ 变成 1。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>「线性收敛 = 慢」——术语陷阱。线性收敛是指数级收缩（cᵏ），已经很快；真正慢的是<strong>次线性</strong>（如 O(1/k)，次梯度法、不可微问题）。把「线性」理解成「一次函数速度」是最常见的误读：看 log 误差，它是斜率 log c 的直线。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 9.2-1</div>
+              <div class="q-text">强凸假设 mI⪯∇²f⪯MI 下，梯度法的误差收缩公式是什么？κ 怎么进入速率？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              f(x⁽ᵏ⁾)−p* ≤ cᵏ(f(x⁰)−p*)；回溯 c=1−m/M=1−1/κ，二次+精确线搜索 c=((κ−1)/(κ+1))²。κ→1 时 c→0（圆等高线，一步收敛）；κ→∞ 时 c→1（扁椭球，锯齿爬行）。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 9.2-2</div>
+              <div class="q-text">锯齿现象的几何原因是什么？为什么 κ 大时梯度法来回弹？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              负梯度垂直于等高线切线；扁椭球（κ 大）时垂直方向几乎横切长轴，并不指向谷底中心，于是轨迹在两壁间交替反弹、缓慢下行。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <h2><span class="sec-no">9.3</span>Newton 方法：二阶信息的代价与回报</h2>
+
+    <p><span class="term">Newton 步</span>（Newton Step）：在当前点做二阶 Taylor 近似并取其极小点：</p>
+
+    <div class="formula">Δx_nt = −∇²f(x)⁻¹ ∇f(x)，&nbsp;&nbsp; x⁺ = x + Δx_nt</div>
+
+    <p>两个标志性性质。① <strong>二次函数一步收敛</strong>：f 二次时二阶近似就是 f 本身。对 9.2 的例：x⁺ = x − Q⁻¹(Qx) = x − x = 0——一步到最优，与起点无关。② <strong>近优解区二次收敛</strong>：‖误差⁺‖ ≤ C·‖误差‖²。数字看一眼：</p>
+
+    <h3>完整手算例：f(x)=x²+x⁴ 的三步 Newton</h3>
+    <p>f′ = 2x+4x³，f″ = 2+12x²。Newton 更新：</p>
+    <div class="formula">x⁺ = x − <span class="frac"><span class="num-part">2x+4x³</span><span class="den-part">2+12x²</span></span> = <span class="frac"><span class="num-part">4x³</span><span class="den-part">1+6x²</span></span></div>
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>步</th><th>x</th><th>误差 = |x−0|</th><th>误差行为</th></tr>
+        <tr><td>起点</td><td>1</td><td>1</td><td></td></tr>
+        <tr><td>①</td><td>4/7 ≈ 0.5714</td><td>0.5714</td><td>压缩 0.57×</td></tr>
+        <tr><td>②</td><td>4(0.5714)³/(1+6·0.5714²) ≈ 0.7466/2.959</td><td>≈ 0.2523</td><td>≈ 误差² 量级</td></tr>
+        <tr><td>③</td><td>4(0.2523)³/(1+6·0.2523²) ≈ 0.0643/1.382</td><td>≈ 0.0465</td><td>0.2523² = 0.0637，同级 ✓</td></tr>
+      </table>
+    </div>
+    <p>有效数字每次近乎翻倍——这就是二次收敛的体感。代价：每步要算 Hessian 并解线性系统（O(n³) 稠密）。<strong>阻尼 Newton</strong>（Damped Newton）：远离最优时用回溯线搜索包一层（保证全局收敛），近优解区自动接受全步长（进入二次收敛）。停止准则用 <span class="term">Newton 减量</span>（Newton Decrement）：λ² = ∇fᵀ∇²f⁻¹∇f，λ²/2 是 f(x)−p* 的估计。最后，<span class="term">自和谐</span>（Self-Concordant）函数类让「多远算近优解区、需要几步阻尼」有了与问题数据无关的通用界——log-barrier 恰是此类，这是第11章复杂度证明的钥匙。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>Newton = 先把坐标系用 Hessian 揉圆（f(x+p) 在尺度 ∇²f 下看就是球），再在新坐标里走最速下降。所以它仿射不变：对变量做任何可逆线性变换，Newton 轨迹不变——梯度法则会被同一个变换毁掉。这就是为什么「条件数」三个字在 Newton 章节里消失了。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>「Newton 法总是比梯度法好」——错。每步代价 O(n³) vs O(n)：n=10⁶ 时 Newton 一步都算不动，梯度法跑得欢。正确的问题不是「哪个好」而是「迭代数 × 每步代价，总账谁小」（9.4）。另外非凸问题上 Newton 可能奔向鞍点——本章一切结论都在凸假设下。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 9.3-1</div>
+              <div class="q-text">写出 Newton 步公式，并用一句话证明二次函数一步收敛。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              Δx_nt = −∇²f⁻¹∇f。二次函数 f=½xᵀQx：x⁺ = x − Q⁻¹(Qx) = 0 = 最优解，任何起点皆然。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 9.3-2</div>
+              <div class="q-text">Newton 减量 λ² 是什么？它为什么能当停止准则？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              λ² = ∇fᵀ∇²f⁻¹∇f。二阶近似给出 f(x)−min ≈ λ²/2，故 λ²/2 ≤ ε 即可停——无需知道 p* 就能估计次优间隙。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <h2><span class="sec-no">9.4</span>收敛率全景与复杂度账</h2>
+
+    <p>三档速率并排看（「迭代数 × 每步代价」才算总账）：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>速率档</th><th>误差行为</th><th>代表算法</th><th>每步代价</th><th>适用</th></tr>
+        <tr><td>次线性</td><td>O(1/k)</td><td>次梯度法</td><td>O(n)</td><td>不可微（LASSO、SVM 合页）</td></tr>
+        <tr><td>线性</td><td>cᵏ，c=((κ−1)/(κ+1))²</td><td>梯度法 + 回溯</td><td>O(n)（矩阵向量乘）</td><td>大规模光滑、κ 适中</td></tr>
+        <tr><td>二次</td><td>误差逐次平方</td><td>阻尼 Newton</td><td>O(n³) 解系统</td><td>中小规模、要高精度</td></tr>
+      </table>
+    </div>
+
+    <p>算一笔总账：9.2 的例要把 f 从 55 压到 55×10⁻⁶，梯度法需 k ≥ log(10⁻⁶)/log(0.669) ≈ 34 步，每步 O(n)，总账 ≈ 34n；Newton 对该二次问题 1 步，每步 O(n³)。n=2 时 Newton 赢；n=10⁵ 时梯度法 34×10⁵ 次浮点 vs Newton 一步 (10⁵)³=10¹⁵ 次——量级反转。<strong>没有免费的二次收敛：它用每步代价买迭代次数。</strong></p>
+
+    <p>本章的方法都吃不了约束。Ch10 先把等式约束嵌进 Newton（KKT 系统），Ch11 再用 log 障碍把不等式软化进目标——无约束算法是这两章的发动机。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>选算法的决策树：不可微 → 次梯度/近端（O(1/k)）；光滑且 n 大 → 梯度家族（每步便宜）；光滑、n 中小、要 8 位精度 → Newton（步数一位数）。Ch11 的内点法之所以统治凸优化实践，正因为它把「带约束」化成了「一串 Newton 能解的无约束问题」，迭代数还很少。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>「迭代次数少 = 算法好」——9.4 的全部要点就是反例：Newton 一步顶梯度法几十步，但每步贵 n² 倍。比较算法必须报两个数：迭代数与每步代价。只报一个的论文/汇报都值得一问。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 9.4-1</div>
+              <div class="q-text">三档收敛率各自的误差公式与代表算法？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              次线性 O(1/k)：次梯度法；线性 cᵏ（c=((κ−1)/(κ+1))²）：梯度法；二次（误差逐次平方）：阻尼 Newton。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 9.4-2</div>
+              <div class="q-text">为什么 n=10⁵ 时宁用梯度法不用 Newton？用总账回答。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              总账 = 迭代数 × 每步代价。梯度法约 34×10⁵ ≈ 3×10⁶ 次浮点；Newton 仅解一步 Hessian 系统就要 (10⁵)³ = 10¹⁵ 次，差 9 个量级。迭代数优势被每步代价吞没。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <h2><span class="sec-no">🃏</span>概念卡：本章概念的一分钟画像</h2>
+    <p>翻面前先自问：这个概念我能用一句话讲清楚吗？</p>
+    <div class="flip-grid">
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 1</div>
+            <div class="q-text">回溯线搜索（Backtracking / Armijo）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">从 t=1 起，不满足 f(x+tΔx)≤f(x)+αt∇fᵀΔx 就 t:=βt。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">用可检查的充分下降代替一维精确最小化，给下降法全局收敛保证。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">先迈一大步，摔了就减半再试，直到「确实在往下走」。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为步长越小越安全——过小步长让收敛慢到不可用，Newton 区还要求全步长。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">Ch9–11 所有主循环的标配；Ch10 不可行 Newton 作用在残差范数上。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 2</div>
+            <div class="q-text">条件数 κ = M/m</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">Hessian 最大/最小曲率之比（强凸常数 M 与 m 的比）。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">用一个数预言梯度法的快慢：c=((κ−1)/(κ+1))²。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">等高线椭球的长短轴比；越扁梯度越来回锯齿。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为 κ 只影响常数不影响阶——κ 大时 c→1，实际步数可差千倍。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">判断要不要预条件/上 Newton；数据归一化的理论依据。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 3</div>
+            <div class="q-text">线性收敛（几何收敛）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">误差 ≤ cᵏ·初始误差，c&lt;1：log 误差随 k 线性下降。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">给「梯度法要跑几步」一个闭式答案：k ≥ log(1/ε)/log(1/c)。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">每步砍掉固定比例的误差，像复利倒着算。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">望文生义以为「线性=慢」；它是指数收缩，真正慢的是次线性 O(1/k)。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">强凸+光滑问题的默认预期；与 Ch11 多项式复杂度对照。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 4</div>
+            <div class="q-text">Newton 步与二次收敛</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">Δx_nt = −∇²f⁻¹∇f；近优解区误差逐次平方。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">用二阶曲率把坐标揉圆，消除条件数的拖累，迭代数降到一位数。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">直接解「当前点的最佳抛物模型」的谷底，而不是沿坡度蹭。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">忽略每步 O(n³)；大规模问题里 Newton 一步都算不动。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">中小规模高精度；Ch10/11 的 KKT 系统与中心化步都是 Newton。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 5</div>
+            <div class="q-text">Newton 减量 λ²</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">λ² = ∇fᵀ∇²f⁻¹∇f，二阶模型估计的「还能降多少」的两倍。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">在不知道 p* 的情况下给出可计算的停止准则（λ²/2 ≤ ε）。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">当前抛物模型宣称的剩余下降量——模型说没油水了，就停车。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">把它当成真实次优间隙的精确值；它只是二阶近似，近优解区才可靠。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">Ch11 中心化步的停止与步长选择（自和谐步长 1/(1+λ)）。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 6</div>
+            <div class="q-text">自和谐（Self-Concordance）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">|f‴| ≤ 2(f″)^(3/2) 的函数类（log-barrier、log det 均属之）。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">让 Newton 的阻尼步数、二次收敛区域有与数据无关的通用界。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">三阶导被二阶导管住——函数弯曲得再厉害也不「抽风」，Newton 永远可预测。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为它是小改进；没有它，内点法的多项式复杂度证明整个不成立。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">Ch11 复杂度账 O(√m log(1/ε)) 的理论地基。</span></div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+    <h2><span class="sec-no">📝</span>分层习题</h2>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>判断对错：「Newton 法用于非凸函数时，只要 Hessian 可逆，仍保证收敛到全局最小。」</div>
+      <details>
+        <summary>提示</summary>
+        <p>Newton 步是二阶模型的极小点——但非凸时 Hessian 可能不定，模型的「极小」方向还是下降方向吗？</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">错。非凸时 ∇²f 可能不定，Δx_nt 可以不是下降方向，Newton 可能奔向极大点或鞍点；即便收敛也只是驻点，无全局性可言。本章全部保证（下降、二次收敛、λ² 停止准则）都建立在凸性（∇²f ≻ 0）之上。这也是「先证凸、再上算法」工作流的来历。</div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>选择：下列哪个说法正确描述了线性收敛？A. 误差每步减少一个固定常数；B. 误差每步乘以一个小于 1 的固定因子；C. 误差与迭代次数成反比；D. 误差每步被平方。</div>
+      <details>
+        <summary>提示</summary>
+        <p>写出 cᵏ 的形式，再对照每个选项的数学翻译。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">B。线性收敛 = 几何级数 cᵏ：每步乘以固定因子 c&lt;1，log 误差随 k 线性下降。A 错：那是「每步减常数」，线性下降趋势会停在 0 以下，对应的是次梯度法的某些界，不是 cᵏ。C 错：1/k 是次线性（次梯度法）。D 错：逐次平方是二次收敛（Newton），比线性快得多。四个选项正好对应速率谱上的四个不同点，值得背下来。</div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>f(x)=x²，x=4，用最速下降方向与 α=1/4、β=1/2 的回溯线搜索，手算接受的步长与新点（写出每次试验的左右两端）。</div>
+      <details>
+        <summary>提示</summary>
+        <p>∇f(4)=8，Δx=−8，∇fᵀΔx=−64。从 t=1 试起。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">① t=1：左端 f(4−8)=f(−4)=16；右端 f(4)+αt∇fᵀΔx=16+(1/4)(−64)=0。16≤0 否 → 回溯。② t=1/2：左端 f(4−4)=f(0)=0；右端 16+(1/4)(1/2)(−64)=8。0≤8 ✓ 接受。③ x⁺=4+(1/2)(−8)=0，一步到最优（二次+对角，意料之中）。④ 注：精确线搜索步长同为 1/2（f(4−8t) 极小点），此例回溯一次即中。</div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>f(x₁,x₂)=½(x₁²+γx₂²)，γ=4，x⁽⁰⁾=(4,1)。手算一步精确线搜索梯度步，并验证 f 的收缩比等于 ((γ−1)/(γ+1))²。</div>
+      <details>
+        <summary>提示</summary>
+        <p>g=(4,4)；t = gᵀg/gᵀQg，Q=diag(1,4)；再算 f 前后值之比。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">① g = ∇f(x⁰) = (4, 4)。② t = gᵀg/gᵀQg = 32/(16+64) = 32/80 = 2/5。③ x¹ = (4−(2/5)·4, 1−(2/5)·4) = (4·3/5, −3/5) = (12/5, −3/5)。④ f(x⁰)=½(16+4)=10；f(x¹)=½(144/25 + 4·9/25)=½·(144+36)/25=½·180/25=18/5=3.6。⑤ 收缩比 3.6/10 = 0.36；理论 ((4−1)/(4+1))² = (3/5)² = 9/25 = 0.36 ✓ 完全吻合。</div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l3">L3 建模应用</span>你要解一个 logistic 回归（光滑、严格凸、n=2000 维、样本 m=10⁶）：工程团队提议「直接上全 Newton，反正它二次收敛」。请用本章的总账框架评估这个提议，给出你的算法选择、停止准则与预估代价结构（不要求精确数字，要求量纲与决策逻辑正确）。</div>
+      <details>
+        <summary>提示</summary>
+        <p>报两个数：迭代数与每步代价。Newton 每步要解多大的系统？梯度/拟牛顿呢？logistic 的 Hessian 有什么结构？</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">评估：Newton 迭代数确实小（logistic 近自和谐，通常 10–20 步到 10⁻⁸），但每步要解 2000×2000 稠密系统 O(n³)≈8×10⁹ 浮点/步，且每步组 Hessian 要扫全数据 O(mn)≈2×10⁹。总账约 20×(8×10⁹)≈1.6×10¹¹。替代：梯度法每步 O(mn)≈2×10⁹ 但 κ 可能大使步数上千；拟牛顿（L-BFGS）每步 O(n·r)（r 为记忆窗口）+ 同样 O(mn) 梯度，迭代数通常几十到一两百。决策：n=2000 其实不算大——若内存放得下 2000² 的 Hessian（32MB），阻尼 Newton 配 λ²/2≤10⁻⁸ 停止准则是干净利落的正确选择，总账 10¹¹ 量级秒级可解；若 n 再大两个量级则转 L-BFGS。给团队的话：「Newton 在这里是对的，但对的理由是 n 小而不是收敛快——迭代数×每步代价都报出来再拍板。」</div>
+      </details>
+    </div>
+
+    <h2><span class="sec-no">✍️</span>本章自测</h2>
+    <p class="quiz-hint">点击选项判分，答错会给出原因。</p>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 1</div>
+      <div class="q-stem">回溯线搜索相对精确线搜索的核心优势是：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 每步找到的 t 更大，收敛更快</li>
+        <li data-opt="b">B. 只需评估函数值，避免解一维子问题，且有全局收敛保证</li>
+        <li data-opt="c">C. 不需要下降方向</li>
+        <li data-opt="d">D. 总能给出比精确线搜索更小的函数值</li>
+      </ul>
+      <div class="quiz-explain">解析：B 对——Armijo 用「充分下降」这个可检查条件替代一维最优化，每次回溯只算函数值，理论上有全局收敛保证。A 错：回溯的 t 通常小于等于精确步长，优势不在步长大小。C 错：∇fᵀΔx&lt;0 仍是前提，条件里就含梯度。D 错：充分下降不保证最小——9.1 例中两者恰好一致是二次问题的巧合，一般情况下精确线搜索单步降得更多（但贵）。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="c">
+      <div class="q-no">自测 2</div>
+      <div class="q-stem">强凸问题 f(x₁,x₂)=½(x₁²+γx₂²) 上梯度法锯齿的根本原因是：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 步长太大导致发散</li>
+        <li data-opt="b">B. 目标函数不光滑</li>
+        <li data-opt="c">C. 负梯度垂直于等高线切线，扁椭球中该方向偏离谷底方向</li>
+        <li data-opt="d">D. 初值离最优点太远</li>
+      </ul>
+      <div class="quiz-explain">解析：C 对——最陡下降方向是等高线的法向；扁椭球（κ 大）中法向几乎横切长轴而非指向中心，于是来回弹。A 错：精确/回溯线搜索下不会发散，锯齿是慢不是散。B 错：二次函数任意阶光滑，锯齿与光滑性无关。D 错：远近只改变迭代数常数，不改变锯齿机制——任何起点都会锯齿。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="a">
+      <div class="q-no">自测 3</div>
+      <div class="q-stem">Newton 法对严格凸二次函数一步收敛，因为：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 二阶 Taylor 模型此时就是函数本身，Newton 步直接解出模型极小点</li>
+        <li data-opt="b">B. 二次函数的梯度很小</li>
+        <li data-opt="c">C. 回溯线搜索总能接受 t=1</li>
+        <li data-opt="d">D. Hessian 是单位阵</li>
+      </ul>
+      <div class="quiz-explain">解析：A 对——二次函数的二阶展开无截断误差，min 模型 = min 原函数，x⁺=x−Q⁻¹(Qx−q̃)=最优解。B 错：梯度大小与收敛机制无关，起点梯度可以任意大。C 错：因果倒置——正是因为 Newton 步已是最优，t=1 才被接受；且非二次时近优解区之外 t=1 常被拒绝。D 错：Q 任意对称正定即可，无需单位阵——这正是 Newton 消除条件数影响的体现。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="d">
+      <div class="q-no">自测 4</div>
+      <div class="q-stem">Newton 减量 λ² = ∇fᵀ∇²f⁻¹∇f 用作停止准则的依据是：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. λ² 等于真实次优间隙 f(x)−p*</li>
+        <li data-opt="b">B. λ² 与梯度范数成正比</li>
+        <li data-opt="c">C. λ² 大说明 Hessian 病态</li>
+        <li data-opt="d">D. 二阶模型给出 f(x)−p* ≈ λ²/2，是无需 p* 的可计算估计</li>
+      </ul>
+      <div class="quiz-explain">解析：D 对——把当前点代入二阶模型，模型宣称的剩余下降量恰为 λ²/2，且只用 ∇f 与 ∇²f，不需要知道 p*。A 错：它只是二阶估计，非等式；近优解区才高度准确。B 错：λ² 用 Hessian 度量加权了梯度，与 ‖∇f‖² 可差 κ 倍——这正是它比梯度范数更适合做停止准则的原因（仿射不变）。C 错：λ² 不诊断病态，Newton 法本身对条件数免疫。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="c">
+      <div class="q-no">自测 5</div>
+      <div class="q-stem">n=10⁶ 的大规模光滑强凸问题，要求中等精度（ε=10⁻⁴），首选通常是：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 精确线搜索梯度法</li>
+        <li data-opt="b">B. 全 Newton 法</li>
+        <li data-opt="c">C. 回溯线搜索梯度法（或加速梯度/L-BFGS）</li>
+        <li data-opt="d">D. 次梯度法</li>
+      </ul>
+      <div class="quiz-explain">解析：C 对——每步 O(n) 量级、只算梯度，中等精度下总账最小；回溯避免了一维子问题。A 错：n=10⁶ 时精确线搜索每步都要解一维优化，代价不可接受。B 错：Newton 每步解 10⁶×10⁶ 系统 ≈10¹⁸ 浮点，一步都走不动。D 错：问题光滑时用次梯度是把 cᵏ 自废成 O(1/k)，精度 10⁻⁴ 要约 10⁸ 步——光滑信息不该浪费。</div>
+    </div>
+
+    <div class="retell">
+      <h3>🗣️ 用自己的话，三句话讲完本章</h3>
+      <p>对着空气（或室友）说出这三句。说卡壳的那句，回去重读对应小节。</p>
+      <details>
+        <summary>句1：这章解决什么问题？——</summary>
+        <div class="retell-answer">参考答案：无约束光滑凸问题用什么迭代格式求解、收敛速度由什么决定、各档方法的总账怎么算。</div>
+      </details>
+      <details>
+        <summary>句2：核心机制是什么？——</summary>
+        <div class="retell-answer">参考答案：方向（负梯度 vs Newton 的二阶修正）× 步长（回溯线搜索的充分下降）；梯度法被条件数 κ 锁定在线性收敛 c=((κ−1)/(κ+1))²，Newton 用 Hessian 揉圆坐标换二次收敛，代价是每步解线性系统。</div>
+      </details>
+      <details>
+        <summary>句3：它和前后章怎么分工？——</summary>
+        <div class="retell-answer">参考答案：Ch6–8 造出本章要解的目标；本章给出无约束发动机；Ch10 把等式约束嵌进 Newton（KKT 系统），Ch11 用 log 障碍把不等式化回本章能解的无约束序列——内点法 = 本章工具的组织方式。</div>
+      </details>
+    </div>
+
+    <div class="review-plan">
+      <h3>🔁 间隔复习计划</h3>
+      <p>回忆本身比重读有效 10 倍。到点只做一件事：翻卡 + 重做标记题。</p>
+      <table>
+        <tr><th>时间点</th><th>复习内容</th><th>预计用时</th></tr>
+        <tr><td>第 1 天</td><td>概念卡 1–6 全部 + 回忆卡 9.1-1、9.2-1、9.3-1</td><td>10 分钟</td></tr>
+        <tr><td>第 3 天</td><td>概念卡 2、4、5 + 重做 L2 两道手算（回溯与精确线搜索）</td><td>12 分钟</td></tr>
+        <tr><td>第 7 天</td><td>三句话复述 + 重推 Newton 一步收敛 + 自测重答</td><td>12 分钟</td></tr>
+        <tr><td>第 15 天</td><td>只做合上书挑战；能全过就毕业，卡哪条回去重读哪节</td><td>15 分钟</td></tr>
+      </table>
+    </div>
+
+    <div class="final-challenge">
+      <h3>📕 合上书挑战</h3>
+      <p class="fc-sub">现在关掉这个页面，拿一张纸，凭记忆完成以下任务。全部做完再回来核对——这是本章真正的毕业考试。</p>
+      <ol id="challenge-list">
+        <li><span class="fc-check"></span>写出 Armijo 条件，手算 f(x)=x²、x=2 的一步回溯（t=1 拒、t=1/2 收）。</li>
+        <li><span class="fc-check"></span>写出强凸下梯度法的线性收敛率，并用条件数解释 κ→1 与 κ→∞ 两个极端。</li>
+        <li><span class="fc-check"></span>手算 f=½(x₁²+4x₂²)、x⁰=(4,1) 的一步精确线搜索，验证收缩比 (3/5)²=0.36。</li>
+        <li><span class="fc-check"></span>证明 Newton 对二次函数一步收敛；再对 f(x)=x²+x⁴ 写两步更新展示误差平方级压缩。</li>
+        <li><span class="fc-check"></span>列出次线性/线性/二次三档的公式、代表算法与每步代价，并说明「总账」怎么算。</li>
+        <li><span class="fc-check"></span>一句话回答本章主线问题：迭代法求解无约束凸问题，收敛速度由什么决定？</li>
+      </ol>
+    </div>
+
+    <div class="complete-zone">
+      <button class="btn-complete" id="btn-complete" onclick="markDone()">✓ 我已完成本章（含合上书挑战）</button>
+    </div>
+
+    <div class="chapter-nav">
+      <a href="chapter-08.html"><span class="nav-dir">← 上一章</span>第8章 几何问题</a>
+      <a href="chapter-10.html" class="next"><span class="nav-dir">下一章 →</span>第10章 等式约束极小化</a>
+    </div>
+
+  </div>
+</div>
+
+<footer class="footer">
+  <div class="wrap">第9章 无约束极小化 · 凸优化互动讲义 · 基于 Boyd &amp; Vandenberghe (2004)</div>
+</footer>
+
+<script src="/lectures-assets/mermaid.min.js"></script>
+<script>
+mermaid.initialize({
+  startOnLoad: true,
+  theme: "base",
+  themeVariables: {
+    primaryColor: "#e3edf7",
+    primaryBorderColor: "#1d5f9e",
+    primaryTextColor: "#1d5f9e",
+    lineColor: "#5c554b",
+    secondaryColor: "#fbeedd",
+    tertiaryColor: "#f5f1e8",
+    fontFamily: "-apple-system, PingFang SC, sans-serif",
+    fontSize: "14px"
+  },
+  flowchart: { curve: "linear", htmlLabels: false }
+});
+</script>
+<script>
+document.querySelectorAll(".quiz-block").forEach(block => {
+  const answer = block.dataset.answer;
+  const explain = block.querySelector(".quiz-explain");
+  block.querySelectorAll(".quiz-opts li").forEach(li => {
+    li.addEventListener("click", () => {
+      const opts = block.querySelectorAll(".quiz-opts li");
+      opts.forEach(o => o.classList.add("disabled"));
+      if (li.dataset.opt === answer) {
+        li.classList.add("correct");
+      } else {
+        li.classList.add("wrong");
+        block.querySelector(`[data-opt="${answer}"]`).classList.add("correct");
+      }
+      explain.classList.add("show");
+    });
+  });
+});
+
+document.querySelectorAll("#challenge-list li").forEach(li => {
+  li.addEventListener("click", () => li.classList.toggle("checked"));
+});
+
+const KEY = "cvx_progress_v1";
+function loadProgress() {
+  try { return JSON.parse(localStorage.getItem(KEY)) || {}; } catch (e) { return {}; }
+}
+const progress = loadProgress();
+const btn = document.getElementById("btn-complete");
+if (progress[9] && progress[9].done) {
+  btn.textContent = "✓ 已完成 · 再次点击重置";
+  btn.classList.add("done");
+}
+function markDone() {
+  const p = loadProgress();
+  if (p[9] && p[9].done) {
+    delete p[9];
+    btn.textContent = "✓ 我已完成本章（含合上书挑战）";
+    btn.classList.remove("done");
+  } else {
+    p[9] = { done: true, completedAt: Date.now(), reviewsDone: 0 };
+    btn.textContent = "✓ 已完成 · 复习提醒已开启";
+    btn.classList.add("done");
+  }
+  localStorage.setItem(KEY, JSON.stringify(p));
+}
+</script>
+
+</body>
+</html>

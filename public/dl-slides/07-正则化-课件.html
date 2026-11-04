@@ -1,0 +1,590 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第7章 深度模型的正则化 · 深度学习课件</title>
+<script>
+window.MathJax = {
+  tex: {
+    inlineMath: [['$', '$'], ['\\(', '\\)']],
+    displayMath: [['$$', '$$'], ['\\[', '\\]']],
+    processEscapes: true,
+    tags: 'none'
+  },
+  svg: { fontCache: 'global', scale: 1.05 },
+  options: { skipHtmlTags: ['script','noscript','style','textarea','pre','code'] }
+};
+</script>
+<!-- MathJax 本地引用（tex-svg 单文件全量组件，约2MB，自带字体数据），file:// 与断网均可用 -->
+<script src="/lectures-assets/tex-svg.js" async></script>
+<style>
+  :root{
+    --primary:#1a365d; --accent:#2b6cb0; --accent-light:#ebf8ff; --accent-border:#bee3f8;
+    --text:#2d3748; --muted:#718096; --border:#e2e8f0; --bg-light:#f7fafc;
+    --success:#38a169; --danger:#e53e3e; --warning:#dd6b20; --warn-bg:#fffaf0;
+  }
+  *{margin:0;padding:0;box-sizing:border-box;}
+  html,body{width:100%;height:100%;overflow:hidden;background:#0f172a;}
+  body{
+    font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Hiragino Sans GB","Microsoft YaHei","WenQuanYi Micro Hei",sans-serif;
+    color:var(--text);
+  }
+  #stage{
+    position:absolute; left:50%; top:50%;
+    width:1280px; height:720px;
+    transform:translate(-50%,-50%) scale(1);
+    transform-origin:center center;
+    background:#ffffff;
+    box-shadow:0 0 40px rgba(0,0,0,.4);
+    overflow:hidden;
+  }
+  .slide{
+    position:absolute; inset:0;
+    padding:36px 60px 52px;
+    display:none;
+    flex-direction:column;
+    background:#ffffff;
+    opacity:0;
+    transition:opacity .35s ease;
+  }
+  .slide.active{ display:flex; opacity:1; }
+
+  #progress{ position:absolute; top:0; left:0; height:6px; background:var(--accent); width:0; z-index:50; transition:width .35s; }
+
+  /* 封面 / 结束页 */
+  .slide-cover{ justify-content:center; align-items:center; text-align:center; }
+  .slide-cover{ background:linear-gradient(135deg,#1a365d 0%,#2b6cb0 100%); color:#fff; }
+  .slide-cover .kicker{ font-size:22px; letter-spacing:6px; opacity:.85; margin-bottom:18px;}
+  .slide-cover h1{ font-size:64px; font-weight:800; line-height:1.2; margin-bottom:22px; letter-spacing:2px;}
+  .slide-cover .sub{ font-size:26px; opacity:.92; margin-bottom:36px;}
+  .slide-cover .meta{ font-size:19px; opacity:.85; line-height:2;}
+  .slide-cover .divider{ width:160px;height:5px;background:#fff;opacity:.6;margin:0 auto 30px;border-radius:3px;}
+  .slide-cover .question{ font-size:24px; background:rgba(255,255,255,.12); border:1px solid rgba(255,255,255,.35); border-radius:12px; padding:12px 28px; margin-bottom:30px;}
+
+  /* 页头：结论式标题 */
+  .slide-head{ display:flex; align-items:baseline; gap:16px; border-bottom:3px solid var(--accent); padding-bottom:9px; margin-bottom:12px;}
+  .slide-head .sec{ font-size:17px; color:var(--accent); font-weight:700; background:var(--accent-light); padding:3px 11px; border-radius:6px; white-space:nowrap;}
+  .slide-head h3{ font-size:29px; color:var(--primary); font-weight:700;}
+  .slide-body{ flex:1; display:flex; flex-direction:column; justify-content:center; min-height:0; }
+
+  p{ font-size:21px; line-height:1.65; margin-bottom:8px;}
+  .lead{ font-size:23px; color:#374151; line-height:1.75;}
+  ul,ol{ margin:0 0 8px 26px; font-size:21px; line-height:1.7;}
+  li{ margin-bottom:5px;}
+  strong{ color:var(--primary); }
+
+  /* 公式块 */
+  .formula{ background:var(--accent-light); border-left:5px solid var(--accent); border-radius:0 10px 10px 0; padding:9px 22px; margin:9px 0; text-align:center; font-size:23px;}
+  .formula-concl{ background:#fffaf0; border-left:5px solid var(--warning);}
+  .MathJax{ font-size:1.05em !important; }
+  mjx-container[display="true"]{ margin:6px 0 !important; }
+
+  /* 表格 */
+  table{ width:100%; border-collapse:collapse; margin:10px 0; font-size:20px;}
+  th{ background:var(--accent); color:#fff; padding:8px 12px; text-align:center; font-weight:600;}
+  td{ padding:7px 12px; border:1px solid var(--border); text-align:center; vertical-align:middle;}
+  tr:nth-child(even) td{ background:var(--bg-light);}
+  td.l{ text-align:left; }
+  table.small{ font-size:18px; }
+  table.small td, table.small th{ padding:6px 10px; }
+
+  /* 组件 */
+  .card{ background:var(--accent-light); border:1px solid var(--accent-border); border-radius:12px; padding:12px 20px; margin:10px 0;}
+  .tip{ background:#ebf8ff; border-left:5px solid var(--accent); border-radius:0 10px 10px 0; padding:10px 20px; margin:10px 0; font-size:20px; color:#2c5282;}
+  .deep{ background:#f0fff4; border-left:5px solid var(--success); border-radius:0 10px 10px 0; padding:10px 20px; margin:10px 0; font-size:20px; color:#22543d;}
+  .warn{ background:var(--warn-bg); border-left:5px solid var(--warning); border-radius:0 10px 10px 0; padding:10px 20px; margin:10px 0; font-size:20px; color:#744210;}
+  .trap{ background:#fef2f2; border-left:5px solid var(--danger); border-radius:0 10px 10px 0; padding:10px 20px; margin:10px 0; font-size:20px; color:#7f1d1d;}
+
+  .pause{
+    background:var(--warn-bg); border:2px dashed var(--warning); border-radius:14px;
+    padding:10px 22px; margin:10px 0; display:flex; align-items:center; gap:16px;
+  }
+  .pause .icon{ font-size:36px; line-height:1; }
+  .pause .txt b{ color:var(--warning); font-size:21px; }
+  .pause .txt p{ font-size:18px; color:#744210; margin:3px 0 0; }
+
+  .cols{ display:flex; gap:28px; align-items:stretch; }
+  .col{ flex:1; min-width:0; }
+
+  /* 推导分步：仅互动模式隐藏，截图(autohide)模式全部可见——此规则不可删 */
+  .step{ opacity:0; transform:translateY(8px); transition:opacity .3s ease, transform .3s ease; }
+  .step.on{ opacity:1; transform:none; }
+  body.autohide .step{ opacity:1 !important; transform:none !important; }
+  .step-hint{ font-size:14px; color:var(--muted); margin-top:4px;}
+  body.autohide .step-hint{ display:none; }
+
+  /* 因果链 */
+  .chain{ margin:6px 0; }
+  .chain .link{ display:flex; align-items:center; gap:14px; margin:6px 0;}
+  .chain .no{ width:34px; height:34px; border-radius:50%; background:var(--accent); color:#fff; font-size:18px; font-weight:700; display:flex; align-items:center; justify-content:center; flex-shrink:0;}
+  .chain .txt{ font-size:21px; line-height:1.5;}
+  .chain .txt strong{ color:var(--primary); }
+
+  /* mermaid 容器：高度封顶，防止溢出 720px 舞台 */
+  .mmd{ background:var(--bg-light); border:1px solid var(--border); border-radius:12px; padding:10px 14px; display:flex; justify-content:center; align-items:center; margin:8px 0;}
+  .mmd .mermaid{ display:flex; justify-content:center; width:100%; visibility:hidden; }
+  .mmd .mermaid[data-done]{ visibility:visible; }
+  .mmd .mermaid svg{ max-width:100%; height:auto; max-height:230px; }
+  .mmd.mmd-tall .mermaid svg{ max-height:330px; }
+  .mmd.mmd-sm svg{ max-height:150px; }
+  .mmd-row{ display:flex; gap:18px; }
+  .mmd-row .mmd{ flex:1; flex-direction:column; }
+  .mmd .cap{ font-size:17px; color:var(--muted); margin-top:6px; text-align:center;}
+  .mmd .cap b{ color:var(--text); }
+
+  #footer{ position:absolute; bottom:0; left:0; right:0; height:40px; display:flex; align-items:center; justify-content:space-between; padding:0 30px; font-size:15px; color:#94a3b8; background:rgba(247,250,252,.85); border-top:1px solid var(--border); z-index:40;}
+  #footer .brand{ font-weight:600; color:var(--accent); }
+
+  .nav{ position:absolute; bottom:48px; right:40px; display:flex; gap:12px; z-index:45;}
+  .nav button{ width:54px; height:54px; border-radius:50%; border:none; background:var(--accent); color:#fff; font-size:24px; cursor:pointer; box-shadow:0 3px 10px rgba(43,108,176,.4); display:flex; align-items:center; justify-content:center;}
+  .nav button:hover{ background:var(--primary); }
+  .nav button:disabled{ background:#cbd5d0; cursor:default; box-shadow:none;}
+
+  #hint{ position:absolute; bottom:48px; left:40px; font-size:14px; color:#94a3b8; z-index:45;}
+
+  body.autohide #progress, body.autohide #footer, body.autohide .nav, body.autohide #hint{ display:none !important; }
+</style>
+</head>
+<body>
+<div id="stage">
+
+  <div id="progress"></div>
+
+  <!-- ★ 1 封面 -->
+  <section class="slide slide-cover active" data-narration="大家好，欢迎来到深度学习第 7 章。上一章我们有了万能逼近器和反向传播，网络既能表达、又能训练。但马上会撞上一个坏消息：容量一大，模型就把训练集连噪声一起背下来，换个考场就露馅。这一章要回答的问题就一句话：容量太大就会背答案，怎么把过拟合压回去？注意，我们不想把模型砍小，大模型的表达力是宝贝。学完这一章，你会拿到四件武器：参数范数惩罚、数据增强与标签平滑、早停，还有随机失活。每件武器我都带你亲手算一遍，保证合上书也能复现。">
+    <div class="kicker">深度学习 · 第 7 章 · 第②段 现代深度网络</div>
+    <h1>深度模型的正则化</h1>
+    <div class="sub">Regularization for Deep Learning —— 不砍容量，把过拟合压回去</div>
+    <div class="question">本章要回答：容量太大就会背答案，怎么把过拟合压回去？</div>
+    <div class="meta">
+      配套讲义：《深度学习互动讲义》第7章 · 基于 Goodfellow et al.《深度学习》(2016)<br>
+      ← → 或空格翻页 · 推导页逐步显示
+    </div>
+  </section>
+
+  <!-- ★ 2 全书位置 -->
+  <section class="slide" data-narration="先看本章在全书地图里的位置。全书分四段：第一段，数学与机器学习基础，第 1 到 5 章，把工具备齐；第二段，现代深度网络，第 6 到 11 章，我们正站在这里；第三段，表示与推断，第 12 到 16 章；第四段，生成模型与前沿，第 17 到 20 章。第 6 章让网络能表达、能训练，本章紧随其后，回答主线上第 7 个问题：不缩小模型容量，如何让大模型在新数据上也表现好。本章引入的超参数和训练动力学问题，会顺手交给第 8 章优化去收拾。往后看，第 9 章卷积、第 10 章序列建模，用的全是本章这套正则化语言。记住这个承上启下的位置。">
+    <div class="slide-head"><span class="sec">定位</span><h3>本章是现代深度网络段第二站：给「能训练」的模型补上「能泛化」</h3></div>
+    <div class="slide-body">
+      <div class="mmd mmd-tall">
+        <div class="mermaid">
+flowchart TB
+  A["第①段 数学与机器学习基础 Ch1–5"] --> B["第②段 现代深度网络 Ch6–11"]
+  B --> C["第③段 表示与推断 Ch12–16"]
+  C --> D["第④段 生成模型与前沿 Ch17–20"]
+  B --- E["Ch7 深度模型的正则化 · 本章"]:::here
+  classDef here fill:#2b6cb0,color:#ffffff,stroke:#1a365d,stroke-width:3px
+        </div>
+      </div>
+      <p style="text-align:center; margin-top:10px;">本章解决「<strong>泛化差距</strong>」——第6章给容量，本章压过拟合，第8章收拾超参数与优化。</p>
+    </div>
+  </section>
+
+  <!-- ★ 3 本章主线 -->
+  <section class="slide" data-narration="这一章的逻辑是一条因果链，我把四环先串一遍。第一环是矛盾：第 6 章给了我们足够大的容量，可容量一大，模型连训练集里的噪声也背下来，泛化翻车。第二环是出路：不砍容量，而是给训练加一道刹车偏好，让模型偏好更平滑、更稳的解。第三环是四件武器：改目标函数的参数惩罚，改数据的增强与标签平滑，改训练过程的早停，改网络结构的随机失活。第四环是代价：每件武器都带来新的超参数，怎么选、怎么训，留给第 8 章。这条链就是本章的目录，下面逐环展开。">
+    <div class="slide-head"><span class="sec">主线</span><h3>一条链：容量惹祸 → 刹车偏好 → 四件武器 → 超参数欠账</h3></div>
+    <div class="slide-body">
+      <div class="chain">
+        <div class="link"><span class="no">1</span><span class="txt"><strong>矛盾</strong>：大容量模型连噪声一起背——训练误差走低，测试误差反升</span></div>
+        <div class="link"><span class="no">2</span><span class="txt"><strong>出路</strong>：不缩容量，给训练加「刹车偏好」——偏好更平滑、更稳的解</span></div>
+        <div class="link"><span class="no">3</span><span class="txt"><strong>武器</strong>：改目标（L2/L1）、改数据（增强/标签平滑）、改过程（早停）、改结构（Dropout）</span></div>
+        <div class="link"><span class="no">4</span><span class="txt"><strong>代价</strong>：α、ε、p、耐心全是新超参数——怎么选、怎么训，交给第 8 章</span></div>
+      </div>
+      <div class="tip">这条链就是本章目录：7.1 矛盾与定义 → 7.2 改目标 → 7.3 改数据 → 7.4 改过程 → 7.5 改结构 → 7.6 对抗训练（推广到输入方向）</div>
+    </div>
+  </section>
+
+  <!-- 4 动机：9 次多项式 -->
+  <section class="slide" data-narration="先用一个能手算的例子，把过拟合逼出来。真实规律是带噪声的一次函数：y 等于 0.5 乘 x 再加噪声。我们采了 10 个数据点，分别用 1 次、3 次、9 次多项式去拟合，再放到 100 个新点上测。结果很戏剧：直线训练误差 5.2、测试 5.8，太简单，这是欠拟合；3 次多项式训练 1.1、测试 1.3，全场最好；9 次多项式有 10 个自由参数，恰好穿过全部 10 个训练点，训练误差 0.0，漂亮吧？可测试误差飙到 47.5，是 3 次模型的三十几倍——它背下的是噪声加规律。最直觉的反应是把模型砍小，但深度学习的经验恰恰相反：大模型加合适的正则化，往往比小模型更好。怎么加？这就是本章。">
+    <div class="slide-head"><span class="sec">动机</span><h3>9 次多项式训练满分、测试崩盘：问题不是「弯太多」，是「没人拦着它乱弯」</h3></div>
+    <div class="slide-body">
+      <p>真实规律 $y = 0.5x + \text{噪声}$，采 10 个点训练，100 个新点测试：</p>
+      <table>
+        <thead><tr><th>模型</th><th>自由参数数</th><th>训练误差</th><th>测试误差</th><th>泛化差距</th></tr></thead>
+        <tbody>
+          <tr><td>1 次多项式（直线）</td><td>2</td><td>5.2</td><td>5.8</td><td>0.6（欠拟合）</td></tr>
+          <tr><td><strong>3 次多项式</strong></td><td>4</td><td>1.1</td><td><strong>1.3</strong></td><td>0.2（恰好）</td></tr>
+          <tr><td>9 次多项式</td><td>10</td><td><strong>0.0</strong></td><td>47.5</td><td>47.5（过拟合）</td></tr>
+        </tbody>
+      </table>
+      <div class="tip">💡 9 次模型能穿过全部 10 个点，不是它太聪明，而是<strong>没有任何东西阻止它乱弯</strong>——正则化就是这道刹车。</div>
+    </div>
+  </section>
+
+  <!-- ★ 5 核心定义 -->
+  <section class="slide" data-narration="先给本章最核心的定义。正则化，英文 Regularization，定义只有一句话：为了降低泛化误差、而不是训练误差，对学习算法做的任何修改。请你品一品这个拧巴的地方：它允许训练误差升高，只要泛化差距能缩小。这里要请出本章真正的考核指标：泛化差距，等于测试误差减去训练误差。刚才的 9 次多项式，泛化差距是 47.5；3 次多项式只有 0.2。记住一句话：训练误差只回答记住没有，泛化差距才回答学会没有。所以本章一切手段，本质都是同一笔交易：训练误差略升，换泛化差距大降。后面四件武器，全是这笔交易的具体实现。">
+    <div class="slide-head"><span class="sec">定义</span><h3>正则化 = 允许训练误差升高、只为缩小泛化差距的任何修改</h3></div>
+    <div class="slide-body">
+      <div class="cols">
+        <div class="col"><div class="card">🎯 <strong>正则化（Regularization）</strong><br>为降低<strong>泛化误差</strong>（而非训练误差）对学习算法做的任何修改</div></div>
+        <div class="col"><div class="card">📏 <strong>泛化差距（Generalization Gap）</strong><br>测试误差 − 训练误差——本章一切手段真正要压下去的指标</div></div>
+      </div>
+      <div class="formula formula-concl">$$\text{泛化差距} = \text{测试误差} - \text{训练误差} \quad\Longrightarrow\quad \text{交易：训练误差略升，换它大降}$$</div>
+      <div class="deep">读法：训练误差只回答「记住没有」，泛化差距才回答「学会没有」——9 次多项式记住了（0.0），但没学会（差距 47.5）。</div>
+    </div>
+  </section>
+
+  <!-- 6 四件武器总览 -->
+  <section class="slide" data-narration="面对同一个矛盾，本章给出四条下手路线，我先把地图亮出来。第一条，改目标函数：在损失里加参数范数惩罚，L2 让权重按方向差别化收缩，L1 直接产生稀疏解。第二条，改数据：数据集增强凭空造出合理样本，标签平滑把硬标签软化。第三条，改训练过程：早停，在验证误差的谷底踩刹车，因为训练轮数本身就是一种容量。第四条，改网络结构：随机失活，训练时随机删单元，用一次训练近似指数级多个子网络的集成。四件武器角度不同，目标完全一致：缩小有效容量，把泛化差距压下去。下面挨个拆，每件都配手算。">
+    <div class="slide-head"><span class="sec">地图</span><h3>同一个矛盾，四条下手路线：改目标、改数据、改过程、改结构</h3></div>
+    <div class="slide-body">
+      <div class="mmd mmd-tall">
+        <div class="mermaid">
+flowchart TB
+  M["核心矛盾：不缩容量又要泛化"] --> A["改目标：L2 收缩 · L1 稀疏"]
+  M --> B["改数据：增强 + 标签平滑"]
+  M --> C["改过程：早停 = 限轮数"]
+  M --> D["改结构：Dropout 廉价集成"]
+        </div>
+      </div>
+      <p style="text-align:center; font-size:19px; color:var(--muted);">四件武器都不动名义容量（结构、参数量不变），只缩小<strong>有效容量</strong>。</p>
+    </div>
+  </section>
+
+  <!-- 7 L2 定义 -->
+  <section class="slide" data-narration="第一件武器：参数范数惩罚，英文 Parameter Norm Penalty。最常用的是 L2 正则化，做法是在原目标函数后面加一项：二分之阿尔法，乘权重的平方和。阿尔法大于等于 0，控制惩罚强度。它在神经网络里有个更出名的名字：权重衰减，英文 Weight Decay。看梯度更新式就知道为什么：每步更新前，权重先被乘上一个比 1 略小的因子，1 减伊塔乘阿尔法——权重在不停衰减，名字就是这么来的。两个细节先记下：只罚权重，不罚偏置；阿尔法不是越大越好，调太大，所有方向一起被压向 0，直接欠拟合。那 L2 到底压了谁、保了谁？下一页把账算到底。">
+    <div class="slide-head"><span class="sec">武器一</span><h3>L2 惩罚 = 给损失加「权重平方和」，每步更新先把权重乘个折扣</h3></div>
+    <div class="slide-body">
+      <p>在目标函数后加 <strong>L2 惩罚</strong>（L2 Regularization），神经网络里常叫<strong>权重衰减</strong>（Weight Decay）：</p>
+      <div class="formula">$$\tilde{J}(\boldsymbol{w}) = J(\boldsymbol{w}) + \frac{\alpha}{2}\,\boldsymbol{w}^{\!\top}\boldsymbol{w} \qquad (\alpha \geq 0\ \text{控制强度})$$</div>
+      <div class="formula formula-concl">$$\boldsymbol{w} \leftarrow \boldsymbol{w} - \eta(\nabla J + \alpha\boldsymbol{w}) = \boldsymbol{(1-\eta\alpha)\,w} - \eta\nabla J$$</div>
+      <div class="warn">每步更新前权重先乘 $(1-\eta\alpha)$——在「衰减」。注意：只罚权重 $\boldsymbol{w}$、<strong>不罚偏置</strong>；$\alpha$ 太大则全部压向 0，直接欠拟合。</div>
+    </div>
+  </section>
+
+  <!-- ★ 8 L2 推导 -->
+  <section class="slide" data-narration="这页做本章最重要的一条推导，分三步。第一步，在最优点 w 星附近把损失做二次近似：最优点处一阶项为零，剩下的曲率全部装在海森矩阵 H 里。第二步，给这个近似加上 L2 惩罚，对 w 求梯度并令其为零，整理得到：H 加阿尔法倍单位阵，乘 w 波浪，等于 H 乘 w 星。第三步，对 H 做特征分解，沿第 i 个特征向量的方向看，整件事退化成一个标量缩放：这个方向的权重被乘上，拉姆达 i 除以拉姆达 i 加阿尔法。这就是结论：L2 不是均匀缩小所有权重，而是按特征值的大小逐方向缩放。每个方向具体缩多少？下一页我们代数字。">
+    <div class="slide-head"><span class="sec">推导</span><h3>二次近似 + 特征分解：L2 沿每个特征方向做标量缩放</h3></div>
+    <div class="slide-body">
+      <div class="step">
+        <p><strong>① 在最优点附近做二次近似</strong>（一阶项在 $\boldsymbol{w}^*$ 处为 0，曲率装进海森矩阵 $\boldsymbol{H}$）</p>
+        <div class="formula">$$J(\boldsymbol{w}) \approx J(\boldsymbol{w}^*) + \tfrac{1}{2}(\boldsymbol{w}-\boldsymbol{w}^*)^{\!\top}\boldsymbol{H}(\boldsymbol{w}-\boldsymbol{w}^*)$$</div>
+      </div>
+      <div class="step">
+        <p><strong>② 加惩罚、求梯度、令其为零</strong></p>
+        <div class="formula">$$\boldsymbol{H}(\tilde{\boldsymbol{w}}-\boldsymbol{w}^*) + \alpha\tilde{\boldsymbol{w}} = 0 \;\Rightarrow\; (\boldsymbol{H}+\alpha\boldsymbol{I})\tilde{\boldsymbol{w}} = \boldsymbol{H}\boldsymbol{w}^*$$</div>
+      </div>
+      <div class="step">
+        <p><strong>③ 对 $\boldsymbol{H}=\boldsymbol{Q}\boldsymbol{\Lambda}\boldsymbol{Q}^{\!\top}$ 特征分解，逐方向看</strong></p>
+        <div class="formula formula-concl">$$\tilde{\boldsymbol{w}} = (\boldsymbol{H}+\alpha\boldsymbol{I})^{-1}\boldsymbol{H}\boldsymbol{w}^* \qquad \text{方向 } i \text{ 缩放：}\ \boldsymbol{\dfrac{\lambda_i}{\lambda_i+\alpha}}$$</div>
+      </div>
+      <p class="step-hint">按空格 / → 逐步展开推导</p>
+    </div>
+  </section>
+
+  <!-- ★ 9 L2 演练（互动停顿页，全章唯一 .pause） -->
+  <section class="slide" data-narration="来，亲手算一遍。设定：海森矩阵只有两个特征方向，拉姆达 1 等于 1，是损失很在意的敏感方向；拉姆达 2 等于 0.01，几乎平坦；阿尔法取 0.1，无惩罚最优解 w 星等于 0.8、0.3，两个分量分别沿两个特征方向。请你算两个方向的缩放因子，再算正则化后的 w 波浪。先暂停视频自己推一遍。推出来了吗？好，对答案。敏感方向：1 除以 1.1，约等于 0.909，保留九成多，几乎不动。平坦方向：0.01 除以 0.11，约等于 0.091，只剩百分之九。代入权重：0.8 乘 0.909 约 0.727，0.3 乘 0.091 约 0.027。看到了吗：损失在意的方向它不敢动，损失无所谓的方向顺手清零——这就是智能橡皮擦。">
+    <div class="slide-head"><span class="sec">演练</span><h3>手算 L2：敏感方向留 91%，平坦方向剩 9%——数据决定谁值得保留</h3></div>
+    <div class="slide-body">
+      <p>设定：$\lambda_1 = 1$（敏感方向）、$\lambda_2 = 0.01$（平坦方向）、$\alpha = 0.1$、$\boldsymbol{w}^* = [0.8,\ 0.3]$</p>
+      <div class="step"><p>① 敏感方向缩放：$\dfrac{\lambda_1}{\lambda_1+\alpha} = \dfrac{1}{1.1} \approx \mathbf{0.909}$ —— 保留约 91%，几乎不动</p></div>
+      <div class="step"><p>② 平坦方向缩放：$\dfrac{\lambda_2}{\lambda_2+\alpha} = \dfrac{0.01}{0.11} \approx \mathbf{0.091}$ —— 只剩约 9%，压向 0</p></div>
+      <div class="step"><p>③ 代入：$\tilde{\boldsymbol{w}} \approx [0.8 \times 0.909,\ 0.3 \times 0.091] \approx \mathbf{[0.727,\ 0.027]}$</p></div>
+      <div class="pause"><div class="icon">✍️</div><div class="txt"><b>暂停推导</b><p>动手算：两个缩放因子 + 正则化后的权重向量，写下来再对答案。</p></div></div>
+      <p class="step-hint">按空格 / → 逐步揭示答案</p>
+    </div>
+  </section>
+
+  <!-- 10 L1 vs L2 -->
+  <section class="slide" data-narration="说完 L2，必须请出它的对照组：L1 正则化，惩罚项换成权重绝对值之和。两者效果完全不同，几何直觉一句话说清：L2 的等惩罚面是圆形，光滑，损失等高线可以在任意角度相切，权重被整体缩小，但几乎不会恰好变成 0；L1 的等惩罚面是菱形，棱角戳在坐标轴上，等高线最容易撞上棱角，而棱角处某些权重恰好等于 0。所以 L1 产生稀疏解，英文 Sparse Solution，大量权重为 0，相当于自动做特征选择。记住口诀：L2 只缩不归零，L1 菱形出稀疏。想要稀疏解却把阿尔法调大？没用——L2 的缩放因子对有限阿尔法恒大于零。">
+    <div class="slide-head"><span class="sec">对照</span><h3>L1 菱形棱角戳在坐标轴上出稀疏；L2 圆面只缩不归零</h3></div>
+    <div class="slide-body">
+      <div class="cols">
+        <div class="col"><div class="card">⭕ <strong>L2：圆形等惩罚面</strong><br>光滑无极点，等高线任意角度相切 → 权重整体缩小，很少恰好为 0</div></div>
+        <div class="col"><div class="card">🔶 <strong>L1：菱形等惩罚面</strong><br>$\tilde{J} = J + \alpha\|\boldsymbol{w}\|_1$，棱角在坐标轴上 → 最优解停在角上，某些权重<strong>恰好为 0</strong></div></div>
+      </div>
+      <div class="deep">口诀：<strong>L2 只缩不归零，L1 菱形出稀疏</strong>——稀疏解（Sparse Solution）= 自动特征选择；稀疏性来自 L1 在 0 点的棱角，不是惩罚强度的产物。</div>
+      <div class="warn">为什么偏置不罚：偏置不乘输入、不参与「乱弯」，罚它只引入欠拟合，没有正则化收益。</div>
+    </div>
+  </section>
+
+  <!-- 11 数据集增强 -->
+  <section class="slide" data-narration="第二件武器换条路：不改目标，改数据。过拟合的根源是数据不够模型背，那就造数据——数据集增强，英文 Dataset Augmentation：用领域知识对训练样本做不改变标签的变换，凭空造出合理的新样本。图像里，平移几个像素、水平翻转、轻微旋转、缩放、加噪；语音里，给音频加背景噪声。模型见过同一只猫的一百种摆法，自然不会再把「猫必须面朝左」这种偶然当规律。但有一条红线：变换必须保持标签不变。水平翻转数字 6 会得到 9，翻转字母 b 会得到 d——在字符识别任务里，这是往数据里掺错标签，绝对禁用。另外记住：增强造出的样本高度相关，信息量远不如真实新数据，它是补充，不是替代。">
+    <div class="slide-head"><span class="sec">武器二</span><h3>数据集增强：让模型见过同一只猫的一百种摆法，偶然就不再被当规律</h3></div>
+    <div class="slide-body">
+      <p><strong>数据集增强</strong>（Dataset Augmentation）：对训练样本做<strong>保持标签不变</strong>的变换，人造扩充训练集。</p>
+      <div class="cols">
+        <div class="col"><div class="card">✅ <strong>可以做</strong><br>图像平移几像素、水平翻转、轻微旋转、缩放、加噪；语音加背景噪声</div></div>
+        <div class="col"><div class="card">🚫 <strong>红线：变换不得改标签</strong><br>数字 6 翻转成 9、字母 b 翻转成 d——OCR 里这类操作是掺错标签</div></div>
+      </div>
+      <div class="tip">💡 本质是把领域先验（「这些变换不改语义」）注入模型；但增强样本高度相关，信息量不如真实新数据。</div>
+    </div>
+  </section>
+
+  <!-- 12 标签平滑 -->
+  <section class="slide" data-narration="同一条思路的另一半：不改输入，改标签。标签平滑，英文 Label Smoothing：k 分类的硬标签是独热向量，平滑版把真实类的概率从 1 降到 1 减伊普西隆，匀出的部分平分给所有类。手算一遍：3 分类，硬标签 1、0、0，伊普西隆取 0.1。按花书惯例，真实类取 0.9，其余两类各 0.05，结果是 0.9、0.05、0.05，加起来正好 1，验算通过。它防什么？软最大加负对数似然，想让正确类概率精确等于 1，唯一办法是把它的分数值推向正无穷——权重跟着无限膨胀，这正是过拟合的一种形态。软标签给出有限的最优解：最优分差只需 log 18，约 2.89。分数值被拴住，权重不再狂奔，和权重衰减殊途同归。">
+    <div class="slide-head"><span class="sec">武器二·续</span><h3>标签平滑把最优分差从无穷大拴回 log 18 ≈ 2.89</h3></div>
+    <div class="slide-body">
+      <div class="formula">$$\boldsymbol{y}_{\text{smooth}} = (1-\varepsilon)\,\boldsymbol{y}_{\text{hard}} + \frac{\varepsilon}{k}\cdot\boldsymbol{1}$$</div>
+      <div class="step"><p>手算（3 分类，$\boldsymbol{y}=[1,0,0]$，$\varepsilon=0.1$）：真实类取 $1-\varepsilon=0.9$，其余两类各 $\varepsilon/(k-1)=0.05$</p></div>
+      <div class="formula formula-concl">$$[1,\ 0,\ 0] \;\longrightarrow\; \boldsymbol{[0.9,\ 0.05,\ 0.05]} \qquad 0.9+0.05+0.05 = 1.0\ \checkmark$$</div>
+      <div class="deep">硬标签要 softmax 输出精确 1 → logit 趋向 $+\infty$；软标签的最优 logit 差只需 $\log(0.9/0.05)=\log 18 \approx 2.89$——有限的差距，权重不再膨胀。</div>
+    </div>
+  </section>
+
+  <!-- 13 早停 -->
+  <section class="slide" data-narration="第三件武器最省事：什么都不改，只在该停的时候停下来。早停，英文 Early Stopping：训练过程中持续在验证集上评估，记下验证误差最低点时的参数副本；当验证误差连续若干轮不再改善，就终止训练、回滚到那份副本。看这组数字：训练 15 轮，验证误差从第 1 轮的 1.20 一路降到第 12 轮的 0.83，第 13 轮回升到 0.835，之后继续升到 0.85——典型的 U 形，谷底在第 12 轮。早停就取第 12 轮的参数作为最终模型，尽管此时训练误差还在下降。第 13 轮之后，模型继续往训练集里钻，那正是过拟合开始的部分，我们主动放弃它。">
+    <div class="slide-head"><span class="sec">武器三</span><h3>早停：验证误差 U 形谷底在第 12 轮，回滚取它，后面的过拟合段不要了</h3></div>
+    <div class="slide-body">
+      <div class="cols">
+        <div class="col">
+          <table class="small">
+            <thead><tr><th>轮次</th><th>1</th><th>5</th><th>10</th><th>11</th><th>12</th><th>13</th><th>14</th><th>15</th></tr></thead>
+            <tbody>
+              <tr><td class="l"><strong>验证误差</strong></td><td>1.20</td><td>0.90</td><td>0.85</td><td>0.845</td><td><strong>0.83</strong></td><td>0.835</td><td>0.84</td><td>0.85</td></tr>
+            </tbody>
+          </table>
+          <div class="tip">第 1→12 轮一路走低，第 13 轮起回升——<strong>早停取第 12 轮参数</strong>，尽管训练误差仍在下降。</div>
+        </div>
+        <div class="col">
+          <div class="mmd">
+            <div class="mermaid">
+flowchart TB
+  A["训练误差：一路下降"] --> B["第13轮起仍在降 = 过拟合段"]
+  C["验证误差：U 形先降后升"] --> D["谷底：第 12 轮 0.83"]
+  D --> E["回滚取这份参数"]
+            </div>
+          </div>
+          <p style="text-align:center; font-size:18px; color:var(--muted);">训练/验证曲线走向示意</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 14 早停 = 等效容量 -->
+  <section class="slide" data-narration="为什么停得早就等于容量小？给你一个好记的图景：训练是参数从初始点出发的一趟旅程，初始点通常在 0 附近。只走 5 步，参数能到达的区域是以起点为中心的小球；走 5000 步，可达区域大得多。可达区域的大小，就是等效容量。限制训练轮数，等于把权重约束在起点附近，和 L2 把权重拉向 0 异曲同工——事实上可以证明，二次损失下，早停与 L2 权重衰减近似等价。所以训练轮数本身就是一个控制容量的超参数。两个工程细节别踩坑：早停必须用验证集，绝不能用测试集，否则评估被污染；验证误差有抖动，要设耐心参数，比如连续 5 轮不改善才停。早停几乎零成本，是所有训练流程的标配。">
+    <div class="slide-head"><span class="sec">深挖</span><h3>训练轮数 ≈ 等效容量：限轮数 = 把权重约束在起点附近的小球里</h3></div>
+    <div class="slide-body">
+      <p>参数从初始点（约 0）出发：走 5 步可达区域是小球，走 5000 步可达区域大得多——<strong>可达区域大小 = 等效容量</strong>。</p>
+      <div class="formula formula-concl">$$\text{二次损失下：早停} \;\approx\; \text{L2 权重衰减（都把权重约束在 0 附近）}$$</div>
+      <div class="deep">早停自带「容量随数据自动调节」属性：数据多，自然停得晚，等效容量随数据量放大——最便宜的正则化。</div>
+      <div class="warn">两条纪律：用<strong>验证集</strong>而非测试集早停（测试集参与选择会被污染）；设<strong>耐心</strong>（Patience），如连续 5 轮不改善才停，抗抖动。</div>
+    </div>
+  </section>
+
+  <!-- 15 Dropout 定义 + 掩码示意 -->
+  <section class="slide" data-narration="第四件武器动网络结构：随机失活，英文 Dropout。规则一句话：训练时，每个隐藏单元以概率 p 保留、以 1 减 p 被临时删除，输出置 0，每一步重新随机；测试时用完整网络，不删。工程上的标准实现叫反向随机失活，英文 Inverted Dropout：训练时把保留下来的激活除以 p，测试时什么都不用改。为什么除 p？因为掩码每一位的期望恰好是 p，除完以后，输出的期望就等于原始激活，训练和测试的尺度就对上了。看图：原网络四个激活，乘上 0-1 掩码，一半单元被删掉，剩下的放大一倍——每一步都在训练一个不同的稀疏子网络。">
+    <div class="slide-head"><span class="sec">武器四</span><h3>Dropout：训练时随机删单元再除以 p，测试时不删——期望因此守恒</h3></div>
+    <div class="slide-body">
+      <div class="formula formula-concl">$$\text{训练：}\ \tilde{\boldsymbol{h}} = \frac{\boldsymbol{h}\odot\boldsymbol{m}}{p}\quad (P(m_i{=}1)=p) \qquad \text{测试：直接用}\ \boldsymbol{h}$$</div>
+      <div class="mmd">
+        <div class="mermaid">
+flowchart TB
+  A["原激活 h = 2, 4, 6, 8"] --> B["乘掩码 m = 1, 0, 1, 0"]
+  B --> C["稀疏子网络 2, 0, 6, 0"]
+  C --> D["除以 p = 0.5 → 4, 0, 12, 0"]
+        </div>
+      </div>
+      <div class="deep">$\odot$ 是逐元素乘积（Element-wise Product）。$\mathbb{E}[m_i]=p$，故 $\mathbb{E}[\tilde{h}_i]=h_i$：<strong>期望守恒</strong>，测试阶段才能无缝用完整网络。</div>
+    </div>
+  </section>
+
+  <!-- 16 Dropout 手算 -->
+  <section class="slide" data-narration="代一组数字，把期望守恒算给你看。某层激活 h 等于 2、4、6、8，保留概率 p 等于 0.5，这一步采到的掩码是 1、0、1、0。第一步，逐元素相乘，得到 2、0、6、0。第二步，除以 0.5，训练输出是 4、0、12、0——注意，保留下来的单元被放大了一倍。第三步，验证期望：取下游权重全 1。不做随机失活时，输出是 2 加 4 加 6 加 8，等于 20。训练时这一步的实际输出是 16，换个掩码可能是 24，但因为每个掩码位的期望是 0.5，长期平均恰好等于 20。单次有波动，期望严格守恒——所以测试时直接用完整网络，就等于取到了那个期望。这也是为什么测试时一个单元都不许再删：删了，尺度立刻对不上。这就是除 p 的全部意义。">
+    <div class="slide-head"><span class="sec">手算</span><h3>本步实际输出 16、期望恰为 20：单次波动，期望严格守恒</h3></div>
+    <div class="slide-body">
+      <p>$\boldsymbol{h}=[2,4,6,8]$，$p=0.5$，掩码 $\boldsymbol{m}=[1,0,1,0]$，下游权重 $\boldsymbol{w}=[1,1,1,1]$：</p>
+      <div class="step"><p>① 逐元素乘：$\boldsymbol{h}\odot\boldsymbol{m} = [2\times1,\ 4\times0,\ 6\times1,\ 8\times0] = [2,\ 0,\ 6,\ 0]$</p></div>
+      <div class="step"><p>② 除以 $p$：$\tilde{\boldsymbol{h}} = [2/0.5,\ 0,\ 6/0.5,\ 0] = \mathbf{[4,\ 0,\ 12,\ 0]}$</p></div>
+      <div class="step"><p>③ 验期望：不 dropout 时 $\boldsymbol{w}\cdot\boldsymbol{h} = 20$；本步实际 $4+0+12+0=16$，但 $\mathbb{E}[\boldsymbol{w}\cdot\tilde{\boldsymbol{h}}] = \boldsymbol{w}\cdot\boldsymbol{h} = \mathbf{20}\ \checkmark$</p></div>
+      <p class="step-hint">按空格 / → 逐步展开计算</p>
+    </div>
+  </section>
+
+  <!-- 17 Dropout 为什么有效 -->
+  <section class="slide" data-narration="随机失活为什么能正则化？两个视角都讲一遍。集成视角：n 个单元有 2 的 n 次方种掩码，每种掩码对应一个子网络——一次训练，等于同时训练了指数级多个共享权重的子网络；测试时的完整网络，就近似它们的集成平均，而集成正是第 5 章讲过的降方差手段。冗余视角：单元 h 2 随时可能缺席，h 1 就不能把赌注押在反正 h 2 会兜底上，每个单元都被迫学出独立有用的特征——这打散了单元之间的共适应，英文 Co-adaptation。一句话总结：训练时反复把网络打残，逼整个网络学会冗余和分布式表示。但有两个实现错误会毁掉一切，误区页集中说。">
+    <div class="slide-head"><span class="sec">机理</span><h3>两个视角：2ⁿ 个子网络的廉价集成 + 打散单元间共适应</h3></div>
+    <div class="slide-body">
+      <div class="cols">
+        <div class="col"><div class="card">🗳️ <strong>集成视角</strong><br>$n$ 个单元有 $2^n$ 种掩码 = 指数级多个共享权重的子网络；测试时完整网络 ≈ 它们的集成平均（集成 = 降方差）</div></div>
+        <div class="col"><div class="card">🧩 <strong>冗余视角</strong><br>队友随时缺席 → 每个单元被迫学出独立有用的特征，打散<strong>共适应</strong>（Co-adaptation）</div></div>
+      </div>
+      <div class="deep">一句话：训练时反复把网络「打残」，让任何单元都不可靠，逼整个网络学会冗余与分布式表示。</div>
+      <div class="tip">实践细节：输入层保留概率应更高（如 0.8）——输入特征丢不起。</div>
+    </div>
+  </section>
+
+  <!-- 18 对抗训练 -->
+  <section class="slide" data-narration="本章思想还能再推远一步。有一种隐蔽的泛化失败：在输入上叠加肉眼不可见、精心构造的小扰动，模型输出会翻天覆地——这叫对抗样本，英文 Adversarial Example。对抗训练，英文 Adversarial Training，思路和数据集增强一脉相承：训练时主动沿梯度符号方向扰动输入，生成对抗样本混进训练集，让模型学着在这些方向上也保持输出稳定。效果上，它近似于对输出关于输入的梯度范数加了一项惩罚——把 L2 的约束参数方向，推广到约束输入方向。顺带纠正一个直觉：对抗样本并不源于模型太深太非线性，花书的解释恰恰相反，是高维空间中的过度线性——每个维度只改一点点，上万维同向累加，就足以翻转输出。">
+    <div class="slide-head"><span class="sec">推广</span><h3>对抗训练：把正则化从「参数方向」推到「输入扰动方向」</h3></div>
+    <div class="slide-body">
+      <p><strong>对抗样本</strong>（Adversarial Example）：输入加肉眼不可见的精心扰动，输出剧变——本质是输入空间某些方向上的泛化失败。</p>
+      <div class="formula">$$\text{对抗训练（Adversarial Training）：}\ \boldsymbol{x}' = \boldsymbol{x} + \varepsilon\cdot\mathrm{sign}(\nabla_{\boldsymbol{x}} J)\ \text{混入训练集}$$</div>
+      <div class="deep">效果 ≈ 惩罚「输出对输入的梯度范数」——与数据增强一脉相承，是本章思想的最远延伸。</div>
+      <div class="warn">反直觉：对抗样本源于高维空间的<strong>过度线性</strong>而非非线性——每维只改 $\varepsilon$，上万维同向累加即翻转输出。</div>
+    </div>
+  </section>
+
+  <!-- ★ 19 误区页 -->
+  <section class="slide" data-narration="集中扫三个雷。第一，以为训练误差越低模型越好——9 次多项式训练误差 0.0，全场最低，测试误差却是 3 次模型的三十几倍；看模型好不好，看泛化差距，不看训练误差。第二，以为 L2 把阿尔法调大就能得到稀疏解，或者顺手对偏置也加惩罚——缩放因子对有限阿尔法恒大于零，稀疏是 L1 棱角的事；偏置不乘输入、不参与乱弯，罚它只带来欠拟合。第三，随机失活在测试时也开着，或者用了反向实现却忘了训练时除 p——前者让每次前向结果随机，评估指标全乱；后者让训练和测试的激活尺度对不上。记住一句话：训练要随机，测试要确定，这不是不一致，是刻意设计。">
+    <div class="slide-head"><span class="sec">避坑</span><h3>三个高频错误：看错指标、罚错对象、搞反训练与测试</h3></div>
+    <div class="slide-body">
+      <div class="trap">❌ <strong>训练误差越低模型越好</strong><br>✅ 9 次多项式训练 0.0、测试 47.5——看<strong>泛化差距</strong>不看训练误差；训练误差只回答「记住没有」。</div>
+      <div class="trap">❌ <strong>L2 把 α 调大就有稀疏解；偏置也一起罚</strong><br>✅ $\lambda_i/(\lambda_i+\alpha)$ 对有限 $\alpha$ 恒大于 0，稀疏是 L1 的事；偏置不乘输入，罚它只致欠拟合。</div>
+      <div class="trap">❌ <strong>测试时也开 dropout；用 inverted dropout 却忘了训练时除 p</strong><br>✅ 训练要随机、测试要确定：测试用完整网络 = 取期望；忘除 p 则训练/测试激活尺度对不上。</div>
+    </div>
+  </section>
+
+  <!-- 20 接口页 -->
+  <section class="slide" data-narration="收个尾，看本章和前后章怎么分工。第 6 章回答网络凭什么能表达、能训练，给出万能逼近器和反向传播，但它没管泛化；本章接过模型，回答训出来怎么还能用，用四件武器把泛化差距压下去；但每件武器都引入新超参数——阿尔法、伊普西隆、p、耐心——而且加了惩罚项的损失曲面更复杂，怎么选超参、怎么优化，正是第 8 章深度模型的优化的任务。再往后，第 11 章实践方法论会把这些手段组装成完整的调参流程。一句话钩子：正则化让大模型肯好好学，优化让这条路走得通。下一章见。">
+    <div class="slide-head"><span class="sec">接口</span><h3>第6章给模型，本章让它「训出来还能用」，第8章收拾超参数与优化</h3></div>
+    <div class="slide-body">
+      <table>
+        <thead><tr><th></th><th>第6章 深度前馈网络</th><th>第7章 正则化（本章）</th><th>第8章 优化</th></tr></thead>
+        <tbody>
+          <tr><td class="l"><strong>回答什么</strong></td><td class="l">凭什么能表达、能训练</td><td class="l">训出来怎么还能用（泛化）</td><td class="l">崎岖损失面上怎么找路</td></tr>
+          <tr><td class="l"><strong>给了什么</strong></td><td class="l">万能逼近器 + 反向传播</td><td class="l">L2/L1、增强、早停、Dropout</td><td class="l">超参数选择 + 训练动力学</td></tr>
+          <tr><td class="l"><strong>欠的账</strong></td><td class="l">容量一大就背噪声</td><td class="l">α、ε、p、耐心全是超参数</td><td class="l">（第11章组装成完整流程）</td></tr>
+        </tbody>
+      </table>
+      <div class="tip">钩子：正则化让大模型肯好好学，优化让这条路走得通——下一章看梯度法凭什么在崎岖损失面上找得到路。</div>
+    </div>
+  </section>
+
+  <!-- ★ 21 小结页 -->
+  <section class="slide" data-narration="三句话讲完第 7 章。第一，解决什么：本章的主线问题是，容量太大就会背答案，怎么把过拟合压回去？答案是：不砍名义容量，用正则化缩小有效容量，拿训练误差略升，换泛化差距大降。第二，核心机制：四条路线——改目标，L2 按拉姆达除以拉姆达加阿尔法逐方向收缩，L1 出稀疏；改数据，增强加标签平滑；改过程，早停，训练轮数约等于等效容量；改结构，随机失活近似指数级集成。第三，遗留问题：阿尔法、伊普西隆、p 这些超参数怎么选、加了正则化怎么优化，全部交给第 8 章。必背公式就一个：正则化后的最优解等于，H 加阿尔法倍单位阵的逆，乘 H，再乘原最优解。">
+    <div class="slide-head"><span class="sec">小结</span><h3>三句话讲完第7章</h3></div>
+    <div class="slide-body">
+      <div class="chain">
+        <div class="link"><span class="no">1</span><span class="txt"><strong>解决什么</strong>：容量太大就会背答案，怎么把过拟合压回去？——不砍名义容量，缩小有效容量，训练误差略升换泛化差距大降</span></div>
+        <div class="link"><span class="no">2</span><span class="txt"><strong>核心机制</strong>：改目标（L2 按方向收缩、L1 出稀疏）、改数据（增强+标签平滑）、改过程（早停≈限容量）、改结构（Dropout≈集成）</span></div>
+        <div class="link"><span class="no">3</span><span class="txt"><strong>遗留问题</strong>：α、ε、p、耐心怎么选？加了惩罚的损失面怎么优化？——交给第 8 章</span></div>
+      </div>
+      <div class="formula formula-concl">$$\tilde{\boldsymbol{w}} = (\boldsymbol{H}+\alpha\boldsymbol{I})^{-1}\boldsymbol{H}\boldsymbol{w}^* \quad\text{——合上书也要能默写}$$</div>
+    </div>
+  </section>
+
+  <!-- ★ 22 结束页 -->
+  <section class="slide slide-cover" data-narration="本章到此结束，布置毕业挑战。合上书，拿一张纸，做四件事。一，写出正则化的定义，并用 1 次、3 次、9 次多项式的那张表解释过拟合与泛化差距。二，推导 L2 闭式解，手算两个方向的缩放因子 0.909 和 0.091，再算出新权重 0.727、0.027。三，给验证误差序列找出第 12 轮这个早停点，并解释训练轮数为什么约等于等效容量。四，手算反向随机失活：从激活 2、4、6、8 和掩码 1、0、1、0 得到 4、0、12、0，并验证期望守恒等于 20。都能默写出来，本章毕业；哪一项卡壳，就回到对应页把那页手算重做一遍。下一章，第 8 章深度模型的优化：损失面如此崎岖，梯度法凭什么找得到路？">
+    <div class="kicker">本 章 结 束</div>
+    <h1>训练误差略升，换泛化差距大降</h1>
+    <div class="sub">毕业挑战：合上书，拿一张纸</div>
+    <div class="divider"></div>
+    <div class="meta">
+      ☑ 写正则化定义 + 用 1/3/9 次多项式表讲泛化差距　　☑ 推 L2 闭式解 + 手算 0.909 / 0.091 → [0.727, 0.027]<br>
+      ☑ 找出第 12 轮早停点 + 讲清「轮数 ≈ 等效容量」　　☑ 手算 dropout [4,0,12,0] + 验证期望守恒 20<br><br>
+      下一章 · 第8章 深度模型的优化：损失面如此崎岖，梯度法凭什么找得到路？
+    </div>
+  </section>
+
+  <!-- 页脚 -->
+  <div id="footer">
+    <span class="brand">第7章 深度模型的正则化 · 深度学习课件</span>
+    <span id="pagenum">1 / 22</span>
+  </div>
+
+  <!-- 导航 -->
+  <div class="nav">
+    <button id="prev" title="上一页 (←)">‹</button>
+    <button id="next" title="下一页 (→ / 空格)">›</button>
+  </div>
+  <div id="hint">← → 翻页 · 空格下一页 · 推导页逐步显示 · 点击左右半屏翻页</div>
+
+</div>
+
+<!-- mermaid 本地引用，保证离线可用；初始化参数全套课件统一，勿改 -->
+<script src="/lectures-assets/mermaid.min.js"></script>
+<script>
+mermaid.initialize({
+  startOnLoad: false,   // 必须为 false：display:none 的隐藏页渲染会得到 0 宽高的退化 SVG，
+                        // 改为页面激活时懒渲染（见 renderMermaid）
+  theme: "base",
+  themeVariables: {
+    primaryColor: "#ebf8ff",
+    primaryBorderColor: "#2b6cb0",
+    primaryTextColor: "#1a365d",
+    lineColor: "#718096",
+    fontFamily: "-apple-system, PingFang SC, sans-serif",
+    fontSize: "15px"
+  },
+  flowchart: { curve: "linear", htmlLabels: false }
+});
+</script>
+<script>
+(function(){
+  const slides = Array.from(document.querySelectorAll('.slide'));
+  const total = slides.length;
+  let idx = 0;
+
+  const params = new URLSearchParams(location.search);
+  const startSlide = parseInt(params.get('slide'), 10);
+  if (params.get('autohide') === '1') document.body.classList.add('autohide');
+  if (!isNaN(startSlide) && startSlide >= 1 && startSlide <= total) idx = startSlide - 1;
+
+  const progress = document.getElementById('progress');
+  const pagenum = document.getElementById('pagenum');
+  const prevBtn = document.getElementById('prev');
+  const nextBtn = document.getElementById('next');
+
+  // 推导分步：每页记住已展开的步数；autohide（截图）模式下 CSS 强制全显
+  const stepState = new Map();
+  function stepsOf(i){ return Array.from(slides[i].querySelectorAll('.step')); }
+  function applySteps(){
+    stepsOf(idx).forEach((el, k)=> el.classList.toggle('on', k < (stepState.get(idx) || 0)));
+  }
+  // 前进一步：先展开本页下一步，全部展开后才翻页
+  function forward(){
+    const steps = stepsOf(idx);
+    const shown = stepState.get(idx) || 0;
+    if (shown < steps.length){ stepState.set(idx, shown + 1); applySteps(); return; }
+    go(idx + 1);
+  }
+  // 后退一步：先收起本页最后一步，收完才回上一页
+  function backward(){
+    const steps = stepsOf(idx);
+    const shown = stepState.get(idx) || 0;
+    if (shown > 0){ stepState.set(idx, shown - 1); applySteps(); return; }
+    go(idx - 1);
+  }
+
+  // mermaid 懒渲染：只在页面激活（有真实宽高）时渲染该页的图，渲染后打 data-done 防重复
+  function renderMermaid(slide){
+    if (typeof mermaid === 'undefined') return;
+    const nodes = Array.from(slide.querySelectorAll('.mermaid:not([data-done])'));
+    if (!nodes.length) return;
+    nodes.forEach(n => n.setAttribute('data-done', ''));
+    mermaid.run({ nodes }).catch(err => {
+      nodes.forEach(n => n.removeAttribute('data-done'));
+      console.error('mermaid 渲染失败：', err);
+    });
+  }
+
+  function render(){
+    slides.forEach((s,i)=> s.classList.toggle('active', i===idx));
+    progress.style.width = ((idx+1)/total*100) + '%';
+    pagenum.textContent = (idx+1) + ' / ' + total;
+    prevBtn.disabled = (idx===0);
+    nextBtn.disabled = (idx===total-1);
+    applySteps();
+    renderMermaid(slides[idx]);
+  }
+  function go(n){ idx = Math.max(0, Math.min(total-1, n)); render(); }
+
+  prevBtn.addEventListener('click', e=>{ e.stopPropagation(); backward(); });
+  nextBtn.addEventListener('click', e=>{ e.stopPropagation(); forward(); });
+
+  document.addEventListener('keydown', e=>{
+    if(e.key==='ArrowRight'||e.key===' '||e.key==='PageDown'){ e.preventDefault(); forward(); }
+    else if(e.key==='ArrowLeft'||e.key==='PageUp'){ e.preventDefault(); backward(); }
+    else if(e.key==='Home'){ stepState.set(idx, 0); go(0); }
+    else if(e.key==='End'){ go(total-1); }
+  });
+
+  document.getElementById('stage').addEventListener('click', e=>{
+    if(e.target.closest('.nav')) return;
+    const x = e.clientX;
+    if(x < window.innerWidth*0.5) backward(); else forward();
+  });
+
+  function fit(){
+    const s = Math.min(window.innerWidth/1280, window.innerHeight/720);
+    document.getElementById('stage').style.transform = 'translate(-50%,-50%) scale(' + s + ')';
+  }
+  window.addEventListener('resize', fit);
+  fit();
+  render();
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,605 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第7章 贝叶斯分类器 · 机器学习课件</title>
+<script>
+window.MathJax = {
+  tex: {
+    inlineMath: [['$', '$'], ['\\(', '\\)']],
+    displayMath: [['$$', '$$'], ['\\[', '\\]']],
+    processEscapes: true,
+    tags: 'none'
+  },
+  svg: { fontCache: 'global', scale: 1.05 },
+  options: { skipHtmlTags: ['script','noscript','style','textarea','pre','code'] }
+};
+</script>
+<script src="/lectures-assets/tex-svg.js" async></script>
+<style>
+  :root{
+    --primary:#1a365d; --accent:#2b6cb0; --accent-light:#ebf8ff; --accent-border:#bee3f8;
+    --text:#2d3748; --muted:#718096; --border:#e2e8f0; --bg-light:#f7fafc;
+    --success:#38a169; --danger:#e53e3e; --warning:#dd6b20; --warn-bg:#fffaf0;
+  }
+  *{margin:0;padding:0;box-sizing:border-box;}
+  html,body{width:100%;height:100%;overflow:hidden;background:#0f172a;}
+  body{
+    font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Hiragino Sans GB","Microsoft YaHei","WenQuanYi Micro Hei",sans-serif;
+    color:var(--text);
+  }
+  #stage{
+    position:absolute; left:50%; top:50%;
+    width:1280px; height:720px;
+    transform:translate(-50%,-50%) scale(1);
+    transform-origin:center center;
+    background:#ffffff;
+    box-shadow:0 0 40px rgba(0,0,0,.4);
+    overflow:hidden;
+  }
+  .slide{
+    position:absolute; inset:0;
+    padding:36px 60px 52px;
+    display:none;
+    flex-direction:column;
+    background:#ffffff;
+    opacity:0;
+    transition:opacity .35s ease;
+  }
+  .slide.active{ display:flex; opacity:1; }
+
+  #progress{ position:absolute; top:0; left:0; height:6px; background:var(--accent); width:0; z-index:50; transition:width .35s; }
+
+  .slide-cover{ justify-content:center; align-items:center; text-align:center; }
+  .slide-cover{ background:linear-gradient(135deg,#1a365d 0%,#2b6cb0 100%); color:#fff; }
+  .slide-cover .kicker{ font-size:22px; letter-spacing:6px; opacity:.85; margin-bottom:18px;}
+  .slide-cover h1{ font-size:64px; font-weight:800; line-height:1.2; margin-bottom:22px; letter-spacing:2px;}
+  .slide-cover .sub{ font-size:26px; opacity:.92; margin-bottom:36px;}
+  .slide-cover .meta{ font-size:19px; opacity:.85; line-height:2;}
+  .slide-cover .divider{ width:160px;height:5px;background:#fff;opacity:.6;margin:0 auto 30px;border-radius:3px;}
+  .slide-cover .question{ font-size:24px; background:rgba(255,255,255,.12); border:1px solid rgba(255,255,255,.35); border-radius:12px; padding:12px 28px; margin-bottom:30px;}
+
+  .slide-head{ display:flex; align-items:baseline; gap:16px; border-bottom:3px solid var(--accent); padding-bottom:9px; margin-bottom:12px;}
+  .slide-head .sec{ font-size:17px; color:var(--accent); font-weight:700; background:var(--accent-light); padding:3px 11px; border-radius:6px; white-space:nowrap;}
+  .slide-head h3{ font-size:29px; color:var(--primary); font-weight:700;}
+  .slide-body{ flex:1; display:flex; flex-direction:column; justify-content:center; min-height:0; }
+
+  p{ font-size:21px; line-height:1.65; margin-bottom:8px;}
+  .lead{ font-size:23px; color:#374151; line-height:1.75;}
+  ul,ol{ margin:0 0 8px 26px; font-size:21px; line-height:1.7;}
+  li{ margin-bottom:5px;}
+  strong{ color:var(--primary); }
+
+  .formula{ background:var(--accent-light); border-left:5px solid var(--accent); border-radius:0 10px 10px 0; padding:9px 22px; margin:9px 0; text-align:center; font-size:23px;}
+  .formula-concl{ background:#fffaf0; border-left:5px solid var(--warning);}
+  .MathJax{ font-size:1.05em !important; }
+  mjx-container[display="true"]{ margin:6px 0 !important; }
+
+  table{ width:100%; border-collapse:collapse; margin:10px 0; font-size:20px;}
+  th{ background:var(--accent); color:#fff; padding:8px 12px; text-align:center; font-weight:600;}
+  td{ padding:7px 12px; border:1px solid var(--border); text-align:center; vertical-align:middle;}
+  tr:nth-child(even) td{ background:var(--bg-light);}
+  td.l{ text-align:left; }
+  table.small{ font-size:18px; }
+  table.small td, table.small th{ padding:6px 10px; }
+
+  .card{ background:var(--accent-light); border:1px solid var(--accent-border); border-radius:12px; padding:12px 20px; margin:10px 0;}
+  .tip{ background:#ebf8ff; border-left:5px solid var(--accent); border-radius:0 10px 10px 0; padding:10px 20px; margin:10px 0; font-size:20px; color:#2c5282;}
+  .deep{ background:#f0fff4; border-left:5px solid var(--success); border-radius:0 10px 10px 0; padding:10px 20px; margin:10px 0; font-size:20px; color:#22543d;}
+  .warn{ background:var(--warn-bg); border-left:5px solid var(--warning); border-radius:0 10px 10px 0; padding:10px 20px; margin:10px 0; font-size:20px; color:#744210;}
+  .trap{ background:#fef2f2; border-left:5px solid var(--danger); border-radius:0 10px 10px 0; padding:10px 20px; margin:10px 0; font-size:20px; color:#7f1d1d;}
+
+  .pause{
+    background:var(--warn-bg); border:2px dashed var(--warning); border-radius:14px;
+    padding:10px 22px; margin:10px 0; display:flex; align-items:center; gap:16px;
+  }
+  .pause .icon{ font-size:36px; line-height:1; }
+  .pause .txt b{ color:var(--warning); font-size:21px; }
+  .pause .txt p{ font-size:18px; color:#744210; margin:3px 0 0; }
+
+  .cols{ display:flex; gap:28px; align-items:stretch; }
+  .col{ flex:1; min-width:0; }
+
+  .step{ opacity:0; transform:translateY(8px); transition:opacity .3s ease, transform .3s ease; }
+  .step.on{ opacity:1; transform:none; }
+  body.autohide .step{ opacity:1 !important; transform:none !important; }
+  .step-hint{ font-size:14px; color:var(--muted); margin-top:4px;}
+  body.autohide .step-hint{ display:none; }
+
+  .chain{ margin:6px 0; }
+  .chain .link{ display:flex; align-items:center; gap:14px; margin:6px 0;}
+  .chain .no{ width:34px; height:34px; border-radius:50%; background:var(--accent); color:#fff; font-size:18px; font-weight:700; display:flex; align-items:center; justify-content:center; flex-shrink:0;}
+  .chain .txt{ font-size:21px; line-height:1.5;}
+  .chain .txt strong{ color:var(--primary); }
+
+  .mmd{ background:var(--bg-light); border:1px solid var(--border); border-radius:12px; padding:10px 14px; display:flex; justify-content:center; align-items:center; margin:8px 0;}
+  .mmd .mermaid{ display:flex; justify-content:center; width:100%; visibility:hidden; }
+  .mmd .mermaid[data-done]{ visibility:visible; }
+  .mmd .mermaid svg{ max-width:100%; height:auto; max-height:230px; }
+  .mmd.mmd-tall .mermaid svg{ max-height:330px; }
+  .mmd.mmd-sm svg{ max-height:150px; }
+  .mmd-row{ display:flex; gap:18px; }
+  .mmd-row .mmd{ flex:1; flex-direction:column; }
+  .mmd .cap{ font-size:17px; color:var(--muted); margin-top:6px; text-align:center;}
+  .mmd .cap b{ color:var(--text); }
+
+  #footer{ position:absolute; bottom:0; left:0; right:0; height:40px; display:flex; align-items:center; justify-content:space-between; padding:0 30px; font-size:15px; color:#94a3b8; background:rgba(247,250,252,.85); border-top:1px solid var(--border); z-index:40;}
+  #footer .brand{ font-weight:600; color:var(--accent); }
+
+  .nav{ position:absolute; bottom:48px; right:40px; display:flex; gap:12px; z-index:45;}
+  .nav button{ width:54px; height:54px; border-radius:50%; border:none; background:var(--accent); color:#fff; font-size:24px; cursor:pointer; box-shadow:0 3px 10px rgba(43,108,176,.4); display:flex; align-items:center; justify-content:center;}
+  .nav button:hover{ background:var(--primary); }
+  .nav button:disabled{ background:#cbd5d0; cursor:default; box-shadow:none;}
+
+  #hint{ position:absolute; bottom:48px; left:40px; font-size:14px; color:#94a3b8; z-index:45;}
+
+  body.autohide #progress, body.autohide #footer, body.autohide .nav, body.autohide #hint{ display:none !important; }
+</style>
+</head>
+<body>
+<div id="stage">
+
+  <div id="progress"></div>
+
+  <!-- 1 封面 -->
+  <section class="slide slide-cover active" data-narration="同学们好，我们进入第七章贝叶斯分类器。前面几章我们一直在学怎么直接画一条分类边界：线性模型找超平面，决策树做划分，支持向量机找最大间隔。这一章我们换一个完全不同的视角：把分类看成在不确定性下做决策，用概率来算账。本章要回答的核心问题是：当先验和似然都能估计出来时，怎么用贝叶斯定理做出风险最小的分类决策？如果特征之间不独立、数据里还有没观测到的隐变量，又该怎么办？学完这一章，你不但能写出贝叶斯最优分类器，还能亲手用朴素贝叶斯算一遍瓜甜不甜，用 EM 算法估一组混在一起的高斯均值。">
+    <div class="kicker">机器学习 · 第 7 章 · 经典模型</div>
+    <h1>贝叶斯分类器</h1>
+    <div class="sub">Bayesian Classifiers —— 把分类看成在不确定性下算账</div>
+    <div class="question">本章要回答：当先验与似然可估计时，如何做风险最小的分类决策？</div>
+    <div class="meta">
+      配套讲义：《机器学习互动讲义》第7章 · 基于周志华《机器学习》<br>
+      ← → 或空格翻页 · 推导页逐步显示
+    </div>
+  </section>
+
+  <!-- 2 全书位置 -->
+  <section class="slide" data-narration="先看本章在全书里的位置。整本书分四段：第一段是基础与评估，讲绪论和模型评估；第二段是经典模型，从第三章线性模型开始，一路到第八章集成学习；第三段是无监督与理论，包括聚类、降维、特征选择和学习理论；第四段是进阶专题。本章在第二段经典模型里，是第六站。上一章支持向量机给了我们一个判别式的极限：直接在特征空间里找最大间隔超平面。本章换一条路：不再直接学边界，而是学概率分布本身，用贝叶斯定理把后验拆成先验乘似然。这条路走出去，下一站第八章集成学习会把包括朴素贝叶斯在内的概率型基学习器组合起来，所以本章是判别与生成两条路线的分水岭。">
+    <div class="slide-head"><span class="sec">定位</span><h3>本章在经典模型段，是从判别式路线拐向生成式路线的分水岭</h3></div>
+    <div class="slide-body">
+      <div class="mmd mmd-tall">
+        <div class="mermaid">
+flowchart TB
+  P1["① 基础与评估<br>Ch1 绪论 · Ch2 模型评估"] --> P2["② 经典模型<br>Ch3 线性 · Ch4 决策树 · Ch5 神经网络"] --> P3["Ch6 SVM<br>判别式：最大间隔"] --> P4["Ch7 贝叶斯分类器<br>生成式：先验 × 似然"]:::here --> P5["Ch8 集成学习<br>把基学习器组合起来"] --> P6["③ 无监督与理论<br>Ch9–12"] --> P7["④ 进阶专题<br>Ch13–16"]
+  classDef here fill:#2b6cb0,color:#ffffff,stroke:#1a365d,stroke-width:3px
+        </div>
+      </div>
+      <p style="text-align:center; margin-top:10px;">本章解决「<strong>用概率做最优决策</strong>」——上一章交付判别边界，本章交付概率模型本身，下一章把多个概率型基学习器组合起来。</p>
+    </div>
+  </section>
+
+  <!-- 3 本章主线 -->
+  <section class="slide" data-narration="本章的逻辑主线是一条链。第一环：我们想要的分类器应该让期望损失最小，这就是贝叶斯决策论，它告诉我们最优就是选条件风险最小的类。第二环：条件风险需要后验概率，后验从哪来？用贝叶斯定理拆成先验乘似然，然后用极大似然估计去估参数。第三环：真正下手时发现特征维度高，联合似然参数爆炸，于是引入朴素贝叶斯的条件独立假设，把高维分布拆成各属性条件概率的连乘。第四环：这个假设太强，要么放松一点成半朴素贝叶斯和贝叶斯网，要么面对没观测到的隐变量时用 EM 算法。整条链就是本章目录，从决策论一路走到 EM。">
+    <div class="slide-head"><span class="sec">主线</span><h3>从「最小风险决策」出发，一路解决「后验从哪来、维度爆炸怎么办、隐变量怎么办」</h3></div>
+    <div class="slide-body">
+      <div class="chain">
+        <div class="link"><span class="no">1</span><span class="txt"><strong>最优 = 最小决策风险</strong>：贝叶斯决策论给出金标准（7.1）</span></div>
+        <div class="link"><span class="no">2</span><span class="txt"><strong>后验从哪来</strong>：贝叶斯定理拆成先验 × 似然，MLE 估参数（7.2）</span></div>
+        <div class="link"><span class="no">3</span><span class="txt"><strong>维度爆炸怎么办</strong>：朴素贝叶斯条件独立假设 + 拉普拉斯平滑（7.3）</span></div>
+        <div class="link"><span class="no">4</span><span class="txt"><strong>假设太强 / 有隐变量怎么办</strong>：半朴素贝叶斯、贝叶斯网、EM 算法（7.4–7.5）</span></div>
+      </div>
+      <div class="tip">这条链就是本章的目录：7.1 决策论 → 7.2 估参数 → 7.3 朴素贝叶斯 → 7.4 贝叶斯网 → 7.5 EM。</div>
+    </div>
+  </section>
+
+  <!-- 4 动机 -->
+  <section class="slide" data-narration="为什么需要换一条路？想象医院要做癌症筛查：一个病人的指标落在两类分布的重叠区，判别式模型只告诉你「判给哪一类」，却不告诉你「判错的代价有多大」。但漏诊和误诊的代价天差地别——漏诊可能丢一条命，误诊只是多做一次复查。判别式模型对这种「代价不对称」无能为力，因为它根本没建模概率，只学了边界。再看第二个困难：就算我们想用概率，x 往往是几十维的向量，联合分布的参数随维度指数爆炸，三十个二值属性就是十亿个参数，根本估不动。这两个困难逼出本章的两个核心动作：用贝叶斯决策论把代价算进决策，用条件独立假设把参数压回线性。">
+    <div class="slide-head"><span class="sec">动机</span><h3>判别式模型不算代价，生成式模型又估不动高维联合分布</h3></div>
+    <div class="slide-body">
+      <p>癌症筛查场景：漏诊代价远高于误诊，但 SVM 只给你一条边界，不告诉你代价怎么算进去。</p>
+      <div class="formula">$$d = 30 \text{ 个二值属性} \;\Rightarrow\; \text{联合分布需 } 2^{30}-1 \approx 10^9 \text{ 个参数}$$</div>
+      <div class="cols">
+        <div class="col"><div class="card">😇 <strong>判别式（SVM / 逻辑回归）</strong><br>直接学边界或 P(c|x)，但无法表达「判错的代价不对称」</div></div>
+        <div class="col"><div class="card">🙂 <strong>朴素生成式</strong><br>想建联合分布 P(x, c)，但参数随维度指数爆炸，数据不够估</div></div>
+      </div>
+      <div class="tip">💡 本章方案：用贝叶斯决策论把代价算进决策，用条件独立假设把参数从指数压回线性。</div>
+    </div>
+  </section>
+
+  <!-- 5 贝叶斯决策论：条件风险 -->
+  <section class="slide" data-narration="先看贝叶斯决策论的核心定义：条件风险。把样本 x 判成类别 c i 的条件风险，等于对所有真实类别 c j 求和，每一项是把 c j 误判成 c i 的代价 lambda i j 乘上 c j 的后验概率。直观说，就是「我这么判，期望要付多少代价」。贝叶斯判定准则一句话：对每个样本，选条件风险最小的那个类。这样得到的分类器叫贝叶斯最优分类器，它的风险叫贝叶斯风险，是任何分类器能达到的下界——谁都不可能做得比它更好，除非后验概率本身估错了。这一节最该记住的是：分类不再是非黑即白的判边界，而是在不确定性下算账，挑期望损失最小的那一行。">
+    <div class="slide-head"><span class="sec">定义</span><h3>条件风险 = 「误判代价」按后验加权的期望，最优决策就是选它最小的类</h3></div>
+    <div class="slide-body">
+      <div class="cols">
+        <div class="col"><div class="card">📋 <strong>误判代价 λ<sub>ij</sub></strong><br>把真实类 c<sub>j</sub> 误判为 c<sub>i</sub> 的代价，可不对称（漏诊 ≫ 误诊）</div></div>
+        <div class="col"><div class="card">🎯 <strong>贝叶斯判定准则</strong><br>对每个 x，选使条件风险 R(c<sub>i</sub>|x) 最小的类，即 h*(x) = argmin<sub>i</sub> R(c<sub>i</sub>|x)</div></div>
+      </div>
+      <div class="formula formula-concl">$$R(c_i \mid \boldsymbol{x}) = \sum_{j} \lambda_{ij} \, P(c_j \mid \boldsymbol{x})$$</div>
+      <div class="deep">读法：把 x 判成 c i 的条件风险，等于「是 c j 的后验概率」乘「把 c j 误判成 c i 的代价」，对所有 j 求和。贝叶斯最优分类器 = 挑这个加权和最小的类。</div>
+    </div>
+  </section>
+
+  <!-- 6 0-1 损失退化为 MAP -->
+  <section class="slide" data-narration="最常用的损失是 0-1 损失：判对零代价，判错代价一，不管你错成哪一类都一样。代入条件风险公式，lambda 当 i 等于 j 时是零，不等于 j 时是一，那么求和里只剩 j 不等于 i 的项，也就是一减去 c i 的后验概率。所以最小化风险就等价于最大化后验概率，贝叶斯判定准则退化成一句大白话：把样本判给后验概率最大的类。这就是著名的最大后验准则，简称 MAP。要注意：这个退化只在 0-1 损失下成立。一旦误分代价不对称，比如医疗、风控场景，就必须回到完整的条件风险公式，不能再偷懒用 MAP。">
+    <div class="slide-head"><span class="sec">推论</span><h3>0-1 损失下，「最小风险」退化为「最大后验概率」（MAP）</h3></div>
+    <div class="slide-body">
+      <div class="step">
+        <p><strong>① 0-1 损失代入</strong>：λ<sub>ij</sub> = 0（i=j），λ<sub>ij</sub> = 1（i≠j），求和只剩 j≠i 的项</p>
+        <div class="formula">$$R(c_i \mid \boldsymbol{x}) = \sum_{j \ne i} P(c_j \mid \boldsymbol{x})$$</div>
+      </div>
+      <div class="step">
+        <p><strong>② 概率归一</strong>：所有类后验之和为 1，所以求和 = 1 − P(c<sub>i</sub>|x)</p>
+        <div class="formula">$$R(c_i \mid \boldsymbol{x}) = 1 - P(c_i \mid \boldsymbol{x})$$</div>
+      </div>
+      <div class="step">
+        <div class="formula formula-concl">$$\text{最小化 } R \;\Longleftrightarrow\; \text{最大化 } P(c_i \mid \boldsymbol{x}) \;\Longrightarrow\; \boldsymbol{h^*(\boldsymbol{x}) = \arg\max_i P(c_i \mid \boldsymbol{x})}$$</div>
+      </div>
+      <p class="step-hint">按空格 / → 逐步展开推导</p>
+    </div>
+  </section>
+
+  <!-- 7 小例子：不对称损失 -->
+  <section class="slide" data-narration="看个具体例子感受不对称损失的威力。两类问题，把真 c 二误判成 c 一损失是二，比如漏诊；把真 c 一误判成 c 二损失是一，比如误诊。对三个样本逐样本算风险：x 一后验是零点七对零点三，判 c 一的风险是二乘零点三等于零点六，判 c 二的风险是一乘零点七等于零点七，零点六小于零点七，判 c 一。x 二后验是零点四对零点六，判 c 一风险一点二，判 c 二风险零点四，判 c 二。最有意思的是 x 三：两个后验都是零点五，按最大后验两边一样随便挑，但算风险判 c 一要付一，判 c 二只付零点五，所以判 c 二。你看，不对称损失把决策边界从零点五推到了约零点六六七，这就是为什么要算账不能只比后验。">
+    <div class="slide-head"><span class="sec">例子</span><h3>不对称损失下，即使后验各半，最优决策也不是随便挑</h3></div>
+    <div class="slide-body">
+      <p>两类 c₁、c₂：λ₁₂ = 2（漏诊 c₂ 代价高），λ₂₁ = 1。逐样本算条件风险：</p>
+      <table class="small">
+        <thead><tr><th>样本</th><th>P(c₁|x)</th><th>P(c₂|x)</th><th>R(c₁|x) = 2·P(c₂|x)</th><th>R(c₂|x) = 1·P(c₁|x)</th><th>贝叶斯决策</th></tr></thead>
+        <tbody>
+          <tr><td>x₁</td><td>0.7</td><td>0.3</td><td>0.6</td><td>0.7</td><td>c₁（0.6 小）</td></tr>
+          <tr><td>x₂</td><td>0.4</td><td>0.6</td><td>1.2</td><td>0.4</td><td>c₂（0.4 小）</td></tr>
+          <tr><td>x₃</td><td>0.5</td><td>0.5</td><td>1.0</td><td>0.5</td><td><strong>c₂（0.5 小）</strong></td></tr>
+        </tbody>
+      </table>
+      <div class="warn">⚠️ x₃ 是关键：P(c₁) = P(c₂) = 0.5，但漏诊 c₂ 代价高，最优仍是 c₂。决策边界被推到 P(c₁|x) &gt; λ₁₂/(λ₁₂+λ₂₁) = 2/3 ≈ 0.667，而不是 0.5。</div>
+    </div>
+  </section>
+
+  <!-- 8 判别式 vs 生成式 + MLE -->
+  <section class="slide" data-narration="贝叶斯决策论告诉我们：有了后验概率，最优决策就是查表。但后验不会从天上掉下来，怎么估？两条路线。判别式直接对后验建模，第三章线性模型、第五章神经网络都走这条路。本章走生成式：先对联合分布建模，再用贝叶斯定理翻出后验——后验等于先验乘似然除以证据，证据与类别无关，比较时可以不算。于是估后验被拆成两个更简单的问题：估先验、估似然。怎么估？最经典的是极大似然估计：在参数化分布族里，选让已观测数据出现概率最大的那个参数。抛十次硬币七次正面，似然正比于 θ 的七次方乘一减 θ 的三次方，取对数变求和，对 θ 求导置零，解出 θ 等于十分之七。你看，「频率即概率」不是显然的，是在独立同分布伯努利假设下被极大似然严格推出来的。">
+    <div class="slide-head"><span class="sec">估计</span><h3>生成式路线：后验 = 先验 × 似然，参数用极大似然估计</h3></div>
+    <div class="slide-body">
+      <div class="formula">$$P(c \mid \boldsymbol{x}) = \frac{P(c)\, P(\boldsymbol{x} \mid c)}{P(\boldsymbol{x})} \;\propto\; P(c)\, P(\boldsymbol{x} \mid c)$$</div>
+      <div class="cols">
+        <div class="col"><div class="card">🔪 <strong>判别式</strong><br>直接建模 P(c|x)（Ch3 线性、Ch5 神经网络）</div></div>
+        <div class="col"><div class="card">🌱 <strong>生成式（本章）</strong><br>先建 P(x, c) = 先验 × 似然，再用贝叶斯定理翻后验</div></div>
+      </div>
+      <div class="formula formula-concl">$$\text{MLE 三步：写似然 } L(\theta) \;\to\; \text{取对数} \;\to\; \text{求导置零解 } \hat{\theta} \quad\text{（例：10 抛 7 正} \Rightarrow \hat{\theta} = \tfrac{7}{10}\text{）}$$</div>
+    </div>
+  </section>
+
+  <!-- 9 MLE 推导（.step） -->
+  <section class="slide" data-narration="把抛硬币这个例子完整推一遍，三步走看清楚。第一步写似然：设正面朝上概率 θ，抛十次独立试验，观测到七正三反的概率正比于 θ 的七次方乘一减 θ 的三次方，组合数与 θ 无关可以先不管。第二步取对数：对数单调不改变极值点位置，乘积变求和，得到七乘对数 θ 加三乘对数一减 θ。第三步求导置零：对 θ 求导得七除以 θ 减三除以一减 θ，令其等于零，通分得七倍的一减 θ 等于三 θ，展开七减七 θ 等于三 θ，所以七等于十 θ，θ 等于十分之七。可以验证一下：θ 取零点六九导数是正的应往大调，θ 取零点七一导数是负的应往小调，θ 取零点七导数恰好为零，确实是极大值点。对二项分布，极大似然估计就是次数除以总数。">
+    <div class="slide-head"><span class="sec">推导</span><h3>MLE 三步走：从「10 抛 7 正」到 θ̂ = 7/10</h3></div>
+    <div class="slide-body">
+      <div class="step">
+        <p><strong>① 写似然</strong>（独立伯努利试验，组合数与 θ 无关可略）</p>
+        <div class="formula">$$L(\theta) \;\propto\; \theta^{7} (1-\theta)^{3}$$</div>
+      </div>
+      <div class="step">
+        <p><strong>② 取对数</strong>（单调，不改变 argmax 位置）</p>
+        <div class="formula">$$\ln L(\theta) = 7 \ln\theta + 3 \ln(1-\theta) + \text{常数}$$</div>
+      </div>
+      <div class="step">
+        <p><strong>③ 求导置零</strong>：$\dfrac{7}{\theta} - \dfrac{3}{1-\theta} = 0 \Rightarrow 7(1-\theta) = 3\theta \Rightarrow 7 = 10\theta$</p>
+        <div class="formula formula-concl">$$\boldsymbol{\hat{\theta} = \dfrac{7}{10}} \quad\text{—— 在 i.i.d. 伯努利假设下，MLE 就是观测频率}$$</div>
+      </div>
+      <p class="step-hint">按空格 / → 逐步展开推导</p>
+    </div>
+  </section>
+
+  <!-- 10 朴素贝叶斯：条件独立假设 -->
+  <section class="slide" data-narration="参数能估了，但真正的拦路虎是维度。x 通常是高维向量，d 个二值属性的联合分布要二的 d 次方减一个参数，d 等于三十就是十亿，根本估不动。朴素贝叶斯用一个强到近乎天真的假设把问题打回原形：属性条件独立假设——给定类别 c，各属性相互独立。于是联合似然拆成各属性条件概率的连乘，参数从指数降为线性。后验比较时证据项两边相同可以不算，只需比先验乘各属性条件概率的连乘。这个假设为什么在文本分类这种高维稀疏场景反而表现好？因为虽然算出来的概率值本身不准，但「谁大谁小」的排序常常是对的，而分类只需要排序。真正的坑是属性强相关时同一信息被重复计票，后验会过度自信。">
+    <div class="slide-head"><span class="sec">假设</span><h3>条件独立假设：把高维似然拆成各属性条件概率的连乘</h3></div>
+    <div class="slide-body">
+      <div class="formula formula-concl">$$P(\boldsymbol{x} \mid c) = \prod_{i=1}^{d} P(x_i \mid c) \;\Longrightarrow\; P(c \mid \boldsymbol{x}) \propto P(c) \prod_{i=1}^{d} P(x_i \mid c)$$</div>
+      <div class="cols">
+        <div class="col"><div class="card">📉 <strong>参数爆炸被压住</strong><br>d 个二值属性：从 2<sup>d</sup>−1 个参数降到 2d 个（每个属性每类一个）</div></div>
+        <div class="col"><div class="card">🗳️ <strong>直觉：各证据独立投票</strong><br>先验是底牌，后验 = 底牌 × 各证人证词的连乘</div></div>
+      </div>
+      <div class="deep">为何朴素贝叶斯在文本分类很强？概率值不一定准，但排序常常对——而分类只需要排序。坑：属性强相关时同一信息被重复计票，后验会过度自信。</div>
+    </div>
+  </section>
+
+  <!-- 11 手算（含 .pause）：数据 + 拉普拉斯平滑 + 条件概率表 -->
+  <section class="slide" data-narration="现在亲手算一遍。十条瓜数据，四个离散属性，五好五坏。测试样本是青绿、蜷缩、浊响、清晰。先验好瓜坏瓜各占一半。关键问题来了：根蒂等于蜷缩在坏瓜里出现零次，直接数频次会得到零概率，一连乘整个后验就清零了。所以必须用拉普拉斯平滑：分子加一，分母加该属性的取值数，这里每个属性三个取值，每类五个样本，分母统一是五加三等于八。先暂停视频，自己推一遍。推出来了吗？好，对答案。青绿在好瓜出现两次，平滑后八分之三；蜷缩在好瓜四次，八分之五；浊响在好瓜三次，八分之四；清晰在好瓜四次，八分之五。坏瓜这边，青绿两次八分之三，蜷缩、浊响、清晰都是零次，平滑后都是八分之一。下一步连乘。">
+    <div class="slide-head"><span class="sec">手算</span><h3>拉普拉斯平滑：分子 +1、分母 +取值数，防止「没见过」被当成「不可能」</h3></div>
+    <div class="slide-body">
+      <p>10 条瓜数据（5 好 5 坏），测试样本 x =（青绿，蜷缩，浊响，清晰）。先验 P(好) = P(坏) = 0.5；分母统一 5+3 = 8：</p>
+      <table class="small">
+        <thead><tr><th>条件概率</th><th>好瓜计数</th><th>P(·|好)</th><th>坏瓜计数</th><th>P(·|坏)</th></tr></thead>
+        <tbody>
+          <tr><td>P(色泽=青绿|c)</td><td>2</td><td>3/8 = 0.375</td><td>2</td><td>3/8 = 0.375</td></tr>
+          <tr><td>P(根蒂=蜷缩|c)</td><td>4</td><td>5/8 = 0.625</td><td>0</td><td>1/8 = 0.125</td></tr>
+          <tr><td>P(敲声=浊响|c)</td><td>3</td><td>4/8 = 0.500</td><td>0</td><td>1/8 = 0.125</td></tr>
+          <tr><td>P(纹理=清晰|c)</td><td>4</td><td>5/8 = 0.625</td><td>0</td><td>1/8 = 0.125</td></tr>
+        </tbody>
+      </table>
+      <div class="pause"><div class="icon">✍️</div><div class="txt"><b>暂停推导</b><p>自己动手：用上面的表，把两个未归一化后验得分（好瓜一行、坏瓜一行）各乘出来，再判定该判哪一类。</p></div></div>
+    </div>
+  </section>
+
+  <!-- 12 手算（续）：连乘比较 -->
+  <section class="slide" data-narration="对答案。好瓜得分等于零点五乘零点三七五乘零点六二五乘零点五乘零点六二五，约等于零点零三六六。坏瓜得分等于零点五乘零点三七五乘零点一二五乘零点一二五乘零点一二五，约等于零点零零零四。好瓜得分约为坏瓜的一百倍，归一化后好的后验约零点九九零一，判为好瓜毫无悬念。关键差别来自后三项：蜷缩、浊响、清晰在坏瓜类里一次都没出现，拉普拉斯平滑把它们各压到了八分之一，三个八分之一连乘就把坏瓜得分压垮。你看，朴素贝叶斯就像各证据独立投票：先验是底牌，后验是底牌乘各证人证词的连乘，而平滑是给每个证人一张保底的一票，防止「从没见过」被翻译成「绝不可能」。">
+    <div class="slide-head"><span class="sec">对答案</span><h3>好瓜得分 ≈ 0.0366 ≫ 坏瓜得分 ≈ 0.0004，判好瓜，关键差别来自三个 1/8</h3></div>
+    <div class="slide-body">
+      <div class="formula">$$\text{好瓜得分} = 0.5 \times 0.375 \times 0.625 \times 0.500 \times 0.625 \approx 0.0366$$</div>
+      <div class="formula">$$\text{坏瓜得分} = 0.5 \times 0.375 \times 0.125 \times 0.125 \times 0.125 \approx 0.0004$$</div>
+      <div class="formula formula-concl">$$P(\text{好} \mid \boldsymbol{x}) \approx \frac{0.0366}{0.0366 + 0.0004} \approx \boldsymbol{0.9901} \;\Longrightarrow\; \text{判好瓜}$$</div>
+      <div class="deep">关键差别来自后三项：蜷缩 / 浊响 / 清晰在坏瓜类中计数为 0，平滑后各压到 1/8；三个 1/8 连乘直接把坏瓜得分压垮——「没见过」≠「不可能」，但也绝不是「常见」。</div>
+    </div>
+  </section>
+
+  <!-- 13 半朴素贝叶斯 SPODE -->
+  <section class="slide" data-narration="条件独立假设简单粗暴，但现实里属性往往相关。「放一点相关性进来」有两条递进路线。先看放松一点点的：半朴素贝叶斯，代表是 SPODE，独依赖估计。它的机制一句话：假设所有属性都依赖类别，外加同一个超父属性。比如选色泽作超父，那么联合似然近似等于色泽条件下乘上其他每个属性在类别和色泽双重条件下的概率。为什么这样改有用？回到瓜的例子：如果敲声等于浊响与纹理等于清晰在好瓜中高度相关，朴素贝叶斯会把这条信息计两遍；SPODE 改成纹理在好瓜且敲声等于浊响条件下的概率，把相关性显式吃掉，避免重复计票。注意它只允许一个超父，所有其他属性共享这一个额外依赖——这就是「半朴素」的「半」字：既不放任不管，也不全面放开。">
+    <div class="slide-head"><span class="sec">放松一点</span><h3>SPODE：所有属性共享同一个「超父」，把一对相关性显式吃掉</h3></div>
+    <div class="slide-body">
+      <div class="formula">$$P(\boldsymbol{x} \mid c) \;\approx\; P(x_{sp} \mid c) \prod_{i \ne sp} P(x_i \mid c,\, x_{sp}) \quad\text{（}x_{sp}\text{ 为超父属性）}$$</div>
+      <div class="cols">
+        <div class="col"><div class="card">😇 <strong>朴素贝叶斯</strong><br>敲声=浊响 与 纹理=清晰 高度相关时，同一信息被计两遍</div></div>
+        <div class="col"><div class="card">🌱 <strong>SPODE</strong><br>改为 P(纹理 | 好, 敲声=浊响)，把相关性写进条件，避免重复计票</div></div>
+      </div>
+      <div class="warn">「半」朴素的「半」：只允许一个超父属性，所有其他属性共享这一个额外依赖——既不完全独立，也不放开成任意结构（那是贝叶斯网的事）。</div>
+    </div>
+  </section>
+
+  <!-- 14 贝叶斯网 + 感冒就医图 -->
+  <section class="slide" data-narration="再放松到底：贝叶斯网允许任意结构化依赖。它把变量画成有向无环图的节点，边表示直接依赖，联合概率分解为每个节点以其父节点为条件的乘积。看一个自编的五节点例子——其实是四个变量：感冒会引发发烧和咳嗽，发烧和咳嗽共同影响是否就医。因子分解式写出来就是：感冒的概率乘发烧条件下感冒的概率——不对，念反了，应该是发烧给定感冒的概率，乘咳嗽给定感冒的概率，再乘就医给定发烧和咳嗽的概率。每个变量只听它父母的话，这就是贝叶斯网的精髓。后面我们要考的三种基本结构——同父、顺序、对撞——都能在这张小图上找到：感冒到发烧咳嗽是同父，发烧到就医是顺序的一段，发烧咳嗽共同指向就医是对撞。">
+    <div class="slide-head"><span class="sec">结构化</span><h3>贝叶斯网：DAG + 「每个节点只听父母的话」，联合分布 = 各节点条件概率的乘积</h3></div>
+    <div class="slide-body">
+      <div class="cols">
+        <div class="col">
+          <div class="mmd mmd-tall">
+            <div class="mermaid">
+flowchart TB
+  C["感冒"] --> F["发烧"]
+  C --> K["咳嗽"]
+  F --> D["就医"]
+  K --> D
+            </div>
+          </div>
+          <p style="text-align:center; font-size:18px; color:var(--muted);">同父（C→F, C→K）＋ 顺序（C→F→D）＋ 对撞（F→D←K）三结构齐聚</p>
+        </div>
+        <div class="col">
+          <div class="formula formula-concl">$$P(X_1,\dots,X_n) = \prod_{i} P\!\left(X_i \,\middle|\, \mathrm{父}(X_i)\right)$$</div>
+          <div class="formula">$$P(\text{感,烧,咳,医}) = P(\text{感})\, P(\text{烧}|\text{感})\, P(\text{咳}|\text{感})\, P(\text{医}|\text{烧,咳})$$</div>
+          <div class="tip">读法：联合概率 = 每个变量「以其父节点为条件」的概率连乘。每个变量只「听父母的话」，更远的祖先被父节点屏蔽。</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 15 三种条件独立结构 -->
+  <section class="slide" data-narration="贝叶斯网里最反直觉、也最常考的是三种基本结构的独立性规则。同父结构：一个共同原因派生两个结果，比如感冒派生发烧和咳嗽。不给定感冒时，发烧和咳嗽当然相关；但一旦给定感冒，两者就独立了——知道感不感冒之后，发烧不再给咳嗽带来新信息。顺序结构：A 到 B 到 C 一条链，不给中间节点 B 时两端相关，给定 B 后两端独立，信息被中间节点阻断。最反直觉的是 V 结构也叫对撞：两个原因共同指向一个结果，比如发烧和咳嗽都指向就医。不给对撞节点时两原因相互独立；但一旦给定对撞节点，比如已知患者就医了，两原因反而相关——若他没发烧，那咳嗽的可能性就上升，这就是解释消除。口诀：同父顺序给定中间就独立，对撞反过来，给定反而相关。">
+    <div class="slide-head"><span class="sec">三结构</span><h3>同父 / 顺序：给定中间节点则独立；V 结构：给定对撞节点反而相关</h3></div>
+    <div class="slide-body">
+      <div class="mmd-row">
+        <div class="mmd">
+          <div class="mermaid">
+flowchart TB
+  C["C"] --> F["F"]
+  C --> K["K"]
+          </div>
+          <div class="cap"><b>同父</b><br>不给 C：F 与 K 相关<br>给定 C：F ⊥ K</div>
+        </div>
+        <div class="mmd">
+          <div class="mermaid">
+flowchart LR
+  A["A"] --> B["B"] --> D["C"]
+          </div>
+          <div class="cap"><b>顺序</b><br>不给 B：A 与 C 相关<br>给定 B：A ⊥ C</div>
+        </div>
+        <div class="mmd">
+          <div class="mermaid">
+flowchart TB
+  F["F"] --> D["D"]
+  K["K"] --> D
+          </div>
+          <div class="cap"><b>V 结构（对撞）</b><br>不给 D：F ⊥ K<br>给定 D：F 与 K 相关</div>
+        </div>
+      </div>
+      <div class="warn" style="margin-top:10px;">口诀：<strong>同父、顺序「关闸」在中间——给定中间就独立；对撞「开闸」在对撞点——给定反而相关</strong>（解释消除 Explaining Away）。</div>
+    </div>
+  </section>
+
+  <!-- 16 d-分离两个判断 -->
+  <section class="slide" data-narration="用 d-分离规则在感冒就医网上做两个判断。d-分离一句话：给定集合 S，若 Y 到 Z 的每条无向路径都被 S 阻断，则 Y 与 Z 条件独立。判断一：给定感冒，发烧与咳嗽独立吗？发烧到咳嗽只有一条路，发烧感冒咳嗽，是同父结构，中间节点感冒在给定集里，同父结构中间节点被给定路径就被阻断，所有路径都阻断，所以发烧与咳嗽条件独立。判断二：给定就医，发烧与咳嗽独立吗？这次路径是发烧就医咳嗽，是 V 结构，对撞节点是就医，对撞节点恰恰在给定集里，V 结构对撞节点被给定路径反而打开，存在未阻断路径，所以发烧与咳嗽不独立。直觉：已知患者就医了，若他没发烧，那咳嗽的可能性就上升——两个父节点在给定共同子节点时互相解释，此消彼长。">
+    <div class="slide-head"><span class="sec">判断</span><h3>d-分离：路径全阻断则独立——同一张网上两个相反答案</h3></div>
+    <div class="slide-body">
+      <div class="card"><strong>判断 1：给定「感冒」，发烧 ⊥ 咳嗽 吗？</strong><br>
+        ① 路径只有 发烧→感冒→咳嗽（同父）；② 中间节点「感冒」∈ S；③ 同父结构中间节点被给定 → 阻断；④ 所有路径阻断 ⟹ <strong>独立</strong>。</div>
+      <div class="card"><strong>判断 2：给定「就医」，发烧 ⊥ 咳嗽 吗？</strong><br>
+        ① 路径只有 发烧→就医←咳嗽（V 结构）；② 对撞节点「就医」∈ S；③ V 结构对撞节点被给定 → <strong>不阻断</strong>；④ 存在未阻断路径 ⟹ <strong>不独立</strong>（解释消除）。</div>
+      <div class="deep">直觉：已知就医了，若没发烧，咳嗽的可能性就上升——两个父节点在给定共同子节点时互相「解释」，此消彼长。</div>
+    </div>
+  </section>
+
+  <!-- 17 EM 动机 -->
+  <section class="slide" data-narration="前三节都假设「每个样本属于哪一类」是已知的。但现实中常有隐变量：一批身高数据混了男女两组，哪条数据属于哪组没记录；或者一堆点混了两个高斯，每个点来自哪个分量没标记。这时对数似然里出现「对数套求和」——要先对隐变量求边缘化再取对数，求导置零得不到闭式解。EM 算法用一个优雅的交替迭代绕开它：E 步用当前参数估计隐变量的后验分布，相当于软指派每个点有多大比例属于哪组；M 步把这个软指派当成带权数据，重新做加权极大似然估计。两步交替，数学上可以证明对数似然单调不降，直到收敛到局部最优。这就是「鸡生蛋蛋生鸡」的解法：知道分组就能估参数，知道参数就能估分组，两头都不知道就先猜一头，然后来回修正，每次修正都让整体解释力更好。">
+    <div class="slide-head"><span class="sec">隐变量</span><h3>有未观测变量时似然无闭式解，EM 用「估分组 ⇄ 估参数」交替绕开</h3></div>
+    <div class="slide-body">
+      <div class="cols">
+        <div class="col"><div class="card">🐔 <strong>E 步（Expectation）</strong><br>用当前参数算隐变量后验（责任度 γ），相当于「软指派」</div></div>
+        <div class="col"><div class="card">🥚 <strong>M 步（Maximization）</strong><br>把软指派当带权数据，做加权 MLE 重新估参数</div></div>
+      </div>
+      <div class="formula formula-concl">$$\text{E 步} \to \text{M 步} \to \text{E 步} \to \cdots \;\Longrightarrow\; \text{对数似然单调不降，收敛到局部最优}$$</div>
+      <div class="warn">「鸡生蛋、蛋生鸡」：知道分组就能估参数，知道参数就能估分组。两头都不知道就先猜一头，来回修正，每步都让数据更可能。K-means 就是责任度取 0/1 的硬指派特例。</div>
+    </div>
+  </section>
+
+  <!-- 18 EM 手算（.step） -->
+  <section class="slide" data-narration="亲手算一轮。五个观测点：一、二、三、七、八。两个一维高斯，混合系数零点五，方差都固定为一，只剩两个均值要估，初值 μ 一等于二、μ 二等于六。E 步先算每个点的责任度：x 等于一离 μ 一很近，责任度约一点零；x 等于二也几乎全在第 1 组；x 等于三离两组都不算远但也不近，责任度零点九八二对零点零一八，体现了那点犹豫；x 等于七、八几乎全在第 2 组。M 步用责任度做加权平均：第 1 组有效样本数约二点九八，新 μ 一等于一加二加三乘零点九八二再除以二点九八，约等于一点九九四。第 2 组有效样本数约二点零二，新 μ 二约等于七点四五九。最关键的：对数似然从负十一点五四升到负九点三一，确实上升了——这正是 EM 的收敛保证，每一步都不会让数据变得更不可能。">
+    <div class="slide-head"><span class="sec">手算</span><h3>一轮 EM：μ₁ 从 2 到 1.994，μ₂ 从 6 到 7.459，对数似然 −11.54 → −9.31</h3></div>
+    <div class="slide-body">
+      <div class="step">
+        <p><strong>① E 步：算责任度</strong>（π = 0.5 约掉，σ² = 1，初值 μ₁=2、μ₂=6）</p>
+        <div class="formula">$$\gamma_1(x) = \tfrac{\varphi(x;\mu_1)}{\varphi(x;\mu_1)+\varphi(x;\mu_2)} \;\Rightarrow\; x{=}1,2,3 \text{ 几乎全属第1组},\; x{=}7,8 \text{ 几乎全属第2组},\; \gamma_1(3) \approx 0.982$$</div>
+      </div>
+      <div class="step">
+        <p><strong>② M 步：加权平均更新 μ</strong>（N₁ ≈ 2.982，N₂ ≈ 2.018）</p>
+        <div class="formula">$$\mu_1^{new} = \tfrac{1 \cdot 1 + 2 \cdot 1 + 3 \cdot 0.982}{2.982} \approx 1.994, \qquad \mu_2^{new} = \tfrac{3 \cdot 0.018 + 7 \cdot 1 + 8 \cdot 1}{2.018} \approx 7.459$$</div>
+      </div>
+      <div class="step">
+        <div class="formula formula-concl">$$\boldsymbol{\ell(2,6) \approx -11.54 \;\longrightarrow\; \ell(1.994, 7.459) \approx -9.31} \quad\text{—— 对数似然确实上升}$$</div>
+      </div>
+      <p class="step-hint">按空格 / → 逐步展开推导</p>
+    </div>
+  </section>
+
+  <!-- 19 误区 -->
+  <section class="slide" data-narration="扫三个本章最常踩的雷。第一个：以为后验最大就一定最优。错，只在 0-1 损失下成立；一旦误分代价不对称，比如医疗漏诊远比误诊严重，就必须回到完整的条件风险公式，不能用最大后验，否则高代价错误被当低代价处理。第二个：以为属性独立所以朴素贝叶斯很烂。未必——它在小数据高维稀疏场景，尤其文本分类，表现惊人地好：概率值不准但排序常对，而分类只需排序。第三个：以为 EM 能找到全局最优。错，只保证对数似然单调不降到局部最优，初值不同结果可能完全不同；实践必须多次随机初始化取最好。">
+    <div class="slide-head"><span class="sec">避坑</span><h3>三个最常踩的雷：MAP 滥用、朴素贝叶斯被低估、EM 全局最优幻觉</h3></div>
+    <div class="slide-body">
+      <div class="trap">❌ <strong>后验概率最大就一定最优</strong><br>✅ 只在 0-1 损失下成立。误分代价不对称（医疗、风控、垃圾邮件）时必须用条件风险，不能用 MAP，否则高代价错误被当低代价处理。</div>
+      <div class="trap">❌ <strong>属性独立，所以朴素贝叶斯很烂</strong><br>✅ 小数据高维稀疏（文本分类）反而常常很强——概率值不准但排序对，分类只需排序。真坑：属性强相关时信息被重复计票，后验过度自信。</div>
+      <div class="trap">❌ <strong>EM 能找到全局最优</strong><br>✅ 只保证单调不降到局部最优，初值敏感；初值都取中点会塌缩成退化解。实践：多次随机初始化取最好。</div>
+    </div>
+  </section>
+
+  <!-- 20 接口 -->
+  <section class="slide" data-narration="本章和前后两章怎么分工？上一章支持向量机是判别式路线的代表：直接在特征空间找最大间隔超平面，输出一个硬判决，不管概率也不管代价。本章贝叶斯分类器是生成式路线的代表：学概率分布本身，输出后验概率，天然能把误判代价算进决策。下一章集成学习要做的事是：把多个基学习器组合起来降低方差或偏差，而本章的朴素贝叶斯正是常用的概率型基学习器之一——它训练快、输出概率、易于组合。再往后看，本章的 EM 算法直接是第九章聚类里高斯混合模型的引擎，贝叶斯网则通向第十四章概率图模型。一句话钩子：单个概率模型能力有限，下一章我们看看把一堆「弱」概率学习器组合起来会发生什么事。">
+    <div class="slide-head"><span class="sec">接口</span><h3>Ch6 给边界、Ch7 给概率、Ch8 把多个概率型基学习器组合起来</h3></div>
+    <div class="slide-body">
+      <table>
+        <thead><tr><th></th><th>Ch6 支持向量机</th><th>Ch7 贝叶斯分类器</th><th>Ch8 集成学习</th></tr></thead>
+        <tbody>
+          <tr><td class="l"><strong>路线</strong></td><td class="l">判别式</td><td class="l">生成式</td><td class="l">组合多个基学习器</td></tr>
+          <tr><td class="l"><strong>输出</strong></td><td class="l">硬判决（边界一侧）</td><td class="l">后验概率（可加权代价）</td><td class="l">投票 / 加权概率</td></tr>
+          <tr><td class="l"><strong>给下一章</strong></td><td class="l">—</td><td class="l">朴素贝叶斯 = 常用概率型基学习器</td><td class="l">降方差 / 降偏差</td></tr>
+        </tbody>
+      </table>
+      <div class="tip">钩子：本章的 EM 直接是 Ch9 GMM 聚类的引擎，贝叶斯网通向 Ch14 概率图模型——概率路线一旦踏上，后面一路都是它的延伸。</div>
+    </div>
+  </section>
+
+  <!-- 21 小结 -->
+  <section class="slide" data-narration="三句话讲完本章。第一，解决什么：先验与似然可估计时如何做期望损失最小的分类决策，特征不独立或有隐变量时怎么走下去。第二，核心机制：贝叶斯决策论给出最小条件风险标准，0-1 损失下退化为最大后验；贝叶斯定理把后验拆成先验乘似然，参数用极大似然估计；朴素贝叶斯用条件独立拆维度灾难，拉普拉斯平滑防零概率；假设太强升级为贝叶斯网；有隐变量用 EM 交替优化。第三，承上启下：Ch3 到 Ch6 是判别式，本章是生成式；第八章组合基学习器，EM 通向第九章聚类，贝叶斯网通向第十四章概率图模型。必背公式就是条件风险和贝叶斯定理这两条。">
+    <div class="slide-head"><span class="sec">小结</span><h3>三句话讲完第 7 章</h3></div>
+    <div class="slide-body">
+      <div class="chain">
+        <div class="link"><span class="no">1</span><span class="txt"><strong>解决什么</strong>：当先验与似然可估计时，如何做期望损失最小的分类决策？特征不独立、有隐变量时又怎么办？</span></div>
+        <div class="link"><span class="no">2</span><span class="txt"><strong>核心机制</strong>：条件风险 + 贝叶斯定理拆后验 + MLE 估参数；朴素贝叶斯用条件独立拆维度灾难，EM 在估分组 ⇄ 估参数间交替</span></div>
+        <div class="link"><span class="no">3</span><span class="txt"><strong>承上启下</strong>：Ch3–6 判别式学边界，本章生成式学分布；Ch8 组合基学习器，EM→Ch9 聚类，贝叶斯网→Ch14 概率图模型</span></div>
+      </div>
+      <div class="formula formula-concl">$$R(c_i|\boldsymbol{x}) = \sum_j \lambda_{ij} P(c_j|\boldsymbol{x}) \qquad P(c|\boldsymbol{x}) = \frac{P(c)\,P(\boldsymbol{x}|c)}{P(\boldsymbol{x})} \;\text{—— 合上书也要能默写}$$</div>
+    </div>
+  </section>
+
+  <!-- 22 结束页 -->
+  <section class="slide slide-cover" data-narration="本章到此结束。合上书，拿一张纸，挑战以下四件事：第一，写出条件风险定义与贝叶斯判定准则，并推出 0-1 损失下的最大后验准则；第二，完整推导十次抛硬币七次正面的极大似然估计，从似然到对数似然到求导置零到 θ 等于十分之七；第三，用本章的十条瓜数据，带拉普拉斯平滑手算测试样本青绿、蜷缩、浊响、清晰的两个后验得分并判决；第四，对五点两高斯混合例子手算一轮 EM，写出五个责任度和两个新均值。全部做出来，本章才算真正毕业。下一章是集成学习：单个模型再强也有上限，把一堆弱学习器组合起来，能不能得到强学习器？Bagging、Boosting、随机森林会给出三种不同的回答。">
+    <div class="kicker">本 章 结 束</div>
+    <h1>把分类当成在不确定性下算账</h1>
+    <div class="sub">毕业挑战：合上书，拿一张纸</div>
+    <div class="divider"></div>
+    <div class="meta">
+      ☑ 写出条件风险定义，推出 0-1 损失下的 MAP 准则<br>
+      ☑ 完整推导「10 抛 7 正」的 MLE：θ̂ = 7/10<br>
+      ☑ 用 10 条瓜数据带拉普拉斯平滑手算后验得分并判决<br>
+      ☑ 对 5 点两高斯混合手算一轮 EM：5 个责任度 + 两个新 μ<br><br>
+      下一章 · 第8章 集成学习：把一堆「弱」学习器组合成「强」学习器
+    </div>
+  </section>
+
+  <div id="footer">
+    <span class="brand">第7章 贝叶斯分类器 · 机器学习课件</span>
+    <span id="pagenum">1 / 22</span>
+  </div>
+
+  <div class="nav">
+    <button id="prev" title="上一页 (←)">‹</button>
+    <button id="next" title="下一页 (→ / 空格)">›</button>
+  </div>
+  <div id="hint">← → 翻页 · 空格下一页 · 推导页逐步显示 · 点击左右半屏翻页</div>
+
+</div>
+
+<script src="/lectures-assets/mermaid.min.js"></script>
+<script>
+mermaid.initialize({
+  startOnLoad: false,
+  theme: "base",
+  themeVariables: {
+    primaryColor: "#ebf8ff",
+    primaryBorderColor: "#2b6cb0",
+    primaryTextColor: "#1a365d",
+    lineColor: "#718096",
+    fontFamily: "-apple-system, PingFang SC, sans-serif",
+    fontSize: "15px"
+  },
+  flowchart: { curve: "linear", htmlLabels: false }
+});
+</script>
+<script>
+(function(){
+  const slides = Array.from(document.querySelectorAll('.slide'));
+  const total = slides.length;
+  let idx = 0;
+
+  const params = new URLSearchParams(location.search);
+  const startSlide = parseInt(params.get('slide'), 10);
+  if (params.get('autohide') === '1') document.body.classList.add('autohide');
+  if (!isNaN(startSlide) && startSlide >= 1 && startSlide <= total) idx = startSlide - 1;
+
+  const progress = document.getElementById('progress');
+  const pagenum = document.getElementById('pagenum');
+  const prevBtn = document.getElementById('prev');
+  const nextBtn = document.getElementById('next');
+
+  const stepState = new Map();
+  function stepsOf(i){ return Array.from(slides[i].querySelectorAll('.step')); }
+  function applySteps(){
+    stepsOf(idx).forEach((el, k)=> el.classList.toggle('on', k < (stepState.get(idx) || 0)));
+  }
+  function forward(){
+    const steps = stepsOf(idx);
+    const shown = stepState.get(idx) || 0;
+    if (shown < steps.length){ stepState.set(idx, shown + 1); applySteps(); return; }
+    go(idx + 1);
+  }
+  function backward(){
+    const steps = stepsOf(idx);
+    const shown = stepState.get(idx) || 0;
+    if (shown > 0){ stepState.set(idx, shown - 1); applySteps(); return; }
+    go(idx - 1);
+  }
+
+  function renderMermaid(slide){
+    if (typeof mermaid === 'undefined') return;
+    const nodes = Array.from(slide.querySelectorAll('.mermaid:not([data-done])'));
+    if (!nodes.length) return;
+    nodes.forEach(n => n.setAttribute('data-done', ''));
+    mermaid.run({ nodes }).catch(err => {
+      nodes.forEach(n => n.removeAttribute('data-done'));
+      console.error('mermaid 渲染失败：', err);
+    });
+  }
+
+  function render(){
+    slides.forEach((s,i)=> s.classList.toggle('active', i===idx));
+    progress.style.width = ((idx+1)/total*100) + '%';
+    pagenum.textContent = (idx+1) + ' / ' + total;
+    prevBtn.disabled = (idx===0);
+    nextBtn.disabled = (idx===total-1);
+    applySteps();
+    renderMermaid(slides[idx]);
+  }
+  function go(n){ idx = Math.max(0, Math.min(total-1, n)); render(); }
+
+  prevBtn.addEventListener('click', e=>{ e.stopPropagation(); backward(); });
+  nextBtn.addEventListener('click', e=>{ e.stopPropagation(); forward(); });
+
+  document.addEventListener('keydown', e=>{
+    if(e.key==='ArrowRight'||e.key===' '||e.key==='PageDown'){ e.preventDefault(); forward(); }
+    else if(e.key==='ArrowLeft'||e.key==='PageUp'){ e.preventDefault(); backward(); }
+    else if(e.key==='Home'){ stepState.set(idx, 0); go(0); }
+    else if(e.key==='End'){ go(total-1); }
+  });
+
+  document.getElementById('stage').addEventListener('click', e=>{
+    if(e.target.closest('.nav')) return;
+    const x = e.clientX;
+    if(x < window.innerWidth*0.5) backward(); else forward();
+  });
+
+  function fit(){
+    const s = Math.min(window.innerWidth/1280, window.innerHeight/720);
+    document.getElementById('stage').style.transform = 'translate(-50%,-50%) scale(' + s + ')';
+  }
+  window.addEventListener('resize', fit);
+  fit();
+  render();
+})();
+</script>
+</body>
+</html>

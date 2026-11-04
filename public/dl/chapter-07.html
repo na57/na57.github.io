@@ -1,0 +1,857 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第7章 正则化 · 深度学习互动讲义</title>
+<link rel="stylesheet" href="/lectures-assets/style.css">
+</head>
+<body>
+
+<nav class="topbar">
+  <div class="topbar-inner">
+    <span class="brand"><a href="index.html" style="color:inherit">← 学习地图</a></span>
+    <span class="crumb">阶段② · 现代深度网络 / 第7章</span>
+  </div>
+</nav>
+
+<div class="wrap">
+
+  <div class="lecture-head">
+    <span class="ch-label">CHAPTER 07 · 现代深度网络</span>
+    <h1>正则化</h1>
+    <p class="lead">一句话副标题：第6章让网络"能表达、能训练"，但容量一大就把噪声当规律背下来——本章回答：不缩小模型容量，如何让大模型在新数据上也表现好？</p>
+  </div>
+
+  <!-- ===== 章首四件套之 1：全书定位 ===== -->
+  <div class="position-bar">
+    <strong>本章在主线上的位置：</strong>第6章给出了万能逼近器与反向传播，但"能记住训练集"不等于"能泛化"；本章回答"<u>不砍容量，用什么手段把泛化差距压下去</u>"——参数惩罚、数据增强、早停、Dropout 四件武器；它们引入的超参数与训练动力学问题交给第8章优化。<br>
+    第7章回答主线上的第7个问题：<strong>不缩小模型容量，如何让大模型在新数据上也表现好？</strong>
+    <div class="map-inline">
+      <span class="node">① 数学与机器学习基础<br>Ch1–5 数学工具与机器学习基础</span><span class="arrow">→</span>
+      <span class="node here">② 现代深度网络<br>Ch6 深度前馈网络 · <strong>Ch7 正则化</strong> · Ch8 优化 · Ch9 卷积 · Ch10 序列 · Ch11 实践方法论</span><span class="arrow">→</span>
+      <span class="node">③ 表示与推断<br>Ch12–16 表示学习与结构化模型</span><span class="arrow">→</span>
+      <span class="node">④ 生成模型与前沿<br>Ch17–20 自编码器与生成模型</span>
+    </div>
+  </div>
+
+  <!-- ===== 章首四件套之 2：学习目标 ===== -->
+  <div class="objectives">
+    <h4>🎯 学完本章，合上书你应该能：</h4>
+    <ol>
+      <li>说出正则化的定义，用 1 次/3 次/9 次多项式拟合的例子解释过拟合与泛化差距</li>
+      <li>写出 L2 惩罚下的闭式解 w̃ = (H + αI)⁻¹H w*，并手算两个特征值方向的缩放因子 λᵢ/(λᵢ+α)</li>
+      <li>解释 L1 为什么产生稀疏解而 L2 不产生，说出"权重衰减只罚权重、不罚偏置"的原因</li>
+      <li>对 3 分类硬标签与 ε = 0.1 手算标签平滑结果，并解释它如何阻止 logits 趋向无穷</li>
+      <li>给定验证误差序列找出早停点，说明"训练轮数 ≈ 等效容量"</li>
+      <li>手算 inverted dropout 的训练输出与期望，解释测试时为什么不 dropout</li>
+    </ol>
+  </div>
+
+  <div class="lecture">
+
+    <!-- ===== 章首四件套之 3：推导主线图 ===== -->
+    <div class="figure">
+      <div class="mermaid">
+flowchart TB
+  A["第6章：网络能表达 能训练"] -->|"但容量一大就背下训练集 测试翻车"| B["核心矛盾：不想缩小容量 又要泛化"]
+  B -->|"修改目标函数"| C["参数范数惩罚：L2 收缩 L1 稀疏"]
+  B -->|"修改训练数据"| D["数据集增强与标签平滑"]
+  B -->|"修改训练过程"| E["早停：训练轮数约等于等效容量"]
+  B -->|"修改网络结构"| F["Dropout：廉价的集成近似"]
+  C --> G["遗留问题：α ε p 等超参数要调 且训练动力学更复杂"]
+  D --> G
+  E --> G
+  F --> G
+  G -.->|"交给第8章"| H["优化算法"]
+  classDef hot fill:#fbeedd,stroke:#c4651f,stroke-width:2.5px,color:#c4651f;
+  classDef danger fill:#fae9e7,stroke:#b03a2e,stroke-width:2.5px,color:#b03a2e;
+  class F hot;
+  class G danger;
+      </div>
+      <div class="caption">本章推导主线：过拟合是"容量与数据量不匹配"，四条路线从不同角度缩小泛化差距，但每件武器都带来超参数——如何选择与训练它们是第 8 章的问题。</div>
+    </div>
+
+    <!-- ================= 7.1 ================= -->
+    <h2><span class="sec-no">7.1</span>为什么需要正则化：容量与过拟合</h2>
+
+    <p>第6章证明了前馈网络是万能逼近器，又给了反向传播这件训练工具。但"能逼近任何函数"是一把双刃剑：容量足够大的模型同样能逼近<em>训练集里的噪声</em>。第5章说过，机器学习的真正目标是<span class="term">泛化</span>（Generalization）——在没见过的新数据上表现好。当模型的<span class="term">容量</span>（Model Capacity）远超任务所需，就会出现<span class="term">过拟合</span>（Overfitting）：训练误差一路走低，测试误差却不降反升。</p>
+
+    <p><span class="term">正则化</span>（Regularization）的定义只有一句话：<strong>为降低泛化误差（而非训练误差）对学习算法做的任何修改</strong>。注意这个定义的拧巴之处——它允许训练误差<em>升高</em>，只要泛化差距能缩小。</p>
+
+    <p><strong>完整例子（手算全程）。</strong>采集 10 个数据点，真实规律是带噪声的一次函数 y = 0.5x + 噪声。分别用 1 次、3 次、9 次多项式去拟合这 10 个点，再放到 100 个新点上测误差：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>模型</th><th>自由参数数</th><th>训练误差</th><th>测试误差</th><th>泛化差距</th></tr>
+        <tr><td>1 次多项式（直线）</td><td>2</td><td>5.2</td><td>5.8</td><td>0.6（欠拟合）</td></tr>
+        <tr><td>3 次多项式</td><td>4</td><td>1.1</td><td>1.3</td><td>0.2（恰好）</td></tr>
+        <tr><td>9 次多项式</td><td>10</td><td>0.0</td><td>47.5</td><td>47.5（过拟合）</td></tr>
+      </table>
+    </div>
+
+    <p>三个模型的故事各不相同：直线太简单，训练误差 5.2 已经很高——这是<span class="term">欠拟合</span>（Underfitting），容量不足；9 次多项式有 10 个自由参数，恰好能穿过全部 10 个训练点，训练误差 0.0——但它记住的是"噪声 + 规律"，一到新数据误差飙到 47.5，这就是过拟合；3 次多项式训练误差 1.1 略高于 9 次的 0.0，测试误差 1.3 却全场最低。<strong>泛化差距 = 测试误差 − 训练误差</strong>，它是本章一切手段真正要压下去的指标。</p>
+
+    <p>这里引出一个关键抉择：面对过拟合，最直觉的反应是把 9 次模型砍成 3 次——<em>缩小容量</em>。但深度学习的经验恰恰相反：大模型加合适的正则化，往往比小模型表现得更好。本章的主线问题因此是：<strong>不缩小模型容量，如何让大模型在新数据上也表现好？</strong></p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>正则化的交易公式：<strong>训练误差略升，换泛化差距缩小</strong>。9 次多项式的问题不是"它弯得太多"，而是"没有任何东西阻止它乱弯"。正则化就是给训练加一道"刹车偏好"：让模型在不怎么牺牲拟合能力的前提下，偏好更平滑、更简单、更稳的解。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>以为"训练误差越低，模型越好"。9 次多项式的训练误差是 0.0，三者中最低，测试误差却是 3 次模型的 36 倍。训练误差只回答"记住没有"，泛化差距才回答"学会没有"。另一个误区是以为正则化只在模型太大时才需要——小数据集配中等模型同样需要它。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 7.1-1</div>
+              <div class="q-text">写出正则化的定义。为什么说它允许训练误差升高？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              为降低泛化误差（而非训练误差）对学习算法做的任何修改。目标是缩小泛化差距，交易是"训练误差略升换测试误差大降"——如 3 次多项式训练误差 1.1 高于 9 次的 0.0，测试误差却 1.3 对 47.5。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 7.1-2</div>
+              <div class="q-text">10 个点用 9 次多项式拟合，训练/测试误差是多少？过拟合与欠拟合在"训练误差 vs 测试误差"上各有什么特征？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              训练误差 0.0、测试误差 47.5。过拟合：训练误差很低但泛化差距大；欠拟合：训练误差本身就高（如直线的 5.2），测试误差与训练误差接近。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ================= 7.2 ================= -->
+    <h2><span class="sec-no">7.2</span>参数范数惩罚：L2 权重衰减为什么"挑方向"</h2>
+
+    <p>上一节说正则化要"加刹车"，最直接的加法是在目标函数里加一项<span class="term">参数范数惩罚</span>（Parameter Norm Penalty）：</p>
+
+    <div class="formula">J̃(w) = J(w) + <span class="frac"><span class="num-part">α</span><span class="den-part">2</span></span> wᵀw（L2 惩罚，α ≥ 0 控制强度）</div>
+
+    <p>这就是 <span class="term">L2 正则化</span>（L2 Regularization），在神经网络里更常叫<span class="term">权重衰减</span>（Weight Decay）——看它的梯度更新式就知道名字的来历：</p>
+
+    <div class="formula">w ← w − η(∇J + αw) = (1 − ηα)w − η∇J</div>
+
+    <p>每一步更新前，权重先被乘上一个略小于 1 的因子 (1 − ηα)——权重在"衰减"，这就是名字的由来。但这只是表面。<strong>L2 真正做了什么？</strong>用二次近似把账算到底。</p>
+
+    <p><strong>完整推导。</strong>在最优点 w* 附近把目标函数做二次近似（一阶项在 w* 处为 0）：</p>
+
+    <div class="formula">J(w) ≈ J(w*) + <span class="frac"><span class="num-part">1</span><span class="den-part">2</span></span>(w − w*)ᵀH(w − w*)</div>
+
+    <p>其中 H 是<span class="term">海森矩阵</span>（Hessian Matrix），记录损失曲面在各方向的曲率。加上 L2 惩罚后 J̃ 的梯度为 H(w − w*) + αw，令其为 0：</p>
+
+    <div class="formula">H(w̃ − w*) + αw̃ = 0 ⟹ (H + αI)w̃ = Hw* ⟹ w̃ = (H + αI)⁻¹Hw*</div>
+
+    <p>对 H 做特征分解 H = QΛQᵀ，沿第 i 个<span class="term">特征向量</span>（Eigenvector）方向看，(H + αI)⁻¹H 的作用就是一个标量缩放：</p>
+
+    <div class="formula">方向 i 上的权重被缩放为：<span class="frac"><span class="num-part">λᵢ</span><span class="den-part">λᵢ + α</span></span>（λᵢ 是该方向的特征值）</div>
+
+    <p><strong>完整例子（手算全程）。</strong>设 H 只有两个特征方向：λ₁ = 1（损失在该方向变化快，<em>敏感方向</em>），λ₂ = 0.01（几乎平坦的方向），取 α = 0.1。两个方向的缩放因子分别是：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>方向</th><th>特征值 λᵢ</th><th>缩放因子 λᵢ/(λᵢ+α)</th><th>效果</th></tr>
+        <tr><td>方向 1（敏感）</td><td>1</td><td>1/(1+0.1) = 1/1.1 ≈ 0.909</td><td>保留约 91%，几乎不动</td></tr>
+        <tr><td>方向 2（平坦）</td><td>0.01</td><td>0.01/(0.01+0.1) = 0.01/0.11 ≈ 0.091</td><td>只剩约 9%，压向 0</td></tr>
+      </table>
+    </div>
+
+    <p>代入具体权重 w* = [0.8, 0.3]（两个分量分别沿两个特征方向）：</p>
+
+    <div class="formula">w̃ ≈ [0.8 × 0.909, 0.3 × 0.091] ≈ [0.727, 0.027]</div>
+
+    <p>看结果：敏感方向的 0.8 只缩到 0.727（损失对这个方向很在意，正则化不敢动它）；平坦方向的 0.3 被压到 0.027（损失对它无所谓，正则化就顺手把它清掉）。<strong>L2 不是均匀地缩小所有权重，而是让数据决定哪些方向值得保留。</strong></p>
+
+    <p>与 L2 并列的是 <span class="term">L1 正则化</span>（L1 Regularization）：惩罚项换成绝对值之和 α‖w‖₁ = α∑ᵢ|wᵢ|。几何直觉：L2 的等惩罚面是圆形，光滑，最优交点可以停在任意角度——权重被整体缩小但很少恰好为 0；L1 的等惩罚面是菱形，<strong>棱角戳在坐标轴上</strong>，损失等高线最容易撞上棱角——而棱角处某些权重恰好等于 0。所以 L1 产生<span class="term">稀疏解</span>（Sparse Solution）：大量权重为 0，相当于自动做特征选择。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>L2 的缩放因子 λᵢ/(λᵢ+α) 像一块"智能橡皮擦"：曲率大（λᵢ 大）的方向说明数据强烈需要它，擦得轻；曲率小的方向说明它对拟合没贡献，可能只是噪声撑起来的，擦得重。这就是"不缩小容量也能防过拟合"的第一种实现——容量还在，但无用的方向被自动清零了。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>两个高频错误：(1) 以为 L2 会把权重压成精确的 0——不会，λᵢ/(λᵢ+α) 永远大于 0，要稀疏解请用 L1；(2) 对偏置 b 也加惩罚——实践上只惩罚权重 w，不罚偏置。偏置不乘以输入，过拟合的"乱弯"是权重造成的；罚偏置只会引入欠拟合，没有正则化收益。另外 α 不是越大越好：α → ∞ 时所有方向都被压向 0，直接欠拟合。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 7.2-1</div>
+              <div class="q-text">写出 L2 惩罚下方向 i 的缩放因子公式。λ = 1 与 λ = 0.01（α = 0.1）时各缩放多少？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              缩放因子 = λᵢ/(λᵢ+α)。λ = 1：1/1.1 ≈ 0.909（几乎不动）；λ = 0.01：0.01/0.11 ≈ 0.091（压向 0）。敏感方向保留，平坦方向清除。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 7.2-2</div>
+              <div class="q-text">为什么 L1 产生稀疏解而 L2 不产生？为什么偏置通常不加惩罚？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              L1 等惩罚面是菱形，棱角在坐标轴上，最优解易停在棱角（某些权重 = 0）；L2 是圆，无极点，只缩不归零。偏置不乘输入、不参与"乱弯"，罚它只致欠拟合。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ================= 7.3 ================= -->
+    <h2><span class="sec-no">7.3</span>数据集增强与标签平滑：从数据侧下手的正则化</h2>
+
+    <p>上一节修改的是目标函数。还有一条更朴素的路线：过拟合的根源是"数据不够模型背"，那就给模型更多数据——<span class="term">数据集增强</span>（Dataset Augmentation）用领域知识对训练样本做"不改变标签的变换"，凭空造出合理的新样本：图像平移几个像素、水平翻转、轻微旋转、缩放、加噪；语音识别里给音频加背景噪声。模型见过同一只猫的一百种摆法，自然不会再把"猫必须面朝左"这种偶然当规律。</p>
+
+    <p>增强有一条红线：<strong>变换必须保持标签不变</strong>。水平翻转猫的照片没问题，但水平翻转数字"6"会得到"9"，翻转字母"b"会得到"d"——在 OCR 任务里这类变换会把标签改错，是禁用操作。</p>
+
+    <p>同一节思路的另一半是<span class="term">标签平滑</span>（Label Smoothing）：不改输入，改标签。k 分类的硬标签是 one-hot 向量，平滑版把真实类的概率从 1 降到 (1 − ε)，匀出 ε 平分给所有 k 类：</p>
+
+    <div class="formula">y_smooth = (1 − ε)·y_hard + <span class="frac"><span class="num-part">ε</span><span class="den-part">k</span></span>·1（每个分量都加一点）</div>
+
+    <p><strong>完整例子（手算全程）。</strong>3 分类，硬标签 y = [1, 0, 0]，取 ε = 0.1，k = 3：</p>
+
+    <ol>
+      <li>真实类：(1 − 0.1) × 1 + 0.1/3 = 0.9 + 0.0333…——按花书惯例简化为真实类取 1 − ε = 0.9，其余类平分 ε/(k−1) = 0.05</li>
+      <li>平滑结果：[0.9, 0.05, 0.05]（验证：0.9 + 0.05 + 0.05 = 1.0 ✓）</li>
+    </ol>
+
+    <p>它防什么？回忆第6章：softmax + NLL 要让正确类概率精确等于 1，唯一办法是让它的 logit 趋向 +∞、其余趋向 −∞——模型会拼命把权重和 logits 推向极端，决策边界越来越"自信"，这正是过拟合的一种形态。软标签 [0.9, 0.05, 0.05] 给出了有限的最优解：最优 logits 只需满足 softmax(z) = [0.9, 0.05, 0.05]，即 logit 差值为 log(0.9/0.05) = log 18 ≈ 2.89——有限的差距，模型不再需要奔向无穷。logits 被"拴住"，权重自然不过度膨胀，这也与 7.2 的权重衰减殊途同归。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>数据侧正则化的本质都是"注入先验知识"：增强告诉模型"这些变换不改变语义"，标签平滑告诉模型"训练标签本身也不全可信"。后者还有一个副产品——模型输出的置信度变得有分寸，不再动不动宣称 99.99%。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>两个错误最常见：(1) 盲目增强——对"6/9""b/d"这类变换敏感的任务做了翻转，等于往数据里掺错标签；(2) 在测试/验证时也用平滑标签评估——标签平滑只用于训练阶段，评估时用真实硬标签，否则指标被掺水。另外注意数据增强不能替代真实数据：它造出的样本高度相关，信息量远不如真实新样本。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 7.3-1</div>
+              <div class="q-text">3 分类硬标签 [1, 0, 0]，ε = 0.1，写出标签平滑结果，并验算概率和。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              真实类 1 − ε = 0.9，其余两类各 ε/(k−1) = 0.05：[0.9, 0.05, 0.05]，和为 1.0 ✓。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 7.3-2</div>
+              <div class="q-text">标签平滑为什么能阻止 logits 趋向无穷？数据集增强的红线是什么？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              硬标签要求 softmax 输出精确 1，需 logit → ∞；软标签如 [0.9, 0.05, 0.05] 的最优 logit 差是有限的 log 18 ≈ 2.89。增强红线：变换不得改变标签（如数字 6 不可翻转）。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ================= 7.4 ================= -->
+    <h2><span class="sec-no">7.4</span>早停：训练轮数本身就是一种容量</h2>
+
+    <p>前三节分别改了目标函数和数据。这一节什么都不改——只在"该停的时候停下来"。训练大模型时常见这样的曲线：训练误差单调下降，验证误差却先降后升，呈 U 形。<span class="term">早停</span>（Early Stopping）的做法：训练过程中持续在验证集上评估，记录验证误差最低点时的参数副本；当验证误差连续若干轮不再改善，就终止训练并回滚到那份副本。</p>
+
+    <p><strong>完整例子（手算全程）。</strong>某模型训练 15 轮的验证误差序列如下（训练误差始终在下降，从略）：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>轮次</th><td>1</td><td>2</td><td>3</td><td>4</td><td>5</td><td>6</td><td>7</td><td>8</td><td>9</td><td>10</td><td>11</td><td>12</td><td>13</td><td>14</td><td>15</td></tr>
+        <tr><th>验证误差</th><td>1.20</td><td>1.05</td><td>0.98</td><td>0.93</td><td>0.90</td><td>0.88</td><td>0.87</td><td>0.86</td><td>0.855</td><td>0.85</td><td>0.845</td><td>0.83</td><td>0.835</td><td>0.84</td><td>0.85</td></tr>
+      </table>
+    </div>
+
+    <p>逐轮扫描：第 1 至 12 轮验证误差一路走低（1.20 → 0.83），第 13 轮回升到 0.835，第 14、15 轮继续升到 0.84、0.85——U 形的谷底在<strong>第 12 轮，验证误差 0.83</strong>。早停就取第 12 轮的参数作为最终模型，尽管此时训练误差还在下降（第 13 轮以后模型继续往训练集里钻，那正是过拟合开始的部分）。</p>
+
+    <p>为什么"停得早"等于"容量小"？把训练想象成参数从初始点（通常在 0 附近）出发的一趟旅程：只走 5 步，参数能到达的区域是以起点为中心的小球；走 5000 步，能到达的区域大得多。<strong>可达区域的大小就是等效容量</strong>——限制训练轮数，就把参数的可达范围限制在一个小球里，效果与 L2 把权重拉向 0 异曲同工（事实上可以证明：二次损失下早停与 L2 权重衰减近似等价）。所以"训练轮数"本身就是一个控制容量的超参数。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>早停是最便宜正则化：不改模型、不改目标函数、不增加计算（验证集前向一次远贵不过训练），唯一的代价是要留一份验证集、存一份最佳参数副本。它还自带"训练时间自动调节"属性——数据多时自然停得晚，等效容量随数据量自动放大。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>两个致命错误：(1) 用<em>测试集</em>做早停——这会让测试集参与模型选择，测试误差被乐观污染，不再是无偏估计；早停必须用与训练集、测试集都不重叠的验证集。(2) 一回升就停——验证误差有抖动，通常设 <span class="term">耐心</span>（Patience）参数，如连续 5 轮不改善才停。另外早停后若还想利用验证集数据，需按书上的两轮法重训，细节见原书 7.8 节。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 7.4-1</div>
+              <div class="q-text">验证误差序列 …0.845, 0.83, 0.835, 0.84, 0.85（第 11–15 轮），早停取哪一轮？此时训练误差在升还是降？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              取第 12 轮（验证误差最低 0.83）。此时训练误差仍在下降——第 13 轮起的继续训练正是过拟合的部分，早停主动放弃它。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 7.4-2</div>
+              <div class="q-text">"训练轮数 ≈ 等效容量"是什么意思？早停为什么必须用验证集而非测试集？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              训练越久，参数从初始点可达的区域越大，等效容量越大；限轮数 ≈ 把权重约束在起点附近，与 L2 近似等价。测试集参与早停会使测试误差被污染、失去无偏性。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ================= 7.5 ================= -->
+    <h2><span class="sec-no">7.5</span>Dropout：用一次训练近似指数级集成</h2>
+
+    <p>前面三件武器都没有动网络结构。<span class="term">Dropout</span>（随机失活）改的是前向计算本身：<strong>训练时，每个隐藏单元以概率 p 保留、以 1 − p 被临时删除（输出置 0），每步随机一次；测试时使用完整网络，不做删除。</strong></p>
+
+    <p>工程上的标准实现是<span class="term">反向 Dropout</span>（Inverted Dropout）：训练时把保留下的激活除以 p，测试时什么都不用改：</p>
+
+    <div class="formula">训练时：h̃ = <span class="frac"><span class="num-part">h ⊙ m</span><span class="den-part">p</span></span>（m 是 0/1 掩码，P(mᵢ = 1) = p）；测试时：直接用 h</div>
+
+    <p>⊙ 是<span class="term">逐元素乘积</span>（Element-wise Product）。除以 p 的目的是保持期望不变：E[mᵢ] = p，所以 E[h̃ᵢ] = hᵢ·p/p = hᵢ——训练时输出虽然忽多忽少，平均意义上等于原始激活。</p>
+
+    <p><strong>完整例子（手算全程）。</strong>某层激活 h = [2, 4, 6, 8]，保留概率 p = 0.5，某一步采到掩码 m = [1, 0, 1, 0]：</p>
+
+    <ol>
+      <li>逐元素相乘：h ⊙ m = [2×1, 4×0, 6×1, 8×0] = [2, 0, 6, 0]</li>
+      <li>除以 p：(h ⊙ m)/p = [2/0.5, 0, 6/0.5, 0] = <strong>[4, 0, 12, 0]</strong></li>
+      <li>验证期望守恒：取下游权重 w = [1, 1, 1, 1]。不 dropout 时输出 w·h = 2+4+6+8 = 20；训练时输出的期望 E[w·h̃] = w·E[h̃] = w·h = 20——虽然这一步的实际输出是 4+0+12+0 = 16（换个掩码可能是 24），长期平均恰为 20 ✓</li>
+    </ol>
+
+    <p>为什么这样能正则化？两个视角。<strong>集成视角</strong>：n 个单元有 2ⁿ 种掩码，每种掩码对应一个子网络——一次训练等于同时训练了指数级多个共享权重的子网络，测试时的完整网络近似它们的集成平均（集成正是第5章提过的降方差手段）。<strong>冗余视角</strong>：单元 h₂ 随时可能缺席，h₁ 就不能把赌注押在"反正 h₂ 会兜底"上，每个单元都被迫学出独立有用的特征——打散了单元间的<span class="term">共适应</span>（Co-adaptation）。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>Dropout 用一句话说：训练时反复把网络"打残"，让任何一个单元都不可靠，逼整个网络学会冗余与分布式表示。除以 p 这个小操作是工程关键——它把随机性的期望校准回原值，测试阶段才能无缝用完整网络。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>两个实现错误毁所有：(1) 测试时忘记关 dropout，每次前向结果随机，评估指标全乱；(2) 用 inverted dropout 却忘了训练时除 p（或相反，用老式 dropout 忘了测试时乘 p）——期望不守恒，训练与测试的激活尺度对不上。另外 dropout 在输入层的保留概率应更高（如 0.8），输入特征丢不起。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 7.5-1</div>
+              <div class="q-text">h = [2, 4, 6, 8]，m = [1, 0, 1, 0]，p = 0.5，写出 inverted dropout 的训练输出。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              h ⊙ m = [2, 0, 6, 0]，除以 0.5 得 [4, 0, 12, 0]。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 7.5-2</div>
+              <div class="q-text">为什么要除以 p？测试时如何处理？说出 dropout 正则化的两个解释视角。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              E[mᵢ] = p，除以 p 使 E[h̃] = h 期望守恒（w·h = 20 的例子）。测试时不 dropout、用完整网络。两视角：2ⁿ 个子网络的廉价集成；打散单元间共适应、逼出冗余特征。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ================= 7.6 ================= -->
+    <h2><span class="sec-no">7.6</span>对抗训练：把正则化推到输入扰动方向</h2>
+
+    <p>前五节的正则化都在约束"参数不要走极端"。但还有一类隐蔽的脆弱：在输入上加一个肉眼不可见、精心构造的小扰动，模型输出会翻天覆地——这种样本叫<span class="term">对抗样本</span>（Adversarial Example）。这说明模型在输入空间的某些方向上过度敏感，本质上也是一种泛化失败。</p>
+
+    <p><span class="term">对抗训练</span>（Adversarial Training）的思路与数据集增强一脉相承：训练时主动生成对抗样本（如沿梯度符号方向扰动 x′ = x + ε·sign(∇ₓJ)），混入训练集让模型学着在这些方向上也保持输出稳定。效果上，它近似于对"输出对输入的梯度范数"加了一项惩罚——把 7.2 的"约束参数方向"推广到了"约束输入方向"。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>对抗训练说明正则化的思想没有边界：凡是你希望模型"不变"的方向（权重方向、时间方向、单元组合方向、输入扰动方向），都可以构造对应的正则化手段。它是本章思想的最远延伸。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>以为对抗样本源于"模型太深太非线性"。恰恰相反，花书的解释是高维空间中的<em>过度线性</em>：扰动在每个维度上只改 ε，但成千上万维的效果沿同一方向累加，足以翻转输出。线性已经够制造对抗样本了。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 7.6-1</div>
+              <div class="q-text">什么是对抗样本？对抗训练的基本做法是什么？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              输入上叠加精心构造的微小扰动即令输出剧变的样本。对抗训练：训练时主动生成对抗样本（如 x′ = x + ε·sign(∇ₓJ)）混入训练集。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 7.6-2</div>
+              <div class="q-text">对抗训练与本章前面哪种手段思路最近？它近似于对什么加惩罚？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              与数据集增强一脉相承（造新样本注入先验）。效果近似于惩罚"输出对输入的梯度范数"，即把正则化从参数方向推广到输入扰动方向。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===== 章末五件套之 1：概念卡 ===== -->
+    <h2><span class="sec-no">🃏</span>概念卡：本章概念的一分钟画像</h2>
+    <p>翻面前先自问：这个概念我能用一句话讲清楚吗？</p>
+    <div class="flip-grid">
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 1</div>
+            <div class="q-text">过拟合（Overfitting）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">训练误差与测试误差的差距（泛化差距）随训练不断拉大的现象。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">它本身是要被解决的问题：模型把训练集的噪声当规律背下来，如新数据崩盘（9 次多项式 0.0 → 47.5）。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">考前把十道例题的答案逐字背下，换套卷子就露馅。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为训练误差低就是学得好——过拟合恰恰训练误差最低。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">诊断一切模型训练的第一指标：看训练/验证差距而非单看训练误差。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 2</div>
+            <div class="q-text">L2 正则化 / 权重衰减（Weight Decay）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">J̃ = J + (α/2)wᵀw；二次近似下沿特征方向 i 缩放 λᵢ/(λᵢ+α)。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">不缩模型容量，压掉损失不在意的权重方向（平坦方向 → 0），缩小泛化差距。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">智能橡皮擦：数据在意的方向轻擦，无所谓的方向重擦。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为它产生稀疏解——缩放因子恒大于 0，稀疏是 L1 的事；也别罚偏置。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">几乎所有深度训练的默认配置；第 8 章优化器（如 AdamW）直接内置。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 3</div>
+            <div class="q-text">L1 正则化（Sparse Regularization）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">J̃ = J + α‖w‖₁，惩罚权重绝对值之和。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">产生稀疏解：大量权重恰好为 0，自动做特征选择。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">菱形等惩罚面的棱角戳在坐标轴上，最优解容易停在"某些权重 = 0"的角上。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为 L1/L2 只是惩罚形状不同效果类似——解的形态完全不同：稀疏 vs 收缩。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">需要可解释性、特征筛选或模型压缩时；深度网络中不如 L2 常用。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 4</div>
+            <div class="q-text">早停（Early Stopping）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">监控验证误差，连续若干轮不改善即停，回滚到验证误差最低的参数。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">训练后段的过拟合：训练误差仍降、验证误差已升的部分被直接切掉。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">训练轮数 ≈ 等效容量——参数可达区域随步数扩大，早停把它限制在小球里。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">用测试集做早停（污染评估）；一见回升就停（应设 patience 抗抖动）。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">几乎零成本，是所有训练流程的标配；第 11 章实践方法论还会用它定超参。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 5</div>
+            <div class="q-text">Dropout（随机失活）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">训练时每个单元以概率 p 保留（inverted 版将保留激活除以 p），测试用完整网络。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">打散单元间共适应；一次训练近似 2ⁿ 个共享权重子网络的集成。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">反复把队伍里的成员随机撤走，逼每个人都练出独当一面的本事。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">测试时忘关 dropout；或忘除 p 导致训练/测试激活尺度不一致。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">全连接层的经典正则化；第 9、10 章在卷积/循环网络中有适配变体。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 6</div>
+            <div class="q-text">数据增强（Data Augmentation）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">对训练样本施加保持标签不变的变换（平移/翻转/加噪），人造扩充训练集。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">数据量不足导致的过拟合；把领域先验（何种变换不改语义）注入模型。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">让模型见过同一只猫的一百种姿势，就不会把"面朝左"当成猫的定义。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">盲目变换改坏了标签（6 翻转成 9）；以为它能替代真实新数据。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">视觉/语音任务的标配；与标签平滑同属"从数据侧下手"的正则化。</span></div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- ===== 章末五件套之 2：分层习题 ===== -->
+    <h2><span class="sec-no">📝</span>分层习题</h2>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>
+        <p>某模型分别用 L1 与 L2 正则化训练同一任务，得到两组权重（其余条件相同）：A = [0.9, 0.8, 0.7, 0.6]，B = [1.5, 0, 0, 0.4]。(1) 哪组更可能是 L1 的结果？为什么？(2) 判断："L2 把 α 调得足够大，就能得到和 L1 一样的稀疏解。"</p>
+      </div>
+      <details>
+        <summary>提示</summary>
+        <p>回忆两种惩罚的几何形状：圆形 vs 菱形，哪个的解会精确落在坐标轴上？再想 L2 的缩放因子 λ/(λ+α) 能否等于 0。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p>(1) <strong>B 更可能是 L1 的结果。</strong>B 中有两个权重恰好为 0，是稀疏解——L1 的菱形等惩罚面棱角在坐标轴上，最优解容易停在角上，把部分权重精确压到 0。A 四个权重全部非零、均匀收缩，是 L2 的典型形态（各方向按比例缩放，不归零）。</p>
+          <p>(2) <strong>错。</strong>L2 的缩放因子 λᵢ/(λᵢ+α) 对任意有限 α 都严格大于 0——α → ∞ 时所有权重一起趋近 0 但永不精确为 0（且模型早已欠拟合到不可用）。稀疏性来自 L1 惩罚在 0 点的不可导（棱角），不是惩罚强度的产物。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>
+        <p>判断并说明理由："用 inverted dropout 训练时，既然训练阶段已经除以 p 做了补偿，那么测试阶段也应该随机丢一些单元再除以 p，这样训练和测试才一致。"</p>
+      </div>
+      <details>
+        <summary>提示</summary>
+        <p>除以 p 保证的是"期望"一致，还是"每一次输出"一致？测试时我们想要期望还是想要随机样本？</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p><strong>错。</strong>除以 p 保证的是<em>期望</em>一致：E[h̃] = h，单次输出仍随机波动（7.5 的例子中实际输出 16，期望 20）。测试时直接用完整网络 h，恰好等于这个期望——这才是真正的"一致"。若测试时也随机丢单元，等于给预测人为注入无意义的噪声：同一输入两次前向结果不同，评估不可复现，精度也被随机性拉低。训练要随机（逼出冗余），测试要确定（取期望/集成平均），这不是不一致，而是刻意设计。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>
+        <p>换一组数重算 7.2 的 L2 闭式分析：Hessian 的两个特征值为 λ₁ = 4、λ₂ = 0.04，正则化强度 α = 0.2，无惩罚最优解 w* = [0.8, 0.3]（两分量分别沿两特征方向）。求：(1) 两个方向的缩放因子；(2) 正则化后的 w̃；(3) 对比 7.2 正文（λ = 1, 0.01, α = 0.1 → 0.909, 0.091），说明"α 不变时特征值大的方向为什么总是更安全"。</p>
+      </div>
+      <details>
+        <summary>提示</summary>
+        <p>公式只有一个：缩放因子 = λᵢ/(λᵢ+α)，然后 w̃ 的每个分量 = w*ᵢ × 对应缩放因子。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p>(1) 方向 1：λ₁/(λ₁+α) = 4/(4+0.2) = 4/4.2 ≈ 0.952。方向 2：λ₂/(λ₂+α) = 0.04/(0.04+0.2) = 0.04/0.24 = 1/6 ≈ 0.167。</p>
+          <p>(2) w̃ = [0.8 × 0.952, 0.3 × 0.167] ≈ [0.762, 0.050]。（精确值：3.2/4.2 ≈ 0.7619；0.3/6 = 0.05。）</p>
+          <p>(3) 对比：正文敏感方向保留 90.9%、平坦方向剩 9.1%；本题敏感方向保留 95.2%、平坦方向剩 16.7%。同一 α 下，λᵢ 越大则 α 相对 λᵢ 越小，缩放因子 λᵢ/(λᵢ+α) = 1/(1+α/λᵢ) 越接近 1——分母里的 α/λᵢ 就是"惩罚相对曲率的比重"，曲率大则惩罚占比小，方向因此更安全。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>
+        <p>换一组数重算 7.5 的 inverted dropout：h = [1, 3, 5, 7]，p = 0.5，掩码 m = [0, 1, 1, 0]，下游权重 w = [1, 1, 1, 1]。求：(1) 这一步的训练输出 h̃ = (h ⊙ m)/p；(2) 这一步的实际下游加权和 w·h̃；(3) 验证期望守恒 E[w·h̃] = w·h，并写出中间用到的 E[mᵢ]。</p>
+      </div>
+      <details>
+        <summary>提示</summary>
+        <p>先逐元素乘掩码，再除以 p；期望部分用 E[h̃ᵢ] = hᵢ·E[mᵢ]/p，而 E[mᵢ] = 1·p + 0·(1−p)。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p>(1) h ⊙ m = [1×0, 3×1, 5×1, 7×0] = [0, 3, 5, 0]；除以 p = 0.5：h̃ = [0, 6, 10, 0]。</p>
+          <p>(2) w·h̃ = 0 + 6 + 10 + 0 = 16（本步实际值）。</p>
+          <p>(3) 对每个单元：E[mᵢ] = 1×0.5 + 0×0.5 = 0.5 = p；E[h̃ᵢ] = hᵢ·E[mᵢ]/p = hᵢ·p/p = hᵢ。于是 E[w·h̃] = w·E[h̃] = w·h = 1+3+5+7 = 16。本步 w·h̃ = 16 恰好等于期望值（掩码保留的 h₂+h₃ = 8，除以 0.5 后 16，与原和相同——这是本组数字的巧合；换个掩码如 [1,0,0,1] 实际值是 (1+7)/0.5 = 16，同样巧合，因为 p = 0.5 时任何掩码下 w·h̃ = 2×(保留单元之和)，期望仍是 16）✓。期望守恒成立，测试时直接用 w·h = 16。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l3">L3 建模应用</span>
+        <p>你接手一个项目：训练集只有 5000 张图片，网络却有 2000 万参数。当前训练准确率 99%、验证准确率 70%。给出你的正则化方案：至少选 3 种手段，排定引入的先后顺序，并逐一说明理由与预期效果。</p>
+      </div>
+      <details>
+        <summary>提示</summary>
+        <p>先判断诊断结论（过拟合还是欠拟合？泛化差距多大？），再按"成本从低到高、先数据侧后结构侧"排序。想想每种手段的超参数怎么定。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p><strong>诊断：</strong>训练 99%、验证 70%，泛化差距 29 个百分点——典型重度过拟合（容量远超 5000 张图片所需），欠拟合排除。</p>
+          <p><strong>方案排序（参考答案）：</strong></p>
+          <p>① <strong>数据增强（最先，成本最低收益最大）</strong>：图像任务天然适用——随机裁剪、水平翻转、轻微旋转与颜色抖动，把有效数据量扩大数倍；先验最强、不增加训练复杂度。预期验证率先升到 75% 以上。</p>
+          <p>② <strong>早停（第二，几乎零成本）</strong>：划分验证集，监控验证误差，patience 设 5–10 轮回滚最佳参数。它不提升上限，但保证拿到训练过程中最好的点，防止 99% 那部分继续恶化。</p>
+          <p>③ <strong>L2 权重衰减（第三）</strong>：在优化器上加 α 量级 10⁻⁴–10⁻³ 的权重衰减（只罚权重不罚偏置），用验证集调 α。压掉数据支撑不起的权重方向。</p>
+          <p>④ <strong>Dropout（若仍不够）</strong>：在全连接层加 p = 0.5（输入层 0.8），打散共适应。注意它与批归一化等技术叠加时需谨慎，属第 8、11 章的实践细节。</p>
+          <p><strong>排序理由：</strong>增强与早停几乎不增加调参负担且直接攻击"数据少"这个根因；L2 只需调一个 α；dropout 引入 p 且与其他技术有交互，放最后。全程用验证集做模型选择，测试集只在最终评估时用一次。</p>
+        </div>
+      </details>
+    </div>
+
+    <!-- ===== 章末五件套之 3：自测 ===== -->
+    <h2><span class="sec-no">✍️</span>本章自测</h2>
+    <p class="quiz-hint">点击选项判分，答错会给出原因。</p>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 1</div>
+      <div class="q-stem">L2 正则化在 Hessian 特征值 λᵢ = 0.01 的方向上（α = 0.1），权重被缩放为原来的约多少？这说明了什么？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 约 0.909——所有方向被均匀缩小</li>
+        <li data-opt="b">B. 约 0.091——损失几乎不在意的平坦方向被大幅压向 0</li>
+        <li data-opt="c">C. 恰好 0——L2 把不重要方向精确清零</li>
+        <li data-opt="d">D. 约 1.1——正则化反而放大了该方向</li>
+      </ul>
+      <div class="quiz-explain">解析：B 对——缩放因子 λᵢ/(λᵢ+α) = 0.01/0.11 ≈ 0.091，平坦方向只剩 9%；对比 λ = 1 的敏感方向 0.909，说明 L2 按数据需要程度差别化收缩。A 错：0.909 是 λ = 1 方向的值，且"均匀缩小"恰是 L2 不做的事。C 错：λ/(λ+α) 对有限 α 恒大于 0，精确归零是 L1 的特性。D 错：λ/(λ+α) 必小于 1，不可能放大。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="c">
+      <div class="q-no">自测 2</div>
+      <div class="q-stem">"训练轮数 ≈ 等效容量"的含义，下列哪项最准确？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 训练越久模型参数越多，所以容量越大</li>
+        <li data-opt="b">B. 训练轮数多了学习率会衰减，等效于缩小模型</li>
+        <li data-opt="c">C. 参数从初始点出发可达的区域随训练步数扩大；限制轮数就把权重约束在起点附近，效果与 L2 类似</li>
+        <li data-opt="d">D. 早停减少了实际使用的训练数据量，所以容量变小</li>
+      </ul>
+      <div class="quiz-explain">解析：C 对——这是"训练时间即超参数"的精确含义，且可证明二次损失下早停与 L2 权重衰减近似等价。A 错：参数量在训练前已固定，与轮数无关；容量指函数空间可达范围。B 错：学习率衰减是另一回事，且衰减≠容量减小。D 错：早停用的是全部训练数据，只是提前终止；它约束的是参数可达区域，不是数据量。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="a">
+      <div class="q-no">自测 3</div>
+      <div class="q-stem">inverted dropout 训练时把保留的激活除以 p，其直接目的是：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 使输出的期望等于原始激活（E[h̃] = h），测试阶段才能直接用完整网络</li>
+        <li data-opt="b">B. 放大梯度，让被保留的单元学得更快</li>
+        <li data-opt="c">C. 补偿被删除单元的偏置损失</li>
+        <li data-opt="d">D. 让每次前向的实际输出都等于不 dropout 的输出</li>
+      </ul>
+      <div class="quiz-explain">解析：A 对——E[mᵢ] = p，故 E[h̃ᵢ] = hᵢ·p/p = hᵢ，期望守恒使训练/测试尺度一致（7.5 例子中 w·h = 20 = E[w·h̃]）。B 错：除 p 作用于激活值而非梯度学习率，"学得更快"不是目的。C 错：掩码针对激活整体，与偏置无关。D 错：恰好相反，单次输出仍随机（实例输出 16 ≠ 20），守恒的是期望而非每次实现。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="d">
+      <div class="q-no">自测 4</div>
+      <div class="q-stem">3 分类任务把硬标签 [1, 0, 0] 换成 [0.9, 0.05, 0.05]（ε = 0.1），标签平滑起作用的机制是：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 让模型对错误类别也分配注意力，学到类间相似性</li>
+        <li data-opt="b">B. 给训练引入标签噪声，等价于数据增强</li>
+        <li data-opt="c">C. 降低了训练准确率的上限，模型不再追求满分</li>
+        <li data-opt="d">D. 软标签的最优解对应有限 logits（log 18 ≈ 2.89），模型不再为输出精确概率 1 而把 logits 推向无穷</li>
+      </ul>
+      <div class="quiz-explain">解析：D 对——硬标签下 softmax + NLL 只有 logit → ∞ 才达最优，权重无限膨胀；软标签把最优 logit 差固定在 log(0.9/0.05) ≈ 2.89，从机制上拴住 logits。A 错：类间相似性是某些变体的副产品，标准标签平滑把 ε 均匀分给所有类，不含相似性信息。B 错：噪声方向不同——增强改输入且是确定规则，平滑是系统性降置信而非随机噪声。C 错：它改变的是优化的目标位置，不是"放弃满分"这种模糊说法，且验证准确率往往因此提高。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="c">
+      <div class="q-no">自测 5</div>
+      <div class="q-stem">关于正则化与模型容量的关系，下列说法正确的是：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 正则化通过删除网络中的神经元来缩小容量</li>
+        <li data-opt="b">B. 加了正则化的模型容量变小，所以大模型加正则化不如直接用小模型</li>
+        <li data-opt="c">C. 正则化不缩小名义容量（结构不变），而是缩小有效容量——让模型偏好更简单的解；实践中大模型加正则化常优于小模型</li>
+        <li data-opt="d">D. 正则化与容量无关，它只是提高训练速度的附属品</li>
+      </ul>
+      <div class="quiz-explain">解析：C 对——这是本章主线问题的标准答案：参数数量与结构（名义容量）不变，但可用函数的范围被收窄（有效容量），7.1 的立场正是"不砍容量也能防过拟合"。A 错：除结构化稀疏等特例，正则化不删神经元；dropout 的删除只在训练时临时发生。B 错：结论方向反了——花书明确实践中正则化的大模型通常优于未经正则化的小模型。D 错：正则化常常让训练更慢（要权衡惩罚项），它的目标是泛化不是速度。</div>
+    </div>
+
+    <!-- ===== 章末五件套之 4：三句话复述 ===== -->
+    <div class="retell">
+      <h3>🗣️ 用自己的话，三句话讲完本章</h3>
+      <p>对着空气（或室友）说出这三句。说卡壳的那句，回去重读对应小节。</p>
+      <details>
+        <summary>句1：这章解决什么问题？——</summary>
+        <div class="retell-answer">参考答案：第 6 章让网络能表达、能训练，但大容量模型会背下训练集的噪声（9 次多项式训练误差 0.0、测试 47.5）；本章解决"不缩小模型容量，如何让大模型在新数据上也表现好"——即如何缩小泛化差距。</div>
+      </details>
+      <details>
+        <summary>句2：核心机制是什么？——</summary>
+        <div class="retell-answer">参考答案：四条路线缩小有效容量——改目标（L2 按 λᵢ/(λᵢ+α) 差别化收缩权重、L1 产生稀疏解）；改数据（增强注入先验、标签平滑拴住 logits）；改过程（早停：训练轮数 ≈ 等效容量）；改结构（dropout 以 p 随机失活、除 p 保持期望，近似 2ⁿ 个子网络集成）；对抗训练把同一思想推广到输入扰动方向。</div>
+      </details>
+      <details>
+        <summary>句3：它和前后章怎么分工？——</summary>
+        <div class="retell-answer">参考答案：第 6 章给模型与训练算法，本章让它"训出来还能用"；但 α、ε、p、patience 这些超参数怎么选、加了正则化的损失曲面怎么优化，是第 8 章优化的任务；第 11 章实践方法论再把这些手段组装成完整调参流程。</div>
+      </details>
+    </div>
+
+    <!-- ===== 章末五件套之 5：间隔复习计划 ===== -->
+    <div class="review-plan">
+      <h3>🔁 间隔复习计划</h3>
+      <p>回忆本身比重读有效 10 倍。到点只做一件事：翻卡 + 重做标记题。</p>
+      <table>
+        <tr><th>时间点</th><th>复习内容</th><th>预计用时</th></tr>
+        <tr><td>第 1 天</td><td>概念卡 1–6 + 全部回忆卡（7.1 至 7.6 共 12 张）；重做 L2 第一题（L2 缩放因子重算）</td><td>12 分钟</td></tr>
+        <tr><td>第 3 天</td><td>概念卡 2、4、5（L2 / 早停 / Dropout）+ 自测错题；重算 w̃ = [0.727, 0.027] 与 (h⊙m)/p = [4, 0, 12, 0]</td><td>8 分钟</td></tr>
+        <tr><td>第 7 天</td><td>三句话复述 + 重做 L2 第二题（换数 dropout）；默写缩放因子公式与标签平滑结果 [0.9, 0.05, 0.05]</td><td>10 分钟</td></tr>
+        <tr><td>第 15 天</td><td>只做合上书挑战；能全过（尤其两个手算与 L3 方案排序）本章即毕业，进入第 8 章优化</td><td>15 分钟</td></tr>
+      </table>
+    </div>
+
+    <!-- 合上书挑战 -->
+    <div class="final-challenge">
+      <h3>📕 合上书挑战</h3>
+      <p class="fc-sub">现在关掉这个页面，拿一张纸，凭记忆完成以下任务。全部做完再回来核对——这是本章真正的毕业考试。</p>
+      <ol id="challenge-list">
+        <li><span class="fc-check"></span>写出正则化的定义，并用 1/3/9 次多项式表格（5.2/5.8、1.1/1.3、0.0/47.5）解释过拟合与泛化差距</li>
+        <li><span class="fc-check"></span>推导 L2 闭式解 w̃ = (H + αI)⁻¹Hw*，算出 λ = 1、λ = 0.01、α = 0.1 时 w* = [0.8, 0.3] 的 w̃ ≈ [0.727, 0.027]</li>
+        <li><span class="fc-check"></span>用几何直觉解释 L1 为什么稀疏、L2 为什么不稀疏，并说明偏置为何不罚</li>
+        <li><span class="fc-check"></span>对验证误差序列（1.20, …, 0.83, 0.835, …, 0.85）找出早停点，并解释"训练轮数 ≈ 等效容量"</li>
+        <li><span class="fc-check"></span>对 h = [2, 4, 6, 8]、m = [1, 0, 1, 0]、p = 0.5 手算 inverted dropout 输出 [4, 0, 12, 0]，并用 w = [1, 1, 1, 1] 验证期望守恒（20）</li>
+        <li><span class="fc-check"></span>解释标签平滑 [1,0,0] → [0.9, 0.05, 0.05] 如何阻止 logits 趋向无穷（log 18 ≈ 2.89）</li>
+        <li><span class="fc-check"></span>回答本章的主线问题：不缩小模型容量，如何让大模型在新数据上也表现好？（一句话）</li>
+      </ol>
+    </div>
+
+    <div class="complete-zone">
+      <button class="btn-complete" id="btn-complete" onclick="markDone()">✓ 我已完成本章（含合上书挑战）</button>
+    </div>
+
+    <div class="chapter-nav">
+      <a href="chapter-06.html"><span class="nav-dir">← 上一章</span>第6章 深度前馈网络</a>
+      <a href="chapter-08.html" class="next"><span class="nav-dir">下一章 →</span>第8章 优化</a>
+    </div>
+
+  </div>
+</div>
+
+<footer class="footer">
+  <div class="wrap">第7章 正则化 · 深度学习互动讲义 · 基于 Goodfellow et al.《深度学习》(2016)</div>
+</footer>
+
+<script src="/lectures-assets/mermaid.min.js"></script>
+<script>
+mermaid.initialize({
+  startOnLoad: true,
+  theme: "base",
+  themeVariables: {
+    primaryColor: "#e3edf7",
+    primaryBorderColor: "#1d5f9e",
+    primaryTextColor: "#1d5f9e",
+    lineColor: "#5c554b",
+    secondaryColor: "#fbeedd",
+    tertiaryColor: "#f5f1e8",
+    fontFamily: "-apple-system, PingFang SC, sans-serif",
+    fontSize: "14px"
+  },
+  flowchart: { curve: "linear", htmlLabels: false }
+});
+</script>
+<script>
+// 自测题判分
+document.querySelectorAll(".quiz-block").forEach(block => {
+  const answer = block.dataset.answer;
+  const explain = block.querySelector(".quiz-explain");
+  block.querySelectorAll(".quiz-opts li").forEach(li => {
+    li.addEventListener("click", () => {
+      const opts = block.querySelectorAll(".quiz-opts li");
+      opts.forEach(o => o.classList.add("disabled"));
+      if (li.dataset.opt === answer) {
+        li.classList.add("correct");
+      } else {
+        li.classList.add("wrong");
+        block.querySelector(`[data-opt="${answer}"]`).classList.add("correct");
+      }
+      explain.classList.add("show");
+    });
+  });
+});
+
+// 合上书清单打勾
+document.querySelectorAll("#challenge-list li").forEach(li => {
+  li.addEventListener("click", () => li.classList.toggle("checked"));
+});
+
+// 完成标记 → localStorage（本系列键 dl_progress_v1，章号为字符串 "7"）
+const KEY = "dl_progress_v1";
+function loadProgress() {
+  try { return JSON.parse(localStorage.getItem(KEY)) || {}; } catch (e) { return {}; }
+}
+const progress = loadProgress();
+const btn = document.getElementById("btn-complete");
+if (progress["7"] && progress["7"].done) {
+  btn.textContent = "✓ 已完成 · 再次点击重置";
+  btn.classList.add("done");
+}
+function markDone() {
+  const p = loadProgress();
+  if (p["7"] && p["7"].done) {
+    delete p["7"];
+    btn.textContent = "✓ 我已完成本章（含合上书挑战）";
+    btn.classList.remove("done");
+  } else {
+    p["7"] = { done: true, completedAt: Date.now(), reviewsDone: 0 };
+    btn.textContent = "✓ 已完成 · 复习提醒已开启";
+    btn.classList.add("done");
+  }
+  localStorage.setItem(KEY, JSON.stringify(p));
+}
+</script>
+
+</body>
+</html>

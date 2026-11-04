@@ -1,0 +1,701 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第4章 熵正则与 Sinkhorn 算法 · 最优传输互动讲义</title>
+<link rel="stylesheet" href="/lectures-assets/style.css">
+</head>
+<body>
+
+<nav class="topbar">
+  <div class="topbar-inner">
+    <span class="brand"><a href="index.html" style="color:inherit">← 学习地图</a></span>
+    <span class="crumb">② 离散与算法 / 第4章</span>
+  </div>
+</nav>
+
+<div class="wrap">
+
+  <div class="lecture-head">
+    <span class="ch-label">CHAPTER 04 · 离散与算法</span>
+    <h1>熵正则与 Sinkhorn 算法</h1>
+    <p class="lead">本章回答的核心问题：第3章的精确 LP 在 n 上万时撞墙，能不能换一个问题——不用组合算法、只用矩阵乘法——换来 GPU 时代够用的速度？代价又是什么？</p>
+  </div>
+
+  <div class="position-bar">
+    <strong>本章在主线上的位置：</strong>第3章给出精确 LP 算法但 ~O(n³) 撞墙 → <u>本章给目标函数加一项熵，把组合优化变成光滑凸优化，用交替行列缩放（Sinkhorn）以 O(n²)/轮、全矩阵乘法的形式求解</u> → 第5–6章回到连续理论时，这套数值工具随行。<br>
+    第4章回答主线上的第4个问题：<strong>OT 怎么算得快，快到能进机器学习流水线？</strong>
+    <div class="map-inline">
+      <span class="node">① Ch1 引言（为什么需要新距离）</span><span class="arrow">→</span>
+      <span class="node">① Ch2 Monge 与 Kantorovich（把距离定义严格化）</span><span class="arrow">→</span>
+      <span class="node">② Ch3 离散 OT 与线性规划（怎么算）</span><span class="arrow">→</span>
+      <span class="node here">② Ch4 熵正则与 Sinkhorn（怎么算得快）</span><span class="arrow">→</span>
+      <span class="node">③ Ch5–6 连续与扩展</span><span class="arrow">→</span>
+      <span class="node">④ Ch7–8 应用与前沿</span>
+    </div>
+  </div>
+
+  <div class="objectives">
+    <h4>🎯 学完本章，合上书你应该能：</h4>
+    <ol>
+      <li>写出熵正则问题 min⟨C,P⟩ − εH(P) 并解释为什么它严格凸、解唯一、对输入可微；</li>
+      <li>从 KKT 条件一行推出解的结构 P = diag(u) K diag(v)，K = e^(−C/ε)；</li>
+      <li>写出 Sinkhorn 迭代 u ← a./(Kv)、v ← b./(Kᵀu) 并说明它就是交替行列归一化；</li>
+      <li>对一个 3×3 成本矩阵手算两轮 Sinkhorn，给出具体 u、v、P 的数字；</li>
+      <li>解释 ε 大/小各自的代价（偏差 vs 收敛慢、数值下溢），以及 log-domain 稳定化在解决什么。</li>
+    </ol>
+  </div>
+
+  <div class="lecture">
+
+    <div class="figure">
+      <div class="mermaid">
+flowchart TB
+  A["精确 LP 在 n 上万时撞墙"] --> B["给目标加熵正则：min⟨C,P⟩ − εH·P"]
+  B --> C["严格凸：解唯一、可微、不再卡在顶点"]
+  C --> D["KKT 一行推出：解必是 diag·u·K·diag·v"]
+  D --> E["Sinkhorn：交替行归一化与列归一化"]
+  E --> F["每轮 O·n² 且全是矩阵乘法，GPU 友好"]
+  F --> G["代价：熵偏差——算的是被抹平的近似 OT"]
+  G --> H["ε 调小逼近真解，但收敛变慢且数值下溢"]
+  classDef hot fill:#fbeedd,stroke:#c4651f,stroke-width:2.5px,color:#c4651f;
+  classDef danger fill:#fae9e7,stroke:#b03a2e,stroke-width:2.5px,color:#b03a2e;
+  class E hot;
+  class H danger;
+      </div>
+      <div class="caption">本章推导主线：LP 撞墙 → 加熵换光滑 → KKT 给出乘性结构 → Sinkhorn 交替缩放 → 速度到手，偏差与数值稳定性成为新的遗留问题。</div>
+    </div>
+
+    <h2><span class="sec-no">4.1</span>为什么加熵：把组合难题烫平成光滑凸问题</h2>
+
+    <p>第3章结尾的账很清楚：精确 LP 约 O(n³)，n = 10⁵ 不可行。病根不只在复杂度——LP 的最优解卡在多面体<strong>顶点</strong>上，找它本质上是组合搜索（选哪 n+m−1 个格子非零），这类问题天然抗拒并行化和矩阵运算。Cuturi 2013 年的破局思路是：<strong>不改约束，改目标</strong>——给线性目标加一项熵：</p>
+
+    <div class="formula">min<sub>P ∈ U(a,b)</sub> ⟨C, P⟩ − εH(P)，&nbsp;&nbsp;其中 H(P) = −∑ᵢⱼ Pᵢⱼ (log Pᵢⱼ − 1)</div>
+
+    <p>U(a,b) 仍是满足两条边际约束的耦合多面体；ε &gt; 0 是<span class="term">正则参数</span>（Regularization Parameter）。熵 H(P) 度量耦合的"分散程度"：所有质量挤在少数格子上时 H 小，均匀摊开时 H 大。减去 εH 就是<strong>奖励分散</strong>——算法会偏爱"雨露均沾"的耦合。</p>
+
+    <p>这一项换来三个立竿见影的性质。第一，<strong>严格凸</strong>：熵是严格凹函数，线性项加严格凹项得到严格凸目标，最优解<span class="term">唯一</span>——不再有"一堆等价最优顶点"。第二，<strong>可微</strong>：最优值和最优解都光滑地依赖于输入 (a, b, C)，这意味着 OT 可以嵌进神经网络做反向传播——这是它能进机器学习流水线的关键门票。第三，<strong>结构显式</strong>：下一节会看到，解有闭式骨架 P = diag(u)Kdiag(v)，只剩两个向量要解。</p>
+
+    <p>两个极限行为必须先记住，它们是全章的罗盘：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>极限</th><th>行为</th><th>读法</th></tr>
+        <tr><td>ε → 0</td><td>解 → 真实 OT 的最优耦合（熵最大者）</td><td>正则项消失，回到原 LP</td></tr>
+        <tr><td>ε → ∞</td><td>解 → 独立耦合 abᵀ</td><td>成本被淹没，只剩"尽量分散"的纯熵项</td></tr>
+      </table>
+    </div>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>物理学类比：⟨C,P⟩ 是能量，H(P) 是熵，ε 是温度。ε=0 的系统冻结在能量最低的构型（LP 顶点）；升温后系统按 Boltzmann 分布摊开；温度无穷大时完全无视能量、均匀混合。Sinkhorn 解的 K = e^(−C/ε) 正是 Gibbs/Boltzmann 权重——这不是巧合，是同一个变分原理。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>以为加熵只是"数值技巧"，逼近同一个答案。不：它解的是<strong>另一个问题</strong>。ε &gt; 0 时 ⟨C,P_ε⟩ 严格大于真实 OT 代价（本章 4.3 会算出偏差 0.424）。这个差叫熵偏差，是用速度买来的账单——4.4 节专门算这笔账。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 4.1-1</div>
+              <div class="q-text">写出熵正则 OT 的目标函数，并说出加熵换来的三个性质。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              min ⟨C,P⟩ − εH(P)，H(P) = −∑Pᵢⱼ(logPᵢⱼ−1)。换来：严格凸（解唯一）、对输入可微（可反向传播）、解有 diag(u)Kdiag(v) 显式结构。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 4.1-2</div>
+              <div class="q-text">ε → 0 和 ε → ∞ 时熵正则解分别趋向什么？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              ε→0：趋向真实 OT 最优耦合（多解时取熵最大者）；ε→∞：趋向独立耦合 abᵀ（成本完全被熵淹没）。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <h2><span class="sec-no">4.2</span>Sinkhorn 定理：解一定是"行缩放 × 核 × 列缩放"</h2>
+
+    <p>熵正则问题的约束只有两组边际，拉格朗日乘子 f ∈ Rⁿ、g ∈ Rⁿ（就是第2、3章对偶势的化身）。拉格朗日函数 L = ⟨C,P⟩ − εH(P) + ⟨f, a − P1⟩ + ⟨g, b − Pᵀ1⟩。对 Pᵢⱼ 求导置零：</p>
+
+    <div class="formula">∂L/∂Pᵢⱼ = Cᵢⱼ + ε log Pᵢⱼ − fᵢ − gⱼ = 0 &nbsp;&nbsp;⟹&nbsp;&nbsp; Pᵢⱼ = e^(fᵢ/ε) · e^(−Cᵢⱼ/ε) · e^(gⱼ/ε)</div>
+
+    <p>一行 KKT，结构全部现身：定义<span class="term">Gibbs 核</span>（Gibbs Kernel）Kᵢⱼ = e^(−Cᵢⱼ/ε)，再令 uᵢ = e^(fᵢ/ε)、vⱼ = e^(gⱼ/ε)，则</p>
+
+    <div class="formula">P = diag(u) K diag(v)，&nbsp;&nbsp;即 Pᵢⱼ = uᵢ Kᵢⱼ vⱼ</div>
+
+    <p>也就是说：<strong>熵正则 OT 的解，必然是"正对角阵夹一个固定核"的形式</strong>。问题从解 n² 个 Pᵢⱼ，塌缩成解 2n 个数 (u, v)。剩下的事只有满足边际：</p>
+
+    <div class="formula">diag(u) K v = a，&nbsp;&nbsp;diag(v) Kᵀ u = b</div>
+
+    <p>这组方程没有闭式解，但有个天然的不动点迭代——<span class="term">Sinkhorn 算法</span>（Sinkhorn's Algorithm，1964 年的矩阵缩放定理在 OT 上的复活）：交替固定一个解另一个：</p>
+
+    <div class="formula">u ← a ./ (K v)，&nbsp;&nbsp;v ← b ./ (Kᵀ u)</div>
+
+    <p>读法：K v 是"当前 v 下每行实际运出的量"，u 把它纠回到 a；Kᵀu 同理纠列。所以 Sinkhorn 就是<strong>交替做行归一化和列归一化</strong>，直到行列边际同时吻合。Sinkhorn 定理保证：只要 K 全正（ε &gt; 0 时恒成立），迭代收敛到唯一解。</p>
+
+    <div class="box insight">
+      <span class="box-tag">✅ 为什么这对 GPU 是天作之合</span>
+      <p>每轮迭代 = 两次矩阵-向量乘（Kv、Kᵀu）+ 两次逐元素除法。没有分支、没有 pivot、没有稀疏数据结构——全是稠密矩阵运算，复杂度 O(n²)/轮，且在 GPU 上是教科书级的并行 kernel。第3章 LP 的 ~O(n³) 顺序算法 vs 本章 O(n²) 可并行迭代，这就是"算得快"的全部来源。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>把 u、v 当成新变量从零理解。它们就是第3章势 (u,v) 的指数化：uᵢ = e^(fᵢ/ε)。Sinkhorn 迭代与运输单纯形解的是同一对对偶方程，只是一个用组合枢轴、一个用乘性更新。对偶这条线从第2章一路贯穿到本章。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 4.2-1</div>
+              <div class="q-text">写出 Gibbs 核 K 与解的结构 P = diag(u)Kdiag(v)，并说出这个结构把问题规模降到多少。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              Kᵢⱼ = e^(−Cᵢⱼ/ε)，Pᵢⱼ = uᵢKᵢⱼvⱼ。未知量从 n² 个 Pᵢⱼ 降为 2n 个 (u,v)（即对偶变量 f,g 的指数）。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 4.2-2</div>
+              <div class="q-text">写出 Sinkhorn 两步迭代公式，并用一句话说明它在做什么。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              u ← a./(Kv)，v ← b./(Kᵀu)。交替把当前耦合的行和纠回 a、列和纠回 b，即交替行/列归一化，收敛到同时满足两条边际。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <h2><span class="sec-no">4.3</span>手算两轮 Sinkhorn：一个能全部算完的 3×3 例</h2>
+
+    <p>取一个对称到能口算的成本矩阵，把 Sinkhorn 的两轮迭代逐位算出来：</p>
+
+    <div class="box insight">
+      <span class="box-tag">✅ 手算示例：C 对称、两轮收敛</span>
+      <p>设 C = [[1,0,1],[0,1,1],[1,1,0]]（对角错开的 0/1 结构），a = b = (1/3, 1/3, 1/3)，取 ε = 1。</p>
+      <p><strong>第0步（造核）</strong>：K = e^(−C)，即 C=0 处为 1，C=1 处为 e⁻¹ ≈ 0.368：</p>
+      <div class="tbl-wrap">
+        <table>
+          <tr><th>K</th><th>列1</th><th>列2</th><th>列3</th></tr>
+          <tr><td>行1</td><td>0.368</td><td>1</td><td>0.368</td></tr>
+          <tr><td>行2</td><td>1</td><td>0.368</td><td>0.368</td></tr>
+          <tr><td>行3</td><td>0.368</td><td>0.368</td><td>1</td></tr>
+        </table>
+      </div>
+      <p><strong>第1轮（更新 u）</strong>：初始化 v⁰ = (1,1,1)。K v⁰ = 每行的行和 = (1.736, 1.736, 1.736)（0.368+1+0.368）。于是 u¹ = a./(Kv⁰) = (1/3)/1.736 ≈ (0.1920, 0.1920, 0.1920)。</p>
+      <p><strong>第2轮（更新 v）</strong>：Kᵀ u¹ = 0.1920 ×（K 的每列列和）= 0.1920 × 1.736 ≈ (0.3333, 0.3333, 0.3333)。于是 v¹ = b./(Kᵀu¹) = (1/3)/0.3333 = (1.0, 1.0, 1.0)。</p>
+      <p>对称性让两轮即收敛：u = 0.1920·1，v = 1。最终耦合：</p>
+      <div class="tbl-wrap">
+        <table>
+          <tr><th>P = 0.1920·K</th><th>列1</th><th>列2</th><th>列3</th><th>行和</th></tr>
+          <tr><td>行1</td><td>0.0707</td><td><strong>0.1920</strong></td><td>0.0707</td><td>0.333 ✓</td></tr>
+          <tr><td>行2</td><td><strong>0.1920</strong></td><td>0.0707</td><td>0.0707</td><td>0.333 ✓</td></tr>
+          <tr><td>行3</td><td>0.0707</td><td>0.0707</td><td><strong>0.1920</strong></td><td>0.333 ✓</td></tr>
+        </table>
+      </div>
+      <p>行列边际都吻合。注意结构：C=0 的三个格子（π₁₂, π₂₁, π₃₃）拿到 0.1920，C=1 的六个格子各拿 0.0707——核把"贵"的格子压小，但不压成零。</p>
+    </div>
+
+    <p><strong>和真实 OT 对账</strong>：这个例子的精确 OT 一目了然——把全部质量走 C=0 的格子，π₁₂ = π₂₁ = π₃₃ = 1/3，代价 <strong>0</strong>。而熵正则解的运输代价 ⟨C, P⟩ = 6 × 0.0707 ≈ <strong>0.424</strong>。这 0.424 就是<span class="term">熵偏差</span>（Entropic Bias）：ε = 1 的"温度"把 43% 的质量烘到了贵格子上。</p>
+
+    <p>再看熵：这个解的 −∑PᵢⱼlogPᵢⱼ ≈ 2.07，距理论最大 log 9 ≈ 2.197（均匀耦合）已经很近——ε=1 下熵项确实在强行摊平解。把 ε 调小，0.0707 那些格子会指数级缩水，代价逼近 0；但 4.4 节会看到，代价是迭代变慢、数值开始不稳。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>对比第3章：单纯形的最优解<strong>稀疏</strong>（≤2n−1 个非零元），Sinkhorn 的解<strong>稠密</strong>（K 全正 ⟹ P 全正）。这是两种算法的指纹：精确 OT 走边边角角，熵正则 OT 雨露均沾。要稀疏解就后处理（取最大/阈值化），要光滑可微就接受稠密。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 4.3-1</div>
+              <div class="q-text">上面 3×3 例中，第一轮 u¹ = 0.1920 是怎么算出来的？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              v⁰=1，Kv⁰ = K 的行和 = 1.736（每行都是 0.368+1+0.368）；u¹ = a./(Kv⁰) = (1/3)/1.736 ≈ 0.1920。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 4.3-2</div>
+              <div class="q-text">这个例子的熵偏差是多少？真实 OT 代价与熵正则代价各是多少？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              真实 OT = 0（置换 π₁₂=π₂₁=π₃₃=1/3 全走 C=0）；熵正则 ⟨C,P⟩ = 6×0.0707 ≈ 0.424；熵偏差 = 0.424（ε=1 的账单）。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <h2><span class="sec-no">4.4</span>ε 的权衡：快与准的拔河，以及数值下溢的暗礁</h2>
+
+    <p>ε 是全章唯一的旋钮，它同时控制三件事，而且方向相反：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th></th><th>ε 大（高温）</th><th>ε 小（低温）</th></tr>
+        <tr><td>解的形态</td><td>糊：趋近 abᵀ，贵格子分到大量质量</td><td>锐：逼近真实 OT 的稀疏解</td></tr>
+        <tr><td>熵偏差</td><td>大（4.3 例 ε=1 时 0.424）</td><td>小，ε→0 时消失</td></tr>
+        <tr><td>收敛速度</td><td>快（几轮到位）</td><td>慢：线性收敛速率随 ε 减小而恶化</td></tr>
+        <tr><td>数值稳定</td><td>安全</td><td>危险：e^(−Cᵢⱼ/ε) 下溢成 0</td></tr>
+      </table>
+    </div>
+
+    <p>第三条暗礁最要命。ε = 0.01、Cᵢⱼ = 10 时，e^(−1000) 在双精度下直接是 0——K 变成稀疏零矩阵，行归一化时 a./(Kv) 除以零，迭代当场爆炸。所以"把 ε 调小逼近真解"在朴素实现里走不通。</p>
+
+    <p>解法是<span class="term">对数域稳定化</span>（Log-domain Stabilization）：不碰 u、v，直接在对偶变量 f = ε log u、g = ε log v 上迭代，所有矩阵-向量乘换成 log-sum-exp：</p>
+
+    <div class="formula">f ← ε·( log a − LSEⱼ( (gⱼ − Cᵢⱼ)/ε ) )，&nbsp;&nbsp;g ← ε·( log b − LSEᵢ( (fᵢ − Cᵢⱼ)/ε ) )</div>
+
+    <p>log-sum-exp 有标准防溢技巧（先减最大值再求和），于是任意小的 ε 都能稳定迭代。代价是 log/exp 比乘法贵，且实现更绕——工程上常见折中是<span class="term">ε 折减</span>（ε-annealing）：先用大 ε 快速收敛到粗解，逐步降温微调。</p>
+
+    <p>收敛怎么判？监控<span class="term">边际违反度</span>（Marginal Violation）：‖diag(u)Kv − a‖₁ + ‖diag(v)Kᵀu − b‖₁ 小于阈值即停。理论保证是线性收敛（误差每轮乘一个小于 1 的因子），但这个因子随 ε 变小趋近 1——4.3 例两轮收敛是 ε=1 且高度对称的奢侈，不可外推。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>第3–4章合起来是一个完整的工程决策：<strong>要精确、n ≲ 10³</strong>——用网络单纯形；<strong>要规模、可微、GPU、能容忍 ε 级偏差</strong>——用 Sinkhorn（小 ε 配 log-domain，或 ε 折减）。没有银弹，只有旋钮。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>拿 ⟨C, P_ε⟩ 当 Wasserstein 距离用。它含熵偏差且不对称、不满足三角不等式（甚至 ⟨C,P⟩ 对相同分布也非零——4.3 例中 μ=ν 时"距离"是 0.424 不是 0！）。要当距离用得做 Sinkhorn divergence：OT_ε(a,b) − ½OT_ε(a,a) − ½OT_ε(b,b)，第6章展开。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 4.4-1</div>
+              <div class="q-text">ε 调小带来哪两个坏处？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              ①收敛变慢（线性速率因子趋近 1）；②数值下溢：e^(−C/ε) 在双精度下变成 0，归一化除零。后者靠 log-domain 稳定化解决。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 4.4-2</div>
+              <div class="q-text">为什么 ⟨C, P_ε⟩ 不能直接当距离用？举个例子。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              熵偏差使 μ=ν 时值也非零：4.3 例 a=b 但 ⟨C,P⟩=0.424 ≠ 0，连"同一分布距离为 0"都不满足。修法：Sinkhorn divergence 减去两个自传输项。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <h2><span class="sec-no">🃏</span>概念卡：本章概念的一分钟画像</h2>
+    <p>翻面前先自问：这个概念我能用一句话讲清楚吗？</p>
+    <div class="flip-grid">
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 1</div>
+            <div class="q-text">熵正则（Entropic Regularization）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">min⟨C,P⟩ − εH(P)：给 OT 目标加熵奖励分散的耦合。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">LP 组合结构不可扩展、不可微——换光滑严格凸问题。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">升温：ε 是温度，高温摊平、低温冻结到 LP 顶点。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为是无代价的技巧；它解的是另一个问题，自带熵偏差。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">大规模、需可微、GPU 场景下替代精确 LP。</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 2</div>
+            <div class="q-text">Gibbs 核（Gibbs Kernel）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">Kᵢⱼ = e^(−Cᵢⱼ/ε)，成本矩阵的逐元素指数化。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">把解压缩成 diag(u)Kdiag(v)，n² 问题降为 2n。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">Boltzmann 权重：贵的格子指数级少分质量。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">忘了 ε 小时它会下溢成 0 矩阵——数值暗礁的源头。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">Sinkhorn 迭代的核心算子；也由它定义核方法。</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 3</div>
+            <div class="q-text">Sinkhorn 迭代（Sinkhorn Iteration）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">u ← a./(Kv)，v ← b./(Kᵀu) 交替进行直到边际吻合。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">求解 diag(u)Kdiag(v) 的边际方程组。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">交替行归一化、列归一化，像两脚轮流踩到齐。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为迭代越多越好；监控边际违反度，到阈值即停。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">一切大规模离散 OT 计算的默认引擎。</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 4</div>
+            <div class="q-text">正则参数 ε（Regularization Parameter）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">熵项的权重，单位同成本；系统的"温度"。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">唯一旋钮：在速度/稳定性与偏差之间调平衡。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">火调多大：火大糊得快，火小准但慢还可能糊锅。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为越小越好；小了收敛慢且下溢，需 log-domain 护航。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">实践用 ε 折减：大 ε 起步逼近，逐步降温。</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 5</div>
+            <div class="q-text">熵偏差（Entropic Bias）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">⟨C,P_ε⟩ − ⟨C,P*⟩：熵正则代价高出真实 OT 的部分。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">量化"用速度换来的近似"到底贵了多少。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">温度烘出去的质量：4.3 例 43% 被烘进贵格子。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">把 ⟨C,P_ε⟩ 当距离；μ=ν 时它非零，得用 Sinkhorn divergence。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">选 ε、汇报 OT 数值时必须同时交代的数字。</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 6</div>
+            <div class="q-text">对数域稳定化（Log-domain Stabilization）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">在对偶 f=εlogu、g=εlogv 上用 log-sum-exp 迭代。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">小 ε 时 K 下溢成零、归一化除零的崩溃。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">不碰概率本身，只搬它的对数——避开下溢雷区。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为免费；log/exp 更贵且实现绕，小 ε 才值得启用。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">ε 小到朴素 Sinkhorn 出现 NaN/Inf 时。</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <h2><span class="sec-no">📝</span>分层习题</h2>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>判断对错：ε 越大，Sinkhorn 给出的解越接近真实最优传输的解，因为迭代收敛更快。</div>
+      <details>
+        <summary>提示</summary>
+        <p>收敛快 ≠ 逼近真解。回忆 ε → ∞ 时解趋向什么。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p>错。ε 大收敛确实快，但解趋向独立耦合 abᵀ——成本矩阵被熵淹没，解与真实 OT 无关。逼近真解要 ε 小（代价是收敛慢、数值险）。易错点：把"算法收敛快"与"收敛到想要的解"混为一谈；Sinkhorn 永远精确地解它那个被正则化的问题，问题本身离 OT 多远由 ε 决定。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>选择：Sinkhorn 每轮迭代复杂度 O(n²) 的根本原因是（A）需要解 n 个线性方程组（B）核心运算是两次稠密矩阵-向量乘 Kv 与 Kᵀu（C）要存储 n² 个对偶变量（D）边际约束有 n² 条。</div>
+      <details>
+        <summary>提示</summary>
+        <p>矩阵-向量乘是 n² 次乘加；对偶变量只有 2n 个。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p>B。每轮 = Kv 与 Kᵀu 两个 n×n 矩阵-向量乘（各 n² 次乘加）加逐元素除法。A 错：没有解方程组，只有显式更新；C 错：对偶变量 (u,v) 只有 2n 个（存 K 才是 n²，但那是内存不是每轮运算）；D 错：边际约束只有 n+m 条。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>C = [[0,1],[1,0]]，a = b = (0.5, 0.5)，ε = 1。手算 Sinkhorn 至收敛（利用对称性），给出 u、v、P，并计算熵正则代价与熵偏差（真实 OT 代价为 0）。</div>
+      <details>
+        <summary>提示</summary>
+        <p>K 的对角是 1、反对角是 e⁻¹≈0.368；对称性保证 u、v 各分量相等。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p>K = [[1, 0.368],[0.368, 1]]。v⁰=(1,1)：Kv⁰ = (1.368, 1.368)，u¹ = (0.5/1.368, 0.5/1.368) ≈ (0.3655, 0.3655)。Kᵀu¹ = (0.3655×1.368)×(1,1) = (0.5, 0.5)，v¹ = (0.5/0.5)×(1,1) = (1,1)。已收敛。</p>
+          <p>P = 0.3655·K = [[0.3655, 0.1345],[0.1345, 0.3655]]（0.3655×0.368 ≈ 0.1345）。行和 = 0.5 ✓。</p>
+          <p>熵正则代价 ⟨C,P⟩ = 0.3655×0 + 0.1345×1 + 0.1345×1 + 0.3655×0 = <strong>0.269</strong>。真实 OT 是恒等映射，代价 0 → 熵偏差 = <strong>0.269</strong>（ε=1 时 27% 的质量被烘到了反对角）。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>从熵正则问题的拉格朗日函数出发，完整推导 Pᵢⱼ = e^(fᵢ/ε)·e^(−Cᵢⱼ/ε)·e^(gⱼ/ε)，并说明为什么这组 KKT 条件足以刻画最优解（不需要二阶条件）。</div>
+      <details>
+        <summary>提示</summary>
+        <p>L = ⟨C,P⟩ − εH(P) + ⟨f, a−P1⟩ + ⟨g, b−Pᵀ1⟩；对 Pᵢⱼ 求导时 H 贡献 ε log Pᵢⱼ。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p>∂H/∂Pᵢⱼ = −log Pᵢⱼ（由 H = −∑Pᵢⱼ(logPᵢⱼ−1)，导数为 −log Pᵢⱼ − 1 + 1 = −log Pᵢⱼ）。</p>
+          <p>∂L/∂Pᵢⱼ = Cᵢⱼ + ε log Pᵢⱼ − fᵢ − gⱼ = 0 ⟹ log Pᵢⱼ = (fᵢ + gⱼ − Cᵢⱼ)/ε ⟹ Pᵢⱼ = e^(fᵢ/ε)·e^(−Cᵢⱼ/ε)·e^(gⱼ/ε)。</p>
+          <p>充分性：目标函数严格凸（线性项 + 严格凹熵项 ×(−ε)），约束是线性的，故 KKT 条件不仅必要而且充分，且解唯一——这正是加熵换来的红利，LP 就没有这个待遇（最优解不唯一）。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l3">L3 建模应用</span>你要在 n = 5000 的词向量分布间算 OT 做文档相似度，要求"尽量接近真实 Wasserstein 值"。同事建议直接 ε = 10⁻⁴ 跑朴素 Sinkhorn。指出这个方案的两个具体故障模式，给出你的完整方案（含 ε 策略、实现方式、收敛监控）。</div>
+      <details>
+        <summary>提示</summary>
+        <p>词向量距离量级多大？e^(−C/10⁻⁴) 会怎样？小 ε 下迭代多少轮？</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p>故障1（数值）：词向量平方距离量级约 1–10，C/ε ~ 10⁴–10⁵，e^(−C/ε) 全部下溢为 0，Kv = 0，a./(Kv) 除零 → NaN，第一轮就崩。故障2（收敛）：即使换成 log-domain 不崩，ε=10⁻⁴ 的线性收敛因子几乎为 1，所需轮数爆炸，5000² × 海量轮数反而比 LP 还慢。</p>
+          <p>方案：①ε 折减——从 ε ≈ median(C) 量级起步（偏差大但几轮收敛），几何降温（如 ×0.5/轮）至目标精度；②小 ε 段切换 log-domain 迭代（log-sum-exp 防溢）；③每轮监控边际违反度 ‖P1−a‖₁+‖Pᵀ1−b‖₁ &lt; 10⁻⁶ 即停；④若要当距离用，汇报 Sinkhorn divergence 而非裸 ⟨C,P⟩，消掉自传输偏差。内存上 n=5000 的 K 约 200MB（float64），单 GPU 可放下。</p>
+        </div>
+      </details>
+    </div>
+
+    <h2><span class="sec-no">✍️</span>本章自测</h2>
+    <p class="quiz-hint">点击选项判分，答错会给出原因。</p>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 1</div>
+      <div class="q-stem">给 OT 目标加熵项 −εH(P) 后，问题最关键的性质变化是：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 约束变少了</li>
+        <li data-opt="b">B. 目标严格凸，最优解唯一且对输入可微</li>
+        <li data-opt="c">C. 变量从 n² 个变成 2n 个</li>
+        <li data-opt="d">D. 最优解变成稀疏的</li>
+      </ul>
+      <div class="quiz-explain">解析：熵严格凹，线性+严格凹 = 严格凸，解唯一且光滑依赖输入，选 B。A 错：U(a,b) 一条约束没动；C 错：变量仍是 P（n² 个），2n 是解结构里的对偶自由度，不是变量数；D 错：恰好相反——K 全正使解稠密，稀疏是 LP 顶点的特征。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="c">
+      <div class="q-no">自测 2</div>
+      <div class="q-stem">Gibbs 核 K 的定义是：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. Kᵢⱼ = −Cᵢⱼ/ε</li>
+        <li data-opt="b">B. Kᵢⱼ = e^(−εCᵢⱼ)</li>
+        <li data-opt="c">C. Kᵢⱼ = e^(−Cᵢⱼ/ε)</li>
+        <li data-opt="d">D. Kᵢⱼ = 1/(1 + Cᵢⱼ/ε)</li>
+      </ul>
+      <div class="quiz-explain">解析：K = e^(−C/ε)，逐元素指数，选 C。A 错：少了一层 exp，K 必须全正才能缩放；B 错：ε 在分母——ε 小惩罚重，方向反了就变成高温；D 错：这是有理核，不满足 KKT 推出的乘性结构。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="a">
+      <div class="q-no">自测 3</div>
+      <div class="q-stem">4.3 例（C 为 0/1 对称矩阵，ε=1，a=b=均匀）第一轮迭代后 u¹ 的每个分量是：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 约 0.192</li>
+        <li data-opt="b">B. 约 0.333</li>
+        <li data-opt="c">C. 约 0.577</li>
+        <li data-opt="d">D. 1</li>
+      </ul>
+      <div class="quiz-explain">解析：Kv⁰ = 行和 1.736，u¹ = (1/3)/1.736 ≈ 0.192，选 A。B 错：那是目标行和 1/3 本身，没做归一化除法；C 错：1/√3 ≈ 0.577，是归一化向量的干扰项；D 错：那是 v¹ 收敛后的值，不是 u¹。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="d">
+      <div class="q-no">自测 4</div>
+      <div class="q-stem">ε → ∞ 时，熵正则 OT 的解趋向：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 真实 OT 的最优耦合</li>
+        <li data-opt="b">B. 只有一个非零元的耦合</li>
+        <li data-opt="c">C. 均匀分布 1/(nm) 的全一矩阵</li>
+        <li data-opt="d">D. 独立耦合 abᵀ</li>
+      </ul>
+      <div class="quiz-explain">解析：ε 无穷大时成本项失效，问题退化为在 U(a,b) 上最大化熵，解是独立耦合 abᵀ，选 D。A 错：那是 ε→0 的极限，方向搞反；B 错：极端稀疏是 LP 顶点的特征，高熵恰恰赶走稀疏；C 错：全一矩阵不满足边际约束（除非 a、b 本身均匀），熵最大要在约束内取。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 5</div>
+      <div class="q-stem">小 ε 下朴素 Sinkhorn 崩溃（NaN）的直接原因与对策分别是：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 迭代次数太多；换更大内存的机器</li>
+        <li data-opt="b">B. e^(−C/ε) 下溢成 0 导致除零；改用 log-domain（log-sum-exp）迭代</li>
+        <li data-opt="c">C. K 变成稀疏矩阵；改用稀疏存储格式</li>
+        <li data-opt="d">D. 对偶变量 f、g 发散；改用小学习率</li>
+      </ul>
+      <div class="quiz-explain">解析：e^(−1000) 双精度下为 0，Kv=0 后 a./0 = NaN；log-domain 在 f,g 上用 log-sum-exp 绕开下溢，选 B。A 错：崩溃发生在数值层，与内存无关；C 错：稀疏存储治不了除零；D 错：Sinkhorn 是定点迭代没有学习率，f、g 本身不发散，是它们的指数下溢。</div>
+    </div>
+
+    <div class="retell">
+      <h3>🗣️ 用自己的话，三句话讲完本章</h3>
+      <p>对着空气（或室友）说出这三句。说卡壳的那句，回去重读对应小节。</p>
+      <details>
+        <summary>句1：这章解决什么问题？——</summary>
+        <div class="retell-answer">参考答案：第3章的精确 LP 在 n 上万时算不动且不可微；本章问能不能换一个问题（熵正则）换来 O(n²)/轮、全矩阵乘法、可反向传播的算法。</div>
+      </details>
+      <details>
+        <summary>句2：核心机制是什么？——</summary>
+        <div class="retell-answer">参考答案：加熵使目标严格凸 → KKT 一行推出 P = diag(u)Kdiag(v)（K = e^(−C/ε)）→ Sinkhorn 交替行列归一化解出 (u,v)；ε 控制速度-偏差权衡，小 ε 要用 log-domain 防下溢。</div>
+      </details>
+      <details>
+        <summary>句3：它和前后章怎么分工？——</summary>
+        <div class="retell-answer">参考答案：本章用熵偏差换掉第3章的组合复杂度，给出可扩展近似解；第5–6章回到连续理论（Wasserstein 几何、梯度流、切片法），Sinkhorn 作为数值引擎全程随行，Sinkhorn divergence 在第6章补上"真距离"的补丁。</div>
+      </details>
+    </div>
+
+    <div class="review-plan">
+      <h3>🔁 间隔复习计划</h3>
+      <p>回忆本身比重读有效 10 倍。到点只做一件事：翻卡 + 重做标记题。</p>
+      <table>
+        <tr><th>时间点</th><th>复习内容</th><th>预计用时</th></tr>
+        <tr><td>第 1 天</td><td>概念卡 1–6 全部 + 回忆卡 4.2-2、4.3-1</td><td>12 分钟</td></tr>
+        <tr><td>第 3 天</td><td>概念卡 2、4（Gibbs 核与 ε）+ 重做 L2 第一题（2×2 Sinkhorn 手算）</td><td>12 分钟</td></tr>
+        <tr><td>第 7 天</td><td>三句话复述 + 自测错题 + 默写 KKT 推导那一行</td><td>10 分钟</td></tr>
+        <tr><td>第 15 天</td><td>只做合上书挑战；能全过就毕业</td><td>15 分钟</td></tr>
+      </table>
+    </div>
+
+    <div class="final-challenge">
+      <h3>📕 合上书挑战</h3>
+      <p class="fc-sub">现在关掉这个页面，拿一张纸，凭记忆完成以下任务。全部做完再回来核对——这是本章真正的毕业考试。</p>
+      <ol id="challenge-list">
+        <li><span class="fc-check"></span>写出熵正则 OT 的完整问题（目标 + 约束），说出加熵换来的三个性质</li>
+        <li><span class="fc-check"></span>从 ∂L/∂Pᵢⱼ = 0 推出 P = diag(u)Kdiag(v)，并写出 K 与 u、v 的定义</li>
+        <li><span class="fc-check"></span>写出 Sinkhorn 迭代公式，并复算 3×3 例的第一轮（Kv⁰=1.736，u¹≈0.192）</li>
+        <li><span class="fc-check"></span>说出 3×3 例的真实 OT 代价、熵正则代价、熵偏差三个数字（0 / 0.424 / 0.424）</li>
+        <li><span class="fc-check"></span>解释 ε 大与 ε 小各自的两个后果，以及 log-domain 稳定化防的是什么</li>
+        <li><span class="fc-check"></span>回答本章的主线问题：OT 怎么算得快，快到能进机器学习流水线？（一句话）</li>
+      </ol>
+    </div>
+
+    <div class="complete-zone">
+      <button class="btn-complete" id="btn-complete" onclick="markDone()">✓ 我已完成本章（含合上书挑战）</button>
+    </div>
+
+    <div class="chapter-nav">
+      <a href="chapter-03.html"><span class="nav-dir">← 上一章</span>第3章 离散最优传输与线性规划</a>
+      <a href="chapter-05.html" class="next"><span class="nav-dir">下一章 →</span>第5章 对偶、Wasserstein 距离与几何</a>
+    </div>
+
+  </div>
+</div>
+
+<footer class="footer">
+  <div class="wrap">第4章 熵正则与 Sinkhorn 算法 · 最优传输互动讲义 · 基于 Peyré &amp; Cuturi (2019)</div>
+</footer>
+
+<script src="/lectures-assets/mermaid.min.js"></script>
+<script>
+mermaid.initialize({
+  startOnLoad: true,
+  theme: "base",
+  themeVariables: {
+    primaryColor: "#e3edf7",
+    primaryBorderColor: "#1d5f9e",
+    primaryTextColor: "#1d5f9e",
+    lineColor: "#5c554b",
+    secondaryColor: "#fbeedd",
+    tertiaryColor: "#f5f1e8",
+    fontFamily: "-apple-system, PingFang SC, sans-serif",
+    fontSize: "14px"
+  },
+  flowchart: { curve: "linear", htmlLabels: false }
+});
+</script>
+<script>
+// 自测题判分
+document.querySelectorAll(".quiz-block").forEach(block => {
+  const answer = block.dataset.answer;
+  const explain = block.querySelector(".quiz-explain");
+  block.querySelectorAll(".quiz-opts li").forEach(li => {
+    li.addEventListener("click", () => {
+      const opts = block.querySelectorAll(".quiz-opts li");
+      opts.forEach(o => o.classList.add("disabled"));
+      if (li.dataset.opt === answer) {
+        li.classList.add("correct");
+      } else {
+        li.classList.add("wrong");
+        block.querySelector(`[data-opt="${answer}"]`).classList.add("correct");
+      }
+      explain.classList.add("show");
+    });
+  });
+});
+
+// 合上书清单打勾
+document.querySelectorAll("#challenge-list li").forEach(li => {
+  li.addEventListener("click", () => li.classList.toggle("checked"));
+});
+
+// 完成标记 → localStorage
+const KEY = "ot_progress_v1";
+const CH = "4";
+function loadProgress() {
+  try { return JSON.parse(localStorage.getItem(KEY)) || {}; } catch (e) { return {}; }
+}
+const progress = loadProgress();
+const btn = document.getElementById("btn-complete");
+if (progress[CH] && progress[CH].done) {
+  btn.textContent = "✓ 已完成 · 再次点击重置";
+  btn.classList.add("done");
+}
+function markDone() {
+  const p = loadProgress();
+  if (p[CH] && p[CH].done) {
+    delete p[CH];
+    btn.textContent = "✓ 我已完成本章（含合上书挑战）";
+    btn.classList.remove("done");
+  } else {
+    p[CH] = { done: true, completedAt: Date.now(), reviewsDone: 0 };
+    btn.textContent = "✓ 已完成 · 复习提醒已开启";
+    btn.classList.add("done");
+  }
+  localStorage.setItem(KEY, JSON.stringify(p));
+}
+</script>
+
+</body>
+</html>

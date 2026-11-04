@@ -1,0 +1,1051 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第3章 词法分析 · 编译原理互动讲义</title>
+<link rel="stylesheet" href="/lectures-assets/style.css">
+</head>
+<body>
+
+<nav class="topbar">
+  <div class="topbar-inner">
+    <span class="brand"><a href="index.html" style="color:inherit">← 学习地图</a></span>
+    <span class="crumb">阶段一 · 前端与词法语法 / 第3章</span>
+  </div>
+</nav>
+
+<div class="wrap">
+
+  <div class="lecture-head">
+    <span class="ch-label">CHAPTER 03 · 前端与词法语法</span>
+    <h1>词法分析</h1>
+    <p class="lead">怎样把字符流机械地切成记号流——一个正则表达式如何变成一台可执行的识别机器？</p>
+  </div>
+
+  <div class="position-bar">
+    <strong>本章在主线上的位置：</strong>第2章手工写了扫描器 → <u>本章把"正则→可执行识别机"完全机械化</u> → 第4章在记号流上做语法分析。<br>
+    第3章回答主线上的第1个工程问题：<strong>怎样把字符流机械地切成记号流？</strong>
+    <div class="map-inline">
+      <span class="node here">Ch1–4 前端与词法语法 ← 本章</span><span class="arrow">→</span>
+      <span class="node">Ch5–7 语义与中间代码</span><span class="arrow">→</span>
+      <span class="node">Ch8–11 后端与优化</span><span class="arrow">→</span>
+      <span class="node">Ch12 全书收束</span>
+    </div>
+  </div>
+
+  <div class="objectives">
+    <h4>🎯 学完本章，合上书你应该能：</h4>
+    <ol>
+      <li>说出词素、记号、模式三个概念的差别，并举例说明</li>
+      <li>写出标识符、数、关系运算符的正则表达式与正则定义</li>
+      <li>画出给定正则表达式的 Thompson 构造 NFA（状态数 ≤ 2×正则长度）</li>
+      <li>填出子集构造的状态转换表，把 NFA 变成 DFA</li>
+      <li>手算 DFA 最小化，说出每一步为什么拆分或合并</li>
+      <li>解释最长匹配原则与关键字/标识符冲突的处理办法</li>
+    </ol>
+  </div>
+
+  <div class="lecture">
+
+    <div class="figure">
+      <div class="mermaid">
+flowchart LR
+  A["记号规格：正则表达式"] --> B["需要识别机"]
+  B --> C["Thompson 构造 NFA"]
+  C --> D["NFA 不确定，无法直接执行"]
+  D --> E["子集构造 DFA"]
+  E --> F["DFA 可能冗余"]
+  F --> G["最小化"]
+  G --> H["工程细节：关键字处理、工具生成"]
+  classDef danger fill:#fae9e7,stroke:#b03a2e,stroke-width:2.5px,color:#b03a2e;
+  class H danger;
+      </div>
+      <div class="caption">本章推导主线：从"怎么描述记号"一路推到"怎么让机器自动识别记号"。</div>
+    </div>
+
+    <h2><span class="sec-no">3.1</span>为什么词法分析要独立成一个阶段</h2>
+
+    <p>第2章我们手工写了一个扫描器，每次读一个字符、判断它是不是字母、数字、运算符。代码能跑，但每换一种语言就要重写一遍，而且和语法分析器缠在一起，改一处动全身。这带出一个问题：<strong>能不能把"认字"这件事从"组句"里拆出来，单独做、单独换？</strong></p>
+
+    <p>答案是把编译器前端劈成两半：<span class="term">词法分析器</span>（Lexical Analyzer / Scanner）负责把字符流切成记号流，<span class="term">语法分析器</span>（Parser）负责在记号流上分析结构。第4章会专门讲语法分析；本章只解决前一半。</p>
+
+    <p>切分之前，先把三个最容易混淆的术语钉死：</p>
+
+    <ul>
+      <li><span class="term">词素</span>（Lexeme）：源程序中实际出现的一段字符，比如 <code>if</code>、<code>count</code>、<code>3.14</code>、<code>&lt;=</code>。</li>
+      <li><span class="term">记号</span>（Token）：词素的类别或抽象名字，比如 <code>if</code> 的记号是 <strong>if</strong>，<code>count</code> 的记号是 <strong>id</strong>，<code>3.14</code> 的记号是 <strong>num</strong>。</li>
+      <li><span class="term">模式</span>（Pattern）：描述某类词素长什么样的规则，比如"标识符 = 字母开头，后接字母或数字"。</li>
+    </ul>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>词素是"实物"，记号是"类别标签"，模式是"类别的长相说明书"。扫描器每次读到一段词素，就贴上一张记号标签，顺便记录属性值（比如 id 的名字、num 的数值）。</p>
+    </div>
+
+    <p>记号不是裸标签，它带<span class="term">属性</span>（Attribute）。例如读到 <code>count = count + 1</code>，扫描器产出：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>词素</th><th>记号</th><th>属性</th></tr>
+        <tr><td>count</td><td>id</td><td>指向符号表中 "count" 的指针</td></tr>
+        <tr><td>=</td><td>assign</td><td>—</td></tr>
+        <tr><td>count</td><td>id</td><td>指向符号表中 "count" 的指针</td></tr>
+        <tr><td>+</td><td>plus</td><td>—</td></tr>
+        <tr><td>1</td><td>num</td><td>整数值 1</td></tr>
+      </table>
+    </div>
+
+    <p>词法分析器独立出来的工程好处：</p>
+
+    <ul>
+      <li><strong>去空白与注释</strong>：语法分析器不用关心空格、换行、注释，只看到干净的记号流。</li>
+      <li><strong>统一标识符</strong>：把 <code>count</code>、<code>sum</code>、<code>x1</code> 都归为 id，语法规则里只写 id 一次。</li>
+      <li><strong>行列号报错</strong>：扫描器天然按行扫，记录每个记号的行列号，出错信息才能指到人看懂的行。</li>
+    </ul>
+
+    <p>还有一个扫描时的核心原则：<span class="term">最长匹配</span>（Maximal Munch）。当多个模式都能匹配当前前缀时，选能吃掉最长字符的那个。比如 <code>&lt;=</code> 应该识别为一个记号 relop，而不是先识别 <code>&lt;</code> 再识别 <code>=</code>。</p>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>误区：把"词素"和"记号"混为一谈，说"记号 if 就是字符串 if"。错。词素 if 是源文件里的两个字符；记号 if 是编译器内部的一个枚举值或整数编码。词素可以有无数个（如 id 对应 count、sum、x1），记号只有有限个。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 3.1-1</div>
+              <div class="q-text">词素、记号、模式三者的差别是什么？各举一例。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              词素是源程序中实际出现的字符序列（如 count）；记号是该词素的类别（如 id）；模式是描述该类别的规则（如 letter(letter|digit)*）。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 3.1-2</div>
+              <div class="q-text">最长匹配原则在扫描 <= 时如何起作用？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              当当前前缀同时匹配 < 和 <= 两个模式时，选吃掉字符更长的那个，因此 <= 被识别为一个 relop 记号，而不是先输出 < 再输出 =。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <h2><span class="sec-no">3.2</span>用什么描述记号：正则表达式</h2>
+
+    <p>上一节说了要把词法分析独立出来，但独立之后拿什么来"描述"每类记号的长相？不能再用自然语言，必须给机器能读、能机械执行的规格。这就是<span class="term">正则表达式</span>（Regular Expression）。</p>
+
+    <p>正则表达式由三种基本构造和三种运算组成：</p>
+
+    <ul>
+      <li><strong>ε</strong>：空串，不匹配任何字符。</li>
+      <li><strong>单字符 a</strong>：匹配字符 a 本身。</li>
+      <li><strong>并 |</strong>：r|s 匹配 r 或 s 匹配的任意串。</li>
+      <li><strong>连接</strong>：rs 匹配先 r 后 s 的串。</li>
+      <li><strong>闭包 *</strong>：r* 匹配 r 的 0 次或多次重复。</li>
+    </ul>
+
+    <p>优先级：<strong>* &gt; 连接 &gt; |</strong>。括号用来打破优先级。</p>
+
+    <p>为了方便书写，常用扩展运算符：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>运算符</th><th>含义</th><th>例子</th></tr>
+        <tr><td>r+</td><td>正闭包：r 的 1 次或多次重复</td><td>digit+ 匹配一个或多个数字</td></tr>
+        <tr><td>r?</td><td>可选：r 出现 0 次或 1 次</td><td>(+|-)? 匹配可选符号</td></tr>
+        <tr><td>[a-z]</td><td>字符类：a 到 z 任意一个字符</td><td>[a-zA-Z] 匹配任意字母</td></tr>
+      </table>
+    </div>
+
+    <p>多个正则表达式可以起名字、分层定义，这叫<span class="term">正则定义</span>（Regular Definition）：</p>
+
+    <div class="formula">
+      letter → a | b | … | z | A | … | Z<br>
+      digit → 0 | 1 | … | 9<br>
+      id → letter ( letter | digit )*
+    </div>
+
+    <p>本章后面反复用到的三个正则定义：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>记号</th><th>正则定义</th><th>说明</th></tr>
+        <tr><td>id</td><td>letter ( letter | digit )*</td><td>字母开头，后接字母或数字</td></tr>
+        <tr><td>num</td><td>digit+ ( . digit+ )? ( E ( + | - )? digit+ )?</td><td>整数、小数、科学计数法</td></tr>
+        <tr><td>relop</td><td>&lt; | &lt;= | = | &lt;&gt; | &gt; | &gt;=</td><td>六种关系运算符</td></tr>
+      </table>
+    </div>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>正则表达式是"规格说明书"，不是"执行程序"。它只说明什么串合法，不说明怎么一步步去认。把规格变成执行，是后面两节的事。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>误区：以为正则表达式可以匹配任意嵌套结构，比如"任意层数的配对括号"。错。正则表达式没有记忆，数不了未配对左括号的数量；配对括号需要上下文无关文法（第4章）。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 3.2-1</div>
+              <div class="q-text">正则表达式的三种基本运算是什么？优先级顺序如何？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              并 |、连接、闭包 *。优先级：* 最高，连接次之，| 最低。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 3.2-2</div>
+              <div class="q-text">写出标识符 id 的正则定义，并解释它为什么不能匹配以数字开头的串。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              id → letter(letter|digit)*。第一个位置必须是 letter，digit 不在可选范围，因此 9abc 不匹配。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <h2><span class="sec-no">3.3</span>从正则到机器：Thompson 构造</h2>
+
+    <p>正则表达式只是规格，机器不认规格，只认状态转移。Thompson 构造回答：<strong>给定任意正则表达式，怎么机械地拼出一台等价的 NFA？</strong></p>
+
+    <p><span class="term">不确定有限自动机</span>（NFA，Nondeterministic Finite Automaton）和 DFA 的差别在于：同一状态对同一输入符号可以有多条出边，还可以有 ε-转移（不读字符就跳）。这让它非常灵活，但也无法直接执行——机器每一步不知道选哪条路。</p>
+
+    <p>Thompson 构造的五条基本规则，每条规则只引入少量新状态：</p>
+
+    <div class="figure">
+      <div class="mermaid">
+flowchart TB
+  subgraph basic["基本规则"]
+    direction LR
+    A1["i"] -->|"ε"| A2["f"]
+    B1["i"] -->|"a"| B2["f"]
+  end
+  subgraph combine["组合规则"]
+    direction TB
+    C1["i"] -->|"ε"| C2["r 的 NFA"]
+    C1 -->|"ε"| C3["s 的 NFA"]
+    C2 -->|"ε"| C4["f"]
+    C3 -->|"ε"| C4
+    D1["i"] --> D2["r 的 NFA"] --> D3["s 的 NFA"] --> D4["f"]
+    E1["i"] -->|"ε"| E2["r 的 NFA"]
+    E2 -->|"ε"| E3["f"]
+    E1 -->|"ε"| E3
+    E3 -->|"ε"| E1
+  end
+      </div>
+      <div class="caption">图 3.1 Thompson 构造的五种基本片段：ε、单字符、并、连接、星。</div>
+    </div>
+
+    <p>关键观察：<strong>每条规则最多新增 2 个状态</strong>（新的初态和新的终态）。因此正则长度是 n，Thompson 构造出的 NFA 状态数 ≤ 2n。</p>
+
+    <p>现在做本章最重要的完整手算例：为正则 <strong>(a|b)*abb</strong> 构造 NFA。</p>
+
+    <p>按构造规则，从内到外逐层拼装：</p>
+
+    <ol>
+      <li>字符 a：状态 2 -a→ 3</li>
+      <li>字符 b：状态 4 -b→ 5</li>
+      <li>并 a|b：新初态 1、新终态 6；1 -ε→ 2、4；3 -ε→ 6、5 -ε→ 6</li>
+      <li>星 (a|b)*：新初态 0、新终态 7；0 -ε→ 1、7；6 -ε→ 1、7</li>
+      <li>连接 abb：在 7 后接 a（7-a→8）、b（8-b→9）、b（9-b→10）</li>
+    </ol>
+
+    <p>最终 NFA 恰好 11 个状态，编号 0–10：</p>
+
+    <div class="figure">
+      <div class="mermaid">
+flowchart TB
+  s0((0)) -->|"ε"| s1((1))
+  s0 -->|"ε"| s7((7))
+  s1 -->|"ε"| s2((2))
+  s1 -->|"ε"| s4((4))
+  s2 -->|"a"| s3((3))
+  s4 -->|"b"| s5((5))
+  s3 -->|"ε"| s6((6))
+  s5 -->|"ε"| s6
+  s6 -->|"ε"| s1
+  s6 -->|"ε"| s7
+  s7 -->|"a"| s8((8))
+  s8 -->|"b"| s9((9))
+  s9 -->|"b"| s10(((10)))
+      </div>
+      <div class="caption">图 3.2 (a|b)*abb 的 Thompson NFA。双圈 10 是接受态。</div>
+    </div>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>状态</th><th>输入 a</th><th>输入 b</th><th>ε</th></tr>
+        <tr><td>0</td><td>—</td><td>—</td><td>{1, 7}</td></tr>
+        <tr><td>1</td><td>—</td><td>—</td><td>{2, 4}</td></tr>
+        <tr><td>2</td><td>{3}</td><td>—</td><td>—</td></tr>
+        <tr><td>3</td><td>—</td><td>—</td><td>{6}</td></tr>
+        <tr><td>4</td><td>—</td><td>{5}</td><td>—</td></tr>
+        <tr><td>5</td><td>—</td><td>—</td><td>{6}</td></tr>
+        <tr><td>6</td><td>—</td><td>—</td><td>{1, 7}</td></tr>
+        <tr><td>7</td><td>{8}</td><td>—</td><td>—</td></tr>
+        <tr><td>8</td><td>—</td><td>{9}</td><td>—</td></tr>
+        <tr><td>9</td><td>—</td><td>{10}</td><td>—</td></tr>
+        <tr><td>10</td><td>—</td><td>—</td><td>—</td></tr>
+      </table>
+    </div>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>Thompson 构造的精髓是"局部替换"：把正则表达式看成一棵语法树，每个树节点对应一个 NFA 片段，片段之间只用 ε-边缝合。因为每条规则只加 2 个状态，所以整个 NFA 的大小和正则表达式长度成正比。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>误区：以为 NFA 的 ε-转移可以"随便加"。错。ε-转移是构造规则精确给出的，多一条少一条都会改变识别的语言。手算时必须严格按五条基本规则拼。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 3.3-1</div>
+              <div class="q-text">Thompson 构造中，"并"和"星"各自新增几个状态？为什么状态总数有上界？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              并和星各新增 2 个状态（新初态+新终态）；连接不新增状态。每条规则最多加 2 个，所以状态数 ≤ 2×正则长度。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 3.3-2</div>
+              <div class="q-text">(a|b)*abb 的 Thompson NFA 有多少个状态？接受态是几号？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              11 个状态，编号 0–10；接受态是 10。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <h2><span class="sec-no">3.4</span>从 NFA 到 DFA：子集构造</h2>
+
+    <p>NFA 很灵活，但机器执行不了——每一步面对多条 ε-边和多条同符号出边，不知道选哪条。要执行，必须把 NFA 变成<span class="term">确定有限自动机</span>（DFA，Deterministic Finite Automaton）：每个状态对每个输入符号只有唯一出边，没有 ε-转移。</p>
+
+    <p>子集构造的核心思想：<strong>DFA 的一个状态 = NFA 的一个状态集合</strong>。读入一个字符后，DFA 从"当前可能处于哪些 NFA 状态"跳到"读完这个字符后可能处于哪些 NFA 状态"。</p>
+
+    <p>两个必须钉死的定义：</p>
+
+    <ul>
+      <li><span class="term">ε-闭包</span>（ε-closure）：从某个 NFA 状态集合出发，只走 ε-边能到达的所有状态的集合。</li>
+      <li><span class="term">move</span>（T, a）：从集合 T 中某个状态出发，读入字符 a 后能到达的 NFA 状态集合（先不走 ε）。</li>
+    </ul>
+
+    <p>对上面的 (a|b)*abb NFA 做完整手算：</p>
+
+    <p><strong>第一步：求初态</strong></p>
+    <div class="formula">A = ε-closure({0}) = {0, 1, 2, 4, 7}</div>
+
+    <p><strong>第二步：求 A 的出边</strong></p>
+    <ul>
+      <li>move(A, a) = {3, 8}；ε-closure({3, 8}) = {1, 2, 3, 4, 6, 7, 8} = <strong>B</strong></li>
+      <li>move(A, b) = {5}；ε-closure({5}) = {1, 2, 4, 5, 6, 7} = <strong>C</strong></li>
+    </ul>
+
+    <p><strong>第三步：求 B 的出边</strong></p>
+    <ul>
+      <li>move(B, a) = {3, 8}；闭包 = B（自环）</li>
+      <li>move(B, b) = {5, 9}；ε-closure({5, 9}) = {1, 2, 4, 5, 6, 7, 9} = <strong>D</strong></li>
+    </ul>
+
+    <p><strong>第四步：求 C 的出边</strong></p>
+    <ul>
+      <li>move(C, a) = {3, 8}；闭包 = B</li>
+      <li>move(C, b) = {5}；闭包 = C（自环）</li>
+    </ul>
+
+    <p><strong>第五步：求 D 的出边</strong></p>
+    <ul>
+      <li>move(D, a) = {3, 8}；闭包 = B</li>
+      <li>move(D, b) = {5, 10}；ε-closure({5, 10}) = {1, 2, 4, 5, 6, 7, 10} = <strong>E</strong></li>
+    </ul>
+
+    <p><strong>第六步：求 E 的出边</strong></p>
+    <ul>
+      <li>move(E, a) = {3, 8}；闭包 = B</li>
+      <li>move(E, b) = {5}；闭包 = C</li>
+    </ul>
+
+    <p>DFA 共有 5 个状态：A、B、C、D、E。A 是初态；E 包含原 NFA 的接受态 10，因此 E 是唯一接受态。</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>DFA 状态</th><th>NFA 状态集合</th><th>输入 a</th><th>输入 b</th></tr>
+        <tr><td>A（初态）</td><td>{0,1,2,4,7}</td><td>B</td><td>C</td></tr>
+        <tr><td>B</td><td>{1,2,3,4,6,7,8}</td><td>B</td><td>D</td></tr>
+        <tr><td>C</td><td>{1,2,4,5,6,7}</td><td>B</td><td>C</td></tr>
+        <tr><td>D</td><td>{1,2,4,5,6,7,9}</td><td>B</td><td>E</td></tr>
+        <tr><td>E（接受）</td><td>{1,2,4,5,6,7,10}</td><td>B</td><td>C</td></tr>
+      </table>
+    </div>
+
+    <div class="figure">
+      <div class="mermaid">
+flowchart LR
+  A((A)) -->|"a"| B((B))
+  A -->|"b"| C((C))
+  B -->|"a"| B
+  B -->|"b"| D((D))
+  C -->|"a"| B
+  C -->|"b"| C
+  D -->|"a"| B
+  D -->|"b"| E(((E)))
+  E -->|"a"| B
+  E -->|"b"| C
+      </div>
+      <div class="caption">图 3.3 子集构造得到的 DFA。双圈 E 是接受态。</div>
+    </div>
+
+    <p>用输入串 <strong>aababb</strong> 走一遍验证：</p>
+
+    <div class="formula">
+      A —a→ B —a→ B —b→ D —a→ B —b→ D —b→ E（接受）
+    </div>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>子集构造把"不确定性"变成了"状态"。NFA 里"可能在这里，也可能在那里"的迷茫，被 DFA 里"我正处于这个集合"的确定所替代。代价是状态数可能指数膨胀，但对词法分析器而言，实际语言的状态数通常很小。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>误区：以为 ε-闭包只算一层。错。ε-闭包是传递闭包，必须一直走到没有新的 ε-边为止。比如 ε-closure({0}) 不仅要加 1 和 7，还要从 1 继续加 2 和 4。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 3.4-1</div>
+              <div class="q-text">子集构造中，DFA 的一个状态对应 NFA 的什么？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              DFA 的一个状态对应 NFA 的一个状态集合（即 ε-闭包后的 move 结果）。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 3.4-2</div>
+              <div class="q-text">对 (a|b)*abb 的 NFA，A = ε-closure({0}) 包含哪些状态？E 为什么是接受态？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              A = {0,1,2,4,7}。E 包含原 NFA 的接受态 10，因此是 DFA 的接受态。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <h2><span class="sec-no">3.5</span>DFA 最小化</h2>
+
+    <p>子集构造保证"正确"，不保证"最省"。DFA 里可能混进等价状态——它们对未来的行为完全一样，却占着不同的编号。最小化要回答：<strong>怎么把等价状态合并，得到状态数最少的 DFA？</strong></p>
+
+    <p>方法叫<span class="term">划分求精</span>（Partition Refinement）：先把所有状态按"接受/非接受"劈成两组，然后反复检查——如果同组里两个状态对某个输入符号跳到不同组，就把它们拆开。直到不能再拆为止。</p>
+
+    <p>继续上例，对 5 状态 DFA 做完整手算：</p>
+
+    <p><strong>初始划分</strong>：接受态一组，非接受态一组</p>
+    <div class="formula">Π₀ = { {A, B, C, D}, {E} }</div>
+
+    <p><strong>第一轮检查</strong>：看 {A, B, C, D} 内部</p>
+    <ul>
+      <li>A：a→B（组内），b→C（组内）→ 行为一致</li>
+      <li>B：a→B（组内），b→D（组内）→ 行为一致</li>
+      <li>C：a→B（组内），b→C（组内）→ 行为一致</li>
+      <li>D：a→B（组内），b→E（<strong>异组</strong>）→ 与 A/B/C 不一致，拆出</li>
+    </ul>
+    <div class="formula">Π₁ = { {A, B, C}, {D}, {E} }</div>
+
+    <p><strong>第二轮检查</strong>：看 {A, B, C} 内部</p>
+    <ul>
+      <li>A：a→B（组内），b→C（组内）→ 一致</li>
+      <li>B：a→B（组内），b→D（<strong>异组</strong>）→ 与 A/C 不一致，拆出</li>
+      <li>C：a→B（组内），b→C（组内）→ 一致</li>
+    </ul>
+    <div class="formula">Π₂ = { {A, C}, {B}, {D}, {E} }</div>
+
+    <p><strong>第三轮检查</strong>：看 {A, C} 内部</p>
+    <ul>
+      <li>A：a→B（{B}组），b→C（{A,C}组内）</li>
+      <li>C：a→B（{B}组），b→C（{A,C}组内）</li>
+      <li>两者行为完全一致，不再拆分</li>
+    </ul>
+
+    <p>最终划分 Π = { {A,C}, {B}, {D}, {E} }，最小 DFA 有 4 个状态。把 {A,C} 合并为新状态 AC，转换表如下：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>状态</th><th>输入 a</th><th>输入 b</th></tr>
+        <tr><td>AC（初态）</td><td>B</td><td>AC</td></tr>
+        <tr><td>B</td><td>B</td><td>D</td></tr>
+        <tr><td>D</td><td>B</td><td>E</td></tr>
+        <tr><td>E（接受）</td><td>B</td><td>AC</td></tr>
+      </table>
+    </div>
+
+    <div class="figure">
+      <div class="mermaid">
+flowchart LR
+  AC((AC)) -->|"a"| B((B))
+  AC -->|"b"| AC
+  B -->|"a"| B
+  B -->|"b"| D((D))
+  D -->|"a"| B
+  D -->|"b"| E(((E)))
+  E -->|"a"| B
+  E -->|"b"| AC
+      </div>
+      <div class="caption">图 3.4 (a|b)*abb 的最小 DFA。4 个状态是可证明最少的。</div>
+    </div>
+
+    <p>可以证明：对语言 (a|b)*abb，4 个状态是下限。直观地说，必须记住"最近是否看到了 abb 的后缀进度"，四种进度对应四种必不可少的状态。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>最小化的本质是"按未来行为分类"。两个状态只要对所有可能的后缀输入都给出相同的接受/拒绝答案，它们就是同一个状态。划分求精只是把这个定义机械化了。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>误区：以为最小化可以合并"看起来相似"的状态。错。判断标准不是结构相似，而是"对所有后缀的行为一致"。两个状态哪怕结构完全不同，只要行为等价就能合并。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 3.5-1</div>
+              <div class="q-text">DFA 最小化的初始划分依据是什么？之后每一轮拆分依据又是什么？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              初始划分按"接受/非接受"劈开；之后每轮看同组状态是否对某输入跳到不同组，若是则拆分。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 3.5-2</div>
+              <div class="q-text">对 (a|b)*abb 的 5 状态 DFA，最小化后剩几个状态？哪两个状态被合并？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              剩 4 个状态；A 和 C 被合并为 AC。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <h2><span class="sec-no">🃏</span>概念卡：本章概念的一分钟画像</h2>
+    <p>翻面前先自问：这个概念我能用一句话讲清楚吗？</p>
+    <div class="flip-grid">
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 1</div>
+            <div class="q-text">记号 / 词素 / 模式（Token / Lexeme / Pattern）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">词素是源程序中的实际字符序列；记号是该词素的类别；模式是描述该类别的规则。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">把"认字"从"组句"中拆出来，让扫描器只输出类别和属性。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">词素是实物，记号是标签，模式是标签的说明书。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">把记号和词素混为一谈，以为记号就是字符串本身。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">第3章全章；第4章语法分析器消费记号流。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 2</div>
+            <div class="q-text">正则表达式（Regular Expression）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">由 ε、单字符、并 |、连接、闭包 * 构成的有限表达式，描述一个正规语言。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">给每类记号提供机器可读的规格说明书。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">正则表达式是"什么样"，不是"怎么认"。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为正则表达式能数配对括号或任意嵌套结构。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">3.2 节定义记号；3.3 节 Thompson 构造把它变成 NFA。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 3</div>
+            <div class="q-text">NFA（Nondeterministic Finite Automaton）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">允许同一状态对同一符号有多条出边、允许 ε-转移的有限自动机。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">作为正则表达式到 DFA 之间的中间表示，构造简单。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">NFA 是"可以同时走多条路"的并行探索器。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为 NFA 比 DFA 更强大；其实两者识别能力等价。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">3.3 节 Thompson 构造的产物；3.4 节子集构造的输入。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 4</div>
+            <div class="q-text">ε-闭包（ε-closure）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">从 NFA 状态集合出发，只走 ε-边能到达的所有状态的集合（含传递）。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">把"不读字符就能跳"的隐性可能性全部显式化。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">ε-闭包是"免费瞬移"能达到的最远范围。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">只算一层 ε-边，忘记传递闭包。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">3.4 节子集构造中，每次 move 之后都要取 ε-闭包。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 5</div>
+            <div class="q-text">子集构造（Subset Construction）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">把 NFA 的每个状态集合映射为 DFA 的一个状态，通过 move+ε-闭包生成转换表。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">把无法直接执行的 NFA 变成可机械执行的 DFA。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">DFA 状态 = NFA 的"可能位置集合"。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为子集构造一定导致状态爆炸；实际词法分析中通常很温和。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">3.4 节核心算法；生成词法分析器的必经之路。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 6</div>
+            <div class="q-text">DFA 最小化（Minimization）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">通过划分求精合并等价状态，得到状态数最少的 DFA。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">消除冗余状态，减少词法分析器的内存占用和表项。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">按"对未来所有后缀的行为"分类，行为一致即同一状态。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为最小化改变识别的语言；其实它保持语言不变。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">3.5 节；Lex/Flex 生成最终扫描器前的优化步骤。</span></div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+    <h2><span class="sec-no">📝</span>分层习题</h2>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>判断：正则表达式 (a|b)*abb 和 (a|b)*a(a|b)(a|b) 描述的是同一个语言吗？</div>
+      <details>
+        <summary>提示</summary>
+        <p>注意第二个表达式中 a 后面跟两个任意字符，这限定了结尾三个字符的结构。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p><strong>不是同一个语言。</strong></p>
+          <p>(a|b)*abb 要求串以 abb 结尾；而 (a|b)*a(a|b)(a|b) 只要求倒数第三个字符是 a，后两位可以是任意 a 或 b。例如 abba 属于后者（倒数第三是 a），但不属于前者（不以 abb 结尾）。</p>
+          <p>易错点：看到 (a|b)* 就以为"后面随便"，忽略了对结尾结构的具体约束。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>选择：在词法分析中，"最长匹配"原则主要用于解决什么问题？</div>
+      <details>
+        <summary>提示</summary>
+        <p>想想 <= 和 < 、= 的关系。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p><strong>答案：解决多个模式同时匹配当前前缀时的选择问题。</strong></p>
+          <p>例如扫描到 <= 时，< 和 <= 都能匹配前缀。最长匹配选吃掉字符更多的 <=，避免错误地拆成两个记号。</p>
+          <p>易错选项：以为最长匹配用来处理关键字 vs 标识符（那是优先级规则）；或以为用来处理嵌套括号（正则做不到）。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>用 Thompson 构造画出正则 (a|ε)b* 的 NFA，并数出状态总数。</div>
+      <details>
+        <summary>提示</summary>
+        <p>先构造 a、ε、b 的基本块，再做 a|ε 的并，然后 b* 的星，最后连接。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p><strong>状态总数：10 个。</strong></p>
+          <p>逐块计算：</p>
+          <ul>
+            <li>a：2 个状态（新初态+新终态）</li>
+            <li>ε：2 个状态</li>
+            <li>a|ε：并规则新增 2 个状态，内部保留 a 和 ε 的 4 个状态，共 6 个</li>
+            <li>b：2 个状态</li>
+            <li>b*：星规则新增 2 个状态，内部保留 b 的 2 个状态，共 4 个</li>
+            <li>连接：不新增状态，直接把 (a|ε) 的终态通过 ε-边接到 b* 的初态</li>
+          </ul>
+          <p>总计 6 + 4 = <strong>10 个状态</strong>。</p>
+          <p>NFA 结构（文字版）：状态 0/1 是总初态/终态；0-ε→{2,4}（进入 a 块和 ε 块）；a 块 2-a→3；ε 块 4-ε→5；3-ε→6，5-ε→6；6-ε→{7,9}（进入 b*）；b* 中 7-ε→8（b块），8-b→9，9-ε→{7,10}，10 是 b* 终态；10-ε→1。</p>
+          <p>易错点：以为连接也新增 2 个状态；或忘记 ε 本身也是一个基本块，占 2 个状态。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>对正则 ab(a|b)* 做子集构造，给出 NFA→DFA 状态集合表与最终 DFA 转换表。</div>
+      <details>
+        <summary>提示</summary>
+        <p>先写 Thompson NFA 的关键状态，再按 move+ε-闭包逐步填表。注意 ab 是前缀，(a|b)* 是循环。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p><strong>Thompson NFA 关键状态编号</strong>（简化标记）：</p>
+          <ul>
+            <li>s0 -a→ s1</li>
+            <li>s1 -ε→ s2</li>
+            <li>s2 -b→ s3</li>
+            <li>s3 -ε→ s10（进入星）</li>
+            <li>s10 -ε→ {s8, s11}</li>
+            <li>s8 -ε→ {s4, s6}</li>
+            <li>s4 -a→ s5</li>
+            <li>s6 -b→ s7</li>
+            <li>s5 -ε→ s9，s7 -ε→ s9</li>
+            <li>s9 -ε→ {s8, s11}</li>
+            <li>s11 是接受态</li>
+          </ul>
+
+          <p><strong>子集构造步骤</strong>：</p>
+          <ul>
+            <li>A = ε-closure({s0}) = {s0}</li>
+            <li>move(A,a)={s1} → ε-closure = {s1,s2} = B</li>
+            <li>move(A,b)=∅</li>
+            <li>move(B,b)={s3} → ε-closure = {s3,s10,s8,s4,s6,s11} = C</li>
+            <li>move(C,a)={s5} → ε-closure = {s5,s9,s8,s4,s6,s11} = D</li>
+            <li>move(C,b)={s7} → ε-closure = {s7,s9,s8,s4,s6,s11} = E</li>
+            <li>move(D,a)={s5} → D；move(D,b)={s7} → E</li>
+            <li>move(E,a)={s5} → D；move(E,b)={s7} → E</li>
+          </ul>
+
+          <p><strong>NFA→DFA 状态集合表</strong>：</p>
+          <div class="tbl-wrap">
+            <table>
+              <tr><th>DFA 状态</th><th>NFA 状态集合</th><th>是否接受</th></tr>
+              <tr><td>A</td><td>{s0}</td><td>否</td></tr>
+              <tr><td>B</td><td>{s1,s2}</td><td>否</td></tr>
+              <tr><td>C</td><td>{s3,s10,s8,s4,s6,s11}</td><td>是（含 s11）</td></tr>
+              <tr><td>D</td><td>{s5,s9,s8,s4,s6,s11}</td><td>是（含 s11）</td></tr>
+              <tr><td>E</td><td>{s7,s9,s8,s4,s6,s11}</td><td>是（含 s11）</td></tr>
+            </table>
+          </div>
+
+          <p><strong>最终 DFA 转换表</strong>：</p>
+          <div class="tbl-wrap">
+            <table>
+              <tr><th>状态</th><th>输入 a</th><th>输入 b</th></tr>
+              <tr><td>A（初态）</td><td>B</td><td>—</td></tr>
+              <tr><td>B</td><td>—</td><td>C</td></tr>
+              <tr><td>C</td><td>D</td><td>E</td></tr>
+              <tr><td>D</td><td>D</td><td>E</td></tr>
+              <tr><td>E</td><td>D</td><td>E</td></tr>
+            </table>
+          </div>
+
+          <p>验证：ab 走 A-a→B-b→C 接受；abba 走 A-a→B-b→C-b→E-a→D 接受。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l3">L3 建模应用</span>为一个迷你语言设计正则定义集：标识符、整数、关系运算符、关键字 if/else。说明关键字 vs 标识符冲突如何处理，并指出这些定义在 Lex/Flex 中对应什么。</div>
+      <details>
+        <summary>提示</summary>
+        <p>先写各记号的正则表达式，再想"当 if 同时匹配关键字模式和标识符模式时怎么办"。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p><strong>正则定义集</strong>：</p>
+          <ul>
+            <li>digit → 0|1|…|9</li>
+            <li>letter → a|b|…|z|A|…|Z</li>
+            <li>id → letter(letter|digit)*</li>
+            <li>num → digit+</li>
+            <li>relop → &lt;|&lt;=|=|&lt;&gt;|&gt;|&gt;=</li>
+            <li>if → if</li>
+            <li>else → else</li>
+          </ul>
+
+          <p><strong>关键字 vs 标识符冲突</strong>：</p>
+          <p>if 和 else 都符合 id 的模式。解决办法是两条规则叠加：</p>
+          <ol>
+            <li><strong>最长匹配</strong>：if 和 id 都匹配前缀 "i" 时，id 匹配更长，但整个输入就是 "if" 时两者等长。</li>
+            <li><strong>优先级</strong>：当多个模式匹配相同最长长度时，在 Lex/Flex 中写在前面（定义顺序靠前）的规则胜出。因此把 if、else 的定义放在 id 之前，扫描器遇到 "if" 优先返回记号 if，遇到 "ifx" 则由最长匹配归为 id。</li>
+          </ol>
+
+          <p><strong>在 Lex/Flex 中的对应</strong>：</p>
+          <p>每个正则定义对应 Lex 规则区的一条模式-动作对。Lex 把全部正则定义合并成一个大 NFA，再用子集构造转成 DFA，最后最小化生成 C 代码的扫描器。我们手写的 id、num、relop、if、else 五条规则，在 Lex 源程序里就是五行模式加返回动作。</p>
+        </div>
+      </details>
+    </div>
+
+    <h2><span class="sec-no">✍️</span>本章自测</h2>
+    <p class="quiz-hint">点击选项判分，答错会给出原因。</p>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 1</div>
+      <div class="q-stem">下列关于词素、记号、模式的说法，哪一项正确？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 记号就是源程序中出现的字符串本身</li>
+        <li data-opt="b">B. 词素是源程序中的字符序列，记号是类别，模式是描述该类别的规则</li>
+        <li data-opt="c">C. 模式就是词素的另一种叫法</li>
+        <li data-opt="d">D. 一个记号只能对应一个词素</li>
+      </ul>
+      <div class="quiz-explain">解析：B 正确。A 错，把词素当成了记号；C 错，模式是规则不是词素；D 错，id 一个记号对应无数个词素（count、sum、x1…）。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="c">
+      <div class="q-no">自测 2</div>
+      <div class="q-stem">正则表达式 ab|c 的优先级等价于下列哪一项？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. (ab)|c</li>
+        <li data-opt="b">B. a(b|c)</li>
+        <li data-opt="c">C. (ab)|c，因为连接优先级高于并</li>
+        <li data-opt="d">D. a(b|c)，因为并优先级高于连接</li>
+      </ul>
+      <div class="quiz-explain">解析：C 正确。优先级 * &gt; 连接 &gt; |，所以 ab|c 先算 ab 再与 c 做并。A 虽然结构对，但选项 C 解释了原因，更完整；B、D 的优先级判断错误。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="a">
+      <div class="q-no">自测 3</div>
+      <div class="q-stem">Thompson 构造中，对正则 r|s 和 r* 分别新增多少个状态？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 各新增 2 个状态</li>
+        <li data-opt="b">B. r|s 新增 2 个，r* 新增 4 个</li>
+        <li data-opt="c">C. r|s 新增 4 个，r* 新增 2 个</li>
+        <li data-opt="d">D. 各新增 4 个状态</li>
+      </ul>
+      <div class="quiz-explain">解析：A 正确。并和星都只需一个新的初态和一个新的终态，共 2 个。B/C/D 都记错了新增数量。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="d">
+      <div class="q-no">自测 4</div>
+      <div class="q-stem">在子集构造中，ε-closure(T) 的定义是？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 从 T 出发读入 ε 后到达的状态</li>
+        <li data-opt="b">B. 从 T 出发只走一条 ε-边到达的状态</li>
+        <li data-opt="c">C. 从 T 出发读入任意字符后到达的状态</li>
+        <li data-opt="d">D. 从 T 出发只走 ε-边（含传递）能到达的所有状态的集合</li>
+      </ul>
+      <div class="quiz-explain">解析：D 正确。A 错，ε-闭包不消耗输入字符；B 错，必须算传递闭包；C 错，读入字符的是 move 而不是 ε-闭包。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 5</div>
+      <div class="q-stem">对 (a|b)*abb 的 5 状态 DFA 做最小化，最终得到多少个状态？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 3 个</li>
+        <li data-opt="b">B. 4 个</li>
+        <li data-opt="c">C. 5 个</li>
+        <li data-opt="d">D. 11 个</li>
+      </ul>
+      <div class="quiz-explain">解析：B 正确。A 和 C 被合并，剩 {A,C}、B、D、E 共 4 个。A 错，合并后不是 3 个；C 错，最小化确实发生了合并；D 错，11 是 Thompson NFA 的状态数，不是最小 DFA 的。</div>
+    </div>
+
+    <div class="retell">
+      <h3>🗣️ 用自己的话，三句话讲完本章</h3>
+      <p>对着空气（或室友）说出这三句。说卡壳的那句，回去重读对应小节。</p>
+      <details>
+        <summary>句1：这章解决什么问题？——</summary>
+        <div class="retell-answer">参考答案：把字符流切成记号流，让编译器前端的第一阶段可以独立、可替换、可机械化。</div>
+      </details>
+      <details>
+        <summary>句2：核心机制是什么？——</summary>
+        <div class="retell-answer">参考答案：正则表达式描述记号 → Thompson 构造 NFA → 子集构造 DFA → 最小化 DFA，一条链把规格变成可执行机器。</div>
+      </details>
+      <details>
+        <summary>句3：它和前后章怎么分工？——</summary>
+        <div class="retell-answer">参考答案：第2章手工写了扫描器；本章把扫描器的生成完全机械化；第4章将在本章输出的记号流上做语法分析。</div>
+      </details>
+    </div>
+
+    <div class="review-plan">
+      <h3>🔁 间隔复习计划</h3>
+      <p>回忆本身比重读有效 10 倍。到点只做一件事：翻卡 + 重做标记题。</p>
+      <table>
+        <tr><th>时间点</th><th>复习内容</th><th>预计用时</th></tr>
+        <tr><td>第 1 天</td><td>概念卡 1–6 + 回忆 3.1-1/2、3.2-1/2、3.3-1/2、3.4-1/2、3.5-1/2</td><td>10 分钟</td></tr>
+        <tr><td>第 3 天</td><td>概念卡 2、4、5（正则、ε-闭包、子集构造）+ 自测错题 + L2 第1题</td><td>8 分钟</td></tr>
+        <tr><td>第 7 天</td><td>三句话复述 + 回忆 3.3-2、3.4-2、3.5-2 + L2 第2题</td><td>10 分钟</td></tr>
+        <tr><td>第 15 天</td><td>只重做合上书挑战；能全过就毕业</td><td>15 分钟</td></tr>
+      </table>
+    </div>
+
+    <div class="final-challenge">
+      <h3>📕 合上书挑战</h3>
+      <p class="fc-sub">现在关掉这个页面，拿一张纸，凭记忆完成以下任务。全部做完再回来核对——这是本章真正的毕业考试。</p>
+      <ol id="challenge-list">
+        <li><span class="fc-check"></span>写出词素、记号、模式的定义，并各举一例</li>
+        <li><span class="fc-check"></span>写出 id、num、relop 的正则定义</li>
+        <li><span class="fc-check"></span>画出 (a|b)*abb 的 Thompson NFA（11 个状态）</li>
+        <li><span class="fc-check"></span>对同一 NFA 填出子集构造的 DFA 转换表（A–E 五行）</li>
+        <li><span class="fc-check"></span>把该 DFA 最小化到 4 个状态，并说明每一步拆分理由</li>
+        <li><span class="fc-check"></span>解释最长匹配和优先级如何共同解决 if vs 标识符冲突</li>
+        <li><span class="fc-check"></span>回答本章的主线问题：怎样把字符流机械地切成记号流——一个正则表达式如何变成一台可执行的识别机器？（一句话）</li>
+      </ol>
+    </div>
+
+    <div class="complete-zone">
+      <button class="btn-complete" id="btn-complete" onclick="markDone()">✓ 我已完成本章（含合上书挑战）</button>
+    </div>
+
+    <div class="chapter-nav">
+      <a href="chapter-02.html"><span class="nav-dir">← 上一章</span>第2章 一个简单的语法制导翻译器</a>
+      <a href="chapter-04.html" class="next"><span class="nav-dir">下一章 →</span>第4章 语法分析</a>
+    </div>
+
+  </div>
+</div>
+
+<footer class="footer">
+  <div class="wrap">第3章 词法分析 · 编译原理互动讲义 · 基于 Aho/Lam/Sethi/Ullman《编译原理》（第 2 版）</div>
+</footer>
+
+<script src="/lectures-assets/mermaid.min.js"></script>
+<script>
+mermaid.initialize({
+  startOnLoad: true,
+  theme: "base",
+  themeVariables: {
+    primaryColor: "#e3edf7",
+    primaryBorderColor: "#1d5f9e",
+    primaryTextColor: "#1d5f9e",
+    lineColor: "#5c554b",
+    secondaryColor: "#fbeedd",
+    tertiaryColor: "#f5f1e8",
+    fontFamily: "-apple-system, PingFang SC, sans-serif",
+    fontSize: "14px"
+  },
+  flowchart: { curve: "linear", htmlLabels: false }
+});
+</script>
+<script>
+// 自测题判分（原样复用，勿改）
+document.querySelectorAll(".quiz-block").forEach(block => {
+  const answer = block.dataset.answer;
+  const explain = block.querySelector(".quiz-explain");
+  block.querySelectorAll(".quiz-opts li").forEach(li => {
+    li.addEventListener("click", () => {
+      const opts = block.querySelectorAll(".quiz-opts li");
+      opts.forEach(o => o.classList.add("disabled"));
+      if (li.dataset.opt === answer) {
+        li.classList.add("correct");
+      } else {
+        li.classList.add("wrong");
+        block.querySelector(`[data-opt="${answer}"]`).classList.add("correct");
+      }
+      explain.classList.add("show");
+    });
+  });
+});
+
+// 合上书清单打勾（原样复用，勿改）
+document.querySelectorAll("#challenge-list li").forEach(li => {
+  li.addEventListener("click", () => li.classList.toggle("checked"));
+});
+
+// 完成标记 → localStorage
+const KEY = "comp_progress_v1";
+function loadProgress() {
+  try { return JSON.parse(localStorage.getItem(KEY)) || {}; } catch (e) { return {}; }
+}
+const progress = loadProgress();
+const btn = document.getElementById("btn-complete");
+if (progress[3] && progress[3].done) {
+  btn.textContent = "✓ 已完成 · 再次点击重置";
+  btn.classList.add("done");
+}
+function markDone() {
+  const p = loadProgress();
+  if (p[3] && p[3].done) {
+    delete p[3];
+    btn.textContent = "✓ 我已完成本章（含合上书挑战）";
+    btn.classList.remove("done");
+  } else {
+    p[3] = { done: true, completedAt: Date.now(), reviewsDone: 0 };
+    btn.textContent = "✓ 已完成 · 复习提醒已开启";
+    btn.classList.add("done");
+  }
+  localStorage.setItem(KEY, JSON.stringify(p));
+}
+</script>
+
+</body>
+</html>

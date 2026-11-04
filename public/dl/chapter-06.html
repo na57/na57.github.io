@@ -1,0 +1,893 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第6章 深度前馈网络 · 深度学习互动讲义</title>
+<link rel="stylesheet" href="/lectures-assets/style.css">
+</head>
+<body>
+
+<nav class="topbar">
+  <div class="topbar-inner">
+    <span class="brand"><a href="index.html" style="color:inherit">← 学习地图</a></span>
+    <span class="crumb">阶段② · 现代深度网络 / 第6章</span>
+  </div>
+</nav>
+
+<div class="wrap">
+
+  <div class="lecture-head">
+    <span class="ch-label">CHAPTER 06 · 现代深度网络</span>
+    <h1>深度前馈网络</h1>
+    <p class="lead">一句话副标题：第5章定义了"学什么、怎么评估"，但线性模型连 XOR 都画不出分界线——本章用一层隐藏的非线性变换打开表达力，并用反向传播把参数训出来。</p>
+  </div>
+
+  <!-- ===== 章首四件套之 1：全书定位 ===== -->
+  <div class="position-bar">
+    <strong>本章在主线上的位置：</strong>第5章的机器学习基础告诉我们"学什么、怎么评估"，本章回答"用什么模型学"——<u>用多层非线性变换构造可训练的万能函数逼近器</u>；它的训练难题（梯度消失、优化难）正是第7、8章要解决的。<br>
+    第6章回答主线上的第6个问题：<strong>线性模型做不到的事（如 XOR），多层网络凭什么做到，又靠什么算法把参数训出来？</strong>
+    <div class="map-inline">
+      <span class="node">① 数学与机器学习基础<br>Ch1–5 数学工具与机器学习基础</span><span class="arrow">→</span>
+      <span class="node here">② 现代深度网络<br><strong>Ch6 深度前馈网络</strong> · Ch7 正则化 · Ch8 优化 · Ch9 卷积 · Ch10 序列 · Ch11 实践方法论</span><span class="arrow">→</span>
+      <span class="node">③ 表示与推断<br>Ch12–16 表示学习与结构化模型</span><span class="arrow">→</span>
+      <span class="node">④ 生成模型与前沿<br>Ch17–20 自编码器与生成模型</span>
+    </div>
+  </div>
+
+  <!-- ===== 章首四件套之 2：学习目标 ===== -->
+  <div class="objectives">
+    <h4>🎯 学完本章，合上书你应该能：</h4>
+    <ol>
+      <li>写出 XOR 线性不可分的代数证明：列出四条约束、两式相加、推出矛盾</li>
+      <li>对给定的两层 ReLU 网络（W、c、w 已知），手算 XOR 四个输入的 z、h、y，验证输出 0, 1, 1, 0</li>
+      <li>默写 σ′(z) = σ(z)(1−σ(z)) 并指出其上界 0.25，用 0.25³ 解释 sigmoid 深网络的梯度消失</li>
+      <li>用 z = −5 的数值例解释 sigmoid / softmax 输出为什么必须配负对数似然（两种代价的梯度差约 150 倍）</li>
+      <li>对单隐层网络手算一步反向传播（四个梯度）并完成一次梯度下降更新，验证损失确实下降</li>
+      <li>陈述万能近似定理的结论与它的两个"不保证"，用一句话说清深度相对宽度的效率优势</li>
+    </ol>
+  </div>
+
+  <div class="lecture">
+
+    <!-- ===== 章首四件套之 3：推导主线图 ===== -->
+    <div class="figure">
+      <div class="mermaid">
+flowchart TB
+  A["第5章：知道了学什么 怎么评估"] -->|"但线性模型连 XOR 都学不会"| B["表达瓶颈：需要非线性的特征变换"]
+  B -->|"加一层隐藏层 让网络自己学特征"| C["隐藏层：仿射变换加非线性激活"]
+  C -->|"没有非线性 多层退化为单层"| D["激活函数：ReLU 缓解 sigmoid 饱和"]
+  D -->|"输出层与代价必须配对"| E["softmax 配负对数似然：错得越狠 梯度越大"]
+  E -->|"可参数怎么训"| F["反向传播：链式法则沿计算图回传梯度"]
+  F --> G["遗留问题：梯度会消失 损失曲面难优化"]
+  G -.->|"交给第7章 第8章"| H["正则化与优化"]
+  classDef hot fill:#fbeedd,stroke:#c4651f,stroke-width:2.5px,color:#c4651f;
+  classDef danger fill:#fae9e7,stroke:#b03a2e,stroke-width:2.5px,color:#b03a2e;
+  class F hot;
+  class G danger;
+      </div>
+      <div class="caption">本章推导主线：每一步都回答"为什么需要下一步"。注意末端红框：深度前馈网络能表达、能训练，但梯度消失与难优化的损失曲面留给第 7、8 章。</div>
+    </div>
+
+    <!-- ================= 6.1 ================= -->
+    <h2><span class="sec-no">6.1</span>为什么线性模型不够：XOR 困境</h2>
+
+    <p>第5章把机器学习的问题定义清楚了：给定数据，最小化训练误差并控制泛化误差。线性回归、逻辑回归都是好工具，但它们有一个共同的天花板——只能学"线性可分"的决策规则。本节用一个最小的反例把这块天花板钉死：<span class="term">异或</span>（XOR，Exclusive OR）问题——输入两位二进制数，两位不同时输出 1，相同时输出 0：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>输入 (x₁, x₂)</th><th>(0, 0)</th><th>(0, 1)</th><th>(1, 0)</th><th>(1, 1)</th></tr>
+        <tr><td>目标输出 t</td><td>0</td><td>1</td><td>1</td><td>0</td></tr>
+      </table>
+    </div>
+
+    <p>沿用第5章的线性模型，加一条判决规则：</p>
+
+    <div class="formula">f(x) = w₁x₁ + w₂x₂ + b，预测规则：f(x) &gt; 0 输出 1，f(x) ≤ 0 输出 0</div>
+
+    <p>要正确分类全部四个点，参数 (w₁, w₂, b) 必须同时满足四条约束：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>编号</th><th>输入</th><th>目标</th><th>对参数的约束</th></tr>
+        <tr><td>①</td><td>(0, 0)</td><td>0</td><td>b ≤ 0</td></tr>
+        <tr><td>②</td><td>(1, 0)</td><td>1</td><td>w₁ + b &gt; 0</td></tr>
+        <tr><td>③</td><td>(0, 1)</td><td>1</td><td>w₂ + b &gt; 0</td></tr>
+        <tr><td>④</td><td>(1, 1)</td><td>0</td><td>w₁ + w₂ + b ≤ 0</td></tr>
+      </table>
+    </div>
+
+    <p>现在只做三步代数，矛盾就会自动浮出来：</p>
+
+    <ol>
+      <li>由约束 ② + ③ 相加：w₁ + w₂ + 2b &gt; 0 ……（★）</li>
+      <li>由约束 ①：b ≤ 0，两边各加 b 得 2b ≤ b，于是 w₁ + w₂ + 2b ≤ w₁ + w₂ + b</li>
+      <li>结合（★）：w₁ + w₂ + b ≥ w₁ + w₂ + 2b &gt; 0，即 w₁ + w₂ + b &gt; 0——但约束 ④ 要求 w₁ + w₂ + b ≤ 0。<strong>矛盾。</strong></li>
+    </ol>
+
+    <p>结论：不存在任何一组 (w₁, w₂, b) 能同时满足这四条约束。无论怎么调参数，线性模型在 XOR 上至少错一个点，训练误差至少 1/4。还要注意：这个证明与数据量无关——再给一百万个服从 XOR 规律的样本，线性模型照样学不会。这不是"数据不够"，是<span class="term">模型容量</span>（Model Capacity）的天花板。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>线性模型的本质能力是"画一条直线，把平面切成两半"。XOR 的四个点里，同一类的两个点恰好被另一类夹在两侧，一条直线无论如何切不开。出路只有一条：<strong>别在原始输入 x 上画线，先把 x 变换到一个新表示 h，让点在 h 空间里变成线性可分</strong>。这个变换不让工程师手工设计，而是让网络自己学出来——这就是下一节的隐藏层。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>以为"把线性层多堆几层"就能学会 XOR。错。<strong>线性变换的复合仍是线性变换</strong>：若 h = W₁x + b₁、y = W₂h + b₂，则 y = W₂W₁x + (W₂b₁ + b₂) = W′x + b′——两个线性层等价于一个，一千层也一样。没有非线性，深度毫无意义。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 6.1-1</div>
+              <div class="q-text">XOR 的四个输入点与目标输出分别是什么？它的判决规则对线性模型提出了几条约束？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              (0,0)→0、(0,1)→1、(1,0)→1、(1,1)→0。f(x) = w₁x₁ + w₂x₂ + b 按 "&gt;0 判 1" 产生四条约束：b ≤ 0、w₁+b &gt; 0、w₂+b &gt; 0、w₁+w₂+b ≤ 0。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 6.1-2</div>
+              <div class="q-text">XOR 不可分证明中，矛盾是怎样推出的？为什么说"堆更多线性层"救不了它？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              中间两式相加得 w₁+w₂+2b &gt; 0，再由 b ≤ 0 得 w₁+w₂+b &gt; 0，与第四式 ≤ 0 矛盾。线性层复合仍是线性变换（W₂W₁ = W′），不加非线性，层数再多也等价于一层。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ================= 6.2 ================= -->
+    <h2><span class="sec-no">6.2</span>一个隐藏层解决 XOR：完整手算</h2>
+
+    <p>上一节证明了对 x 直接画直线无解。解法是给网络一次"换个角度看数据"的机会：先把 x 送进一个<span class="term">隐藏层</span>（Hidden Layer）得到新表示 h，再在 h 上画直线。整体结构：</p>
+
+    <div class="formula">h = g(Wᵀx + c)，y = wᵀh + b_out</div>
+
+    <p>其中 g 是<span class="term">激活函数</span>（Activation Function），这里用<span class="term">整流线性单元</span>（Rectified Linear Unit，ReLU）：</p>
+
+    <div class="formula">g(z) = max{0, z}（对向量逐元素作用）</div>
+
+    <p>W 是 2×2 矩阵、两个<span class="term">隐藏单元</span>（Hidden Unit）各对应一行，c 是隐藏层偏置；w 与 b_out 是输出层权重与偏置。这样一个"输入层 → 隐藏层 → 输出层"的网络就是最小的<span class="term">深度前馈网络</span>（Deep Feedforward Network），也叫<span class="term">多层感知机</span>（Multilayer Perceptron，MLP）——信息只向前流，没有回路。</p>
+
+    <p><strong>完整例子（手算全程）。</strong>取 W 的两行均为 [1, 1]（即两个隐藏单元都计算 x₁ + x₂），c = (0, −1)；w = (1, −2)，b_out = 0。对 XOR 的四个输入逐一计算 z = Wᵀx + c，再过 ReLU 得 h，最后算 y = wᵀh：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>输入 x</th><th>z = Wᵀx + c 的计算</th><th>z</th><th>h = max{0, z}</th><th>y = 1·h₁ + (−2)·h₂</th><th>目标</th></tr>
+        <tr><td>(0, 0)</td><td>(0+0+0, 0+0−1)</td><td>(0, −1)</td><td>(0, 0)</td><td>1×0 + (−2)×0 = 0</td><td>0 ✓</td></tr>
+        <tr><td>(1, 0)</td><td>(1+0+0, 1+0−1)</td><td>(1, 0)</td><td>(1, 0)</td><td>1×1 + (−2)×0 = 1</td><td>1 ✓</td></tr>
+        <tr><td>(0, 1)</td><td>(0+1+0, 0+1−1)</td><td>(1, 0)</td><td>(1, 0)</td><td>1×1 + (−2)×0 = 1</td><td>1 ✓</td></tr>
+        <tr><td>(1, 1)</td><td>(1+1+0, 1+1−1)</td><td>(2, 1)</td><td>(2, 1)</td><td>1×2 + (−2)×1 = 0</td><td>0 ✓</td></tr>
+      </table>
+    </div>
+
+    <p>输出 0, 1, 1, 0，与目标完全一致——训练误差 0。一个两层网络做到了任何线性模型都做不到的事。</p>
+
+    <div class="figure">
+      <div class="mermaid">
+flowchart LR
+  X1["x₁"] -->|"权重 1"| H1["h₁ = max{0, x₁+x₂+0}"]
+  X1 -->|"权重 1"| H2["h₂ = max{0, x₁+x₂−1}"]
+  X2["x₂"] -->|"权重 1"| H1
+  X2 -->|"权重 1"| H2
+  H1 -->|"权重 1"| Y["y"]
+  H2 -->|"权重 −2"| Y
+  classDef hot fill:#fbeedd,stroke:#c4651f,stroke-width:2.5px,color:#c4651f;
+  class Y hot;
+      </div>
+      <div class="caption">图 6.2 解 XOR 的网络结构：2 输入 → 2 隐藏单元（ReLU）→ 1 输出。两个隐藏单元的偏置不同（0 与 −1），输出权重为 (1, −2)。</div>
+    </div>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>看 h 那一列发生了什么：(0,0) → (0,0)；(1,0) 与 (0,1) 都 → (1,0)；<strong>两个原本夹在中间的点被折叠到了同一处</strong>；(1,1) → (2,1)。在 h 平面上，目标 1 的点聚成 (1,0) 一个点，目标 0 的点在 (0,0) 和 (2,1)——三个点落在直线 h₂ = ½h₁ 的两侧，线性可分了。隐藏层把"夹心"结构折叠成了"同族相聚"。这就是<span class="term">特征学习</span>（Feature Learning）：好特征不是人设计的，是网络为任务学出来的。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>以为这组权重是"凑出来的特例，学习算法找不到"。其实梯度下降从随机初始化出发就能轻松找到这类解——6.5 会完整手算一步训练过程。真正难的不是 XOR，而是网络加深后的梯度消失（6.3）与损失曲面（第 8 章）。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 6.2-1</div>
+              <div class="q-text">默写解 XOR 网络的 W、c、w，并对 x = (1, 1) 手算 z、h、y。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              W 两行均为 [1, 1]，c = (0, −1)，w = (1, −2)，b_out = 0。x = (1,1)：z = (2, 1)，h = (2, 1)，y = 1×2 + (−2)×1 = 0。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 6.2-2</div>
+              <div class="q-text">隐藏层为什么必须带非线性激活？XOR 例子中 (0,1) 与 (1,0) 在 h 空间发生了什么？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              无非线性则多层复合等价于单层线性，XOR 仍无解。在 h 空间中 (0,1) 与 (1,0) 被折叠到同一点 (1,0)，目标 1 的类聚成单点，从而线性可分。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ================= 6.3 ================= -->
+    <h2><span class="sec-no">6.3</span>激活函数与梯度：ReLU 凭什么取代 sigmoid</h2>
+
+    <p>上一节用了 ReLU 但没解释为什么是它。早期网络的默认选择是 <span class="term">sigmoid 函数</span>（Logistic Sigmoid）：它把任意实数平滑地压到 (0, 1)。问题藏在它的导数里：</p>
+
+    <div class="formula">σ(z) = <span class="frac"><span class="num-part">1</span><span class="den-part">1 + e⁻ᶻ</span></span>，σ′(z) = σ(z) · (1 − σ(z))</div>
+
+    <p>代入两组数感受它（验算：e⁻⁰·⁵ ≈ 0.6065，σ(0.5) = 1/1.6065 ≈ 0.6225；e⁻⁵ ≈ 0.0067，σ(5) = 1/1.0067 ≈ 0.9933）：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>z</th><th>σ(z)</th><th>σ′(z) = σ(z)(1−σ(z))</th><th>状态</th></tr>
+        <tr><td>0</td><td>0.5</td><td>0.5 × 0.5 = 0.25（全局最大）</td><td>最敏感</td></tr>
+        <tr><td>0.5</td><td>0.6225</td><td>0.6225 × 0.3775 ≈ 0.235</td><td>正常</td></tr>
+        <tr><td>5</td><td>0.9933</td><td>0.9933 × 0.0067 ≈ 0.0066</td><td><span class="term">饱和</span>（Saturation）</td></tr>
+        <tr><td>−5</td><td>0.0067</td><td>0.0067 × 0.9933 ≈ 0.0066</td><td>饱和</td></tr>
+      </table>
+    </div>
+
+    <p>σ′ 的最大值只有 0.25（在 z = 0 处），|z| 一大就趋近 0——两端都会饱和。这在深网络里是灾难：梯度要穿过每一层的激活回传（6.5 细讲），每过一层 sigmoid 至多乘 0.25。三层链式连乘：</p>
+
+    <div class="formula">sigmoid 最好情形：0.25³ ≈ 0.0156；z = 0.5 处：0.235³ ≈ 0.013；ReLU 正区：1³ = 1</div>
+
+    <p>也就是说，三层 sigmoid 把梯度缩到不足 1.6%，若有某层落在饱和区（σ′ ≈ 0.0066），再乘什么都是死——这就是<span class="term">梯度消失</span>（Vanishing Gradient）。ReLU 在 z &gt; 0 时导数恒为 1，三层连乘仍是 1³ = 1，梯度原封不动地送到底层。这就是隐藏层默认选 ReLU 的全部理由。</p>
+
+    <div class="box insight">
+      <span class="box-tag">✅ 判定规则</span>
+      <p>隐藏层激活默认用 ReLU（及其变体）；sigmoid 只保留在输出层——那里需要的正是"压到 (0, 1) 当概率"。看一个激活函数行不行，先看它的导数上界与饱和区。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>以为"ReLU 完美无缺"。z &lt; 0 时 ReLU 导数为 0，若一个单元的输入长期为负，它就再也收不到梯度、"死亡"（恒输出 0）。实践中靠合适的初始化与偏置大多能避开，第 7、8 章还会回到这个议题。另外 ReLU 在 z = 0 处不可导，实践上用次梯度，不影响训练。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 6.3-1</div>
+              <div class="q-text">默写 σ′(z) 的公式，说出它的最大值与取到最大值的 z。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              σ′(z) = σ(z)(1−σ(z))，最大值 1/4 = 0.25，在 z = 0（σ = 0.5）处取到；|z| 越大越接近 0（饱和）。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 6.3-2</div>
+              <div class="q-text">用三层链乘的数字说明 ReLU 为什么能缓解梯度消失。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              sigmoid 每层最多乘 0.25，三层 0.25³ ≈ 0.0156，梯度缩水 98% 以上；ReLU 正区导数恒 1，三层 1³ = 1，不衰减。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ================= 6.4 ================= -->
+    <h2><span class="sec-no">6.4</span>输出层与代价函数：为什么 softmax 要配负对数似然</h2>
+
+    <p>隐藏层解决了"表示"，<span class="term">输出层</span>（Output Layer）要解决"读出答案"。分类问题的标准做法：二分类用 sigmoid 把线性输出 z 压成概率 ŷ = σ(z)；多分类用 <span class="term">softmax 函数</span>（Softmax Function）把一组 logits 压成总和为 1 的概率分布：</p>
+
+    <div class="formula">softmax(z)ᵢ = <span class="frac"><span class="num-part">exp(zᵢ)</span><span class="den-part">∑<sub>j</sub> exp(zⱼ)</span></span></div>
+
+    <p>那<span class="term">代价函数</span>（Cost Function）呢？第5章的均方误差顺手拈来——但本节用一个数值例证明：这个顺手的选择会把训练卡死。</p>
+
+    <p><strong>完整例子（手算全程）。</strong>二分类，真标签 y = 1，模型线性输出 z = −5，即 ŷ = σ(−5) ≈ 0.0067——严重错判，离 1 很远，本该被大力纠正。两种代价对 z 的梯度分别是多少？</p>
+
+    <p><strong>方案 A：<span class="term">平方误差</span>（Squared Error）J = ½(ŷ − y)²。</strong>链式法则：∂J/∂z = (ŷ − y) · σ′(z)。代入：(ŷ − y) = 0.0067 − 1 = −0.9933；σ′(−5) = 0.0067 × 0.9933 ≈ 0.0066。于是：</p>
+
+    <div class="formula">∂J/∂z = (−0.9933) × 0.0066 ≈ −0.0066</div>
+
+    <p>错得离谱，梯度却只有 0.0066——几乎原地不动。</p>
+
+    <p><strong>方案 B：<span class="term">负对数似然</span>（Negative Log-Likelihood，NLL）J = −y log ŷ − (1−y) log(1−ŷ)</strong>（二分类<span class="term">交叉熵</span>，Cross-Entropy）。推导：∂J/∂ŷ = −y/ŷ + (1−y)/(1−ŷ)，乘以 σ′(z) = ŷ(1−ŷ) 后两项恰好化简，得到：</p>
+
+    <div class="formula">∂J/∂z = ŷ − y = 0.0067 − 1 = −0.9933</div>
+
+    <p>两个梯度相差 0.9933 / 0.0066 ≈ <strong>150 倍</strong>。对数在这里的角色像解药：σ 是指数函数出身，log 恰好是它的逆运算，把饱和区压扁的 σ′ 因子又救了回来。错误越大，NLL 的梯度越大；平方误差的梯度却被饱和区的 σ′ 乘没了。多分类同理：softmax + NLL（合称交叉熵代价）对每个 logit 的梯度恰好是 ŷᵢ − yᵢ，同样不含饱和因子。</p>
+
+    <div class="box insight">
+      <span class="box-tag">✅ 判定规则</span>
+      <p>输出层与代价函数必须<strong>配对</strong>：sigmoid / softmax 输出 ⇔ 负对数似然代价；线性输出（回归）⇔ 平方误差。配对标准只有一条：代价对线性输出 z 的梯度里，不能残留激活函数的饱和导数因子。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>以为"平方误差更直观，分类也能凑合用"。数值上确实能跑，但饱和区梯度趋零，训练慢几个数量级——上面 150 倍还只是一个样本、一步更新的差距，累积到整个训练就是"学得动"与"学不动"的差别。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 6.4-1</div>
+              <div class="q-text">写出 softmax 的公式。它把什么映射成什么？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              softmax(z)ᵢ = exp(zᵢ) / ∑ⱼ exp(zⱼ)。把一组任意实数 logits 压成非负、总和为 1 的概率分布，最大 logit 对应最大概率。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 6.4-2</div>
+              <div class="q-text">用 z = −5、y = 1 的数字说明：为什么 sigmoid 输出层要配 NLL 而不是平方误差？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              平方误差对 z 的梯度 = (ŷ−y)·σ′(z) ≈ (−0.9933)×0.0066 ≈ −0.0066；NLL 的梯度 = ŷ−y ≈ −0.9933。相差约 150 倍：log 抵消了饱和区的 σ′，错得越大纠正越狠。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ================= 6.5 ================= -->
+    <h2><span class="sec-no">6.5</span>反向传播：一步完整的梯度手算</h2>
+
+    <p>6.1 证明线性模型训不出 XOR，6.2 给出了解的结构——但那组权重从哪来？靠训练。训练需要每个参数的梯度，<span class="term">反向传播</span>（Backpropagation）就是高效算梯度的算法：把模型画成<span class="term">计算图</span>（Computational Graph），先做一次前向传播记下所有中间值，再从损失出发，沿<span class="term">链式法则</span>（Chain Rule）逐节点把梯度传回去。</p>
+
+    <p><strong>完整例子（手算全程，最小网络）。</strong>x = 2；隐藏层 z₁ = w₁x，w₁ = 0.5，h = ReLU(z₁)；输出 ŷ = w₂h，w₂ = 0.3；真值 y = 1；损失 L = ½(ŷ − y)²；<span class="term">学习率</span>（Learning Rate）η = 0.1。</p>
+
+    <div class="figure">
+      <div class="mermaid">
+flowchart LR
+  W1["w₁ = 0.5"] --> Z1["z₁ = w₁·x = 1"]
+  X["x = 2"] --> Z1
+  Z1 --> H["h = max{0, z₁} = 1"]
+  W2["w₂ = 0.3"] --> Y["ŷ = w₂·h = 0.3"]
+  H --> Y
+  Y --> L["L = ½(ŷ − y)² = 0.245"]
+  classDef hot fill:#fbeedd,stroke:#c4651f,stroke-width:2.5px,color:#c4651f;
+  class L hot;
+      </div>
+      <div class="caption">图 6.5 计算图与前向传播结果。反向传播就是从最右端的 L 出发，沿边向左逐个节点回传梯度。</div>
+    </div>
+
+    <p><strong>第一步：前向传播。</strong>z₁ = 0.5 × 2 = 1；h = max{0, 1} = 1；ŷ = 0.3 × 1 = 0.3；L = ½ × (0.3 − 1)² = ½ × 0.49 = 0.245。</p>
+
+    <p><strong>第二步：反向传播。</strong>从 L 往回走，每个节点只做一件事：<em>上游传来的梯度 × 本地导数</em>。</p>
+
+    <ol>
+      <li>∂L/∂ŷ = ŷ − y = 0.3 − 1 = <strong>−0.7</strong></li>
+      <li>∂L/∂w₂ = ∂L/∂ŷ × ∂ŷ/∂w₂ = (−0.7) × h = (−0.7) × 1 = <strong>−0.7</strong>（至此 w₂ 的梯度已到手）</li>
+      <li>∂L/∂h = ∂L/∂ŷ × ∂ŷ/∂h = (−0.7) × w₂ = (−0.7) × 0.3 = <strong>−0.21</strong></li>
+      <li>ReLU 节点：z₁ = 1 &gt; 0，本地导数为 1，梯度直通：∂L/∂z₁ = −0.21 × 1 = <strong>−0.21</strong></li>
+      <li>∂L/∂w₁ = ∂L/∂z₁ × ∂z₁/∂w₁ = (−0.21) × x = (−0.21) × 2 = <strong>−0.42</strong></li>
+    </ol>
+
+    <p><strong>第三步：<span class="term">梯度下降</span>（Gradient Descent）更新</strong>，沿负梯度方向走一步 η = 0.1：</p>
+
+    <div class="formula">w₂′ = 0.3 − 0.1 × (−0.7) = 0.37；w₁′ = 0.5 − 0.1 × (−0.42) = 0.542</div>
+
+    <p><strong>第四步：验证这一步真的有用。</strong>用新权重重跑前向：z₁′ = 0.542 × 2 = 1.084，h′ = 1.084，ŷ′ = 0.37 × 1.084 ≈ 0.401，新损失 L′ = ½ × (0.401 − 1)² ≈ ½ × 0.3588 ≈ 0.179 &lt; 0.245。损失确实下降，预测从 0.3 朝 1 迈了一步。百万参数的大网络训练，就是把这四步重复几百万次。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>反向传播不是新数学，是<strong>链式法则 + 动态规划式的缓存</strong>：前向时把每个节点的值存下来，反向时每个节点的梯度只算一次、被所有下游共享。对 p 个参数的网络，一次前向加一次反向就得到全部梯度，代价约为一次前向的两倍——这就是它能训练上亿参数的原因。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>以为反向传播是"把误差从输出层平均分摊回各层"。不是分摊，是严格求导：每个参数拿到的梯度 = 上游梯度 × 它自己这条边的本地导数，一步都不能跳、一个因子都不能丢。另外，反向传播只负责算梯度，真正更新参数的是梯度下降——两者不是一回事。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 6.5-1</div>
+              <div class="q-text">反向传播在计算图上的两个pass分别做什么？每个节点要存什么？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              前向 pass：沿图计算并存下每个节点的输出值（z₁、h、ŷ、L）；反向 pass：从 L 出发，逐节点做"上游梯度 × 本地导数"，得到每个参数的梯度。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 6.5-2</div>
+              <div class="q-text">本节例子中 ∂L/∂w₁ 的完整链式路径是什么？数值是多少？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              ∂L/∂w₁ = ∂L/∂ŷ × ∂ŷ/∂h × ∂h/∂z₁ × ∂z₁/∂w₁ = (−0.7) × 0.3 × 1 × 2 = −0.42。一个因子都不能丢。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ================= 6.6 ================= -->
+    <h2><span class="sec-no">6.6</span>万能近似与深度的价值</h2>
+
+    <p>前五节证明了深度前馈网络"能学 XOR、能算梯度"。最后一个问题：它的表达能力边界在哪里？</p>
+
+    <p><span class="term">万能近似定理</span>（Universal Approximation Theorem）：只要隐藏层足够宽（单元足够多），一个单隐层前馈网络就能以任意精度逼近任意连续函数。从这个意义说，6.2 解 XOR 不是巧合，而是普遍能力的缩影。</p>
+
+    <p>但定理有两个"不保证"：<strong>不保证学习算法能找到那组权重</strong>（存在 ≠ 找得到）；<strong>不保证宽度可以承受</strong>——浅而宽的网络对某些函数需要指数级多的单元。深度的价值正在于此：每加深一层，都是在前一层的特征之上再组合一次——第 1 层学边缘，第 2 层把边缘拼成角，第 3 层拼成部件。用组合换来指数级的表达效率：同一个函数，深而窄的网络可能用多项式规模的单元就够，浅而宽的却需要天文数字。</p>
+
+    <p>不过天下没有免费的午餐：层数一多，6.3 的梯度消失、崎岖的损失曲面都找上门来——这正是第 7 章（正则化）与第 8 章（优化）存在的理由。再往后，第 9 章卷积、第 10 章循环还会给网络加上结构先验，让"深"用得更省。</p>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 6.6-1</div>
+              <div class="q-text">万能近似定理说了什么？它的两个"不保证"是什么？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              单隐层、足够宽的前馈网络可任意精度逼近任意连续函数。不保证：(1) 学习算法找得到那组权重；(2) 所需宽度可以承受（可能指数级）。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 6.6-2</div>
+              <div class="q-text">为什么"深而窄"通常比"浅而宽"更高效？这引出后续哪几章？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              每层在下层特征之上再组合，逐层复用带来指数级表达效率。深度带来梯度消失与难优化 → 第 7、8 章；结构先验（卷积、循环）→ 第 9、10 章。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===== 章末五件套之 1：概念卡 ===== -->
+    <h2><span class="sec-no">🃏</span>概念卡：本章概念的一分钟画像</h2>
+    <p>翻面前先自问：这个概念我能用一句话讲清楚吗？</p>
+    <div class="flip-grid">
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 1</div>
+            <div class="q-text">隐藏单元与特征学习（Hidden Units &amp; Feature Learning）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">隐藏层中每个做"仿射变换 + 非线性激活"的单元，h = g(Wᵀx + c) 的一个分量。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">原始特征线性不可分时，学出新表示使任务可分（XOR 四点在 h 空间线性可分）。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">给数据换个角度拍照——夹心的点被折到了一边。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为特征要靠人工设计；深度学习恰恰让特征成为可训练参数的产物。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">一切深度模型的基本砖块；第 9、10 章的卷积核、循环单元都是它的特化。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 2</div>
+            <div class="q-text">ReLU（Rectified Linear Unit）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">g(z) = max{0, z}，逐元素作用；正区导数恒 1，负区导数 0。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">sigmoid 两端饱和导致梯度消失；ReLU 正区不衰减，深层链乘 1ⁿ = 1。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">单向阀门：正的放行，负的截断，信号不缩水。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为处处可导（z = 0 处用次梯度）；以为零风险（负区可能"死亡单元"）。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">隐藏层默认激活；本章与第 9 章卷积网络的主力。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 3</div>
+            <div class="q-text">sigmoid 与饱和（Sigmoid &amp; Saturation）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">σ(z) = 1/(1+e⁻ᶻ)，把实数压到 (0,1)；σ′(z) = σ(z)(1−σ(z)) ≤ 0.25。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">提供平滑可导的"软开关"，输出层取值可直接解释为概率。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">音量旋钮拧到头就拧不动了——|z| 大时梯度趋零（饱和）。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">拿它当隐藏层主力堆深层：0.25³ ≈ 0.016，梯度三层就缩水两个数量级。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">二分类输出层（配 NLL）；需要门控的场合（第 10 章 LSTM）。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 4</div>
+            <div class="q-text">softmax 与负对数似然（Softmax &amp; NLL）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">softmax(z)ᵢ = exp(zᵢ)/∑ⱼexp(zⱼ) 给出类别概率；NLL = −log ŷ（正确类的对数概率取负）。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">多分类的概率读出；与 NLL 配对后 ∂J/∂z = ŷ − y，饱和被 log 解除。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">错得越自信（ŷ 越小），惩罚越狠（−log 爆炸）。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">给 sigmoid / softmax 配平方误差：z = −5 时梯度被压小约 150 倍，学不动。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">一切分类器的标准输出头；第 11 章实践方法论反复出现。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 5</div>
+            <div class="q-text">万能近似定理（Universal Approximation Theorem）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">单隐层、足够宽的前馈网络可以任意精度逼近任意连续函数。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">保证深度前馈网络"表达得上"——不存在天然学不了的合理目标函数。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">乐高积木够多什么都能拼——但没保证你找得到拼法。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">当成"训练必成功"的保证书——它不管优化，也不管宽度是否爆炸。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">回答"这个模型族行不行"时的理论底牌；6.6 深度效率讨论的起点。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 6</div>
+            <div class="q-text">反向传播与计算图（Backpropagation &amp; Computational Graph）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">在计算图上先前向缓存中间值，再从损失沿链式法则逐节点回传梯度的算法。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">对百万级参数高效求梯度：一次前向 + 一次反向 ≈ 两倍前向代价。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">流水线质检：成品出问题，沿传送带倒查，每站只问"你的输入差多少"。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为它等于梯度下降——它只算梯度，更新参数的是梯度下降。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">所有深度学习框架的引擎；第 8 章一切优化算法的梯度来源。</span></div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- ===== 章末五件套之 2：分层习题 ===== -->
+    <h2><span class="sec-no">📝</span>分层习题</h2>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>
+        <p>判断对错并说明理由：(1) "三层不带激活函数的线性网络 y = W₃(W₂(W₁x + b₁) + b₂) + b₃，只要层数够多就能学会 XOR。" (2) "把 6.2 网络里的 ReLU 全部换成恒等激活 g(z) = z，网络在 XOR 四点上的输出仍然是 0, 1, 1, 0。"</p>
+      </div>
+      <details>
+        <summary>提示</summary>
+        <p>(1) 线性变换的复合是什么？(2) 用恒等激活对 x = (0, 0) 重算：h = Wᵀx + c，再算 y = wᵀh。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p>(1) <strong>错。</strong>展开复合：y = W₃W₂W₁x + (W₃W₂b₁ + W₃b₂ + b₃) = W′x + b′，三层线性严格等价于一个线性模型，仍受 6.1 四条约束的矛盾。层数解决不了"没有非线性"。</p>
+          <p>(2) <strong>错。</strong>换成恒等激活后 h = Wᵀx + c。对 x = (0, 0)：h = (0, −1)，y = 1×0 + (−2)×(−1) = 2 ≠ 0——第一个点就错了（按 0.5 阈值判为 1）。正是 ReLU 把 (0,0) 的 z₂ = −1 截断为 0，才挡住这个错误。非线性不可省。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>
+        <p>判断对错并说明理由：(1) "sigmoid 的导数最大只有 0.25，所以拿 sigmoid 当隐藏层堆 10 层，梯度最坏会缩小到不足万分之一——这是早年网络做不深的原因之一。" (2) "softmax 只能用于三分类及以上；二分类必须用 sigmoid。"</p>
+      </div>
+      <details>
+        <summary>提示</summary>
+        <p>(1) 算 0.25¹⁰。(2) 把两类 softmax 的公式写出来，与 σ(z) 对比。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p>(1) <strong>对。</strong>最好情形每层贡献 0.25，0.25¹⁰ ≈ 9.5 × 10⁻⁷，确实不足万分之一（实际还取决于权重，可能更糟）。方向与量级都对。</p>
+          <p>(2) <strong>错。</strong>二分类完全可以用两类 softmax，且与 sigmoid 数学等价（softmax 两类的差值 logistic 化正是 σ）；反过来，三分类以上无法用单个 sigmoid 归一化，必须 softmax（多标签任务除外，那是一组 sigmoid）。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>
+        <p>不翻 6.2，用该节权重（W 两行均为 [1, 1]，c = (0, −1)，w = (1, −2)，b_out = 0）对 XOR 四个输入独立重算：每个输入写出 z、h、y 三步。并指出 (0, 1) 与 (1, 0) 在 h 空间的关系说明了什么。</p>
+      </div>
+      <details>
+        <summary>提示</summary>
+        <p>z = Wᵀx + c，h 逐元素取 max{0, z}，y = wᵀh。先算 z 的两个分量，再决定 ReLU 放行还是截断。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p>x = (0,0)：z = (0+0+0, 0+0−1) = (0, −1)；h = (0, 0)；y = 1×0 + (−2)×0 = 0。</p>
+          <p>x = (1,0)：z = (1+0+0, 1+0−1) = (1, 0)；h = (1, 0)；y = 1×1 + (−2)×0 = 1。</p>
+          <p>x = (0,1)：z = (0+1+0, 0+1−1) = (1, 0)；h = (1, 0)；y = 1×1 + (−2)×0 = 1。</p>
+          <p>x = (1,1)：z = (1+1+0, 1+1−1) = (2, 1)；h = (2, 1)；y = 1×2 + (−2)×1 = 2 − 2 = 0。</p>
+          <p>输出 0, 1, 1, 0 全对。(0,1) 与 (1,0) 在 h 空间被折叠到同一点 (1, 0)：目标 1 的两个样本聚成单点，目标 0 的在 (0,0) 与 (2,1)——h 空间线性可分。这就是"隐藏层学特征"的具体含义。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>
+        <p>换一组数重走 6.5 的反向传播：x = 1.5，w₁ = 0.4，w₂ = 0.6，真值 y = 1，η = 0.1，L = ½(ŷ − y)²，网络为 z₁ = w₁x，h = ReLU(z₁)，ŷ = w₂h。(1) 前向求 z₁、h、ŷ、L；(2) 反向求 ∂L/∂ŷ、∂L/∂w₂、∂L/∂h、∂L/∂w₁；(3) 更新 w₁、w₂；(4) 用新权重重算前向，验证 L 下降。</p>
+      </div>
+      <details>
+        <summary>提示</summary>
+        <p>严格照 6.5 的四步走：前向存值 → 反向逐节点"上游梯度 × 本地导数" → 负梯度方向更新 → 重跑前向对比 L。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p>(1) 前向：z₁ = 0.4 × 1.5 = 0.6；h = max{0, 0.6} = 0.6；ŷ = 0.6 × 0.6 = 0.36；L = ½ × (0.36 − 1)² = ½ × 0.4096 = 0.2048。</p>
+          <p>(2) 反向：∂L/∂ŷ = ŷ − y = −0.64；∂L/∂w₂ = (−0.64) × h = (−0.64) × 0.6 = −0.384；∂L/∂h = (−0.64) × w₂ = (−0.64) × 0.6 = −0.384（注意这里 h 与 w₂ 数值碰巧相同，两个梯度数值相同纯属巧合）；ReLU：z₁ = 0.6 &gt; 0 梯度直通；∂L/∂w₁ = (−0.384) × x = (−0.384) × 1.5 = −0.576。</p>
+          <p>(3) 更新：w₂′ = 0.6 − 0.1 × (−0.384) = 0.6384；w₁′ = 0.4 − 0.1 × (−0.576) = 0.4576。</p>
+          <p>(4) 验证：z₁′ = 0.4576 × 1.5 = 0.6864，h′ = 0.6864，ŷ′ = 0.6384 × 0.6864 ≈ 0.4382，L′ = ½ × (0.4382 − 1)² ≈ ½ × 0.3156 ≈ 0.1578 &lt; 0.2048。损失下降，方向正确。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l3">L3 建模应用</span>
+        <p>某医院想用化验指标做二分类筛查：输入是 20 维化验指标向量，输出"患病概率"，拟用一个两隐层前馈网络。请设计：(1) 隐藏层激活函数选什么？(2) 输出层选什么？(3) 代价函数选什么？(4) 逐一说明为什么不选"sigmoid 隐藏层 + 平方误差代价"。若医生说"漏诊（患病判健康）比误诊可怕十倍"，在代价函数层面可以怎么调整？</p>
+      </div>
+      <details>
+        <summary>提示</summary>
+        <p>回忆 6.3、6.4 的判定规则；"漏诊更贵"意味着 y = 1 样本的错判要加大权重。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p>(1) 隐藏层用 ReLU：两层以上的网络若用 sigmoid，梯度每层最多乘 0.25，两层就只剩 6%，深层训练不动；ReLU 正区导数恒 1。</p>
+          <p>(2) 输出层用 sigmoid：把线性输出压到 (0, 1)，直接解释为患病概率（也可用两类 softmax，与 sigmoid 等价）。</p>
+          <p>(3) 代价用负对数似然（二分类交叉熵）：它对 z 的梯度是 ŷ − y，不含饱和因子。若用平方误差，最难学的样本（如真患病但 z 深度负值，ŷ ≈ 0.0067）梯度只有约 −0.0066，比 NLL 的 −0.9933 小约 150 倍——恰好是最该大力纠正的样本最学不动，对筛查任务不可接受。</p>
+          <p>(4) 漏诊加权：把正类（y = 1）样本的 NLL 项乘一个更大权重（如 10 倍），即加权交叉熵；部署时也可下调判决阈值。这类实践权衡的细节属于第 11 章。</p>
+        </div>
+      </details>
+    </div>
+
+    <!-- ===== 章末五件套之 3：自测 ===== -->
+    <h2><span class="sec-no">✍️</span>本章自测</h2>
+    <p class="quiz-hint">点击选项判分，答错会给出原因。</p>
+
+    <div class="quiz-block" data-answer="c">
+      <div class="q-no">自测 1</div>
+      <div class="q-stem">XOR 线性不可分证明中，推出矛盾的关键一步是：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 四个点不共线，所以一条直线分不开它们</li>
+        <li data-opt="b">B. 假设 w₁ = w₂，代入后化简得到矛盾</li>
+        <li data-opt="c">C. 由 w₁+b &gt; 0 与 w₂+b &gt; 0 相加得 w₁+w₂+2b &gt; 0，结合 b ≤ 0 推出 w₁+w₂+b &gt; 0，与第四条约束矛盾</li>
+        <li data-opt="d">D. 直接令 b = 0，发现 w₁+w₂ &gt; 0 与 w₁+w₂ ≤ 0 矛盾</li>
+      </ul>
+      <div class="quiz-explain">解析：C 对——这是覆盖一切 (w₁, w₂, b) 的严格代数链条。A 错："不共线"是几何直觉不是证明，而且三个点的集合不共线并不妨碍线性可分，证明必须落到约束不等式上。B 错：证明不允许假设权重相等，对称性是结论不是前提。D 错：b = 0 只是特例，而合法模型允许任意 b，必须一般地推出矛盾。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="c">
+      <div class="q-no">自测 2</div>
+      <div class="q-stem">sigmoid 导数 σ′(z) = σ(z)(1−σ(z)) 的取值范围是：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. (0, 1]——σ 的最大值接近 1</li>
+        <li data-opt="b">B. (0, 0.5]——σ 的中点是 0.5</li>
+        <li data-opt="c">C. (0, 0.25]——在 z = 0 处取到最大值 1/4</li>
+        <li data-opt="d">D. 无上限——z 越大斜率越大</li>
+      </ul>
+      <div class="quiz-explain">解析：C 对——σ ∈ (0,1) 时乘积 σ(1−σ) 在 σ = 0.5（即 z = 0）处取最大值 0.25。A 错：1 是 σ 值本身的上界，不是导数的上界。B 错：0.5 是 σ 的中点函数值，σ′(0) = 0.5 × 0.5 = 0.25。D 错：恰好说反，|z| 越大 σ′ 越接近 0（饱和）。这个 0.25 上界正是"0.25¹⁰ ≈ 10⁻⁶"梯度消失的根源。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 3</div>
+      <div class="q-stem">z = −5、真标签 y = 1 时，对 z 的梯度：NLL 约 −0.9933，平方误差约 −0.0066。造成约 150 倍差距的根本原因是：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. NLL 里有 log，而 log(0.0067) 的绝对值很大</li>
+        <li data-opt="b">B. 平方误差的梯度要乘饱和区的 σ′(z) ≈ 0.0066；NLL 中 1/ŷ 恰好把 σ′ 约掉，只剩 ŷ − y</li>
+        <li data-opt="c">C. NLL 隐含使用了更大的学习率</li>
+        <li data-opt="d">D. 平方误差此时为负值，梯度方向错误</li>
+      </ul>
+      <div class="quiz-explain">解析：B 对——链式法则里平方误差多出一个饱和导数因子 σ′，NLL 的导数结构恰好把它抵消。A 错：梯度大小取决于导数结构，不取决于 log 的函数值本身。C 错：比较是在同一学习率下做的。D 错：平方误差 ½(0.0067−1)² ≈ 0.493 &gt; 0，且损失正负与梯度方向无关。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="a">
+      <div class="q-no">自测 4</div>
+      <div class="q-stem">对 6.5 的网络（x → z₁ → h → ŷ → L），∂L/∂w₁ 的正确链式展开是：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. ∂L/∂ŷ × ∂ŷ/∂h × ∂h/∂z₁ × ∂z₁/∂w₁</li>
+        <li data-opt="b">B. ∂L/∂ŷ × ∂ŷ/∂w₁</li>
+        <li data-opt="c">C. ∂L/∂h × ∂h/∂w₁</li>
+        <li data-opt="d">D. (∂L/∂w₂) × x</li>
+      </ul>
+      <div class="quiz-explain">解析：A 对——必须沿计算图经过每一个中间节点，数值上 = (−0.7)×0.3×1×2 = −0.42。B 错：ŷ 不直接依赖 w₁，"一步偏导" ∂ŷ/∂w₁ 不存在，必须拆经 h 与 z₁。C 错：丢掉了 ŷ 到 L 这一段链路，少了因子 ∂L/∂ŷ。D 错：∂L/∂w₂ = −0.7 是另一条边上的梯度，不能挪用到 w₁。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="c">
+      <div class="q-no">自测 5</div>
+      <div class="q-stem">关于万能近似定理与深度，下列说法正确的是：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 定理保证梯度下降一定能找到逼近任意函数的权重</li>
+        <li data-opt="b">B. 定理说隐藏层越宽越好，所以增加深度没有意义</li>
+        <li data-opt="c">C. 定理只保证"存在"足够宽的单隐层网络；深而窄的网络靠逐层组合特征，可用远少于浅而宽的单元表达同一函数</li>
+        <li data-opt="d">D. 定理要求激活函数必须是 sigmoid</li>
+      </ul>
+      <div class="quiz-explain">解析：C 对——定理是存在性结果，而深度的价值是逐层组合带来的指数级表达效率。A 错：定理不管优化，"存在"不等于"找得到"，训练难题是第 8 章的主题。B 错：恰好相反，浅而宽对某些函数需要指数级单元，深度才有意义。D 错：定理对一大类非线性激活（包括 ReLU）都成立。</div>
+    </div>
+
+    <!-- ===== 章末五件套之 4：三句话复述 ===== -->
+    <div class="retell">
+      <h3>🗣️ 用自己的话，三句话讲完本章</h3>
+      <p>对着空气（或室友）说出这三句。说卡壳的那句，回去重读对应小节。</p>
+      <details>
+        <summary>句1：这章解决什么问题？——</summary>
+        <div class="retell-answer">参考答案：第 5 章解决了"学什么、怎么评估"，但线性模型连 XOR 都表达不了；本章给出能逼近任意连续函数的模型——深度前馈网络，以及训练它的两件工具：与输出层配对的代价函数、反向传播。</div>
+      </details>
+      <details>
+        <summary>句2：核心机制是什么？——</summary>
+        <div class="retell-answer">参考答案：隐藏层做"仿射 + 非线性激活"，把输入折叠成线性可分的表示（XOR 四点在 h 空间聚成可分三点）；sigmoid / softmax 输出配负对数似然，让 log 抵消饱和导数，错误越大梯度越大（150 倍差距）；反向传播在计算图上用链式法则，一次前向加一次反向求出全部参数的梯度，梯度下降负责更新。</div>
+      </details>
+      <details>
+        <summary>句3：它和前后章怎么分工？——</summary>
+        <div class="retell-answer">参考答案：本章给"模型"（前馈网络）与"训练算法"（反向传播）；但深网络的梯度消失、过拟合与难优化的损失曲面尚未解决——第 7 章正则化、第 8 章优化接手；第 9、10 章再加结构先验（卷积、循环）。</div>
+      </details>
+    </div>
+
+    <!-- ===== 章末五件套之 5：间隔复习计划 ===== -->
+    <div class="review-plan">
+      <h3>🔁 间隔复习计划</h3>
+      <p>回忆本身比重读有效 10 倍。到点只做一件事：翻卡 + 重做标记题。</p>
+      <table>
+        <tr><th>时间点</th><th>复习内容</th><th>预计用时</th></tr>
+        <tr><td>第 1 天</td><td>概念卡 1–6 + 全部回忆卡（6.1 至 6.6 共 12 张）；重做 L2 第一题（XOR 四点重算）</td><td>12 分钟</td></tr>
+        <tr><td>第 3 天</td><td>概念卡 2、3、4（ReLU / sigmoid / softmax+NLL）+ 自测错题；重算 σ′(0.5)、σ′(5) 与 150 倍梯度对比</td><td>8 分钟</td></tr>
+        <tr><td>第 7 天</td><td>三句话复述 + 重做 L2 第二题（换数反向传播）；默写 XOR 四约束与链式四因子</td><td>10 分钟</td></tr>
+        <tr><td>第 15 天</td><td>只做合上书挑战；能全过（尤其两个手算）本章即毕业，进入第 7 章正则化</td><td>15 分钟</td></tr>
+      </table>
+    </div>
+
+    <!-- 合上书挑战 -->
+    <div class="final-challenge">
+      <h3>📕 合上书挑战</h3>
+      <p class="fc-sub">现在关掉这个页面，拿一张纸，凭记忆完成以下任务。全部做完再回来核对——这是本章真正的毕业考试。</p>
+      <ol id="challenge-list">
+        <li><span class="fc-check"></span>写出 XOR 线性不可分的完整证明：四条约束、两式相加、推出矛盾</li>
+        <li><span class="fc-check"></span>默写 6.2 网络的 W、c、w、b_out，并对 x = (1, 1) 手算 z、h、y</li>
+        <li><span class="fc-check"></span>写出 σ′(z) 的公式与最大值，算出 0.25³，说明它为什么让 sigmoid 深网络难训</li>
+        <li><span class="fc-check"></span>用 z = −5、y = 1 的例子解释为什么 sigmoid / softmax 输出要配 NLL 而非平方误差（两个梯度各是多少、差多少倍）</li>
+        <li><span class="fc-check"></span>对 x = 2、w₁ = 0.5、w₂ = 0.3、y = 1 的网络手算一步反向传播并更新权重，验证 L 从 0.245 降到约 0.179</li>
+        <li><span class="fc-check"></span>陈述万能近似定理及它的两个"不保证"，用一句话说清深度相对宽度的效率优势</li>
+        <li><span class="fc-check"></span>回答本章的主线问题：线性模型做不到的事（如 XOR），多层网络凭什么做到，又靠什么算法把参数训出来？（一句话）</li>
+      </ol>
+    </div>
+
+    <div class="complete-zone">
+      <button class="btn-complete" id="btn-complete" onclick="markDone()">✓ 我已完成本章（含合上书挑战）</button>
+    </div>
+
+    <div class="chapter-nav">
+      <a href="chapter-05.html"><span class="nav-dir">← 上一章</span>第5章 机器学习基础</a>
+      <a href="chapter-07.html" class="next"><span class="nav-dir">下一章 →</span>第7章 正则化</a>
+    </div>
+
+  </div>
+</div>
+
+<footer class="footer">
+  <div class="wrap">第6章 深度前馈网络 · 深度学习互动讲义 · 基于 Goodfellow et al.《深度学习》(2016)</div>
+</footer>
+
+<script src="/lectures-assets/mermaid.min.js"></script>
+<script>
+mermaid.initialize({
+  startOnLoad: true,
+  theme: "base",
+  themeVariables: {
+    primaryColor: "#e3edf7",
+    primaryBorderColor: "#1d5f9e",
+    primaryTextColor: "#1d5f9e",
+    lineColor: "#5c554b",
+    secondaryColor: "#fbeedd",
+    tertiaryColor: "#f5f1e8",
+    fontFamily: "-apple-system, PingFang SC, sans-serif",
+    fontSize: "14px"
+  },
+  flowchart: { curve: "linear", htmlLabels: false }
+});
+</script>
+<script>
+// 自测题判分
+document.querySelectorAll(".quiz-block").forEach(block => {
+  const answer = block.dataset.answer;
+  const explain = block.querySelector(".quiz-explain");
+  block.querySelectorAll(".quiz-opts li").forEach(li => {
+    li.addEventListener("click", () => {
+      const opts = block.querySelectorAll(".quiz-opts li");
+      opts.forEach(o => o.classList.add("disabled"));
+      if (li.dataset.opt === answer) {
+        li.classList.add("correct");
+      } else {
+        li.classList.add("wrong");
+        block.querySelector(`[data-opt="${answer}"]`).classList.add("correct");
+      }
+      explain.classList.add("show");
+    });
+  });
+});
+
+// 合上书清单打勾
+document.querySelectorAll("#challenge-list li").forEach(li => {
+  li.addEventListener("click", () => li.classList.toggle("checked"));
+});
+
+// 完成标记 → localStorage（本系列键 dl_progress_v1，章号为字符串 "6"）
+const KEY = "dl_progress_v1";
+function loadProgress() {
+  try { return JSON.parse(localStorage.getItem(KEY)) || {}; } catch (e) { return {}; }
+}
+const progress = loadProgress();
+const btn = document.getElementById("btn-complete");
+if (progress["6"] && progress["6"].done) {
+  btn.textContent = "✓ 已完成 · 再次点击重置";
+  btn.classList.add("done");
+}
+function markDone() {
+  const p = loadProgress();
+  if (p["6"] && p["6"].done) {
+    delete p["6"];
+    btn.textContent = "✓ 我已完成本章（含合上书挑战）";
+    btn.classList.remove("done");
+  } else {
+    p["6"] = { done: true, completedAt: Date.now(), reviewsDone: 0 };
+    btn.textContent = "✓ 已完成 · 复习提醒已开启";
+    btn.classList.add("done");
+  }
+  localStorage.setItem(KEY, JSON.stringify(p));
+}
+</script>
+
+</body>
+</html>

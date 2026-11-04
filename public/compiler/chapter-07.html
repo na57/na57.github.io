@@ -1,0 +1,923 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第7章 运行环境 · 编译原理互动讲义</title>
+<link rel="stylesheet" href="/lectures-assets/style.css">
+</head>
+<body>
+
+<nav class="topbar">
+  <div class="topbar-inner">
+    <span class="brand"><a href="index.html" style="color:inherit">← 学习地图</a></span>
+    <span class="crumb">阶段② · 语义与中间代码 / 第7章</span>
+  </div>
+</nav>
+
+<div class="wrap">
+
+  <div class="lecture-head">
+    <span class="ch-label">CHAPTER 07 · 语义与中间代码</span>
+    <h1>运行环境</h1>
+    <p class="lead">三地址码里到处是名字——a、x、quicksort。CPU 却只认识地址。本章回答：每个名字在运行时住在内存的哪个位置，又是谁、在什么时候、按什么规矩把它安放在那儿的。</p>
+  </div>
+
+  <!-- ===== 章首四件套之 1：全书定位 ===== -->
+  <div class="position-bar">
+    <strong>本章在主线上的位置：</strong>第6章把源程序翻成了三地址码，但里面的名字还只是符号 → <u>本章给每个名字找到运行时的家：区、帧、帧内偏移</u> → 第8章因此能把三地址码落成带真实寻址的机器指令。<br>
+    第7章回答主线上的第4个问题：<strong>源程序里的名字，在运行时如何找到它的存储位置？</strong>
+    <div class="map-inline">
+      <span class="node">Ch1–4 前端：词法与语法（给了语法树）</span><span class="arrow">→</span>
+      <span class="node here">Ch5–7 语义与中间代码 · 本章 Ch7 运行环境</span><span class="arrow">→</span>
+      <span class="node">Ch8–11 后端与优化（Ch8 用本章帧布局做寻址）</span><span class="arrow">→</span>
+      <span class="node">Ch12 全书收束</span>
+    </div>
+  </div>
+
+  <!-- ===== 章首四件套之 2：学习目标 ===== -->
+  <div class="objectives">
+    <h4>🎯 学完本章，合上书你应该能：</h4>
+    <ol>
+      <li>画出进程地址空间的四区划分图，并解释栈与堆为什么对向生长。</li>
+      <li>默写活动记录的七个字段，并对每个字段说出「不存它会怎样」。</li>
+      <li>把一次过程调用拆成调用序列与返回序列，分清每一步由调用者还是被调用者完成。</li>
+      <li>给定嵌套过程与一段调用序列，画出栈状态与全部访问链，并算出访问任一非局部变量要沿几条链。</li>
+      <li>对同一个非局部访问任务，用访问链与 display 各算一次代价，说出两者的空间/时间账单。</li>
+      <li>说出引用计数与标记-清扫各自的回收能力与致命短板。</li>
+    </ol>
+  </div>
+
+  <div class="lecture">
+
+    <!-- ===== 章首四件套之 3：推导主线图 ===== -->
+    <div class="figure">
+      <div class="mermaid">
+flowchart TB
+  A["第6章的遗产：三地址码里全是名字"] --> B["问题1：名字住在哪 → 四区划分"]
+  B --> C["静态名字：编译时定址，零运行时开销"]
+  B --> D["问题2：一次调用要记什么 → 活动记录"]
+  D --> E["调用序列与返回序列：调用者与被调用者分工"]
+  D --> F["问题3：嵌套过程的非局部变量 → 访问链"]
+  F --> G["display：用一张表把跳链换成查表"]
+  D --> H["问题4：寿命不定的数据 → 堆与垃圾回收"]
+  G --> I["代价：跳链步数等于嵌套深度差；堆引入碎片与回收开销"]
+  H --> I
+  classDef hot fill:#fbeedd,stroke:#c4651f,stroke-width:2.5px,color:#c4651f;
+  classDef danger fill:#fae9e7,stroke:#b03a2e,stroke-width:2.5px,color:#b03a2e;
+  class I danger;
+      </div>
+      <div class="caption">本章推导主线：名字的住址问题分四步解决，最后落到「跳链的深度代价」与「堆的回收代价」。</div>
+    </div>
+
+    <!-- ============================================================
+      7.1 存储组织
+    ============================================================ -->
+    <h2><span class="sec-no">7.1</span>名字住在哪个区：运行时的存储组织</h2>
+
+    <p>第6章留给我们的三地址码里，<code>x := t1</code>、<code>call quicksort, 2</code> 这样的语句全是符号。编译器后端动工前，必须先回答三个问题：每个名字<strong>住在哪个区</strong>、住多大、住多久。这一节先解决「哪个区」——答案取决于这个数据的<strong>寿命</strong>。</p>
+
+    <p>一个目标程序的逻辑地址空间被划分为四个区域：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>区域</th><th>存什么</th><th>大小何时确定</th><th>寿命</th></tr>
+        <tr><td>代码区</td><td>编译出的目标指令</td><td>编译时</td><td>整个运行期</td></tr>
+        <tr><td>静态数据区</td><td>全局变量、<code>static</code> 变量、常量表</td><td>编译时（可定址）</td><td>整个运行期</td></tr>
+        <tr><td>栈（Stack）</td><td>活动记录：每次过程调用的参数、局部数据、返回地址</td><td>调用时压入，返回时弹出</td><td>一次调用期间</td></tr>
+        <tr><td>堆（Heap）</td><td>运行时才申请的数据（<code>new</code> / <code>malloc</code>）</td><td>运行时，申请与释放时机不定</td><td>由程序或垃圾回收决定</td></tr>
+      </table>
+    </div>
+
+    <p>三种分配策略因此得名：<span class="term">静态分配</span>（Static Allocation）在编译时把名字钉死在静态区；<span class="term">栈式分配</span>（Stack Allocation）随调用进退而压栈弹栈；<span class="term">堆式分配</span>（Heap Allocation）把申请与释放的时机完全交给运行时。</p>
+
+    <div class="figure">
+      <div class="mermaid">
+flowchart TB
+  subgraph M["进程地址空间：低地址在上，高地址在下"]
+    direction TB
+    A["代码区"] --> B["静态数据区"]
+    B --> C["堆：向高地址生长"]
+    C -. "中间是空闲区，谁先碰到谁才算耗尽" .-> D["栈：向低地址生长"]
+  end
+      </div>
+      <div class="caption">图 7.1 四区划分与生长方向：注意栈与堆之间隔着一整块共用的空闲区。</div>
+    </div>
+
+    <p><strong>为什么栈和堆对向生长？</strong>两者的需求都无法预知：递归多深、动态申请多少，编译时都不知道。让它们从同一大块空闲区的两端相向生长——堆向上、栈向下——任何一方增长都只是推进一个边界指针，直到两者相遇才算真正耗尽。若同向生长，中间被隔开的空闲区就永远浪费了：栈用不完的部分，堆永远借不到。</p>
+
+    <p><strong>例 7.1-A（编译期定址，完整步骤）：</strong>某程序在静态区声明：全局整型 <code>g</code>（4 字节）、静态数组 <code>buf[0..9]</code>（10×4 = 40 字节）、常量表（16 字节）。设静态区基址为 4096，按声明顺序、4 字节对齐依次摆放：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>名字</th><th>大小</th><th>编译期偏移</th><th>运行时地址</th></tr>
+        <tr><td>g</td><td>4</td><td>0</td><td>4096</td></tr>
+        <tr><td>buf</td><td>40</td><td>4</td><td>4100</td></tr>
+        <tr><td>常量表</td><td>16</td><td>44</td><td>4140</td></tr>
+      </table>
+    </div>
+
+    <p>于是生成代码里所有对 <code>g</code> 的引用直接写成绝对地址 4096，<strong>零运行时开销</strong>。这就是「能静态就静态」的吸引力。但递归让局部变量不可能静态：quicksort 调用自己时，两份 <code>m</code>、<code>n</code> 必须同时在场——一个地址放不下两个值，只能每次调用在栈上各领一份。</p>
+
+    <div class="formula">静态名字的地址：addr(<span class="var">x</span>) = base<sub>static</sub> + off(<span class="var">x</span>)，其中 off 由声明顺序与对齐在编译期算定</div>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>存储组织的本质是<strong>按寿命分租</strong>：寿命等于整个程序的住静态区（一次付清，管理免费）；寿命等于一次调用的住栈（自动进退）；寿命说不准的住堆（随租随还，但要人盘点）。租金——管理开销——依次递增。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>「局部变量一定在栈上」。错。栈分配的前提是「寿命严格等于一次调用」：C 里被闭包/指针带走、函数返回后仍要活着的局部变量会「逃逸」到堆；过大的局部数组（如一百万个 int）栈根本装不下。反过来，递归过程的局部变量绝不能在静态区——那是老式 FORTRAN 不允许递归的根本原因。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 7.1-1</div>
+              <div class="q-text">四个区各存什么？大小分别在何时确定？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              代码区：目标指令，编译时；静态区：全局/static/常量，编译时；栈：活动记录，调用进退时；堆：动态申请的数据，运行时。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 7.1-2</div>
+              <div class="q-text">栈和堆为什么要对向生长？同向生长会浪费什么？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              两者需求都无法预知，共用同一块空闲区、从两端相向推进，直到相遇才耗尽；同向生长会让中间的空洞永远无法被另一方借用。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============================================================
+      7.2 活动与活动记录
+    ============================================================ -->
+    <h2><span class="sec-no">7.2</span>一次调用要记住什么：活动与活动记录</h2>
+
+    <p>7.1 说局部数据住栈上，但一次过程调用要记的东西远不止局部变量——还要记住「从哪来、回哪去、上一层是谁」。过程的一次执行称为一个<span class="term">活动</span>（Activation）；该活动在栈上占用的数据块称为<span class="term">活动记录</span>（Activation Record），俗称<span class="term">栈帧</span>（Stack Frame）。</p>
+
+    <p>活动记录最多含七个字段，每个字段都对应一个「不存就会出事」的理由：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>字段</th><th>内容</th><th>不存它会怎样</th></tr>
+        <tr><td>实在参数</td><td>调用者算好的实参值</td><td>被调用者拿不到输入</td></tr>
+        <tr><td>返回值</td><td>交还给调用者的结果</td><td>函数结果无处交接</td></tr>
+        <tr><td><span class="term">控制链</span>（Control Link，又叫动态链）</td><td>指向调用者的活动记录</td><td>返回时栈无法弹回调用现场</td></tr>
+        <tr><td><span class="term">访问链</span>（Access Link，又叫静态链）</td><td>指向词法上直接外层的最近一次活动</td><td>找不到外层声明的非局部变量</td></tr>
+        <tr><td>保存的机器状态</td><td>返回地址、调用时的寄存器值</td><td>不知回哪继续执行，调用者现场全乱</td></tr>
+        <tr><td>局部数据</td><td>本过程声明的变量</td><td>递归时新旧值互相覆盖</td></tr>
+        <tr><td>临时变量</td><td>表达式的中间结果（如 t1）</td><td>寄存器不够时无处可溢出</td></tr>
+      </table>
+    </div>
+
+    <p>注意：这是逻辑字段表，实际布局（谁前谁后、谁交给寄存器）由编译器定。但字段间的<strong>分工原则</strong>是铁律——谁的信息谁负责。一次调用被拆成两个标准动作：<span class="term">调用序列</span>（Calling Sequence，进入时铺床）与<span class="term">返回序列</span>（Return Sequence，退出时收床）。</p>
+
+    <p><strong>例 7.2-A（调用序列与返回序列的完整分工）：</strong>以 quicksort(1,9) 调用 partition(1,9) 为例，逐条过一遍，并标明每一步由谁执行：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>阶段</th><th>步骤</th><th>执行者</th><th>为什么是它</th></tr>
+        <tr><td rowspan="3">调用序列</td><td>计算实参 1、9，写入被调用者帧的参数区</td><td>调用者</td><td>只有调用者知道传什么</td></tr>
+        <tr><td>保存返回地址（调用点下一条指令）</td><td>调用者</td><td>只有调用者知道调用点在哪</td></tr>
+        <tr><td>设控制链指向自己的帧；按 7.3 的规则设访问链</td><td>调用者</td><td>调用者知道自己帧的位置与词法嵌套关系</td></tr>
+        <tr><td rowspan="2">调用序列</td><td>保存将被覆盖的寄存器等机器状态</td><td>被调用者</td><td>只有被调用者知道自己要用哪些寄存器</td></tr>
+        <tr><td>初始化局部数据，开始执行函数体</td><td>被调用者</td><td>局部数据的大小与被初始化方式只有它知道</td></tr>
+        <tr><td rowspan="3">返回序列</td><td>把返回值写入自己帧的返回值区</td><td>被调用者</td><td>只有它算出了结果</td></tr>
+        <tr><td>恢复保存的机器状态，按控制链把栈顶弹回调用者</td><td>被调用者</td><td>现场是它保存的，由它还原</td></tr>
+        <tr><td>按返回地址跳回；调用者从返回值区取走结果</td><td>被调用者 → 调用者</td><td>交接完成</td></tr>
+      </table>
+    </div>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>栈帧就是一次调用的<strong>档案袋</strong>：调用时领一个（压栈），返回时销毁（弹栈）。袋里装着三样东西——怎么来的（参数、控制链）、怎么回去（返回地址、保存状态）、干活的草稿纸（局部数据与临时变量）。调用/返回序列的分工原则只有一句：<strong>只有自己知道的信息，由自己处理</strong>。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>把控制链和访问链当成同一个东西。控制链回答「谁调用我」（<strong>动态</strong>关系，返回时用它弹栈）；访问链回答「我的词法外层在哪」（<strong>静态</strong>关系，找非局部变量用它）。C 语言没有嵌套函数，帧里通常只有控制链——这正是只学过 C 的人第一次见访问链会发懵的原因。7.3 的例子会让这条区别变得具体。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 7.2-1</div>
+              <div class="q-text">活动记录的七个字段是什么？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              实在参数、返回值、控制链、访问链、保存的机器状态、局部数据、临时变量。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 7.2-2</div>
+              <div class="q-text">调用序列中调用者与被调用者各做什么？分工原则是什么？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              调用者：算实参、存返回地址、设控制链与访问链；被调用者：保存机器状态、初始化局部数据。原则：只有自己知道的信息由自己处理。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============================================================
+      7.3 核心例题：嵌套过程的栈帧与访问链
+    ============================================================ -->
+    <h2><span class="sec-no">7.3</span>嵌套过程怎么找非局部变量：栈帧布局与访问链全程演示</h2>
+
+    <p>7.2 说访问链「指向词法外层」，这话太抽象。词法嵌套到底怎样落成栈上的指针？访问一个外层变量到底要走几步？本节用一个完整例子走到底——这是本章的核心例题，一步都不跳。</p>
+
+    <p><strong>例 7.3-A（Pascal 风格嵌套程序）：</strong>下面这个快速排序程序是龙书的经典例子。Pascal 允许过程嵌套声明，正是观察访问链的最好样本：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>行</th><th>代码</th><th>说明</th></tr>
+        <tr><td>1</td><td><code>program sort;</code></td><td>最外层，深度 1</td></tr>
+        <tr><td>2</td><td><code>&nbsp;&nbsp;var a: array[0..10] of integer; x: integer;</code></td><td>sort 的局部数据</td></tr>
+        <tr><td>3</td><td><code>&nbsp;&nbsp;procedure readarray; var i: integer;</code></td><td>深度 2</td></tr>
+        <tr><td>4</td><td><code>&nbsp;&nbsp;procedure exchange(i, j: integer);</code></td><td>深度 2；函数体用 x 与 a 做交换</td></tr>
+        <tr><td>5</td><td><code>&nbsp;&nbsp;procedure quicksort(m, n: integer);</code></td><td>深度 2</td></tr>
+        <tr><td>6</td><td><code>&nbsp;&nbsp;&nbsp;&nbsp;var k, v: integer;</code></td><td>quicksort 的局部数据</td></tr>
+        <tr><td>7</td><td><code>&nbsp;&nbsp;&nbsp;&nbsp;function partition(y, z: integer): integer; var i, j: integer;</code></td><td>深度 3；用到 a、v，并调用 exchange(i, j)</td></tr>
+        <tr><td>8</td><td><code>&nbsp;&nbsp;begin ... partition(m, n) ... quicksort(...) end;</code></td><td>quicksort 递归调用自己</td></tr>
+        <tr><td>9</td><td><code>begin readarray; quicksort(1, 10) end.</code></td><td>主程序体</td></tr>
+      </table>
+    </div>
+
+    <p><strong>第一步：标嵌套深度。</strong><span class="term">嵌套深度</span>（Nesting Depth）= 词法上被几层过程包住：sort 为 1；readarray、exchange、quicksort 为 2；partition 为 3。访问链的一切计算都从这两个数字出发。</p>
+
+    <p><strong>第二步：定帧布局与偏移表。</strong>约定：偏移从帧首（低地址）算起，字长 4 字节；帧头固定三项——偏移 0 控制链、偏移 4 访问链、偏移 8 保存的机器状态；其后依次是参数、返回值、局部数据、临时变量。各过程的完整偏移表：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>帧</th><th>偏移</th><th>字段</th><th>备注</th></tr>
+        <tr><td rowspan="5"><strong>sort</strong></td><td>0</td><td>控制链</td><td>主程序，调用者为运行时系统</td></tr>
+        <tr><td>4</td><td>访问链</td><td>null（没有词法外层）</td></tr>
+        <tr><td>8</td><td>保存的机器状态</td><td>返回地址等</td></tr>
+        <tr><td>12</td><td>数组 a，11×4 = 44 字节</td><td>占偏移 12–55</td></tr>
+        <tr><td>56</td><td>x</td><td>临时区自 60 起</td></tr>
+        <tr><td rowspan="5"><strong>quicksort</strong></td><td>0</td><td>控制链</td><td></td></tr>
+        <tr><td>4</td><td>访问链</td><td>指向 sort 帧</td></tr>
+        <tr><td>8</td><td>保存的机器状态</td><td></td></tr>
+        <tr><td>12 / 16</td><td>参数 m / n</td><td></td></tr>
+        <tr><td>20 / 24</td><td>局部 k / v</td><td>临时区自 28 起</td></tr>
+        <tr><td rowspan="6"><strong>partition</strong></td><td>0</td><td>控制链</td><td></td></tr>
+        <tr><td>4</td><td>访问链</td><td>指向调用它的那个 quicksort 帧</td></tr>
+        <tr><td>8</td><td>保存的机器状态</td><td></td></tr>
+        <tr><td>12 / 16</td><td>参数 y / z</td><td></td></tr>
+        <tr><td>20</td><td>返回值</td><td>function 需要</td></tr>
+        <tr><td>24 / 28</td><td>局部 i / j</td><td>临时区自 32 起</td></tr>
+        <tr><td rowspan="4"><strong>exchange</strong></td><td>0</td><td>控制链</td><td></td></tr>
+        <tr><td>4</td><td>访问链</td><td>指向 sort 帧（注意：不是 partition！）</td></tr>
+        <tr><td>8</td><td>保存的机器状态</td><td></td></tr>
+        <tr><td>12 / 16</td><td>参数 i / j</td><td>无局部数据，临时区自 20 起</td></tr>
+      </table>
+    </div>
+
+    <p><strong>第三步：跑一段调用序列，画出栈。</strong>设主程序执行 <code>readarray</code>（已返回）后调用 <code>quicksort(1, 9)</code>；它调用 <code>partition(1, 9)</code> 得划分点 4（已返回），于是递归调 <code>quicksort(1, 3)</code>；后者调 <code>partition(1, 3)</code>，partition 在扫描中调 <code>exchange(1, 3)</code>。此刻栈上有五个活动（栈顶在最下），实线为控制链（指向调用者），虚线为访问链（指向词法外层的最近活动）：</p>
+
+    <div class="figure">
+      <div class="mermaid">
+flowchart TB
+  subgraph ST["栈：自顶向下生长，栈顶在最下"]
+    direction TB
+    S["sort 帧：a 在偏移12，x 在偏移56"]
+    Q1["quicksort(1,9) 帧：k 在20，v 在24"]
+    Q2["quicksort(1,3) 帧：k 在20，v 在24"]
+    P["partition(1,3) 帧：i 在24，j 在28"]
+    E["exchange(1,3) 帧：参数 i 在12，j 在16"]
+    S --> Q1 --> Q2 --> P --> E
+  end
+  Q1 -. "访问链" .-> S
+  Q2 -. "访问链" .-> S
+  P -. "访问链" .-> Q2
+  E -. "访问链" .-> S
+      </div>
+      <div class="caption">图 7.2 执行到 exchange(1,3) 时的栈状态：实线控制链永远指向调用者；虚线访问链永远指向词法外层——注意 exchange 的访问链跨过它的调用者 partition，直达 sort。</div>
+    </div>
+
+    <p><strong>第四步：访问链的建立规则。</strong>设调用者嵌套深度为 n<sub>p</sub>，被调用者深度为 n<sub>e</sub>，调用时由调用者按下表设被调用者的访问链：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>情形</th><th>含义</th><th>被调用者的访问链</th></tr>
+        <tr><td>n<sub>e</sub> = n<sub>p</sub> + 1</td><td>被调用者直接嵌在调用者体内（如 quicksort 调 partition）</td><td>= 调用者的帧本身</td></tr>
+        <tr><td>n<sub>e</sub> = n<sub>p</sub></td><td>同级，词法外层相同（如 quicksort 递归调用自己）</td><td>复制调用者的访问链</td></tr>
+        <tr><td>n<sub>e</sub> &lt; n<sub>p</sub></td><td>被调用者声明在更外层（如 partition 调 exchange）</td><td>从调用者帧出发沿访问链走 n<sub>p</sub> − n<sub>e</sub> + 1 步，落点即是</td></tr>
+      </table>
+    </div>
+
+    <p><strong>第五步：演示一次访问链建立。</strong>partition(1,3) 调用 exchange(1,3)：n<sub>p</sub> = 3，n<sub>e</sub> = 2，属第三种情形。从 partition 帧沿访问链走 3 − 2 + 1 = <strong>2 步</strong>：partition → quicksort(1,3) → sort。落点 sort 帧即为 exchange 的访问链——与词法事实一致：exchange 的直接外层正是 sort。请对着图 7.2 里 exchange 的那条长虚线再看一眼。</p>
+
+    <p><strong>第六步：演示沿访问链找非局部变量。</strong>规则：在深度 n<sub>p</sub> 的过程中访问声明于深度 n<sub>a</sub> 的名字 x，沿访问链走 n<sub>p</sub> − n<sub>a</sub> 步到达宿主帧，再加帧内偏移 off(x)。partition 执行 <code>x := a[i] + v</code>（x、a 属 sort，v 属 quicksort），逐个来：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>名字</th><th>声明深度</th><th>走几步</th><th>路径</th><th>地址表达式</th></tr>
+        <tr><td>v</td><td>2（quicksort）</td><td>3 − 2 = 1</td><td>partition → quicksort(1,3)</td><td>fp<sub>q2</sub> + 24</td></tr>
+        <tr><td>a</td><td>1（sort）</td><td>3 − 1 = 2</td><td>partition → quicksort(1,3) → sort</td><td>fp<sub>sort</sub> + 12 + 4×i</td></tr>
+        <tr><td>x</td><td>1（sort）</td><td>2</td><td>同上</td><td>fp<sub>sort</sub> + 56</td></tr>
+      </table>
+    </div>
+
+    <p>若 i = 3，则 a[3] 的运行时地址 = fp<sub>sort</sub> + 12 + 12 = fp<sub>sort</sub> + 24。再看 exchange 内的 <code>x := a[i]</code>：exchange 深度 2，走 2 − 1 = <strong>1 步</strong>：exchange → sort。注意它的<strong>调用者</strong>是 partition，而访问链根本不理会调用者——沿控制链走会一头撞进 partition 的 i、j，那不是你想要的 a。这就是 7.2 警告的实例化。</p>
+
+    <div class="formula">非局部访问：跳数 = <span class="var">n</span><sub>p</sub> − <span class="var">n</span><sub>a</sub>；addr(<span class="var">x</span>) = 沿访问链解引用 (n<sub>p</sub> − n<sub>a</sub>) 次后的帧指针 + off(<span class="var">x</span>)</div>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>访问链把<strong>词法作用域</strong>翻译成了<strong>栈上的指针链</strong>：编译时只做一件事——数两个深度相减；运行时只做一件事——按数好的步数跳指针，再加一个编译期算好的偏移。静态信息变成运行时固定次数的 hop，这就是「名字 → 地址」翻译的全部秘密。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>以为沿控制链也能找到非局部变量。控制链随调用历史变化（quicksort 可以被 sort 调、也可以被自己递归调），而 a 永远声明在 sort 里——动态的路找不到静态的家。一句话：<strong>控制链是回家的路，访问链是找词法祖先的路</strong>，两条路只在「非嵌套、非递归」的巧合下重合。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 7.3-1</div>
+              <div class="q-text">深度 3 的 partition 调用深度 2 的 exchange，访问链如何建立？走几步、落到哪？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              属 n<sub>e</sub> &lt; n<sub>p</sub>：从 partition 帧沿访问链走 3 − 2 + 1 = 2 步，经 quicksort(1,3) 落到 sort 帧，即为 exchange 的访问链。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 7.3-2</div>
+              <div class="q-text">partition 访问 sort 的数组 a：沿几条链？a[i] 的地址表达式？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              走 3 − 1 = 2 条链：partition → quicksort(1,3) → sort；addr = fp<sub>sort</sub> + 12 + 4i。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============================================================
+      7.4 display
+    ============================================================ -->
+    <h2><span class="sec-no">7.4</span>display：用一张小表把「跳链」换成「查表」</h2>
+
+    <p>7.3 的查找很优雅，但代价与嵌套深度差成正比：深度 5 的过程访问最外层变量要跳 4 次指针，每次跳指针都是一次访存。嵌套深、非局部访问频繁时，这条链就是瓶颈。<span class="term">display</span>（词法层显示器）用一个全局数组把「沿链走」换成「一步查表」。</p>
+
+    <p>定义：display 是一个数组 d[]，d[k] 始终指向<strong>当前活跃的、深度为 k 的最近一个活动</strong>的帧。于是访问声明于深度 k 的名字 x：地址 = d[k] + off(x)——一次数组下标加一次偏移，与嵌套深度差<strong>无关</strong>。维护规则：调用深度为 n<sub>e</sub> 的过程时，把 d[n<sub>e</sub>] 的旧值存进新帧，令 d[n<sub>e</sub>] 指向新帧；返回时从新帧取回旧值恢复。每次调用与返回各花常数时间。</p>
+
+    <p><strong>例 7.4-A（同一任务的两种账单，完整对比）：</strong>设某深度 5 的过程 p 要访问声明于深度 1 的变量 g，帧内偏移 40。</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>方案</th><th>单次访问代价</th><th>每次调用/返回的维护</th><th>空间</th></tr>
+        <tr><td>访问链</td><td>4 次间接访存（沿链）+ 1 次取数 = 5 次访存</td><td>设 1 条链：1 次写</td><td>每帧 1 个指针</td></tr>
+        <tr><td>display</td><td>1 次查 d[1] + 1 次取数 = 2 次访存</td><td>保存旧 d[5] + 写新值 + 返回时恢复：约 3 次写</td><td>一个全局数组，长度 = 最大嵌套深度</td></tr>
+      </table>
+    </div>
+
+    <p>账要合起来算：若 p 的一次活动只做 <strong>1 次</strong>非局部访问——访问链共 5 + 1 = 6 次访存，display 共 2 + 3 = 5 次，打平；若做 <strong>100 次</strong>——访问链 501 次，display 203 次，display 大胜。反过来，若过程几乎不访问非局部变量却调用极频繁，display 的维护费就是纯亏。实际语言嵌套普遍很浅（很少超过 3 层），所以多数编译器用访问链就够了；display 是 Pascal 时代与深度嵌套场景的经典方案。</p>
+
+    <div class="formula">C<sub>链</sub> = n<sub>p</sub> − n<sub>a</sub> 次解引用 + 1 次取数；C<sub>display</sub> = 1 次查表 + 1 次取数</div>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>display 是「以空间换时间」的缓存：把沿链反复走的路折叠成一张直达表。凡是「链 vs 表」之争——访问链对 display、链表对数组——背后都是同一个权衡：省下的是查询时间，花掉的是维护与空间。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>以为 display 严格优于访问链。display 的维护发生在<strong>每次调用与返回</strong>（保存旧值、写新值、恢复旧值），与是否访问非局部变量无关。调用频繁而非局部访问稀少时，它就是一笔白交的手续费。选型要看「非局部访问次数 ÷ 调用次数」这个比值。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 7.4-1</div>
+              <div class="q-text">d[k] 指向什么？调用和返回时各要做什么维护？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              d[k] 指向当前活跃、深度为 k 的最近活动的帧。调用时保存旧 d[k] 入帧并令 d[k] 指向新帧；返回时从新帧恢复旧值。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 7.4-2</div>
+              <div class="q-text">什么场景下 display 反而比访问链亏？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              嵌套浅、调用频繁但几乎不做非局部访问时：display 的每次调用维护费照交，却换不到查询收益。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============================================================
+      7.5 堆与垃圾回收
+    ============================================================ -->
+    <h2><span class="sec-no">7.5</span>栈管不了的数据：堆、碎片与垃圾回收</h2>
+
+    <p>栈帧弹栈即毁，可有的数据必须比创建它的调用活得更久：<code>new</code> 出来的对象、被闭包捕获的变量、运行时才知大小的结构。它们的共同点是「寿命不可预知」，7.1 说过——这种数据只能进堆。这一节看堆的两个代价：碎片与回收。</p>
+
+    <p><strong>堆分配</strong>通常维护一条空闲块链表：申请时找一块够大的空闲块（首次适配：从头找第一块够用的；最佳适配：找够用的里最小的），切下所需，余下的留在链上；释放时挂回链表并尽量与相邻空闲块合并。反复申请释放后，空闲区被撕成许多小洞——<span class="term">碎片</span>（Fragmentation）：空闲总量够，却没有连续大块可用。</p>
+
+    <p><strong>例 7.5-A（外部碎片，完整推演）：</strong>设堆为地址 1000–1599 共 600 字节，初始一整块空闲。</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>步</th><th>操作</th><th>结果（占用 / 空闲）</th></tr>
+        <tr><td>1</td><td>alloc(200) → A</td><td>A: 1000–1199；空闲 1200–1599（400）</td></tr>
+        <tr><td>2</td><td>alloc(200) → B</td><td>B: 1200–1399；空闲 1400–1599（200）</td></tr>
+        <tr><td>3</td><td>alloc(100) → C</td><td>C: 1400–1499；空闲 1500–1599（100）</td></tr>
+        <tr><td>4</td><td>free(B)</td><td>空闲两块：1200–1399（200）与 1500–1599（100）</td></tr>
+        <tr><td>5</td><td>alloc(250) → <strong>失败</strong></td><td>空闲共 300 字节，但最大的连续块只有 200</td></tr>
+      </table>
+    </div>
+
+    <p>空闲 300 字节却申请不到 250——这就是外部碎片。合并相邻块、换适配策略都只能缓解，不能根除。</p>
+
+    <p>谁负责把死数据还给堆？两条经典路线，都属于<span class="term">垃圾回收</span>（Garbage Collection, GC）：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>机制</th><th>做法</th><th>优点</th><th>致命短板</th></tr>
+        <tr><td><span class="term">引用计数</span>（Reference Counting）</td><td>每个对象记「几个指针指向我」，归零立即回收</td><td>即时回收，开销均摊到每次指针改写</td><td><strong>收不掉循环引用</strong>：A 指 B、B 指 A，都已无人使用，计数却都 ≥ 1，永远无法归零</td></tr>
+        <tr><td><span class="term">标记-清扫</span>（Mark-and-Sweep）</td><td>从「根」（栈、寄存器、静态区里的指针）出发标记所有可达对象；然后线性扫堆，回收未标记者</td><td>能收循环垃圾（不可达即死，不管互相怎么指）</td><td>需要暂停程序遍历全堆（停顿）；且必须先知道根在哪</td></tr>
+      </table>
+    </div>
+
+    <p>至此本章主线闭环：能静态的名字编译时定址；调用级的名字住栈帧、按编译期偏移寻址；非局部名字沿访问链或 display 按深度差定位；寿命不定的名字进堆、由分配器与 GC 照看。代价也已经亮明——跳链深度、碎片、回收停顿。名字的住址问题解决了，第8章才能把三地址码一条条落成机器指令。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>栈是自动售货机：严格后进先出，找零（回收）全自动；堆是仓库：随取随还，但必须有仓库管理员盘点——引用计数是「每件货物挂计数牌」，标记-清扫是「定期从正门出发盘点能走到的货」。语言对程序员越自由，越依赖这位管理员。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>把引用计数当成 GC 的「轻量平替」。它收不掉循环引用，这在对象图里比比皆是（双向链表、父子互指的树）。Python 的真实方案是引用计数为主、循环检测 GC 为辅，双机制才补上这个洞。另一个误区：以为标记-清扫能标记「将来还会用的」——它只看可达性，可达但从此不再使用的对象照样收不掉（那叫逻辑泄漏，GC 无能为力）。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 7.5-1</div>
+              <div class="q-text">什么样的数据必须进堆而不能住栈？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              寿命超过创建它的那次调用的数据（new 的对象、被闭包捕获后逃逸的变量），或大小/寿命运行时才确定的数据。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 7.5-2</div>
+              <div class="q-text">循环引用为什么难倒引用计数？标记-清扫的「根」是什么？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              环上每个对象计数都 ≥ 1，永不归零。标记-清扫的根是栈、寄存器与静态区里的指针——程序此刻直接够得着的入口。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===== 章末五件套之 1：概念卡 ===== -->
+    <h2><span class="sec-no">🃏</span>概念卡：本章概念的一分钟画像</h2>
+    <p>翻面前先自问：这个概念我能用一句话讲清楚吗？</p>
+    <div class="flip-grid">
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 1</div>
+            <div class="q-text">活动记录（Activation Record）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">过程的一次活动在栈上占用的数据块，含参数、返回值、控制链、访问链、保存状态、局部数据、临时变量七字段。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">没有它，递归与嵌套调用的每一层现场无处安放：回哪去、外层是谁、局部值放哪全部失控。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">一次调用领一个档案袋：怎么来的、怎么回去、草稿纸，走时整袋销毁。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为字段布局由语言标准规定——字段是逻辑的，物理布局与寄存器分工由编译器与调用约定定。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">第8章代码生成把每个局部名翻译成「帧指针 + 偏移」，直接用本章的偏移表。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 2</div>
+            <div class="q-text">控制链（Control Link）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">帧内指向调用者活动记录的指针，又叫动态链。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">返回时把栈顶精确弹回调用者的帧，恢复调用现场。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">「回家的路」：记住是谁把我叫来的。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">拿它去找非局部变量——调用者不一定是词法外层（partition 调 exchange 即反例）。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">返回序列、调试器的栈回溯（backtrace）沿的就是控制链。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 3</div>
+            <div class="q-text">访问链（Access Link）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">帧内指向词法直接外层的最近一次活动的指针，又叫静态链。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">嵌套过程中定位非局部变量：跳数 = 深度差，偏移编译期定。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">「找词法祖先的路」：源码里我套在谁里面，指针就指向谁。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">与控制链混为一谈；C 没有嵌套函数所以帧里通常没有它，不等于它不存在于其他语言。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">Pascal/Ada 式嵌套过程、函数式语言的闭包（闭包环境本质是访问链的堆版）。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 4</div>
+            <div class="q-text">display（词法层显示器）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">全局数组 d[]，d[k] 恒指向当前活跃、深度为 k 的最近活动的帧。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">把非局部访问从「沿链跳深度差次」降为「一次查表」。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">访问链的缓存：直达表代替走楼梯。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为免费——每次调用与返回都要保存/恢复 d[k]，调用勤而查询少时纯亏。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">深层嵌套且非局部访问频繁的语言实现；理解「链 vs 表」权衡的经典样本。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 5</div>
+            <div class="q-text">调用序列（Calling Sequence）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">一次调用中，调用者与被调用者按固定次序铺设活动记录的动作序列（返回时对称地拆，叫返回序列）。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">把「调用」这件大事拆成可逐条生成代码的小步骤，并划清双方责任。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">铺床与收床：各管只有自己知道的事。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为全由被调用者完成——实参与返回地址只有调用者知道，寄存器保护只有被调用者知道。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">第8章为 call 语句生成目标代码时逐条落地；ABI/调用约定的来源。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 6</div>
+            <div class="q-text">堆碎片（Heap Fragmentation）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">反复分配释放后，堆的空闲区碎成许多不连续小洞，总量够却没有连续大块可用的现象。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">它是「问题」本身：解释为什么堆会「有空间却分配失败」，逼出合并、适配策略与压缩式 GC。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">停车场剩下 30 个分散车位，却停不进一辆需要 2 个相连车位的加长车。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为换最佳适配就能根除——任何在线分配策略都无法保证无碎片，只能缓解。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">第7.5节的堆管理、后续讨论压缩/分代 GC 的动机。</span></div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- ===== 章末五件套之 2：分层习题 ===== -->
+    <h2><span class="sec-no">📝</span>分层习题</h2>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>判断正误并说明理由：（a）「沿控制链走两步，就能找到本过程词法外层声明的变量」；（b）「C 语言的栈帧里通常没有访问链，所以 C 函数不可能访问非局部变量」。</div>
+      <details>
+        <summary>提示</summary>
+        <p>控制链与访问链各回答什么问题？C 的「非局部变量」（全局量）住在哪里、怎么寻址？</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p>（a）<strong>错</strong>。控制链指向<strong>调用者</strong>（动态关系），词法外层是<strong>静态</strong>关系；7.3 中 partition 调 exchange，exchange 沿控制链到的是 partition 的帧，而 a、x 在 sort 帧——根本走错方向。找非局部变量只能沿访问链（或 display）。</p>
+          <p>（b）<strong>前半对、结论错</strong>。C 禁止嵌套函数，任何函数的词法外层都是「全局层」，因此帧里确实不需要访问链；但全局变量住在<strong>静态区</strong>，编译期定址、用绝对地址直接访问——非局部访问走另一条路，并没有被禁止。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>下列数据各应分配到哪个区（代码区 / 静态区 / 栈 / 堆），给一句理由：字符串常量表；递归过程的形参；malloc 出来的链表节点；编译期已知大小的全局数组。</div>
+      <details>
+        <summary>提示</summary>
+        <p>用「寿命」这把尺子逐个量。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p>字符串常量表 → <strong>静态区</strong>：内容编译期已知，寿命为整个运行期。递归过程的形参 → <strong>栈</strong>：每层调用各需一份，寿命等于一次调用。malloc 的链表节点 → <strong>堆</strong>：释放时机由程序运行时决定，寿命不可预知。全局数组 → <strong>静态区</strong>：大小与寿命都编译期可知，可绝对定址。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>程序 P（深度 1）内声明过程 Q 与 R（深度 2），Q 内声明 S（深度 3）。执行轨迹：P 调 Q；Q 调 S；S 调 R。请：（1）画出此刻栈上的全部活动记录与控制链；（2）标出每个活动的访问链指向；（3）回答 S 访问 P 的变量要沿几条访问链；（4）写出建立 R 的访问链的步骤。</div>
+      <details>
+        <summary>提示</summary>
+        <p>先标四个过程的嵌套深度；访问链只看「词法外层是谁」，与谁调用谁无关；建立时用 n<sub>p</sub> − n<sub>e</sub> + 1 的步数规则。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p>（1）栈自底向顶：<strong>P → Q → S → R</strong>（栈顶为 R）。控制链依次指向调用者：R→S，S→Q，Q→P，P→运行时系统。</p>
+          <p>（2）访问链只看词法外层：Q 的外层是 P → Q 指向 P；S 的外层是 Q → S 指向 Q；R 的外层是 P → R 指向 P（<strong>不是它的调用者 S</strong>）；P 的访问链为 null。</p>
+          <p>（3）S 深度 3，P 深度 1：沿 3 − 1 = <strong>2 条</strong>访问链：S → Q → P，再加 P 帧内的编译期偏移。</p>
+          <p>（4）S（n<sub>p</sub> = 3）调用 R（n<sub>e</sub> = 2），属 n<sub>e</sub> &lt; n<sub>p</sub>：从 S 的帧出发沿访问链走 3 − 2 + 1 = <strong>2 步</strong>：S → Q → P，落点 P 帧即为 R 的访问链。验证：R 的词法外层确实是 P。✓</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>某语言的栈帧约定：偏移 0 控制链、4 访问链、8 保存的机器状态（占 8 字节），其后依次为实在参数（每个 4 字节）、返回值（4 字节）、局部数据、临时变量，字长 4 字节。函数 f(a, b) 有两个整型参数、有返回值，局部声明整型 x、y 与含 5 个整数的数组 t。写出 f 的完整偏移表。</div>
+      <details>
+        <summary>提示</summary>
+        <p>按约定顺序逐项累加偏移：帧头 0/4/8（状态占两项 8、12），参数紧随其后。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p>逐项累加：偏移 0 控制链；4 访问链；8–15 保存的机器状态（8 字节）；16 参数 a；20 参数 b；24 返回值；28 局部 x；32 局部 y；36 数组 t（5×4 = 20 字节，占 36–55）；56 起为临时变量区。</p>
+          <p>检查：t[3] 的帧内地址 = 36 + 3×4 = 48；运行时地址 = fp<sub>f</sub> + 48。✓</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l3">L3 建模应用</span>你在为一门支持任意深度嵌套函数的语言设计运行时，目标平台是内存极小的嵌入式设备（约 64 KB），程序普遍嵌套 5–8 层，且深度访问非局部变量非常频繁（状态机风格）。访问链与 display 选哪个？从空间、单次访问代价、调用/返回维护三方面论证并给出结论。</div>
+      <details>
+        <summary>提示</summary>
+        <p>把 7.4 的账单公式套到这个场景：嵌套深 → 深度差大；非局部访问频繁 → 查询次数远大于调用次数；内存小 → 一个长度 ≈ 8 的指针数组算不算负担？</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p><strong>空间</strong>：访问链每帧 1 个指针（4 字节）；display 需全局数组，长度 = 最大深度 8，即 32 字节，外加每帧保存旧值 1 个指针——两者在 64 KB 下都可忽略，空间不是决定因素。</p>
+          <p><strong>单次访问</strong>：嵌套 5–8 层意味着深度差常达 4–7，访问链每次要 4–7 次解引用；display 恒为 1 次查表。状态机风格下非局部访问极频繁，display 的优势被调用次数放大后仍然显著。</p>
+          <p><strong>调用/返回维护</strong>：display 每次约多 2–3 次写。本题「查询次数 ≫ 调用次数」，维护费被查询收益摊薄。</p>
+          <p><strong>结论：选 display</strong>。深嵌套 + 高频非局部访问正是它的主场；维护开销被频繁的 O(1) 查询覆盖，空间代价在 64 KB 下微不足道。</p>
+        </div>
+      </details>
+    </div>
+
+    <!-- ===== 章末五件套之 3：自测 ===== -->
+    <h2><span class="sec-no">✍️</span>本章自测</h2>
+    <p class="quiz-hint">点击选项判分，答错会给出原因。</p>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 1</div>
+      <div class="q-stem">栈和堆之所以从空闲区两端对向生长，根本原因是什么？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 硬件架构规定栈必须向下生长</li>
+        <li data-opt="b">B. 两者需求都无法预知，共用同一块空闲区、相向推进边界，直到相遇才算耗尽</li>
+        <li data-opt="c">C. 为了满足内存对齐要求</li>
+        <li data-opt="d">D. 方便操作系统的分页管理</li>
+      </ul>
+      <div class="quiz-explain">解析：B 对——对向生长让栈与堆共享一整块空闲区，任何一方增长只是推进一个指针。A 错：栈的生长方向在多数架构上只是约定，不是共享空间的理由；C 错：对齐是字段级的事，与区域布局无关；D 错：分页是 OS 的事，编译器的四区划分与它无因果关系。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 2</div>
+      <div class="q-stem">访问链（access link）指向什么？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 调用者的活动记录</li>
+        <li data-opt="b">B. 词法上直接外层的最近一次活动</li>
+        <li data-opt="c">C. 静态数据区的基址</li>
+        <li data-opt="d">D. 栈底（主程序帧）</li>
+      </ul>
+      <div class="quiz-explain">解析：B 对——访问链编码的是词法嵌套关系。A 错：那是控制链（动态链）；C 错：静态名字用绝对地址，不需要链；D 错：词法外层不一定是主程序（partition 的访问链指向 quicksort，不是 sort）。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="c">
+      <div class="q-no">自测 3</div>
+      <div class="q-stem">在 7.3 的例子中，partition（深度 3）访问声明于 sort（深度 1）的数组 a，要沿几条访问链？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 0 条</li>
+        <li data-opt="b">B. 1 条</li>
+        <li data-opt="c">C. 2 条</li>
+        <li data-opt="d">D. 3 条</li>
+      </ul>
+      <div class="quiz-explain">解析：C 对——跳数 = 深度差 = 3 − 1 = 2：partition → quicksort(1,3) → sort。A 错：a 不在本帧，0 条只适用于访问自己的局部量；B 错：1 条是访问 quicksort 的 v（深度 2）的跳数；D 错：3 是 partition 的深度本身，而公式是深度<strong>差</strong>，不是访问者的深度。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 4</div>
+      <div class="q-stem">引用计数法永远收不掉哪类垃圾？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 体积特别大的对象</li>
+        <li data-opt="b">B. 循环引用的对象团</li>
+        <li data-opt="c">C. 被栈上指针引用的对象</li>
+        <li data-opt="d">D. 字符串常量</li>
+      </ul>
+      <div class="quiz-explain">解析：B 对——环上每个对象的计数都 ≥ 1，永不归零，即使整团从外部已不可达。A 错：计数与大小无关；C 错：被栈引用说明活着，本来就该留（栈指针还是标记-清扫的根）；D 错：字符串常量通常在静态区，不归堆 GC 管。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="c">
+      <div class="q-no">自测 5</div>
+      <div class="q-stem">深度 3 的过程 S 调用深度 1 的过程 R，建立 R 的访问链时，调用者 S 要沿自己的访问链走几步？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 1 步</li>
+        <li data-opt="b">B. 2 步</li>
+        <li data-opt="c">C. 3 步</li>
+        <li data-opt="d">D. 4 步</li>
+      </ul>
+      <div class="quiz-explain">解析：C 对——n<sub>e</sub> &lt; n<sub>p</sub> 时走 n<sub>p</sub> − n<sub>e</sub> + 1 = 3 − 1 + 1 = 3 步，落点即 R 的词法外层帧。A 错：1 步是 n<sub>e</sub> = n<sub>p</sub> 的情形（复制自己的访问链不需要走）；B 错：2 步是访问变量时的跳数 n<sub>p</sub> − n<sub>a</sub>，与建立访问链的公式差 1，张冠李戴；D 错：无任何公式得出 4。</div>
+    </div>
+
+    <!-- ===== 章末五件套之 4：三句话复述 ===== -->
+    <div class="retell">
+      <h3>🗣️ 用自己的话，三句话讲完本章</h3>
+      <p>对着空气（或室友）说出这三句。说卡壳的那句，回去重读对应小节。</p>
+      <details>
+        <summary>句1：这章解决什么问题？——</summary>
+        <div class="retell-answer">参考答案：源程序/三地址码里的名字，在运行时如何找到它的存储位置——住在哪个区、哪一帧、帧内哪个偏移。</div>
+      </details>
+      <details>
+        <summary>句2：核心机制是什么？——</summary>
+        <div class="retell-answer">参考答案：按寿命把存储分为代码/静态/栈/堆四区；每次调用压一个七字段的活动记录，局部名用「帧指针 + 编译期偏移」寻址，非局部名沿访问链（跳数 = 深度差）或 display（一次查表）定位；寿命不定的数据进堆，由分配器与垃圾回收照看。</div>
+      </details>
+      <details>
+        <summary>句3：它和前后章怎么分工？——</summary>
+        <div class="retell-answer">参考答案：第6章产出含名字的三地址码；本章给每个名字安家（区、帧、偏移、链）；第8章据此把三地址码逐条翻译成带真实寻址方式的机器指令。</div>
+      </details>
+    </div>
+
+    <!-- ===== 章末五件套之 5：间隔复习计划 ===== -->
+    <div class="review-plan">
+      <h3>🔁 间隔复习计划</h3>
+      <p>回忆本身比重读有效 10 倍。到点只做一件事：翻卡 + 重做标记题。</p>
+      <table>
+        <tr><th>时间点</th><th>复习内容</th><th>预计用时</th></tr>
+        <tr><td>第 1 天</td><td>全部概念卡 + 回忆卡 7.1-1 至 7.5-2；重画图 7.2 的栈与访问链</td><td>12 分钟</td></tr>
+        <tr><td>第 3 天</td><td>概念卡 2、3、4（三条链/表）+ 自测错题 + 重做 L2 第 1 题</td><td>10 分钟</td></tr>
+        <tr><td>第 7 天</td><td>三句话复述 + 重做 L2 两题与 L3；默写四帧偏移表</td><td>12 分钟</td></tr>
+        <tr><td>第 15 天</td><td>只重做合上书挑战；能全过就毕业</td><td>15 分钟</td></tr>
+      </table>
+    </div>
+
+    <!-- 合上书挑战 -->
+    <div class="final-challenge">
+      <h3>📕 合上书挑战</h3>
+      <p class="fc-sub">现在关掉这个页面，拿一张纸，凭记忆完成以下任务。全部做完再回来核对——这是本章真正的毕业考试。</p>
+      <ol id="challenge-list">
+        <li><span class="fc-check"></span>画出地址空间四区图，标出生长方向，并写出对向生长的理由。</li>
+        <li><span class="fc-check"></span>默写活动记录七个字段，每个配一句「不存它会怎样」。</li>
+        <li><span class="fc-check"></span>写出 sort、quicksort、partition、exchange 四个帧的完整偏移表。</li>
+        <li><span class="fc-check"></span>凭记忆演示：partition(1,3) 调 exchange 时访问链如何建立（走几步落到哪），以及 partition 取 a[i]（i=3）的完整地址推导。</li>
+        <li><span class="fc-check"></span>用一句话各写出访问链与 display 的时间/空间账单，并说出 display 亏本的场景。</li>
+        <li><span class="fc-check"></span>解释引用计数为什么收不掉循环引用、标记-清扫为什么能，并写出后者的「根」是什么。</li>
+        <li><span class="fc-check"></span>一句话回答本章主线问题：源程序里的名字，在运行时如何找到它的存储位置？</li>
+      </ol>
+    </div>
+
+    <div class="complete-zone">
+      <button class="btn-complete" id="btn-complete" onclick="markDone()">✓ 我已完成本章（含合上书挑战）</button>
+    </div>
+
+    <div class="chapter-nav">
+      <a href="chapter-06.html"><span class="nav-dir">← 上一章</span>第6章 中间代码生成</a>
+      <a href="chapter-08.html" class="next"><span class="nav-dir">下一章 →</span>第8章 代码生成</a>
+    </div>
+
+  </div>
+</div>
+
+<footer class="footer">
+  <div class="wrap">第7章 运行环境 · 编译原理互动讲义 · 基于 Aho, Lam, Sethi &amp; Ullman《编译原理》(第2版)</div>
+</footer>
+
+<script src="/lectures-assets/mermaid.min.js"></script>
+<script>
+mermaid.initialize({
+  startOnLoad: true,
+  theme: "base",
+  themeVariables: {
+    primaryColor: "#e3edf7",
+    primaryBorderColor: "#1d5f9e",
+    primaryTextColor: "#1d5f9e",
+    lineColor: "#5c554b",
+    secondaryColor: "#fbeedd",
+    tertiaryColor: "#f5f1e8",
+    fontFamily: "-apple-system, PingFang SC, sans-serif",
+    fontSize: "14px"
+  },
+  flowchart: { curve: "linear", htmlLabels: false }
+});
+</script>
+<script>
+// 自测题判分（原样复用，勿改）
+document.querySelectorAll(".quiz-block").forEach(block => {
+  const answer = block.dataset.answer;
+  const explain = block.querySelector(".quiz-explain");
+  block.querySelectorAll(".quiz-opts li").forEach(li => {
+    li.addEventListener("click", () => {
+      const opts = block.querySelectorAll(".quiz-opts li");
+      opts.forEach(o => o.classList.add("disabled"));
+      if (li.dataset.opt === answer) {
+        li.classList.add("correct");
+      } else {
+        li.classList.add("wrong");
+        block.querySelector(`[data-opt="${answer}"]`).classList.add("correct");
+      }
+      explain.classList.add("show");
+    });
+  });
+});
+
+// 合上书清单打勾（原样复用，勿改）
+document.querySelectorAll("#challenge-list li").forEach(li => {
+  li.addEventListener("click", () => li.classList.toggle("checked"));
+});
+
+// 完成标记 → localStorage（章号：7）
+const KEY = "comp_progress_v1";
+function loadProgress() {
+  try { return JSON.parse(localStorage.getItem(KEY)) || {}; } catch (e) { return {}; }
+}
+const progress = loadProgress();
+const btn = document.getElementById("btn-complete");
+if (progress[7] && progress[7].done) {
+  btn.textContent = "✓ 已完成 · 再次点击重置";
+  btn.classList.add("done");
+}
+function markDone() {
+  const p = loadProgress();
+  if (p[7] && p[7].done) {
+    delete p[7];
+    btn.textContent = "✓ 我已完成本章（含合上书挑战）";
+    btn.classList.remove("done");
+  } else {
+    p[7] = { done: true, completedAt: Date.now(), reviewsDone: 0 };
+    btn.textContent = "✓ 已完成 · 复习提醒已开启";
+    btn.classList.add("done");
+  }
+  localStorage.setItem(KEY, JSON.stringify(p));
+}
+</script>
+
+</body>
+</html>

@@ -1,0 +1,733 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第20章 深度生成模型 · 深度学习互动讲义</title>
+<link rel="stylesheet" href="/lectures-assets/style.css">
+</head>
+<body>
+
+<nav class="topbar">
+  <div class="topbar-inner">
+    <span class="brand"><a href="index.html" style="color:inherit">← 学习地图</a></span>
+    <span class="crumb">阶段④ · 生成模型与前沿 / 第20章</span>
+  </div>
+</nav>
+
+<div class="wrap">
+
+  <div class="lecture-head">
+    <span class="ch-label">CHAPTER 20 · 生成模型与前沿</span>
+    <h1>深度生成模型</h1>
+    <p class="lead">一句话副标题：全书的总清算章。第16章提出了配分函数 Z 这笔算不动的账，17 章给了采样武器，18 章给了绕开 Z 的目标函数，19 章给了近似推断；本章检阅七类生成模型，看它们各自选用哪件武器、付什么代价、换来什么能力——每一类都给一笔具体的数字账。</p>
+  </div>
+
+  <!-- ===== 章首四件套之 1：全书定位 ===== -->
+  <div class="position-bar">
+    <strong>本章在主线上的位置：</strong>这是全书主线的收官章。前面三章分别给了对付配分函数的三类武器（采样、绕开训练、近似推断），本章回答最后一问：<u>这些武器装进真实的生成模型里，各长成什么样子？</u>玻尔兹曼机家族扛着 Z 硬打，有向模型绕开 Z，VAE 用下界换可训练性，GAN 干脆不要似然——读完本章，生成建模的全景图就齐了。<br>
+    第20章回答主线上的第20个问题：<strong>面对指数级的状态空间，七类深度生成模型各自如何绕过或驯服配分函数，各自的代价又是什么？</strong>
+    <div class="map-inline">
+      <span class="node">① 数学与机器学习基础<br>Ch1–5 数学工具与机器学习基础</span><span class="arrow">→</span>
+      <span class="node">② 现代深度网络<br>Ch6–11 前馈 · 卷积 · 序列 · 实践</span><span class="arrow">→</span>
+      <span class="node">③ 表示与推断<br>Ch13 线性因子 · Ch14 自编码器 · Ch15 表示学习 · Ch16 结构化概率模型</span><span class="arrow">→</span>
+      <span class="node here">④ 生成模型与前沿<br>Ch17 蒙特卡洛方法 · Ch18 直面配分函数 · Ch19 近似推断 · <strong>Ch20 深度生成模型</strong></span>
+    </div>
+  </div>
+
+  <!-- ===== 章首四件套之 2：学习目标 ===== -->
+  <div class="objectives">
+    <h4>🎯 学完本章，合上书你应该能：</h4>
+    <ol>
+      <li>写出 RBM 的能量函数 E(v,h) = −vᵀWh − bᵀv − cᵀh，并手算 784×500 RBM 的参数量与 Z 的求和规模</li>
+      <li>推导块 Gibbs 条件分布 p(h_j=1|v) = σ(c_j + vᵀW_:j)，对给定数值算出具体概率</li>
+      <li>说出 DBN 与 DBM 的结构差别：混合（有向+无向）vs 全无向，以及各自调用第17/18/19章的哪件武器</li>
+      <li>写出 VAE 的 ELBO = 重建项 − KL 项，手算一维高斯的 KL 闭式 ½(μ²+σ²−1−lnσ²)，并解释重参数化</li>
+      <li>写出 GAN 目标 min_G max_D V，推导最优判别器 D* = p_data/(p_data+p_g)，手算最优值 −log 4</li>
+      <li>解释自回归模型为什么"根本没有 Z"，并用一张七模型对比表总结全景（有无 Z / 训练目标 / 采样方式 / 主要代价）</li>
+    </ol>
+  </div>
+
+  <div class="lecture">
+
+    <!-- ===== 章首四件套之 3：推导主线图 ===== -->
+    <div class="figure">
+      <div class="mermaid">
+flowchart TB
+  A["第16章留下总账：配分函数 Z 对 2 的 n 次方个状态求和"] -->|"三类武器就绪"| B["第17章采样 第18章绕开训练 第19章近似推断"]
+  B -->|"扛着 Z 硬打：无向能量模型"| C["玻尔兹曼机家族 RBM DBN DBM"]
+  B -->|"干脆没有 Z：有向归一化"| D["sigmoid信念网 自回归 GSN"]
+  B -->|"换目标函数"| E["VAE：用 ELBO 下界代替似然"]
+  E -->|"再退一步：不要显式似然"| F["GAN：判别器与生成器对弈"]
+  C --> G["生成建模的全景图：每个模型是对 Z 的一种回答"]
+  D --> G
+  E --> G
+  F --> G
+  classDef hot fill:#fbeedd,stroke:#c4651f,stroke-width:2.5px,color:#c4651f;
+  classDef danger fill:#fae9e7,stroke:#b03a2e,stroke-width:2.5px,color:#b03a2e;
+  class C danger;
+  class E hot;
+  class F hot;
+  class G hot;
+      </div>
+      <div class="caption">本章推导主线：从第16章的总账出发，七类模型按"如何对付 Z"分成三条路线——硬打（玻尔兹曼机家族）、绕开（有向模型）、换目标（VAE、GAN）。末端橙框是全书收官：生成建模的全景图。</div>
+    </div>
+
+    <!-- ================= 20.1 ================= -->
+    <h2><span class="sec-no">20.1</span>玻尔兹曼机家族：RBM、DBN、DBM</h2>
+
+    <p>第16章把无向模型定义为 p(x) = p̃(x)/Z，当时就说 Z 算不动。玻尔兹曼机家族是这条路线最纯正的后代：<strong>明知 Z 算不动，依然用能量函数建模，训练和采样全靠第17、18章的武器硬撑</strong>。最核心的成员是<span class="term">受限玻尔兹曼机</span>（Restricted Boltzmann Machine, RBM）：可见层 v 与隐藏层 h 两层二值单元，<strong>层内无连接、层间全连接</strong>——"受限"指的就是砍掉层内连接这一条。</p>
+
+    <p>它的能量函数为：</p>
+
+    <div class="formula">E(v, h) = −vᵀWh − bᵀv − cᵀh，p(v, h) = <span class="frac"><span class="num-part">e<sup>−E(v,h)</sup></span><span class="den-part">Z</span></span></div>
+
+    <p>先算一笔维度账。MNIST 图像：v 是 784 维像素，h 取 500 个隐藏单元。参数只有三块：连接矩阵 W 是 784×500，可见偏置 b 是 784，隐藏偏置 c 是 500，合计 392000 + 784 + 500 = <strong>393 284 个参数</strong>——训练侧完全可承受。但配分函数 Z 要对 (v, h) 的<strong>全部 2¹²⁸⁴ 个状态</strong>求和：2¹²⁸⁴ ≈ 10³⁸⁶，比全宇宙原子数（约 10⁸⁰）大了 300 多个数量级。<strong>参数账很省，归一化账彻底算不动</strong>——这就是无向模型的宿命。</p>
+
+    <p>Z 算不动，但条件分布好算。"受限"买来的最大礼物是：给定 v 时各隐藏单元相互独立，给定 h 时各可见单元相互独立。推导只一步：能量函数对 h_j 是线性的，p(h_j=1|v) 正比于 e 的线性指数，归一化两项即得 sigmoid：</p>
+
+    <div class="formula">p(h_j = 1 | v) = σ(c_j + vᵀW_:j)，p(v_i = 1 | h) = σ(b_i + W_i: h)</div>
+
+    <p>完整手算一个最小例子。设某个隐藏单元与两个可见单元相连，权重 w = (2, −1)，偏置 c = 0，可见层取值 v = (1, 1)。分值 = c + vᵀw = 0 + (1×2 + 1×(−1)) = 1，于是：</p>
+
+    <div class="formula">p(h = 1 | v) = σ(1) = <span class="frac"><span class="num-part">1</span><span class="den-part">1 + e<sup>−1</sup></span></span> ≈ 0.731</div>
+
+    <p>两个条件分布都便宜，第17章的 Gibbs 采样就能整块地用：交替采样 h|v 与 v|h（<strong>块 Gibbs</strong>，block Gibbs，一次更新一整层而不是一个变量）。训练时的正相用数据，负相需要模型分布的样本——用第18章的 CD-k 只跑 k 步链。<strong>前面章节的两件武器在这里合流：采样靠第17章的块 Gibbs，训练靠第18章的 CD-k。</strong></p>
+
+    <p>家族另两名成员。<span class="term">深度信念网络</span>（Deep Belief Network, DBN）：把多个 RBM 逐层训练后堆叠，下层连接改作有向（生成时自顶向下），只有顶层联合分布保持无向——是一种<strong>有向+无向的混合结构</strong>，预训练权重再用作前馈网络的初始化，这是 2006 年点燃深度学习复兴的那把火。<span class="term">深度玻尔兹曼机</span>（Deep Boltzmann Machine, DBM）：多层<strong>全部无向</strong>，理论更纯粹，但层间相互耦合使条件分布不再独立，推断必须借助第19章的均值场近似——第三件武器在此合流。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>RBM 的全部工程智慧就一条：<strong>用"层内无连接"把联合分布的难题切成条件分布的易事</strong>。联合 p(v,h) 有 2¹²⁸⁴ 个状态算不动，但每个条件 p(h_j|v) 只是一个 sigmoid。第17章早就说过：MCMC 不需要知道 Z，只需要能算条件分布或能量比。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>把"受限"理解成"简单到能精确计算"。错。"受限"只让<strong>条件分布</strong>简单了，配分函数 Z 依然是 2¹²⁸⁴ 个状态的求和，依然算不动；CD-k 的梯度仍然是有偏近似。RBM 不是绕开了 Z，而是学会了在 Z 的阴影下生存。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 20.1-1</div>
+              <div class="q-text">784×500 的 RBM 有多少参数？Z 要对多少状态求和？这说明了什么？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              参数 = 784×500 + 784 + 500 = 393 284 个；Z 要对 2¹²⁸⁴ 个状态求和。参数账省、归一化账爆炸——无向模型的宿命。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 20.1-2</div>
+              <div class="q-text">写出块 Gibbs 的条件分布公式。DBN 与 DBM 的结构差别是什么？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              p(h_j=1|v) = σ(c_j + vᵀW_:j)，对称地 p(v_i=1|h) = σ(b_i + W_i:h)。DBN 是有向+无向混合（仅顶层无向）；DBM 全部无向、训练更难、靠均值场近似推断。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ================= 20.2 ================= -->
+    <h2><span class="sec-no">20.2</span>有向生成模型与生成随机网络（GSN）</h2>
+
+    <p>上一节的麻烦全来自无向模型的 Z。第二条路线干脆釜底抽薪：<strong>用有向图建模，条件概率逐个归一化，联合分布自动归一——Z 根本不存在</strong>。最简单的代表是<span class="term">sigmoid 信念网络</span>（Sigmoid Belief Network）：一个以 sigmoid 为条件分布的有向无环图模型，p(x) = ∏ᵢ p(xᵢ | 父节点)，每个条件项自己归一，乘积自然归一。</p>
+
+    <p>但天下没有免费的午餐。有向模型把归一化的难题消灭了，却把难题转移到了<strong>推断</strong>上：给定可见单元求隐藏单元的后验 p(h|v)，在有向图里会因"解释远离"（explaining away）而高度耦合，精确后验同样指数级。这正是第19章变分推断的主战场——用 q(h) 近似真实后验。<strong>无向模型难在训练（Z），有向模型难在推断（后验）</strong>，总有一个地方要付账。</p>
+
+    <p>本节第二个角色更有野心。<span class="term">生成随机网络</span>（Generative Stochastic Network, GSN）：既然第17章的马尔可夫链能从复杂分布采样，为什么不把<strong>马尔可夫链本身</strong>当模型来学？GSN 用一个神经网络参数化转移算子 p(x′|x)（典型地学一个"去噪"转移：把被污染的数据点拉回数据流形），采样就是反复运行这条链。训练时只需让每一步转移分布靠近目标条件分布，每步都是归一化的——又一次绕开了 Z。</p>
+
+    <p>算一笔维度账看 GSN 的妙处。RBM 的联合状态有 2¹²⁸⁴ 个，而 GSN 每步只是一个条件分布网络：输入一个 784 维向量、输出一个 784 维向量，参数量取决于网络宽度而与状态空间大小<strong>无关</strong>——2ⁿ 的诅咒从模型结构里被删除了。代价是：采样仍要走马尔可夫链，继承了链的全部毛病（相关、要暖机、混合慢）。</p>
+
+    <div class="box insight">
+      <span class="box-tag">✅ 判定规则</span>
+      <p>两类模型放在主线上的位置：sigmoid 信念网络把账从"训练"转嫁给"推断"，配第19章武器；GSN 把"采样算法"升级成"模型本身"，配第17章武器。看一个生成模型，先问两句话：<strong>Z 去哪了？后验谁算？</strong>——答案就定位了它在全景图里的坐标。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>以为有向模型"没有 Z 就全面优于无向模型"。有向模型消灭了归一化难题，却引入了推断难题和结构假设（必须指定变量顺序或父节点）；无向模型表达对称关系更自然。选哪边取决于你要频繁算的是什么：频繁采样选有向，频繁做条件化推理则要看后验是否好近似。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 20.2-1</div>
+              <div class="q-text">有向模型为什么没有 Z？它把难题转移到了哪里？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              每个条件分布自己归一，乘积自动归一。难题转移到推断：p(h|v) 因解释远离而耦合，需第19章的近似推断。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 20.2-2</div>
+              <div class="q-text">GSN 的核心想法是什么？它的维度账为什么好看？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              把马尔可夫链本身参数化（学去噪转移算子），采样=运行链。每步是条件分布网络，参数量与状态数无关，绕开 2ⁿ；代价是继承链的相关与慢混合。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ================= 20.3 ================= -->
+    <h2><span class="sec-no">20.3</span>变分自编码器（VAE）</h2>
+
+    <p>有向模型好采样但后验难算，第19章给了变分推断这件武器：用一个参数化的 q(z|x) 逼近真后验，最大化证据下界 ELBO。<span class="term">变分自编码器</span>（Variational Autoencoder, VAE）就是把这件武器做成神经网络的标准产品：<strong>生成模型 p(x|z) 与推断模型 q(z|x) 各用一个网络，联合训练</strong>。编码器把图像压成隐变量分布，解码器把隐变量还原成图像——第14章自编码器的概率版。</p>
+
+    <p>先算结构账。经典 VAE 在 MNIST 上：编码器 784 → 400 → 输出 μ 和 σ 各 20 维，解码器 20 → 400 → 784。参数量逐块数：784×400 ≈ 31.4 万，400→(20+20) 约 1.6 万，20×400 = 0.8 万，400×784 ≈ 31.4 万，合计约 <strong>65 万个参数</strong>，隐空间只有 20 维——一张 784 像素的图被压缩进 20 个高斯旋钮。</p>
+
+    <p>训练目标是最大化 ELBO（第19章的记号）：</p>
+
+    <div class="formula">ELBO = E<sub>z∼q</sub>[ log p(x|z) ] − KL( q(z|x) ‖ p(z) )</div>
+
+    <p>第一项是<strong>重建项</strong>：从 q 采出 z，解码器还原 x 的似然越高越好；第二项是 <strong>KL 正则项</strong>：q(z|x) 别偏离先验 p(z) = N(0, I) 太远。当 q 和 p 都是高斯时，KL 有闭式解，一维情形：</p>
+
+    <div class="formula">KL = <span class="frac"><span class="num-part">1</span><span class="den-part">2</span></span>(μ² + σ² − 1 − ln σ²)</div>
+
+    <p>完整手算一项：编码器对某维度输出 μ = 0.5、σ = 1，则 KL = ½(0.25 + 1 − 1 − ln 1) = ½ × 0.25 = <strong>0.125</strong>。直觉对照：σ = 1 恰好等于先验方差，唯一被罚的是均值偏离了 0 半个单位。</p>
+
+    <p>还剩一个工程难关：z 是从 q(z|x) <strong>采出来</strong>的，采样操作不可导，梯度怎么传回编码器？<span class="term">重参数化技巧</span>（Reparameterization Trick）：把"采 z ∼ N(μ, σ²)"改写为"采 ε ∼ N(0,1)，算 z = μ + σε"。随机性被挪进与参数无关的 ε，μ 和 σ 到 z 的路径变成纯计算——<strong>梯度顺着加法和乘法流回编码器</strong>。这是第17章逆变换采样思想（标准高斯好采）与第19章变分目标的合流。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>VAE 是"用可优化性换精确性"的典范：真实似然 log p(x) 算不动，就最大化它的下界 ELBO；下界与真值之间的缝隙恰好是 KL(q‖真后验)——推断越准，缝隙越小。一笔买卖：接受一个下界，换来端到端的梯度训练。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>抱怨"VAE 生成的图模糊，是不是实现有 bug"。多半不是 bug，是目标使然：重建项用逐像素似然，最优解是对多个合理取值的<strong>平均</strong>，平均出来就是模糊；KL 项又把后验往标准高斯上拉，进一步压缩信息量。想要锐利图像，换目标（如 GAN）而不是修 bug。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 20.3-1</div>
+              <div class="q-text">写出 ELBO 的两项及一维高斯 KL 闭式。μ=0.5、σ=1 时 KL 是多少？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              ELBO = 重建项 E_q[log p(x|z)] − KL(q‖p)。KL = ½(μ²+σ²−1−lnσ²)；代入得 ½×0.25 = 0.125。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 20.3-2</div>
+              <div class="q-text">重参数化技巧解决了什么问题？怎么写？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              采样不可导、梯度无法回传编码器。改写成 z = μ + σε，ε∼N(0,1)：随机性挪进 ε，μ、σ 到 z 是纯计算路径，梯度畅流。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ================= 20.4 ================= -->
+    <h2><span class="sec-no">20.4</span>生成对抗网络（GAN）与自回归模型</h2>
+
+    <p>收官一节的两位主角走了两个极端。<span class="term">生成对抗网络</span>（Generative Adversarial Network, GAN）比 VAE 更激进：<strong>连似然的下界都不要了</strong>。它把生成建模改写成一场双人博弈：生成器 G 从噪声 z 造样本，判别器 D 判断样本是真是假，两者对同一个价值函数做零和对抗：</p>
+
+    <div class="formula">min<sub>G</sub> max<sub>D</sub> V = E<sub>x∼p_data</sub>[log D(x)] + E<sub>z</sub>[log(1 − D(G(z)))]</div>
+
+    <p>先求最优判别器。固定 G，V 对 D 逐点求极值：形如 a·log D + b·log(1−D) 的函数在 D = a/(a+b) 处取最大，因此：</p>
+
+    <div class="formula">D*(x) = <span class="frac"><span class="num-part">p<sub>data</sub>(x)</span><span class="den-part">p<sub>data</sub>(x) + p<sub>g</sub>(x)</span></span></div>
+
+    <p>完整手算一个点：某区域真实数据密度 p_data = 0.6、生成密度 p_g = 0.2，则 D* = 0.6/(0.6+0.2) = <strong>0.75</strong>——判别器输出"75% 像真的"，不武断地押 0 或 1，而是如实反映两个密度的比例。</p>
+
+    <p>再把 D* 代回 V，可以得到 G 真正在优化的东西：</p>
+
+    <div class="formula">V(D*) = −log 4 + 2 · JSD(p<sub>data</sub> ‖ p<sub>g</sub>)</div>
+
+    <p>JSD 是 Jensen-Shannon 散度，非负、当且仅当两分布相等时为 0。所以 G 的全局最优是 p_g = p_data，此时 V(D*) = −log 4 ≈ <strong>−1.386</strong>，JSD = 0，判别器对所有输入都输出 0.5——彻底分不清真假，博弈达到纳什均衡。</p>
+
+    <p>理论漂亮，训练难缠，三大著名困难。①<strong>min-max 不收敛只震荡</strong>：梯度下降-上升在鞍点附近打转，loss 曲线抖个不停却无法判断是收敛中还是发散中。②<span class="term">模式坍塌</span>（Mode Collapse）：生成器发现骗过判别器不需要学会所有模式，把千差万别的 z 全映射到少数几个输出——造一百张"手写数字"全是同一个 7。③<strong>梯度消失</strong>：D 太完美时 log(1−D(G(z))) 饱和趋平，G 收不到梯度信号；实践中常改用 log D(G(z)) 让梯度更肥。</p>
+
+    <p>另一个极端是<span class="term">自回归模型</span>（Autoregressive Model）：用概率链式法则把联合分布拆成 p(x) = ∏ᵢ p(xᵢ | x₁, …, x_{i−1})，每个条件用一个网络输出（如 256 类 softmax）。<strong>每个条件自己归一，乘积自动归一——根本没有 Z！</strong>维度账：一张 28×28 的图拆成 784 个条件分布，每个是像素值上的 256 类 softmax；似然精确可算，训练就是普通的极大似然。代价：生成必须<strong>逐像素串行</strong>，784 次前向才能出一张图，快不起来。GAN 牺牲似然换样本质量，自回归牺牲速度换精确似然——全景图的两极。</p>
+
+    <p>七类模型总清算，一张表看完本章：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>模型</th><th>有无 Z</th><th>训练目标</th><th>采样方式</th><th>主要代价</th></tr>
+        <tr><td>RBM</td><td>有，算不动</td><td>CD-k 近似对数似然</td><td>块 Gibbs 短链</td><td>负相有偏、评估难</td></tr>
+        <tr><td>DBN</td><td>顶层有</td><td>逐层 RBM 预训练</td><td>有向层采样+顶层 Gibbs</td><td>混合结构目标不统一</td></tr>
+        <tr><td>DBM</td><td>有，算不动</td><td>变分下界+持续链</td><td>均值场+Gibbs</td><td>训练最贵、推断最难</td></tr>
+        <tr><td>GSN</td><td>无</td><td>每步转移的匹配</td><td>运行学习的马尔可夫链</td><td>链相关、慢混合</td></tr>
+        <tr><td>VAE</td><td>无</td><td>ELBO（似然下界）</td><td>采 z∼N(0,I) 一次解码</td><td>样本模糊、后验缝隙</td></tr>
+        <tr><td>GAN</td><td>无</td><td>min-max 博弈</td><td>采 z 一次前向</td><td>无显式似然、模式坍塌</td></tr>
+        <tr><td>自回归</td><td>无</td><td>精确极大似然</td><td>逐维串行生成</td><td>生成慢</td></tr>
+      </table>
+    </div>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>这张表就是全书的句号：<strong>每个生成模型都是对"Z 怎么办"的一种回答</strong>。硬打（RBM/DBN/DBM）、结构性绕开（GSN/VAE/自回归）、干脆换游戏规则（GAN）。没有免费的午餐，只有不同的账单——选型就是选你愿意付哪种代价。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>问"GAN 和 VAE 谁的似然大"。GAN 没有显式似然，这个问题在结构上无答案——评估 GAN 只能靠间接手段（样本质量、最近邻对比、人工评价），这不是工程缺陷而是设计选择的后果。拿似然标准要求 GAN，等于用体重标准要求百米运动员。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 20.4-1</div>
+              <div class="q-text">写出最优判别器公式。V(D*) 等于什么？p_g = p_data 时值是多少？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              D* = p_data/(p_data+p_g)。V(D*) = −log 4 + 2·JSD(p_data‖p_g)；p_g = p_data 时 = −log 4 ≈ −1.386。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 20.4-2</div>
+              <div class="q-text">自回归模型为什么没有 Z？它付出了什么代价？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              链式分解 ∏p(xᵢ|x₁..xᵢ₋₁)，每个条件自己归一，乘积自动归一。代价：生成必须逐像素串行（784 次前向），慢。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===== 章末五件套之 1：概念卡 ===== -->
+    <h2><span class="sec-no">🃏</span>概念卡：本章概念的一分钟画像</h2>
+    <p>翻面前先自问：这个概念我能用一句话讲清楚吗？</p>
+    <div class="flip-grid">
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 1</div>
+            <div class="q-text">受限玻尔兹曼机（RBM）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">可见层×隐藏层、层内无连接的无向能量模型，E = −vᵀWh − bᵀv − cᵀh。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">用可分解的条件分布表达联合分布，学数据的隐藏结构。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">受限换条件独立：联合算不动，条件全是 sigmoid。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为受限=简单——Z 仍对 2 的 1284 次方个状态求和。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">二值/近二值表示学习；DBN 的砖块；CD-k 的练兵场。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 2</div>
+            <div class="q-text">深度信念网络（DBN）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">多个 RBM 逐层预训练后堆叠：下层有向生成、顶层无向联合的混合模型。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">2006 年首次证明深层网络可以有效训练，点燃深度学习复兴。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">一层一层学，每层只需解决一个 RBM 的小问题。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">把它当全无向模型——只有顶层联合无向，下层是有向的。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">无标注数据预训练初始化；历史上的深网破冰船。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 3</div>
+            <div class="q-text">深度玻尔兹曼机（DBM）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">多层全部无向的能量模型，层间全连接。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">比 DBN 更纯粹的无向多层表示，双向推断。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">每层既被下层证据推、又被上层先验拉。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为比 RBM 只是"更深"——条件独立性丢失，推断必须均值场。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">需要双向推断的无向深模型；第19章均值场的最大客户。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 4</div>
+            <div class="q-text">生成随机网络（GSN）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">把马尔可夫链的转移算子本身参数化（学去噪转移）的生成模型。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">把第17章的 MCMC 从"算法"升级成"模型"。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">学"走一步"而非"全局分布"，采样就是反复走。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为绕开 Z 就零代价——继承链的相关与慢混合。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">去噪式生成；后来扩散模型的思想祖先。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 5</div>
+            <div class="q-text">变分自编码器（VAE）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">编码器 q(z|x) + 解码器 p(x|z)，最大化 ELBO 的隐变量模型。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">让有向隐变量模型的推断与训练端到端可微。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">重建 + KL 拉正则，用下界换可优化性。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">生成模糊当 bug——是逐像素似然目标的平均化本性。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">要平滑隐空间、可插值、近似似然可算的场景。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 6</div>
+            <div class="q-text">生成对抗网络（GAN）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">G 造假、D 辨假的 min-max 博弈；最优时 p_g = p_data，V = −log 4。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">绕开显式似然，直接逼近"样本真假难辨"。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">造假者与鉴定师互相升级，直到以假乱真。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">问它的似然——结构性无答案；震荡不收敛是常态。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">要锐利高质样本、不需要显式似然的生成任务。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 7</div>
+            <div class="q-text">自回归模型（Autoregressive Model）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">p(x) = ∏ᵢ p(xᵢ|x₁..xᵢ₋₁)，逐维条件分布相乘。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">链式分解自带归一化——根本没有 Z，似然精确可算。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">像写作文：一个字一个字往外蹦，每个字看前面所有字。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为精确似然=全面最优——生成串行，784 次前向出一张图。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">要精确似然与密度评估；序列数据的天然选择。</span></div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- ===== 章末五件套之 2：分层习题 ===== -->
+    <h2><span class="sec-no">📝</span>分层习题</h2>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>判断对错：RBM 的"受限"使配分函数 Z 可以被精确计算。</div>
+      <details>
+        <summary>提示</summary>
+        <p>"受限"砍的是哪种连接？它让什么变简单了？Z 的定义变了吗？</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer"><strong>错。</strong>受限（层内无连接）让<strong>条件分布</strong> p(h|v)、p(v|h) 分解为独立 sigmoid 的乘积，好算；但 Z = Σ_{v,h} e^(−E) 依然要对全部 2 的 (n_v+n_h) 次方个状态求和（784+500 维就是 2¹²⁸⁴），精确计算依然不可能。条件容易 ≠ 归一化容易，这是无向模型的结构性宿命。</div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>判断对错：GAN 训练稳定后，可以通过最大化似然来评估它学得好不好。</div>
+      <details>
+        <summary>提示</summary>
+        <p>GAN 的模型定义里出现过 p_g(x) 的显式表达式吗？</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer"><strong>错。</strong>GAN 的生成器只定义了从 z 到样本的<strong>映射</strong>，从不给出 p_g(x) 的显式密度——似然在结构上就不存在，无从最大化也无从精确评估。评估只能靠间接代理（样本质量、最近邻对比等）。这是设计选择的后果，不是实现缺陷。</div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>RBM 中某隐藏单元连接三个可见单元，w = (1, 2, −1)，c = 0.5，v = (1, 0, 1)。(a) 求 p(h=1|v)；(b) 若 v 换成 (0, 1, 1)，概率变为多少？(c) 解释为什么同样的 w 对不同 v 给出不同概率。已知 σ(0.5)≈0.622，σ(1.5)≈0.818。</div>
+      <details>
+        <summary>提示</summary>
+        <p>先算分值 c + vᵀw，再过 sigmoid。注意 vᵀw 只对 v_i = 1 的维度求和。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          (a) 分值 = 0.5 + (1×1 + 0×2 + 1×(−1)) = 0.5 + 0 = 0.5，p = σ(0.5) ≈ <strong>0.622</strong>；<br>
+          (b) 分值 = 0.5 + (0×1 + 1×2 + 1×(−1)) = 0.5 + 1 = 1.5，p = σ(1.5) ≈ <strong>0.818</strong>；<br>
+          (c) 隐藏单元是可见模式的"检测器"：vᵀw 度量当前可见向量与权重模式的吻合度，吻合度越高分值越大、激活概率越高。RBM 的每一列权重学的就是一种它"想看"的特征。
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>GAN 中，固定 G 后某点 p_data(x) = 0.8、p_g(x) = 0.8。(a) 求 D*(x)；(b) 求该点对 V 的贡献密度 a·logD + b·log(1−D) 的值；(c) 若全空间处处如此，V(D*) 等于多少？log 2 ≈ 0.693。</div>
+      <details>
+        <summary>提示</summary>
+        <p>(a) 套 D* = a/(a+b)；(b) 代入 D*=0.5 算两项之和；(c) 对照 V(D*) = −log 4 + 2·JSD 的公式。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          (a) D* = 0.8/(0.8+0.8) = <strong>0.5</strong>——两密度相等时判别器完全无法区分；<br>
+          (b) 0.8·log 0.5 + 0.8·log 0.5 = 1.6·(−0.693) ≈ −1.109；<br>
+          (c) p_g = p_data 全局成立时 JSD = 0，V(D*) = −log 4 = −2×0.693 ≈ <strong>−1.386</strong>。<br>
+          物理含义：纳什均衡点，判别器收益被压到理论下限，生成器胜利毕业。
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l3">L3 建模应用</span>你要为一个百万张无标注图像的数据集建生成模型，需求：(i) 训练快、稳定；(ii) 需要给新图像一个密度分数做异常检测；(iii) 生成质量中等即可。从七类模型中选一类并给出理由，说明它用了第17/18/19章的哪件武器，再指出被排除的六类各因哪一条需求出局。</div>
+      <details>
+        <summary>提示</summary>
+        <p>需求(ii)要密度分数——哪些模型根本没有显式似然？需求(i)要稳定——谁靠 min-max 博弈、谁靠有偏短链？</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          选 <strong>VAE</strong>。理由：ELBO 是单目标下界优化，训练稳定（满足 i）；q(z|x) 给出近似似然下界可当密度分数（满足 ii）；生成模糊但需求只要"中等"（满足 iii）。调用第19章武器：变分推断 + 重参数化让梯度穿采样。<br>
+          排除：RBM/DBN/DBM——Z 算不动、密度分数无从谈起（败于 ii），CD 训练还有偏（败于 i）；GSN——链式采样无密度分数（败于 ii）；GAN——结构性无似然（败于 ii）且 min-max 不稳定（败于 i）；自回归——似然精确但百万规模下逐像素串行生成与逐维求值都太贵（险败于 i，密度评估成本也高）。<br>
+          一句话：需求(ii)一出手，全景图就只剩有显式似然的三家，需求(i)再淘汰两家。
+        </div>
+      </details>
+    </div>
+
+    <!-- ===== 章末五件套之 3：自测 ===== -->
+    <h2><span class="sec-no">✍️</span>本章自测</h2>
+    <p class="quiz-hint">点击选项判分，答错会给出原因。</p>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 1</div>
+      <div class="q-stem">784×500 的 RBM（含偏置）参数量与配分函数 Z 的求和规模分别是？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 参数约 39 万个，Z 对 2⁵⁰⁰ 个状态求和</li>
+        <li data-opt="b">B. 参数 393 284 个，Z 对 2¹²⁸⁴ 个状态求和</li>
+        <li data-opt="c">C. 参数约 40 万个，Z 对 784×500 个状态求和</li>
+        <li data-opt="d">D. 参数 393 284 个，Z 只需对可见层 2⁷⁸⁴ 个状态求和</li>
+      </ul>
+      <div class="quiz-explain">解析：B 对——W 是 784×500 = 392 000，加偏置 784 + 500，共 393 284；Z 要对 (v,h) 联合的 2 的 (784+500) = 2¹²⁸⁴ 个状态求和。A 错在漏算了可见层的 2⁷⁸⁴ 倍；C 把"参数形状"当成了状态数，状态是每个单元 0/1 取值的组合，是指数而非乘积；D 错在 Z 的定义是联合分布的归一化，隐藏层的状态也必须求和（即便解析上可分解出部分和，代价依然指数级）。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="c">
+      <div class="q-no">自测 2</div>
+      <div class="q-stem">DBN 与 DBM 的结构差别是？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. DBN 全无向，DBM 有向+无向混合</li>
+        <li data-opt="b">B. DBN 只有一层，DBM 有多层</li>
+        <li data-opt="c">C. DBN 下层有向、仅顶层联合无向（混合结构）；DBM 多层全部无向</li>
+        <li data-opt="d">D. 两者结构完全相同，只是训练算法不同</li>
+      </ul>
+      <div class="quiz-explain">解析：C 对——这是两者的本质区别，也决定了训练难度：DBN 下层有向所以逐层预训练后生成容易；DBM 全无向所以推断要靠均值场。A 恰好说反了；B 错：两者都是多层；D 错：有向/无向是图结构的差别，不只是算法差别——结构决定条件独立性，进而决定一切。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="a">
+      <div class="q-no">自测 3</div>
+      <div class="q-stem">VAE 中编码器输出 μ = 0.5、σ = 1（一维），KL(q‖N(0,1)) = ½(μ²+σ²−1−lnσ²) 的值是？重参数化写为？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 0.125；z = μ + σε，ε∼N(0,1)</li>
+        <li data-opt="b">B. 0.25；z = μ + σε，ε∼N(0,1)</li>
+        <li data-opt="c">C. 0.125；z = μ · σε，ε∼N(0,1)</li>
+        <li data-opt="d">D. 0；z = μ + σε，ε∼N(0,1)</li>
+      </ul>
+      <div class="quiz-explain">解析：A 对——½(0.25+1−1−ln1) = ½×0.25 = 0.125；重参数化是加法+缩放：z = μ + σε。B 忘了公式前面的 ½；C 把加法写成乘法，那样 z 的均值不再是 μ，且 σ→0 时 z 不趋近 μ，完全错了；D 错在以为 σ=1 就零惩罚——σ 虽等于先验方差，但 μ=0.5 偏离了先验均值，仍要付 0.125。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="d">
+      <div class="q-no">自测 4</div>
+      <div class="q-stem">固定 G 时 GAN 的最优判别器是？某点 p_data = 0.6、p_g = 0.2 时 D* 为？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. D* = p_data − p_g；0.4</li>
+        <li data-opt="b">B. D* = p_data / p_g；3</li>
+        <li data-opt="c">C. D* = p_g / (p_data + p_g)；0.25</li>
+        <li data-opt="d">D. D* = p_data / (p_data + p_g)；0.75</li>
+      </ul>
+      <div class="quiz-explain">解析：D 对——对 a·logD + b·log(1−D) 求导置零得 D* = a/(a+b)，代入 0.6/0.8 = 0.75。A 的差值可能为负，不是概率；B 的比值可能大于 1，且 p_g→0 时发散，判别器输出必须在 [0,1]；C 把分子放错了——输出应是"为真的概率"，当然用 p_data 做分子。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 5</div>
+      <div class="q-stem">自回归模型 p(x) = ∏ᵢ p(xᵢ|x₁..xᵢ₋₁) 为什么没有配分函数 Z？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 因为 Z 被近似成了一个常数，实践中可以忽略</li>
+        <li data-opt="b">B. 每个条件分布自己归一化，乘积自动归一，Z 结构性不存在</li>
+        <li data-opt="c">C. 因为用了 MCMC 采样，Z 在接受率里约掉了</li>
+        <li data-opt="d">D. 因为自回归模型是无向图模型，无向模型没有 Z</li>
+      </ul>
+      <div class="quiz-explain">解析：B 对——链式分解的每个因子 p(xᵢ|前文) 都是合法的概率分布（如 256 类 softmax，和为 1），归一化分布的乘积依然归一，从头到尾不需要 Z。A 错：不是近似，是精确不存在；C 张冠李戴：那是 MCMC 绕开 Z 的方式，自回归根本不走链；D 错得离谱：恰好相反，是<strong>无向</strong>模型才有 Z，自回归是有向链式分解。</div>
+    </div>
+
+    <!-- ===== 章末五件套之 4：三句话复述 ===== -->
+    <div class="retell">
+      <h3>🗣️ 用自己的话，三句话讲完本章</h3>
+      <p>对着空气（或室友）说出这三句。说卡壳的那句，回去重读对应小节。</p>
+      <details>
+        <summary>句1：这章解决什么问题？——</summary>
+        <div class="retell-answer">参考答案：第16章以来所有生成模型都卡在同一笔账上——配分函数 Z 对指数级状态求和。本章总清算七类深度生成模型，看它们各自如何对付这笔账、付什么代价。</div>
+      </details>
+      <details>
+        <summary>句2：核心机制是什么？——</summary>
+        <div class="retell-answer">参考答案：三条路线——硬打（RBM/DBN/DBM：能量建模+块 Gibbs+CD/均值场）；绕开（sigmoid 信念网、自回归：有向归一化，Z 不存在；GSN：把马尔可夫链当模型）；换目标（VAE：ELBO 下界+重参数化；GAN：min-max 博弈，D* = p_data/(p_data+p_g)，最优值 −log 4）。</div>
+      </details>
+      <details>
+        <summary>句3：它和前后章怎么分工？——</summary>
+        <div class="retell-answer">参考答案：这是全书主线收官——第16章提出 Z 这笔账，第17章给采样武器（MCMC/Gibbs），第18章给绕开训练的目标（CD-k 等），第19章给近似推断（变分/均值场）；本章七类模型各自从武器库选用一件或几件：RBM 用 17+18，DBM 用 17+18+19，VAE 用 19，GAN 索性不要似然。每个模型都是对"Z 怎么办"的一种回答。</div>
+      </details>
+    </div>
+
+    <!-- ===== 章末五件套之 5：间隔复习计划 ===== -->
+    <div class="review-plan">
+      <h3>🔁 间隔复习计划</h3>
+      <p>回忆本身比重读有效 10 倍。到点只做一件事：翻卡 + 重做标记题。</p>
+      <table>
+        <tr><th>时间点</th><th>复习内容</th><th>预计用时</th></tr>
+        <tr><td>第 1 天</td><td>全部概念卡 + 回忆卡 20.1 至 20.4</td><td>10 分钟</td></tr>
+        <tr><td>第 3 天</td><td>概念卡 1、5、6、7（RBM/VAE/GAN/自回归）+ 重做 L2 两题</td><td>10 分钟</td></tr>
+        <tr><td>第 7 天</td><td>三句话复述 + 自测错题 + 默写 ELBO、D* 公式与 RBM 条件分布</td><td>10 分钟</td></tr>
+        <tr><td>第 15 天</td><td>只重做合上书挑战；能全过就毕业（也是全书毕业）</td><td>15 分钟</td></tr>
+      </table>
+    </div>
+
+    <!-- 合上书挑战 -->
+    <div class="final-challenge">
+      <h3>📕 合上书挑战</h3>
+      <p class="fc-sub">现在关掉这个页面，拿一张纸，凭记忆完成以下任务。全部做完再回来核对——这是本章真正的毕业考试，也是全书的毕业典礼。</p>
+      <ol id="challenge-list">
+        <li><span class="fc-check"></span>写出 RBM 能量函数，算出 784×500 RBM 的参数量（393 284）与 Z 的求和规模（2¹²⁸⁴）</li>
+        <li><span class="fc-check"></span>手算块 Gibbs 一例：w=(2,−1)、v=(1,1)、c=0，p(h=1|v) = σ(1) ≈ 0.731</li>
+        <li><span class="fc-check"></span>说出 DBN 与 DBM 的结构差别，以及各自调用第17/18/19章的哪件武器</li>
+        <li><span class="fc-check"></span>写出 ELBO 两项与一维 KL 闭式，手算 μ=0.5、σ=1 → 0.125，并写出重参数化</li>
+        <li><span class="fc-check"></span>推导 D* = p_data/(p_data+p_g)，手算 p_data=0.6、p_g=0.2 → 0.75，以及均衡值 −log 4 ≈ −1.386</li>
+        <li><span class="fc-check"></span>默写七模型对比表：模型 | 有无 Z | 训练目标 | 采样方式 | 主要代价</li>
+        <li><span class="fc-check"></span>回答本章的主线问题：七类深度生成模型各自如何绕过或驯服配分函数，各自付什么代价？（一句话）</li>
+      </ol>
+    </div>
+
+    <div class="complete-zone">
+      <button class="btn-complete" id="btn-complete" onclick="markDone()">✓ 我已完成本章（含合上书挑战）</button>
+    </div>
+
+    <div class="chapter-nav">
+      <a href="chapter-19.html"><span class="nav-dir">← 上一章</span>第19章 近似推断</a>
+      <a href="index.html" class="next"><span class="nav-dir">回到学习地图（全书完）→</span>学习地图</a>
+    </div>
+
+  </div>
+</div>
+
+<footer class="footer">
+  <div class="wrap">第20章 深度生成模型 · 深度学习互动讲义 · 基于 Goodfellow et al.《深度学习》(2016)</div>
+</footer>
+
+<script src="/lectures-assets/mermaid.min.js"></script>
+<script>
+mermaid.initialize({
+  startOnLoad: true,
+  theme: "base",
+  themeVariables: {
+    primaryColor: "#e3edf7",
+    primaryBorderColor: "#1d5f9e",
+    primaryTextColor: "#1d5f9e",
+    lineColor: "#5c554b",
+    secondaryColor: "#fbeedd",
+    tertiaryColor: "#f5f1e8",
+    fontFamily: "-apple-system, PingFang SC, sans-serif",
+    fontSize: "14px"
+  },
+  flowchart: { curve: "linear", htmlLabels: false }
+});
+</script>
+<script>
+// 自测题判分
+document.querySelectorAll(".quiz-block").forEach(block => {
+  const answer = block.dataset.answer;
+  const explain = block.querySelector(".quiz-explain");
+  block.querySelectorAll(".quiz-opts li").forEach(li => {
+    li.addEventListener("click", () => {
+      const opts = block.querySelectorAll(".quiz-opts li");
+      opts.forEach(o => o.classList.add("disabled"));
+      if (li.dataset.opt === answer) {
+        li.classList.add("correct");
+      } else {
+        li.classList.add("wrong");
+        block.querySelector(`[data-opt="${answer}"]`).classList.add("correct");
+      }
+      explain.classList.add("show");
+    });
+  });
+});
+
+// 合上书清单打勾
+document.querySelectorAll("#challenge-list li").forEach(li => {
+  li.addEventListener("click", () => li.classList.toggle("checked"));
+});
+
+// 完成标记 → localStorage（本系列键 dl_progress_v1，章号为字符串 "20"）
+const KEY = "dl_progress_v1";
+function loadProgress() {
+  try { return JSON.parse(localStorage.getItem(KEY)) || {}; } catch (e) { return {}; }
+}
+const progress = loadProgress();
+const btn = document.getElementById("btn-complete");
+if (progress["20"] && progress["20"].done) {
+  btn.textContent = "✓ 已完成 · 再次点击重置";
+  btn.classList.add("done");
+}
+function markDone() {
+  const p = loadProgress();
+  if (p["20"] && p["20"].done) {
+    delete p["20"];
+    btn.textContent = "✓ 我已完成本章（含合上书挑战）";
+    btn.classList.remove("done");
+  } else {
+    p["20"] = { done: true, completedAt: Date.now(), reviewsDone: 0 };
+    btn.textContent = "✓ 已完成 · 复习提醒已开启";
+    btn.classList.add("done");
+  }
+  localStorage.setItem(KEY, JSON.stringify(p));
+}
+</script>
+
+</body>
+</html>

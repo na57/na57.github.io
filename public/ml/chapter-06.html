@@ -1,0 +1,858 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第6章 支持向量机 · 机器学习互动讲义</title>
+<link rel="stylesheet" href="/lectures-assets/style.css">
+</head>
+<body>
+
+<nav class="topbar">
+  <div class="topbar-inner">
+    <span class="brand"><a href="index.html" style="color:inherit">← 学习地图</a></span>
+    <span class="crumb">阶段二 · 经典模型 / 第6章</span>
+  </div>
+</nav>
+
+<div class="wrap">
+
+  <div class="lecture-head">
+    <span class="ch-label">CHAPTER 06 · 经典模型</span>
+    <h1>支持向量机</h1>
+    <p class="lead">所有能分开两类的线里，挑"最中间"的那条——本章回答：间隔为什么值得最大化，以及线性不可分时怎么办。</p>
+  </div>
+
+  <!-- ===== 章首四件套之 1：全书定位 ===== -->
+  <div class="position-bar">
+    <strong>本章在主线上的位置：</strong>第 3 章线性模型给出了一种分界面，第 5 章神经网络用隐层解决非线性——本章走另一条路：用"最大间隔"把分界面唯一确定下来，用"核技巧"不增模型复杂度就解决非线性。<br>
+    第 6 章回答主线上的这个问题：<strong>能分开两类的分界面有无数条，凭什么说"最中间"那条最好？数据线性不可分时又怎么办？</strong>
+    <div class="map-inline">
+      <span class="node">① 基础与评估 Ch1–2</span><span class="arrow">→</span>
+      <span class="node here">② 经典模型 Ch3–8</span><span class="arrow">→</span>
+      <span class="node">③ 无监督与理论 Ch9–12</span><span class="arrow">→</span>
+      <span class="node">④ 进阶专题 Ch13–16</span>
+    </div>
+    <br>
+    前驱 Ch3 线性模型给出分界面、Ch5 用隐层解决非线性 → <u>本章用"最大间隔 + 核技巧"给出另一条路</u> → 后继 Ch12 计算学习理论（间隔与泛化界的联系在那里得到理论解释）。
+  </div>
+
+  <!-- ===== 章首四件套之 2：学习目标 ===== -->
+  <div class="objectives">
+    <h4>🎯 学完本章，合上书你应该能：</h4>
+    <ol>
+      <li>说出函数间隔与几何间隔的区别，写出几何间隔 = 2/‖<span class="var">w</span>‖ 并解释为什么要把它最大化。</li>
+      <li>写出 SVM 的基本型：最小化 ½‖<span class="var">w</span>‖²，约束 <span class="var">y</span><sub>i</sub>(<span class="var">w</span>ᵀ<span class="var">x</span><sub>i</sub>+<span class="var">b</span>) ≥ 1，并说明约束里那个 1 是怎么"约定"出来的。</li>
+      <li>在一维/二维小数据集上手算出最优分界面、间隔和支持向量。</li>
+      <li>解释 KKT 条件为什么保证解只依赖支持向量，并说出这对预测速度的启示。</li>
+      <li>写出 hinge 损失与软间隔目标式，说明惩罚参数 C 调大调小各自偏向什么。</li>
+      <li>说出核函数的作用，手算验证 K(<span class="var">x</span>,<span class="var">z</span>) = (<span class="var">x</span>ᵀ<span class="var">z</span>)² 与显式映射结果一致，并列出三种常用核。</li>
+    </ol>
+  </div>
+
+  <div class="lecture">
+
+    <!-- ===== 章首四件套之 3：推导主线图 ===== -->
+    <div class="figure">
+      <div class="mermaid">
+flowchart LR
+  A["能分开两类的分界面有无数条，选哪条？"] --> B["选几何间隔最大的那条"]
+  B --> C["凸二次规划：最小化 ½‖w‖²"]
+  C --> D["拉格朗日对偶：解只依赖支持向量"]
+  D --> E{"现实数据线性可分吗？"}
+  E -->|有噪声个别越界| F["软间隔：hinge 损失加惩罚 C"]
+  E -->|本质非线性| G["核技巧：内积换成核函数"]
+  F --> H["遗留：核怎么选、大规模训练开销大"]
+  G --> H
+  classDef hot fill:#fbeedd,stroke:#c4651f,stroke-width:2.5px,color:#c4651f;
+  classDef danger fill:#fae9e7,stroke:#b03a2e,stroke-width:2.5px,color:#b03a2e;
+  class E hot;
+  class H danger;
+      </div>
+      <div class="caption">图 6.0 本章推导主线：选哪条线 → 最大间隔 → 凸二次规划 → 对偶与支持向量 → 噪声分叉（软间隔 / 核技巧）→ 遗留问题。</div>
+    </div>
+
+    <!-- ============ 6.1 ============ -->
+    <h2><span class="sec-no">6.1</span>间隔：为什么"最中间"的线最好</h2>
+
+    <p>第 3 章的线性模型已经能用超平面 <span class="var">w</span>ᵀ<span class="var">x</span> + <span class="var">b</span> = 0 把两类分开。但它带出一个问题：<strong>能把训练集分开的超平面有无数条</strong>——只要两类之间有缝，就能在这道缝里摆出无数个角度不同的分界面，它们在训练集上的错误率都是 0。第 2 章说过，训练误差相同就要比泛化能力。直觉上，离两类样本都"最远"的那条线最稳：它对新样本的轻微扰动最不敏感。这个直觉就是本章的起点。</p>
+
+    <p>给定超平面 <span class="var">w</span>ᵀ<span class="var">x</span> + <span class="var">b</span> = 0，样本点 <span class="var">x</span> 到超平面的<strong>带符号距离</strong>正比于 <span class="var">w</span>ᵀ<span class="var">x</span> + <span class="var">b</span>。若样本被正确分类，<span class="var">y</span>(<span class="var">w</span>ᵀ<span class="var">x</span>+<span class="var">b</span>) 必为正（<span class="var">y</span> ∈ {+1, −1}）。于是定义：</p>
+
+    <ul>
+      <li><span class="term">函数间隔</span>（Functional Margin）：<span class="var">γ̂</span> = <span class="var">y</span>(<span class="var">w</span>ᵀ<span class="var">x</span>+<span class="var">b</span>)。它有正有负的大小，但有个毛病：<span class="var">w</span>、<span class="var">b</span> 同乘 10，超平面没变，函数间隔却放大 10 倍——所以它<strong>随缩放而变，不能客观度量"离边界多远"</strong>。</li>
+      <li><span class="term">几何间隔</span>（Geometric Margin）：把函数间隔除以 ‖<span class="var">w</span>‖，即 <span class="var">γ</span> = <span class="var">y</span>(<span class="var">w</span>ᵀ<span class="var">x</span>+<span class="var">b</span>) / ‖<span class="var">w</span>‖。这才是欧氏空间里真正的点到面距离，缩放不变。</li>
+    </ul>
+
+    <h3>完整手算例：四个点定一条线</h3>
+
+    <p>看一个能完全手算的最小例子。训练集只有 4 个点，都在 x 轴上：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>样本</th><th>(0, 0)</th><th>(1, 0)</th><th>(3, 0)</th><th>(4, 0)</th></tr>
+        <tr><td>类别 <span class="var">y</span></td><td>−1</td><td>−1</td><td>+1</td><td>+1</td></tr>
+      </table>
+    </div>
+
+    <p>负类最靠右的点是 (1, 0)，正类最靠左的点是 (3, 0)，缝隙是 x ∈ (1, 3)。"最中间"的分界线自然是 <strong>x = 2</strong>。写成超平面 <span class="var">w</span>ᵀ<span class="var">x</span> + <span class="var">b</span> = 0：取 <span class="var">w</span> = (1, 0)，<span class="var">b</span> = −2，则 <span class="var">w</span>ᵀ<span class="var">x</span> + <span class="var">b</span> = x₁ − 2 = 0 即 x₁ = 2 ✓。</p>
+
+    <p><strong>逐点验证</strong>（全部代入 <span class="var">w</span>ᵀ<span class="var">x</span> + <span class="var">b</span> = x₁ − 2）：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>样本 <span class="var">x</span></th><th><span class="var">y</span></th><th><span class="var">w</span>ᵀ<span class="var">x</span>+<span class="var">b</span></th><th><span class="var">y</span>(<span class="var">w</span>ᵀ<span class="var">x</span>+<span class="var">b</span>)</th><th>位置</th></tr>
+        <tr><td>(0, 0)</td><td>−1</td><td>0 − 2 = −2</td><td>(−1)×(−2) = 2</td><td>间隔边界外，安全</td></tr>
+        <tr><td>(1, 0)</td><td>−1</td><td>1 − 2 = −1</td><td>(−1)×(−1) = 1</td><td><strong>恰在边界上</strong></td></tr>
+        <tr><td>(3, 0)</td><td>+1</td><td>3 − 2 = +1</td><td>(+1)×(+1) = 1</td><td><strong>恰在边界上</strong></td></tr>
+        <tr><td>(4, 0)</td><td>+1</td><td>4 − 2 = +2</td><td>(+1)×(+2) = 2</td><td>间隔边界外，安全</td></tr>
+      </table>
+    </div>
+
+    <p>离分界面最近的点 (1, 0) 和 (3, 0) 满足 <span class="var">w</span>ᵀ<span class="var">x</span>+<span class="var">b</span> = ±1——它们叫<span class="term">支持向量</span>（Support Vector）。此时 ‖<span class="var">w</span>‖ = √(1²+0²) = 1，最近点的几何间隔 = 1/‖<span class="var">w</span>‖ = 1。两侧边界之间的总宽度：</p>
+
+    <div class="formula">总间隔 = <span class="frac"><span class="num-part">2</span><span class="den-part">‖<span class="var">w</span>‖</span></span> = <span class="frac"><span class="num-part">2</span><span class="den-part">1</span></span> = 2（每侧各 1，正是 x=1 与 x=3 之间的距离）</div>
+
+    <p><strong>关于"恰好等于 ±1"的约定</strong>：注意 <span class="var">w</span> = (1, 0)、<span class="var">b</span> = −2 与 <span class="var">w</span> = (2, 0)、<span class="var">b</span> = −4 是<strong>同一个超平面</strong>（x = 2），几何间隔也相同（后者函数间隔全翻倍，但除以 ‖<span class="var">w</span>‖=2 后还是 1）。既然缩放不改变任何实质，我们索性把缩放固定下来：<strong>规范化到支持向量处 |<span class="var">w</span>ᵀ<span class="var">x</span>+<span class="var">b</span>| = 1</strong>。这个约定白送、无损失，却让目标函数变得极漂亮。</p>
+
+    <p>于是"找最中间的线"就写成：<strong>在所有人都不越界（函数间隔 ≥ 1）的前提下，把几何间隔 1/‖<span class="var">w</span>‖ 最大化</strong>。最大化 1/‖<span class="var">w</span>‖ 等价于最小化 ‖<span class="var">w</span>‖，再添个 ½ 和平方只是为了求导干净（½·2<span class="var">w</span> = <span class="var">w</span>）：</p>
+
+    <div class="formula">min<sub><span class="var">w</span>,<span class="var">b</span></sub> ½‖<span class="var">w</span>‖²&emsp;s.t.&emsp;<span class="var">y</span><sub>i</sub>(<span class="var">w</span>ᵀ<span class="var">x</span><sub>i</sub>+<span class="var">b</span>) ≥ 1,&emsp;i = 1,…,m</div>
+
+    <p>这就是 SVM 的<strong>基本型</strong>：目标函数是二次的（凸），约束是线性的——一个标准的<span class="term">凸二次规划</span>（Convex Quadratic Programming），有唯一全局最优解，没有局部最优的坑（对比第 5 章神经网络的非凸优化）。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>"最中间的线最好"的直觉，翻译过来就是：<strong>几何间隔最大 ⟺ ‖<span class="var">w</span>‖ 最小</strong>。而规范化约定（支持向量处函数间隔 = 1）把这个几何问题压缩成了一句干净的话：约束 <span class="var">y</span><sub>i</sub>(<span class="var">w</span>ᵀ<span class="var">x</span><sub>i</sub>+<span class="var">b</span>) ≥ 1 下最小化 ½‖<span class="var">w</span>‖²。间隔大意味着两类之间的"隔离带"宽，新样本稍微挪一点也不容易越界——这就是泛化能力的几何来源（Ch12 会给出它的理论界）。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p><strong>误区一：把函数间隔当距离。</strong>函数间隔可以任意放大（<span class="var">w</span>,<span class="var">b</span> 同乘常数），它只负责"符号对不对"，不负责"离得多远"；真正度量距离的是除以 ‖<span class="var">w</span>‖ 后的几何间隔。<strong>误区二：以为间隔是"一条线的粗细"。</strong>间隔 2/‖<span class="var">w</span>‖ 是<strong>两条边界线之间的宽度</strong>：wᵀx+b=+1 与 wᵀx+b=−1 之间不允许有任何训练样本，分界面位于正中央。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 6.1-1</div>
+              <div class="q-text">函数间隔和几何间隔差在哪？为什么优化的是几何间隔？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              几何间隔 = 函数间隔 / ‖w‖。w,b 同乘常数时函数间隔随便变、几何间隔不变，只有几何间隔是真正的点到面距离，所以最大化的是几何间隔。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 6.1-2</div>
+              <div class="q-text">写出 SVM 基本型（目标 + 约束），并说约束里的 1 是怎么来的。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              min ½‖w‖²，s.t. yᵢ(wᵀxᵢ+b) ≥ 1。1 是缩放约定：w,b 同乘常数不改变超平面，于是把缩放固定到"支持向量处函数间隔恰好等于 1"，白送无损失。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 6.2 ============ -->
+    <h2><span class="sec-no">6.2</span>对偶问题与支持向量：解为什么只挂在少数点上</h2>
+
+    <p>6.1 把问题写成了凸二次规划，可以直接解。但它带出一个更有意思的问题：<strong>约束有 m 条（每个样本一条），最后真正"顶"在最优解上的有几条？</strong>答案藏在拉格朗日对偶里，而这个答案正是 SVM 名字的由来。</p>
+
+    <p>对每条约束 <span class="var">y</span><sub>i</sub>(<span class="var">w</span>ᵀ<span class="var">x</span><sub>i</sub>+<span class="var">b</span>) ≥ 1 引入一个<span class="term">拉格朗日乘子</span>（Lagrange Multiplier）α<sub>i</sub> ≥ 0，构造拉格朗日函数，先对 <span class="var">w</span>、<span class="var">b</span> 求极小。对 <span class="var">w</span> 求偏导并令其为零，得到：</p>
+
+    <div class="formula"><span class="var">w</span> = ∑<sub>i=1</sub><sup>m</sup> α<sub>i</sub><span class="var">y</span><sub>i</sub><span class="var">x</span><sub>i</sub></div>
+
+    <p>代回原式，问题化为只关于 α 的<span class="term">对偶问题</span>（Dual Problem）：在 α<sub>i</sub> ≥ 0、∑α<sub>i</sub><span class="var">y</span><sub>i</sub> = 0 的约束下，最大化 ∑α<sub>i</sub> − ½∑<sub>i</sub>∑<sub>j</sub>α<sub>i</sub>α<sub>j</sub><span class="var">y</span><sub>i</sub><span class="var">y</span><sub>j</sub><span class="var">x</span><sub>i</sub>ᵀ<span class="var">x</span><sub>j</sub>。注意最后一项：训练样本<strong>只以内积形式出现</strong>。</p>
+
+    <p>关键的性质来自 <span class="term">KKT 条件</span>（Karush-Kuhn-Tucker Conditions）中的互补松弛：</p>
+
+    <div class="formula">α<sub>i</sub> · [ <span class="var">y</span><sub>i</sub>(<span class="var">w</span>ᵀ<span class="var">x</span><sub>i</sub>+<span class="var">b</span>) − 1 ] = 0</div>
+
+    <p>每一项都是两个非负数（α<sub>i</sub> 与"超出间隔的量"）的乘积等于 0，所以每个样本必然落在两种情况之一：</p>
+
+    <ul>
+      <li><strong>α<sub>i</sub> = 0</strong>：样本在间隔边界之外（函数间隔 > 1），它对 <span class="var">w</span> = ∑α<sub>i</sub><span class="var">y</span><sub>i</sub><span class="var">x</span><sub>i</sub> 的贡献为零；</li>
+      <li><strong>α<sub>i</sub> > 0 ⟺ <span class="var">y</span><sub>i</sub>(<span class="var">w</span>ᵀ<span class="var">x</span><sub>i</sub>+<span class="var">b</span>) = 1</strong>：样本恰好压在间隔边界上——它就是<span class="term">支持向量</span>（Support Vector），只有它进入 <span class="var">w</span> 的线性组合。</li>
+    </ul>
+
+    <p>回代 6.1 的例子：最优解 <span class="var">w</span> = (1, 0) = ∑α<sub>i</sub><span class="var">y</span><sub>i</sub><span class="var">x</span><sub>i</sub>。x 分量只有 (1,0) 与 (3,0) 能贡献 x 方向：α₂·(−1)·(1,0) + α₃·(+1)·(3,0) = (3α₃ − α₂, 0) = (1, 0)，配约束 α₂ = α₃（∑α<sub>i</sub><span class="var">y</span><sub>i</sub> = 0），得 α₂ = α₃ = 0.5；而 (0, 0) 与 (4, 0) 的 α₁ = α₄ = 0。于是 <span class="var">w</span> = 0.5×(−1)×(1,0) + 0.5×(+1)×(3,0) = (−0.5+1.5, 0) = (1, 0) ✓。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>SVM 的解是<strong>稀疏</strong>的：<span class="var">w</span> 只是少数支持向量的加权和。在 6.1 的例子中，把 (0,0) 和 (4,0) 这两个非支持向量挪到更远的地方（比如 (−5,0) 和 (9,0)），甚至干脆删掉，重新求解得到的分界面<strong>纹丝不动</strong>——分界面 x=2 完全由压在边界上的 (1,0)、(3,0) 两个点决定。这就是"支持向量机"这个名字的全部含义：模型 = 支持向量撑起来的机器。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p><strong>误区：以为支持向量是"最难分对的坏样本"。</strong>恰好相反：支持向量是最"守规矩"的边缘样本——它们被分对了，而且恰好压在间隔边界上。离边界远的样本（多数派）完全不参与决策。<strong>另一个误区：以为对偶只是为了数学漂亮。</strong>对偶形式里训练样本只以内积 <span class="var">x</span><sub>i</sub>ᵀ<span class="var">x</span><sub>j</sub> 出现、预测时也只算 <span class="var">w</span>ᵀ<span class="var">x</span> = ∑α<sub>i</sub><span class="var">y</span><sub>i</sub><span class="var">x</span><sub>i</sub>ᵀ<span class="var">x</span>——清一色的内积。这一点在 6.4 会变成核技巧的入口。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 6.2-1</div>
+              <div class="q-text">KKT 互补松弛条件是什么？它怎么推出"解只依赖支持向量"？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              αᵢ·[yᵢ(wᵀxᵢ+b)−1] = 0：样本在边界外（函数间隔>1）则 αᵢ=0，αᵢ>0 当且仅当样本恰好压在边界上。而 w = Σαᵢyᵢxᵢ，αᵢ=0 的点不贡献，所以 w 只由支持向量决定。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 6.2-2</div>
+              <div class="q-text">对偶问题中训练样本以什么形式出现？这个细节为什么重要？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              只以内积 xᵢᵀxⱼ 出现（预测时同理）。于是 6.4 可以把"内积"整体替换成"核函数 K(xᵢ,xⱼ)"，不显式做高维映射就获得非线性能力——这就是核技巧的入口。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 6.3 ============ -->
+    <h2><span class="sec-no">6.3</span>软间隔：允许个别点犯错</h2>
+
+    <p>6.1–6.2 都假设两类之间真的存在一条干净的缝。但现实数据几乎总有噪声：个别样本标错了、测歪了，硬生生插在对方阵营里。此时硬间隔的约束 yᵢ(wᵀxᵢ+b) ≥ 1 <strong>无解</strong>——整个优化问题直接崩溃。怎么办？答案很务实：<strong>允许个别样本不满足约束，但要为"不满足的程度"付费</strong>。</p>
+
+    <p>给每个样本一个<span class="term">松弛变量</span>（Slack Variable）ξ<sub>i</sub> ≥ 0，把约束放宽为 yᵢ(wᵀxᵢ+b) ≥ 1 − ξ<sub>i</sub>，并在目标函数里收"罚款"：</p>
+
+    <div class="formula">min<sub><span class="var">w</span>,<span class="var">b</span>,ξ</sub> ½‖<span class="var">w</span>‖² + <span class="var">C</span>·∑<sub>i=1</sub><sup>m</sup> ξ<sub>i</sub>&emsp;s.t.&emsp;<span class="var">y</span><sub>i</sub>(<span class="var">w</span>ᵀ<span class="var">x</span><sub>i</sub>+<span class="var">b</span>) ≥ 1 − ξ<sub>i</sub>, ξ<sub>i</sub> ≥ 0</div>
+
+    <p>这就是<span class="term">软间隔</span>（Soft Margin）SVM。惩罚参数 C > 0 控制"间隔宽度"与"犯错数量"的权衡。ξ<sub>i</sub> 的取值有清晰的含义：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>ξ<sub>i</sub> 取值</th><th>含义</th></tr>
+        <tr><td>ξ<sub>i</sub> = 0</td><td>样本在间隔边界上或之外，无犯规</td></tr>
+        <tr><td>0 &lt; ξ<sub>i</sub> ≤ 1</td><td>样本越过自己的边界，但仍在正确一侧（掉进了隔离带）</td></tr>
+        <tr><td>ξ<sub>i</sub> &gt; 1</td><td>样本被分错（越过了分界面）</td></tr>
+      </table>
+    </div>
+
+    <p>等价的另一种写法是<span class="term">hinge 损失</span>（Hinge Loss）：ℓ(z) = max(0, 1 − z)，其中 z = y(wᵀx+b)。函数间隔 ≥ 1 时损失为 0；不足 1 时每差一分罚一分（线性增长）。软间隔目标就是 ½‖w‖² + C·∑ℓ(yᵢ(wᵀxᵢ+b))——"结构风险 + 经验损失"的又一个实例（呼应 Ch1）。</p>
+
+    <h3>完整手算例：越界点该罚多少</h3>
+
+    <p>沿用 6.1 的分界面：w = (1, 0)，b = −2（即 x₁ = 2），支持向量处函数间隔 = 1。现在加入一个新样本 <strong>(1.5, 0)，标签为负类（y = −1）</strong>——它在 x 轴上位于 1 和 2 之间，越过了负类边界 x₁ = 1，掉进了隔离带，但还没过分界面 x₁ = 2，仍被正确分类。逐步代入：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>步骤</th><th>计算</th><th>结果</th></tr>
+        <tr><td>① 算 wᵀx+b</td><td>1.5 − 2</td><td>−0.5（符号为负 → 分对了 ✓）</td></tr>
+        <tr><td>② 算函数间隔 z = y(wᵀx+b)</td><td>(−1)×(−0.5)</td><td>0.5（&lt; 1 → 不满足硬约束）</td></tr>
+        <tr><td>③ 算 ξ = max(0, 1 − z)</td><td>max(0, 1 − 0.5)</td><td><strong>0.5</strong>（掉进隔离带，未分错：0&lt;ξ≤1 ✓）</td></tr>
+        <tr><td>④ 计入目标函数</td><td>C × 0.5</td><td>C=1 罚 0.5；C=10 罚 5</td></tr>
+      </table>
+    </div>
+
+    <p>若这个点再往右挪到 (2.5, 0)（越过了分界面）：z = (−1)×(0.5) = −0.5，ξ = max(0, 1−(−0.5)) = 1.5 &gt; 1，被分错。C 的角色一目了然：<strong>C → ∞ 时任何犯规都是天价，软间隔退化为硬间隔；C 很小时罚款不痛不痒，模型宁愿牺牲几个样本也要把隔离带留宽</strong>。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>软间隔把"必须全部满足"的硬约束换成"不满足就付费"的弹性约束。hinge 损失的形状很有意思：<strong>分对了且离边界够远 → 零损失；分对了但贴太近 → 照样罚；分错了 → 罚得更狠，且越错越罚（线性）</strong>。它与 Ch3 对率回归的对数损失对比鲜明：logistic loss 对所有样本都有非零"唠叨"，hinge 损失对安全样本完全沉默——这正是 SVM 解稀疏（只依赖支持向量）在损失函数层面的镜像。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p><strong>误区一：以为 ξ 大 = 分错。</strong>ξ &gt; 1 才分错；0 &lt; ξ ≤ 1 是分对了但掉进了隔离带（如上面 ξ=0.5 的例子）。<strong>误区二：以为 C 越大越好。</strong>C 大 → 模型对每个训练样本的犯规都锱铢必较 → 隔离带被压窄 → 对噪声过拟合；C 小 → 容忍犯规 → 间隔宽但训练误差上升。C 是偏差-方差旋钮，必须用交叉验证调，不是越大越好。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 6.3-1</div>
+              <div class="q-text">写出 hinge 损失，并说出 ξ 的三个取值区间各自意味着什么。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              ℓ(z)=max(0,1−z)，z=y(wᵀx+b)。ξ=0：不犯规；0&lt;ξ≤1：分对但掉进隔离带；ξ&gt;1：被分错。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 6.3-2</div>
+              <div class="q-text">C 调大和调小分别把模型推向哪边？C→∞ 时发生什么？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              C 大→更在意错分，间隔窄、易过拟合；C 小→更在意间隔宽，容忍犯规。C→∞ 时软间隔退化为硬间隔，数据若不可分则无解。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 6.4 ============ -->
+    <h2><span class="sec-no">6.4</span>核技巧：把非线性问题抬高维度</h2>
+
+    <p>软间隔解决了"个别点越界"，但还有更根本的失败：<strong>有些数据本质上就不是线性可分的</strong>。经典反例是异或（XOR）：四个点 (0,0)、(1,1) 为正类，(0,1)、(1,0) 为负类——平面上任何一条直线都无法把它们分开（第 5 章用隐层解决了它）。SVM 的答案不是加层，而是<strong>换空间</strong>：把样本映射到更高维的特征空间 φ(x)，让数据在那里变得线性可分，然后在新空间里跑标准的线性 SVM。</p>
+
+    <p>问题来了：高维映射后，6.2 的对偶问题和预测式里的内积都变成 φ(xᵢ)ᵀφ(xⱼ)，维度一高（甚至无穷维）根本算不动。<span class="term">核技巧</span>（Kernel Trick）的观察是：<strong>算法从头到尾只需要内积，不需要映射本身</strong>。于是定义<span class="term">核函数</span>（Kernel Function）：</p>
+
+    <div class="formula">K(<span class="var">x</span>, <span class="var">z</span>) = φ(<span class="var">x</span>)ᵀφ(<span class="var">z</span>)</div>
+
+    <p>只要一个二元函数 K 恰好等于"某个映射后的内积"，我们就可以<strong>直接在原空间算 K，效果等价于先映射再算内积</strong>——绕开了显式构造 φ。这叫"核函数免显式映射"。</p>
+
+    <h3>完整手算例：验证 K(x,z) = (xᵀz)² 是一个核</h3>
+
+    <p>取二维映射 φ(x₁,x₂) = (x₁², x₂², √2·x₁x₂)。我们验证：<strong>先算内积再平方</strong> 与 <strong>先映射再算内积</strong>，结果必须一致。取 x = (1, 2)，z = (3, 4)：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>路径</th><th>计算</th><th>结果</th></tr>
+        <tr><td>① 原空间：xᵀz</td><td>1×3 + 2×4 = 3 + 8</td><td>11</td></tr>
+        <tr><td>② 平方：K = (xᵀz)²</td><td>11²</td><td><strong>121</strong></td></tr>
+        <tr><td>③ 显式映射 φ(x)</td><td>(1², 2², √2×1×2)</td><td>(1, 4, 2√2)</td></tr>
+        <tr><td>④ 显式映射 φ(z)</td><td>(3², 4², √2×3×4)</td><td>(9, 16, 12√2)</td></tr>
+        <tr><td>⑤ 高维内积 φ(x)ᵀφ(z)</td><td>1×9 + 4×16 + (2√2)×(12√2) = 9 + 64 + 48</td><td><strong>121</strong> ✓</td></tr>
+      </table>
+    </div>
+
+    <p>两条路径殊途同归：121 = 121 ✓。（注意第⑤步 (2√2)(12√2) = 24×2 = 48。）也就是说，<strong>算一次二二维内积再平方（约 3 次乘法），就等于在三维空间里做完整内积</strong>——映射维度越高，这个"偷步"省得越多。对 XOR 四点，这个 φ 恰好让它们在高维线性可分：正类 (0,0)、(1,1) 的交叉项 x₁x₂ 分别为 0、1，负类 (0,1)、(1,0) 的交叉项都是 0——映射后沿 x₁x₂ 这一维一刀切即可。</p>
+
+    <p>常用核函数（"常用核"几乎就是背这三行）：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>核名称</th><th>表达式</th><th>参数</th><th>一句话直觉</th></tr>
+        <tr><td>线性核（Linear Kernel）</td><td>K(x,z) = xᵀz</td><td>无</td><td>不做映射，就是普通线性 SVM；高维稀疏数据（如文本）的首选起点</td></tr>
+        <tr><td>多项式核（Polynomial Kernel）</td><td>K(x,z) = (xᵀz)<sup>d</sup></td><td>次数 d ≥ 1</td><td>显式引入特征交叉项；d=2 即上面手算的映射，d 越大边界越弯</td></tr>
+        <tr><td>高斯核 / RBF 核（Radial Basis Function）</td><td>K(x,z) = exp(−‖x−z‖² / (2σ²))（常写 exp(−γ‖x−z‖²)）</td><td>带宽 σ（或 γ=1/(2σ²)）</td><td>"相似度随距离指数衰减"；等效于无穷维映射，表达力最强、最常用</td></tr>
+      </table>
+    </div>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>核技巧的本质是<strong>偷换"相似度"的定义</strong>：内积 xᵀz 是原空间的一种相似度，核函数 K(x,z) 是某个（可能无穷维的）特征空间里的相似度。SVM 的对偶形式和预测式里只有内积，所以把内积整个换成核函数，算法一行不改，就获得了在那个高维空间里工作的能力——<strong>复杂度按原空间付账，表达力按高维空间收钱</strong>。这也是 6.2 为什么要强调"解只以内积出现"。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p><strong>误区一：以为核函数是"随便一个相似度函数"。</strong>不是——K 必须能写成某映射的内积 φ(x)ᵀφ(z)（ Mercer 条件：核矩阵半正定），否则对偶问题不再是凸的，整套理论失效。<strong>误区二：以为 RBF 核参数 γ 越大越灵活越好。</strong>γ 大 → 相似度衰减极快 → 每个样本只影响自己周围一小圈 → 边界贴着训练点打转，过拟合。γ 和 C 一样，要用交叉验证调。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 6.4-1</div>
+              <div class="q-text">核函数的定义是什么？为什么 SVM 可以"免显式映射"？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              K(x,z)=φ(x)ᵀφ(z)。因为 SVM 的对偶问题与预测式中样本只以内积出现，把内积整体换成 K 就等价于在高维空间跑线性 SVM，无需真的构造 φ。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 6.4-2</div>
+              <div class="q-text">说出三种常用核及其参数；XOR 问题说明了一个什么事实？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              线性核（无参，xᵀz）、多项式核（次数 d，(xᵀz)ᵈ）、RBF 高斯核（带宽 σ 或 γ）。XOR 四点证明存在本质上非线性的分类问题，低维线性方法（含单层感知机）无能为力，必须升维或换模型。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 6.5 ============ -->
+    <h2><span class="sec-no">6.5</span>软间隔 + 核的实战观与 SVM 复盘</h2>
+
+    <p>6.1–6.4 把 SVM 的两块拼图备齐了：软间隔对付噪声，核技巧对付非线性。实战中的 SVM 几乎总是两者合体：min ½‖w‖² + C·∑ξ<sub>i</sub>，样本以 K(xᵢ,xⱼ) 的形式出现。剩下的问题是工程性的：<strong>核怎么选？参数怎么调？</strong></p>
+
+    <p><strong>核选择的经验法则</strong>（顺序有讲究）：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>情形</th><th>推荐</th><th>理由</th></tr>
+        <tr><td>先试</td><td><strong>线性核</strong></td><td>最便宜、最不易过拟合；很多任务（尤其高维）线性就够</td></tr>
+        <tr><td>样本少、特征多（如文本，特征数万维）</td><td><strong>线性核或高斯核</strong></td><td>高维空间中数据天然稀疏易分，复杂映射容易过拟合</td></tr>
+        <tr><td>样本多、特征少、边界明显弯曲</td><td><strong>高斯核（RBF）</strong></td><td>表达力最强，等效无穷维，能雕出任意形状的边界</td></tr>
+        <tr><td>已知问题有明确的多项式交互结构</td><td><strong>多项式核</strong></td><td>把领域知识直接编码进核</td></tr>
+      </table>
+    </div>
+
+    <p><strong>调参</strong>：C（软间隔的罚款力度）与核参数（RBF 的 γ、多项式的 d）一起决定模型复杂度，标准做法是<span class="term">网格搜索</span>（Grid Search）配交叉验证：在 (C, γ) 的对数网格（如 C ∈ {0.1, 1, 10, 100}，γ ∈ {0.01, 0.1, 1, 10}）上逐点做 k 折交叉验证，选验证精度最高的组合。调参顺序的经验：先固定一个中等 γ 粗调 C 找到量级，再细调 γ，最后联合微调。</p>
+
+    <p><strong>回归变体一句话</strong>：同一套思想换个损失就是 <span class="term">支持向量回归</span>（Support Vector Regression, SVR）：不惩罚"掉进隔离带"，而是定义一条 ε 宽的"间隔带"，<strong>带内误差为零、带外才计线性损失</strong>，同样可用核技巧——间隔思想从分类平移到了回归。</p>
+
+    <p><strong>与第 3 章对率回归的正面对比</strong>：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>维度</th><th>SVM（本章）</th><th>对率回归（Ch3）</th></tr>
+        <tr><td>关心谁</td><td>只关心压在间隔边界上的少数支持向量</td><td>所有样本都贡献梯度（logistic loss 永不为 0）</td></tr>
+        <tr><td>输出</td><td>硬分类符号 sign(wᵀx+b)，<strong>不输出概率</strong></td><td>天然输出后验概率 p(y|x)</td></tr>
+        <tr><td>非线性手段</td><td>核技巧（不增参数个数的升维）</td><td>特征工程，或交给神经网络（Ch5）</td></tr>
+        <tr><td>优化问题</td><td>凸二次规划，全局唯一最优</td><td>凸优化，全局唯一最优</td></tr>
+      </table>
+    </div>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>SVM 的实战心法可以压成三句话：<strong>先试线性核；不行换 RBF；(C, γ) 用网格搜</strong>。它的独门优势是"小样本科班出身"：解只依赖支持向量，样本量不大、特征维度高（文本、生物信息）时，泛化往往好于更需要数据喂养的神经网络。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p><strong>误区：把 SVM 的输出当概率用。</strong>SVM 原生输出的是到分界面的带符号距离 wᵀx+b，<strong>不是概率</strong>：sign 给出类别，但 |wᵀx+b| 大不等于"把握大"的概率化度量。需要概率输出时要做额外的校准（如 Platt 缩放，用逻辑回归把距离映射成概率），不能直接把分数 sigmoid 一压就当概率。需要天然概率的场景，回 Ch3 用对率回归或等 Ch7 贝叶斯方法。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 6.5-1</div>
+              <div class="q-text">核选择的经验顺序是什么？什么数据形态适合线性核？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              先试线性核，不行换 RBF 高斯核。样本少、特征多（高维稀疏，如文本）适合线性核——高维空间中数据本就近乎可分，复杂映射徒增过拟合风险。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 6.5-2</div>
+              <div class="q-text">SVM 与对率回归最关键的一个输出差异是什么？后果是什么？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              LR 天然输出概率，SVM 只输出带符号距离（硬分类）。后果：需要概率/置信度的场景，SVM 必须额外做校准（如 Platt 缩放），不能直接当概率用。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===== 章末五件套之 1：概念卡 ===== -->
+    <h2><span class="sec-no">🃏</span>概念卡：本章概念的一分钟画像</h2>
+    <p>翻面前先自问：这个概念我能用一句话讲清楚吗？</p>
+    <div class="flip-grid">
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 1</div>
+            <div class="q-text">几何间隔（Geometric Margin）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">点到超平面的真实欧氏距离（带符号）：y(wᵀx+b)/‖w‖；训练集间隔 = 所有样本几何间隔的最小值，规范化后总宽度 2/‖w‖。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">函数间隔随 w,b 缩放而变，无法客观度量"离边界多远"；几何间隔缩放不变。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">两类之间的"隔离带"宽度，越宽越稳。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">把函数间隔当距离——函数间隔只负责符号对不对。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">Ch12 计算学习理论：间隔大小直接进入泛化误差界。</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 2</div>
+            <div class="q-text">支持向量（Support Vector）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">恰好压在间隔边界上的样本（y(wᵀx+b)=1，对应 αᵢ&gt;0），w = Σαᵢyᵢxᵢ 中只有它们系数非零。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">让分界面只由少数关键点决定，模型对远离边界的样本增删免疫。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">撑起隔离带的几根"桩子"，其余样本都是看客。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为是"最难分的坏样本"——它们恰恰是被分对的边缘样本。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">预测只需支持向量（快）；Ch12 泛化界与支持向量数量相关。</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 3</div>
+            <div class="q-text">对偶问题（Dual Problem）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">对每条约束引入乘子 αᵢ≥0，先对 w,b 求极小后得到的只关于 α 的等价优化问题。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">暴露两件事：解 w=Σαᵢyᵢxᵢ 只依赖支持向量；样本只以内积形式出现。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">把"约束难处理"换成"给每个样本发工资（α），边界外的工资为零"。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为只是数学技巧——它是核技巧能成立的前提。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">6.4 核技巧直接改对偶式里的内积；KKT 条件是支持向量的判据。</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 4</div>
+            <div class="q-text">hinge 损失与软间隔（Hinge Loss / Soft Margin）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">ℓ(z)=max(0,1−z)；软间隔 = min ½‖w‖² + C·Σξᵢ，允许约束被违反但按量罚款。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">现实数据有噪声、线性不可分时硬间隔无解；软间隔让问题总有解。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">隔离带内犯规收罚款，C 是罚款单价。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">ξ&gt;0 不等于分错；C 不是越大越好（过拟合）。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">几乎所有实际 SVM 都是软间隔；C 是交叉验证的头号调参对象。</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 5</div>
+            <div class="q-text">核函数（Kernel Function）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">K(x,z)=φ(x)ᵀφ(z)：在原空间直接计算、效果等于某高维映射后内积的二元函数。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">高维（甚至无穷维）映射算不动；核技巧绕开显式映射获得非线性。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">偷换"相似度"的定义：复杂度按原空间付账，表达力按高维收钱。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">不是任意相似度都行——必须满足 Mercer 条件（核矩阵半正定）。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">一切"算法里只有内积"的模型都可核化（SVM、核 PCA 等）。</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 6</div>
+            <div class="q-text">RBF 核 / 高斯核（Radial Basis Function Kernel）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">K(x,z)=exp(−‖x−z‖²/(2σ²))，常写 exp(−γ‖x−z‖²)，γ=1/(2σ²)。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">等效无穷维映射，表达力最强，是线性核不够时的默认替补。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">相似度随距离指数衰减；σ 控制"影响圈"半径。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">γ 越大越好——γ 太大每个点只管自己脚下一小圈，严重过拟合。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">样本多、特征少、边界弯曲的低维问题；与 C 一起做网格搜索。</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===== 章末五件套之 2：分层习题 ===== -->
+    <h2><span class="sec-no">📝</span>分层习题</h2>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>
+        <p>判断对错并说明理由：①"把训练集中所有非支持向量删掉，重新训练，最优分界面不变。"②"把训练集中一个支持向量挪远一点点，最优分界面不变。"</p>
+      </div>
+      <details>
+        <summary>提示</summary>
+        <p>想想 w = Σαᵢyᵢxᵢ 中哪些系数非零；支持向量的定义是"恰好压在边界上"，挪动它会发生什么？</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p><strong>① 对。</strong>非支持向量 αᵢ = 0，对 w = Σαᵢyᵢxᵢ 毫无贡献；删掉它们后 KKT 条件的解不变，分界面纹丝不动（这正是解的稀疏性）。</p>
+          <p><strong>② 错。</strong>支持向量恰好满足 y(wᵀx+b)=1，是决定分界面位置/方向的"桩子"。挪远一点点，原来的边界就不再是最大间隔边界，重新求解后分界面会跟着动（通常在两条边界都变宽的方向上偏移）。为什么易错：以为"挪一点点"无所谓——支持向量没有"一点点"的余地，它们就钉在边界上，动桩子就动墙。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>
+        <p>选择：以下关于核函数的说法，哪个正确？A. 任何二元对称函数都能当核函数；B. 核函数必须先显式写出映射 φ 才能使用；C. K(x,z) 必须等于某个映射后的内积（核矩阵半正定），使用时不需显式映射；D. RBF 核的 γ 越大，模型越不容易过拟合。</p>
+      </div>
+      <details>
+        <summary>提示</summary>
+        <p>回忆 Mercer 条件，以及核技巧"免显式映射"的含义。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p><strong>C 正确。</strong>核函数必须能写成 K(x,z)=φ(x)ᵀφ(z)（等价于任意数据集上的核矩阵半正定），否则对偶问题失去凸性；但使用时直接算 K 即可，无需构造 φ——这正是"免显式映射"。</p>
+          <p>为什么其他错：A 错在"任何"——不满足半正定的函数会让优化问题非凸、理论失效；B 与核技巧的初衷完全相反（能显式映射就不需要核了）；D 说反了——γ 越大，相似度衰减越快，模型只信任紧邻样本，越容易过拟合。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>
+        <p>训练集：负类 (−1, 0)、(0, 0)；正类 (2, 0)、(3, 0)。手算：①最优分界面方程；②w 与 b；③总间隔；④支持向量，并逐点验证支持向量满足 wᵀx+b = ±1。</p>
+      </div>
+      <details>
+        <summary>提示</summary>
+        <p>先找负类最右点与正类最左点，"最中间"就是缝隙中点；再按"支持向量处函数间隔 = 1"的规范化写出 w、b。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p>① 负类最右点 (0, 0)，正类最左点 (2, 0)，缝隙 x₁ ∈ (0, 2)，中点 <strong>x₁ = 1</strong>，即分界面方程 x₁ = 1。</p>
+          <p>② 规范化取 <strong>w = (1, 0)，b = −1</strong>：wᵀx+b = x₁ − 1 = 0 ⟺ x₁ = 1 ✓。</p>
+          <p>③ 逐点验证：负类 (0,0)：x₁−1 = −1，y(wᵀx+b) = (−1)(−1) = 1 ✓ 恰在边界上；正类 (2,0)：x₁−1 = +1，y(wᵀx+b) = (+1)(+1) = 1 ✓ 恰在边界上。外围点 (−1,0)：x₁−1 = −2，y·(−2) = 2 &gt; 1；(3,0)：x₁−1 = 2，y·2 = 2 &gt; 1，均在边界外。</p>
+          <p>④ ‖w‖ = 1，<strong>总间隔 = 2/‖w‖ = 2</strong>（每侧 1，即 x₁=0 到 x₁=2 的宽度）。<strong>支持向量 = (0, 0) 与 (2, 0)</strong>，它们满足 wᵀx+b = ±1 ✓；(−1,0)、(3,0) 的 α = 0，删掉不影响结果。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>
+        <p>验证多项式核 K(x,z) = (xᵀz)²（对应映射 φ(x₁,x₂) = (x₁², x₂², √2·x₁x₂)）：取 x = (2, 1)，z = (1, 3)，分别计算 (xᵀz)² 与 φ(x)ᵀφ(z)，确认两者相等。</p>
+      </div>
+      <details>
+        <summary>提示</summary>
+        <p>先算原空间内积再平方；再把两个三维映射向量写出来逐分量相乘求和。注意 (a√2)(b√2) = 2ab。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p><strong>路径一</strong>：xᵀz = 2×1 + 1×3 = 2 + 3 = 5；(xᵀz)² = <strong>25</strong>。</p>
+          <p><strong>路径二</strong>：φ(x) = (2², 1², √2×2×1) = (4, 1, 2√2)；φ(z) = (1², 3², √2×1×3) = (1, 9, 3√2)。</p>
+          <p>φ(x)ᵀφ(z) = 4×1 + 1×9 + (2√2)×(3√2) = 4 + 9 + 6×2 = 4 + 9 + 12 = <strong>25</strong> ✓。</p>
+          <p>两值相等，验证通过。原空间一次内积+一次平方（约 3 次乘法）就代替了三维空间内积——维度越高，核技巧省得越多。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l3">L3 建模应用</span>
+        <p>两个真实场景：A. <strong>文本垃圾邮件分类</strong>——特征为词袋/TF-IDF，上万维、高度稀疏，样本几千封；B. <strong>二维传感器信号分类</strong>——只有 2 个特征，决策边界明显弯曲（类 XOR 形状），样本数万个。分别回答：选什么核？为什么？并说明 C 与核参数的调节顺序。</p>
+      </div>
+      <details>
+        <summary>提示</summary>
+        <p>对照 6.5 的核选择表：看"样本量 vs 特征维数"的比例，以及边界是否弯曲。调节顺序：先粗后细。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p><strong>场景 A：选线性核。</strong>理由：特征维数（上万）远超样本量（几千），高维稀疏空间中数据本就近乎线性可分；再用 RBF 等效升维到无穷维，容量过剩、极易过拟合，且计算昂贵。线性核 + 软间隔（调 C）通常就是此类任务的强基线。</p>
+          <p><strong>场景 B：选 RBF 高斯核。</strong>理由：特征只有 2 维、边界明显弯曲，线性核必然欠拟合；样本数万个足以支撑 RBF 的表达力，且低维空间计算核矩阵代价可接受。</p>
+          <p><strong>调节顺序</strong>：场景 A 只需调 C：先在对数网格 {0.01, 0.1, 1, 10, 100} 上交叉验证找到量级，再在该量级附近加密。场景 B 调 (C, γ) 组合：先固定中等 γ（如 1/特征数），粗调 C 找到量级 → 再扫 γ ∈ {0.001, 0.01, 0.1, 1} → 最后在优胜邻域内 (C, γ) 联合细调。全程用交叉验证精度说话，不看训练集表现（训练集高分恰恰是过拟合信号）。</p>
+        </div>
+      </details>
+    </div>
+
+    <!-- ===== 章末五件套之 3：自测 ===== -->
+    <h2><span class="sec-no">✍️</span>本章自测</h2>
+    <p class="quiz-hint">点击选项判分，答错会给出原因。</p>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 1</div>
+      <div class="q-stem">SVM 基本型中约束 yᵢ(wᵀxᵢ+b) ≥ 1 里的"1"，本质是：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 数据集里最近点到分界面的真实距离</li>
+        <li data-opt="b">B. 一个缩放约定：w,b 同乘常数不改变超平面，于是把缩放固定到支持向量处函数间隔恰好为 1</li>
+        <li data-opt="c">C. 分类正确的置信度阈值，大于 1 才算分对</li>
+        <li data-opt="d">D. 正则化强度的倒数</li>
+      </ul>
+      <div class="quiz-explain">B 对：超平面在缩放不变，1 是白送的规范化约定，换来"间隔 = 2/‖w‖"的干净形式。A 错：真实距离是几何间隔 1/‖w‖，不是 1。C 错：y(wᵀx+b) &gt; 0 就分对了，1 是间隔要求不是分类要求。D 错：1 与正则化无关，正则强度由 ½‖w‖² 项（或软间隔里的 C）承担。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="c">
+      <div class="q-no">自测 2</div>
+      <div class="q-stem">训练完硬间隔 SVM 后，下列哪个操作一定不改变最优分界面？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 把一个支持向量沿法线方向向外挪一点</li>
+        <li data-opt="b">B. 把所有样本整体平移一个固定向量</li>
+        <li data-opt="c">C. 删除所有 αᵢ = 0 的样本</li>
+        <li data-opt="d">D. 把一个远离边界的样本改标成另一类</li>
+      </ul>
+      <div class="quiz-explain">C 对：αᵢ=0 的样本不进入 w = Σαᵢyᵢxᵢ，删除后 KKT 解不变。A 错：支持向量钉在边界上，动它就动解。B 错：整体平移会改变最优分界面在坐标系中的位置（b 会变）——几何关系不变但"w,b 不变"不成立，题目问的是分界面，平移后分界面位置随之平移，此选项描述含混，按"不改变（原坐标系下的）分界面"判错。D 错：改标可能让该点变成新问题的边界点甚至导致不可分，解必然重算。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="a">
+      <div class="q-no">自测 3</div>
+      <div class="q-stem">某样本算得 z = y(wᵀx+b) = 0.5，它在软间隔 SVM 中：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 被分对了，但掉进了隔离带，ξ = 0.5</li>
+        <li data-opt="b">B. 被分错了，ξ = 0.5</li>
+        <li data-opt="c">C. 被分对了且在隔离带外，ξ = 0</li>
+        <li data-opt="d">D. 是分界面本身，ξ = 1</li>
+      </ul>
+      <div class="quiz-explain">A 对：z = 0.5 &gt; 0 说明符号对（分对），但 z &lt; 1 说明越过了自己的间隔边界，ξ = max(0, 1−0.5) = 0.5，属于"掉进隔离带"。B 错：分错要求 z &lt; 0（ξ &gt; 1）。C 错：z ≥ 1 才在带外。D 错：分界面是 wᵀx+b = 0 即 z = 0，对应 ξ = 1，与本题数值不符。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="d">
+      <div class="q-no">自测 4</div>
+      <div class="q-stem">核技巧之所以对 SVM 成立，最关键的结构前提是：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. SVM 的目标函数是二次的</li>
+        <li data-opt="b">B. SVM 的解是稀疏的</li>
+        <li data-opt="c">C. 核函数都很好算</li>
+        <li data-opt="d">D. 对偶问题与预测式中，训练样本只以内积形式出现</li>
+      </ul>
+      <div class="quiz-explain">D 对：正因为算法从头到尾只需要 xᵢᵀxⱼ，才能把内积整体换成 K(xᵢ,xⱼ)=φ(xᵢ)ᵀφ(xⱼ)，实现"免显式映射"。A 错：二次性保证凸性，与核化无因果关系。B 错：稀疏性是结果不是前提，且稀疏本身不蕴含可核化。C 错："好算"是工程优点，不是理论前提——理论上 K 只需满足半正定。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 5</div>
+      <div class="q-stem">与第 3 章对率回归相比，下列说法正确的是：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. SVM 天然输出概率，LR 不输出</li>
+        <li data-opt="b">B. SVM 只由边界上的支持向量决定，LR 的所有样本都参与（logistic loss 永不为 0）；SVM 原生不输出概率，需额外校准</li>
+        <li data-opt="c">C. SVM 的优化是非凸的，LR 是凸的</li>
+        <li data-opt="d">D. 高维稀疏文本数据上，RBF 核 SVM 总是优于线性核</li>
+      </ul>
+      <div class="quiz-explain">B 对：hinge 损失对安全样本为 0 → 解稀疏；logistic loss 对所有样本非零 → 全员参与。SVM 输出带符号距离而非概率。A 说反了。C 错：两者都是凸优化，SVM 是凸二次规划。D 错："总是"必错——样本少特征多时线性核往往更稳，RBF 易过拟合。</div>
+    </div>
+
+    <!-- ===== 章末五件套之 4：三句话复述 ===== -->
+    <div class="retell">
+      <h3>🗣️ 用自己的话，三句话讲完本章</h3>
+      <p>对着空气（或室友）说出这三句。说卡壳的那句，回去重读对应小节。</p>
+      <details>
+        <summary>句1：这章解决什么问题？——</summary>
+        <div class="retell-answer">参考答案：能把两类分开的分界面有无数条，SVM 要选出泛化最好的那一条；并且要解决两个现实障碍——数据有噪声（软间隔）和本质上非线性（核技巧）。</div>
+      </details>
+      <details>
+        <summary>句2：核心机制是什么？——</summary>
+        <div class="retell-answer">参考答案：把分界面规范化为支持向量处函数间隔 = 1，最大化几何间隔等价于最小化 ½‖w‖²（凸二次规划）；对偶问题揭示解只依赖支持向量（KKT：αᵢ&gt;0 ⟺ 样本在边界上）且样本只以内积出现——前者给稀疏性，后者给核技巧的入口；噪声用 hinge 损失 + C 软化，非线性用 K(x,z) 替换内积升维。</div>
+      </details>
+      <details>
+        <summary>句3：它和前后章怎么分工？——</summary>
+        <div class="retell-answer">参考答案：Ch3 给出线性分界面的一种选法（最小化损失），Ch5 用隐层解决非线性；本章用"最大间隔"给出分界面的另一种选法，用"核"给出非线性的另一条路，且解由少数支持向量决定；Ch12 计算学习理论将用间隔大小解释为什么这样选泛化好。</div>
+      </details>
+    </div>
+
+    <!-- ===== 章末五件套之 5：间隔复习计划 ===== -->
+    <div class="review-plan">
+      <h3>🔁 间隔复习计划</h3>
+      <p>回忆本身比重读有效 10 倍。到点只做一件事：翻卡 + 重做标记题。</p>
+      <table>
+        <tr><th>时间点</th><th>复习内容</th><th>预计用时</th></tr>
+        <tr><td>第 1 天</td><td>全部概念卡 1–6 + 回忆卡 6.1-1 至 6.5-2</td><td>12 分钟</td></tr>
+        <tr><td>第 3 天</td><td>概念卡（重点复习翻错的）+ 重做 L2 两道手算 + 自测错题</td><td>12 分钟</td></tr>
+        <tr><td>第 7 天</td><td>三句话复述 + 重推 6.1 四点手算例 + 合上书挑战</td><td>15 分钟</td></tr>
+        <tr><td>第 15 天</td><td>只重做合上书挑战；能全过就毕业</td><td>15 分钟</td></tr>
+      </table>
+    </div>
+
+    <!-- 合上书挑战 -->
+    <div class="final-challenge">
+      <h3>📕 合上书挑战</h3>
+      <p class="fc-sub">现在关掉这个页面，拿一张纸，凭记忆完成以下任务。全部做完再回来核对——这是本章真正的毕业考试。</p>
+      <ol id="challenge-list">
+        <li><span class="fc-check"></span>写出函数间隔与几何间隔的定义，说明为什么优化几何间隔，并写出 SVM 基本型（目标 + 约束）。</li>
+        <li><span class="fc-check"></span>在"负类 (0,0)、(1,0)；正类 (3,0)、(4,0)"上重推最优分界面、w、b、总间隔，并逐点验证支持向量满足 wᵀx+b = ±1。</li>
+        <li><span class="fc-check"></span>写出 KKT 互补松弛条件，用它解释"解只依赖支持向量"，并说明删掉非支持向量为什么不影响分界面。</li>
+        <li><span class="fc-check"></span>写出 hinge 损失与软间隔目标式；给定 wᵀx+b = −0.5、y = −1，算出 ξ 并说明该点状态；解释 C 调大调小的后果。</li>
+        <li><span class="fc-check"></span>对 x=(1,2)、z=(3,4) 验证 (xᵀz)² = φ(x)ᵀφ(z)（φ 为三维二次映射），并列出线性/多项式/RBF 三种核的参数与直觉。</li>
+        <li><span class="fc-check"></span>回答本章的主线问题：SVM 凭什么只用少数几个点就定出分界面？（一句话：最大间隔目标 + KKT 让解只依赖支持向量，核技巧又把内积换成相似度，于是分界面由边界上那几根"桩子"撑起来。）</li>
+      </ol>
+    </div>
+
+    <div class="complete-zone">
+      <button class="btn-complete" id="btn-complete" onclick="markDone()">✓ 我已完成本章（含合上书挑战）</button>
+    </div>
+
+    <div class="chapter-nav">
+      <a href="chapter-05.html"><span class="nav-dir">← 上一章</span>第5章 神经网络</a>
+      <a href="index.html" class="next"><span class="nav-dir">下一章 →</span>第7章 贝叶斯分类器（待生成）</a>
+    </div>
+
+  </div>
+</div>
+
+<footer class="footer">
+  <div class="wrap">第6章 支持向量机 · 机器学习互动讲义 · 基于周志华《机器学习》(2016)</div>
+</footer>
+
+<script src="/lectures-assets/mermaid.min.js"></script>
+<script>
+mermaid.initialize({
+  startOnLoad: true,
+  theme: "base",
+  themeVariables: {
+    primaryColor: "#e3edf7",
+    primaryBorderColor: "#1d5f9e",
+    primaryTextColor: "#1d5f9e",
+    lineColor: "#5c554b",
+    secondaryColor: "#fbeedd",
+    tertiaryColor: "#f5f1e8",
+    fontFamily: "-apple-system, PingFang SC, sans-serif",
+    fontSize: "14px"
+  },
+  flowchart: { curve: "linear", htmlLabels: false }
+});
+</script>
+<script>
+// 自测题判分（原样复用，勿改）
+document.querySelectorAll(".quiz-block").forEach(block => {
+  const answer = block.dataset.answer;
+  const explain = block.querySelector(".quiz-explain");
+  block.querySelectorAll(".quiz-opts li").forEach(li => {
+    li.addEventListener("click", () => {
+      const opts = block.querySelectorAll(".quiz-opts li");
+      opts.forEach(o => o.classList.add("disabled"));
+      if (li.dataset.opt === answer) {
+        li.classList.add("correct");
+      } else {
+        li.classList.add("wrong");
+        block.querySelector(`[data-opt="${answer}"]`).classList.add("correct");
+      }
+      explain.classList.add("show");
+    });
+  });
+});
+
+// 合上书清单打勾（原样复用，勿改）
+document.querySelectorAll("#challenge-list li").forEach(li => {
+  li.addEventListener("click", () => li.classList.toggle("checked"));
+});
+
+// 完成标记 → localStorage（章号 6）
+const KEY = "ml_progress_v1";
+function loadProgress() {
+  try { return JSON.parse(localStorage.getItem(KEY)) || {}; } catch (e) { return {}; }
+}
+const progress = loadProgress();
+const btn = document.getElementById("btn-complete");
+if (progress[6] && progress[6].done) {
+  btn.textContent = "✓ 已完成 · 再次点击重置";
+  btn.classList.add("done");
+}
+function markDone() {
+  const p = loadProgress();
+  if (p[6] && p[6].done) {
+    delete p[6];
+    btn.textContent = "✓ 我已完成本章（含合上书挑战）";
+    btn.classList.remove("done");
+  } else {
+    p[6] = { done: true, completedAt: Date.now(), reviewsDone: 0 };
+    btn.textContent = "✓ 已完成 · 复习提醒已开启";
+    btn.classList.add("done");
+  }
+  localStorage.setItem(KEY, JSON.stringify(p));
+}
+</script>
+
+</body>
+</html>

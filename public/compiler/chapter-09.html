@@ -1,0 +1,926 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第9章 机器无关优化 · 编译原理互动讲义</title>
+<link rel="stylesheet" href="/lectures-assets/style.css">
+</head>
+<body>
+
+<nav class="topbar">
+  <div class="topbar-inner">
+    <span class="brand"><a href="index.html" style="color:inherit">← 学习地图</a></span>
+    <span class="crumb">阶段③ · 后端与优化 / 第9章</span>
+  </div>
+</nav>
+
+<div class="wrap">
+
+  <div class="lecture-head">
+    <span class="ch-label">CHAPTER 09 · 后端与优化</span>
+    <h1>机器无关优化</h1>
+    <p class="lead">第8章把中间代码逐句翻成目标代码，翻得再漂亮，原稿里的浪费原封不动。本章回答：在翻译成机器码之前，怎样不动声色地把中间代码本身改得更省——而且一步都不许改变程序的语义。</p>
+  </div>
+
+  <!-- ===== 章首四件套之 1：全书定位 ===== -->
+  <div class="position-bar">
+    <strong>本章在主线上的位置：</strong>第8章给了代码生成（中间代码 → 目标代码）→ <u>本章在生成之前先优化中间代码本身</u> → 第10、11章因此能在更干净的代码上榨取硬件并行性。<br>
+    第9章回答主线上的第3个问题：<strong>不改变程序语义的前提下，如何让中间代码跑得更快？</strong>
+    <div class="map-inline">
+      <span class="node">① 前端：词法与语法 Ch1–4</span><span class="arrow">→</span>
+      <span class="node">② 语义与中间代码 Ch5–7</span><span class="arrow">→</span>
+      <span class="node here">③ 后端与优化 Ch8–11 ← 本章</span><span class="arrow">→</span>
+      <span class="node">④ 全书收束 Ch12</span>
+    </div>
+  </div>
+
+  <!-- ===== 章首四件套之 2：学习目标 ===== -->
+  <div class="objectives">
+    <h4>🎯 学完本章，合上书你应该能：</h4>
+    <ol>
+      <li>用首领规则把任意一段三地址码划分成基本块，并画出它的流图。</li>
+      <li>对给定基本块依次执行公共子表达式消除、复写传播、死代码消除，写出每一步的代码并说明语义为何不变。</li>
+      <li>说出循环不变式外提的前置条件，并对一条具体语句逐条检验。</li>
+      <li>对含 <span class="var">i*4</span> 寻址的 for 循环做强度削弱，写出变换前后的完整代码，并解释为什么之后可以删掉归纳变量。</li>
+      <li>对一个 4 块小流图列出 gen/kill 表，迭代计算到达定值的 IN/OUT 直到不动点。</li>
+      <li>解释保守原则「宁可不优化，不可改语义」，并举出一个分析结果过于保守而放弃优化的例子。</li>
+    </ol>
+  </div>
+
+  <div class="lecture">
+
+    <!-- ===== 章首四件套之 3：推导主线图 ===== -->
+    <div class="figure">
+      <div class="mermaid">
+flowchart TB
+  A["第8章：中间代码能翻成目标码"] --> B["问题：翻译之前，原稿本身够快吗"]
+  B --> C["第一步：切基本块，画流图"]
+  C --> D["块内优化：公共子表达式、复写传播、死代码"]
+  D --> E["循环优化：不变式外提、强度削弱"]
+  E --> F["凭什么保证语义没变：数据流分析"]
+  F --> G["到达定值与活跃变量，保守原则"]
+  G --> H["代价：优化顺序影响收益，过程内分析到顶"]
+  classDef hot fill:#fbeedd,stroke:#c4651f,stroke-width:2.5px,color:#c4651f;
+  classDef danger fill:#fae9e7,stroke:#b03a2e,stroke-width:2.5px,color:#b03a2e;
+  class D hot;
+  class E hot;
+  class H danger;
+      </div>
+      <div class="caption">本章推导主线：先给优化划地盘（流图），再小改（块内），再大改（循环），最后回答「凭什么敢改」（数据流分析），落到「分析的极限」——通向第10、11章。</div>
+    </div>
+
+    <!-- ============================================================
+      9.1 基本块与流图
+    ============================================================ -->
+    <h2><span class="sec-no">9.1</span>优化之前先划地盘：基本块与流图</h2>
+
+    <p>上一章结束时，我们手里是一段长长的三地址码序列。想优化它，第一个问题是：<strong>在多大的范围内优化？</strong>逐句看，看不到「这句算了两遍」；整段看，跳转让顺序乱成一团。编译器的做法是先把代码切成若干<span class="term">基本块</span>（Basic Block）：<strong>一段最长的不含跳转的直线代码</strong>——只能从第一句进入，从最后一句离开，中途不跳出也不跳入。</p>
+
+    <p>为什么基本块是优化的天然单位？因为块内控制流是平凡的：只要进了第一句，后面每句都必然执行、且只按书写顺序执行。于是块内可以放心地做公共子表达式消除、复写传播，不必担心「跳走」带来的意外。</p>
+
+    <p><strong>划分算法（首领规则）。</strong>先把每条「首领」语句找出来，首领到下一首领之前的全部语句就是一个基本块。三条规则：</p>
+
+    <ol>
+      <li>整个序列的<strong>第一条</strong>语句是首领；</li>
+      <li>任何<strong>跳转的目标</strong>语句是首领；</li>
+      <li>紧跟在<strong>跳转语句之后</strong>的那条语句是首领。</li>
+    </ol>
+
+    <p>本章用一个贯穿到底的示例程序。源代码（int 数组按 4 字节寻址，所以下标 <span class="var">i</span> 要乘 4 作偏移）：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>源代码</th><th>说明</th></tr>
+        <tr><td>for (i = 0; i &lt; n; i++)<br>&nbsp;&nbsp;a[i] = a[i] + b[i] * (x + 1);<br>v = x + 1;</td><td>x 是循环外读入的常数，循环内不改；循环结束后还要再算一次 x + 1（为全局公共子表达式埋下伏笔）</td></tr>
+      </table>
+    </div>
+
+    <p>它翻译出的原始三地址码如下。<strong>完整演示一遍首领规则</strong>（一步不跳）：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>编号</th><th>语句</th><th>是不是首领？依据哪条规则</th></tr>
+        <tr><td>(1)</td><td>i = 0</td><td>✅ 规则1：第一条</td></tr>
+        <tr><td>(2)</td><td>if i &gt;= n goto (15)</td><td>✅ 规则2：是 (14) 的 goto 目标</td></tr>
+        <tr><td>(3)</td><td>t1 = 4 * i</td><td>✅ 规则3：紧跟跳转 (2) 之后</td></tr>
+        <tr><td>(4)</td><td>t2 = a [ t1 ]</td><td>否</td></tr>
+        <tr><td>(5)</td><td>t3 = 4 * i</td><td>否</td></tr>
+        <tr><td>(6)</td><td>t4 = b [ t3 ]</td><td>否</td></tr>
+        <tr><td>(7)</td><td>t5 = x + 1</td><td>否</td></tr>
+        <tr><td>(8)</td><td>t6 = t4 * t5</td><td>否</td></tr>
+        <tr><td>(9)</td><td>t7 = t2 + t6</td><td>否</td></tr>
+        <tr><td>(10)</td><td>t8 = 4 * i</td><td>否</td></tr>
+        <tr><td>(11)</td><td>a [ t8 ] = t7</td><td>否</td></tr>
+        <tr><td>(12)</td><td>t9 = i + 1</td><td>否</td></tr>
+        <tr><td>(13)</td><td>i = t9</td><td>否</td></tr>
+        <tr><td>(14)</td><td>goto (2)</td><td>否（跳转语句本身不是首领，除非它同时是别的跳转的目标）</td></tr>
+        <tr><td>(15)</td><td>v = x + 1</td><td>✅ 规则2：是 (2) 的 goto 目标；也算规则3</td></tr>
+      </table>
+    </div>
+
+    <p>于是首领是 (1)、(2)、(3)、(15)，划出四个基本块：B1 = {(1)}，B2 = {(2)}，B3 = {(3)…(14)}，B4 = {(15)}。把每个块画成节点、块间可能的控制流画成边，得到<span class="term">流图</span>（Flow Graph）：</p>
+
+    <div class="figure">
+      <div class="mermaid">
+flowchart TB
+  B1["B1：i = 0"] --> B2["B2：if i >= n"]
+  B2 -->|"条件为假"| B3["B3：循环体 12 条语句"]
+  B3 -->|"回到循环头"| B2
+  B2 -->|"条件为真"| B4["B4：v = x + 1"]
+  classDef hot fill:#fbeedd,stroke:#c4651f,stroke-width:2.5px,color:#c4651f;
+  class B3 hot;
+      </div>
+      <div class="caption">图 9.1　示例程序的流图。注意看 B3 → B2 这条回边：它圈出的 {B2, B3} 就是循环，优化的主战场。</div>
+    </div>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>基本块是「控制流的原子」：块内直线到底，块间才有岔路。优化因此分两层——块内靠局部恒等变换，块间靠流图上的数据流分析。本章 9.2 只在 B3 里打转，9.3 起就要看图说话了。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>以为「基本块 = 一个语句序列里任意切一段」。错：首领规则求的是<strong>最长</strong>直线段——把 (4)…(14) 再切成两块并不违法，但会让块内优化看不全、白丢机会。反过来，把 (2) 并进 B1 就错了：别人能跳到 (2)，它必须独立成块。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 9.1-1</div>
+              <div class="q-text">首领规则的三条内容是什么？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              ① 第一条语句是首领；② 任何跳转的目标语句是首领；③ 紧跟在跳转语句之后的语句是首领。每个首领到下一首领之前构成一个基本块。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 9.1-2</div>
+              <div class="q-text">为什么说基本块是优化的天然单位？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              块内只能从首句进、末句出，控制流平凡：进了第一句，后面每句必按序执行。因此块内可安全做公共子表达式消除、复写传播等局部变换，不必担心中途跳走。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============================================================
+      9.2 块内三板斧
+    ============================================================ -->
+    <h2><span class="sec-no">9.2</span>块内的三板斧：公共子表达式、复写传播、死代码</h2>
+
+    <p>9.1 把地盘划好了，主战场是 B3 的 12 条语句。先不碰循环结构，只在块内做三件最安全的事。盯着原始代码看三秒钟就能发现浪费：<strong>(3)、(5)、(10) 三条都在算 4 * i</strong>。</p>
+
+    <p><strong>第一板斧：<span class="term">公共子表达式消除</span>（Common Subexpression Elimination）。</strong>若表达式 E 在前面已经算过，且从那时到现在 E 的运算分量都没被重新定值，那么再算一遍纯属浪费——直接用上次的结果。在 B3 内扫描：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>步骤</th><th>发现</th><th>动作</th><th>为什么语义不变</th></tr>
+        <tr><td>1</td><td>(5) t3 = 4 * i 与 (3) t1 = 4 * i 相同；从 (3) 到 (5) 之间 i 没有被改</td><td>删 (5)，把 (6) 里的 t3 换成 t1</td><td>(5) 处 i 的值与 (3) 处相同，所以 4*i 的值相同；t3 与 t1 此后处处等价</td></tr>
+        <tr><td>2</td><td>(10) t8 = 4 * i 同理，(3) 到 (10) 之间 i 未被改</td><td>删 (10)，把 (11) 里的 t8 换成 t1</td><td>同上：同一个 i，同一个乘积</td></tr>
+      </table>
+    </div>
+
+    <p>这是<strong>局部</strong>公共子表达式消除（只看一个块内）。变换后 B3：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>优化前（原始 B3）</th><th>公共子表达式消除后</th></tr>
+        <tr><td>t1 = 4 * i<br>t2 = a [ t1 ]<br><del>t3 = 4 * i</del><br>t4 = b [ t3 ]<br>t5 = x + 1<br>t6 = t4 * t5<br>t7 = t2 + t6<br><del>t8 = 4 * i</del><br>a [ t8 ] = t7<br>t9 = i + 1<br>i = t9<br>goto (2)</td><td>t1 = 4 * i<br>t2 = a [ t1 ]<br>t4 = b [ t1 ]<br>t5 = x + 1<br>t6 = t4 * t5<br>t7 = t2 + t6<br>a [ t1 ] = t7<br>t9 = i + 1<br>i = t9<br>goto (2)</td></tr>
+      </table>
+    </div>
+
+    <p><strong>第二板斧：<span class="term">复写传播</span>（Copy Propagation）。</strong>形如 x = y 的复写语句之后，凡是能用 y 的地方尽量用 y，让 x 的引用消失。看末尾两句：<span class="var">t9 = i + 1; i = t9</span>。第二句是复写，它说「i 现在的值就是 t9」，而 t9 除了这一句再无别的用处——干脆把定值直接写给 i：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>变换前</th><th>变换后</th><th>为什么语义不变</th></tr>
+        <tr><td>t9 = i + 1<br>i = t9</td><td>i = i + 1</td><td>原来 i 得到的值就是 i + 1；t9 此后无人再读（离开本块也不活跃），抹去它不影响任何可观察结果</td></tr>
+      </table>
+    </div>
+
+    <p><strong>第三板斧：<span class="term">死代码消除</span>（Dead Code Elimination）。</strong>定值之后再也不被使用的语句就是死代码，删掉。上一步里 t9 的定值已随复写传播一起消失；判定「死活」的标准是<strong>活跃性</strong>——离开这条语句时变量还会不会被读。三板斧之后 B3 从 12 条瘦到 10 条，而且两条乘法、两次访存的方向已经清清楚楚。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>三板斧的共同套路：<strong>先找一个「两处必相等」的事实，再把其中一处换掉，最后删掉变空的语句</strong>。公共子表达式靠「运算分量没变」，复写传播靠「x 就是 y」，死代码靠「没人再读」——每个变换背后都站着一个「为什么相等」的理由，这个理由在 9.5 会被数据流分析严格化。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>以为「两个表达式字面相同就能消」。错：还必须确认从上次计算到这次使用之间，<strong>所有运算分量都没有被重新定值</strong>。若 (5) 和 (3) 之间插了一句 i = i + 1，两个 4 * i 字面相同、值却不同，消掉就改语义了。块内靠眼睛能查，跨块就必须靠到达定值分析（9.5）。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 9.2-1</div>
+              <div class="q-text">公共子表达式消除要检查什么条件，才敢把第二次计算换成第一次的结果？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              从第一次计算到第二次出现之间，表达式的所有运算分量都没有被重新定值。满足时两次的值必相等，替换不改变语义。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 9.2-2</div>
+              <div class="q-text">复写传播和死代码消除为什么总是结伴出现？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              复写传播把 x = y 之后的 x 引用都换成 y，往往使 x 的定值语句（或 y 的临时定值）无人再读，变成死代码；死代码消除负责收尾删除。一个制造垃圾，一个倒垃圾。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============================================================
+      9.3 循环优化：外提与全局 CSE
+    ============================================================ -->
+    <h2><span class="sec-no">9.3</span>循环里的钱最好赚：不变式外提与全局公共子表达式</h2>
+
+    <p>块内的便宜捡完了。但真正的浪费在循环里：一句代码若被循环执行 n 次，把它从循环里拿出去一次，就省下 n − 1 次。9.2 后的循环体里有一条可疑语句：<strong>t5 = x + 1</strong>——x 在循环里从不改变，1 是常量，每次迭代却都重算一遍。</p>
+
+    <p>这就是<span class="term">循环不变式</span>（Loop-Invariant）：运算分量在循环内都不改变的表达式。把它搬到循环之前只算一次，叫<span class="term">循环不变式外提</span>（Loop-Invariant Code Motion），落脚的块叫<strong>前头块</strong>（Preheader），插在循环入口之前。</p>
+
+    <p>但不是所有不变式都能提。外提前必须逐条检验<strong>前置条件</strong>（龙书给出的充分条件）：</p>
+
+    <ol>
+      <li>被提语句所在的基本块<strong>支配</strong>循环的所有出口，或者被定值的变量离开循环后不再活跃（本例 t5 在 B4 无人使用，满足后者）；</li>
+      <li>循环中该变量<strong>只有这一条定值</strong>（t5 只在 (7) 定值一次 ✓）；</li>
+      <li>循环中对它运算分量的使用，其到达定值不能来自循环内这条语句之外的其他循环内定值（x 在循环内根本没有定值 ✓）。</li>
+    </ol>
+
+    <p>三条全过，外提安全。B1 变为 i = 0; t5 = x + 1，循环体里删掉 (7)。</p>
+
+    <p><strong>顺便收获一次全局公共子表达式消除。</strong>看 B4 的 (15) v = x + 1：它与外提到 B1 的 t5 = x + 1 字面相同。这次跨越了基本块，条件更严——需要确认从 B1 到 B4 的任何路径上 x 都没被重定值（查流图：x 只在程序开头定值 ✓），且 B1 支配 B4（所有到 B4 的路都经过 B1 ✓）。于是 (15) 改成 v = t5。<strong>反例对照</strong>：假如 B4 里有一句 w = a[i]，需要算 4 * i——它和 B3 里的 t1 = 4 * i 字面相同，<strong>却不能消</strong>：B3 里算 t1 时的 i 是循环内的值，到达 B4 的 i 已是 n，两次计算的运算分量来自不同定值。这就是全局消除必须查「到达定值」的原因。</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>外提前</th><th>外提 + 全局公共子表达式消除后</th></tr>
+        <tr><td>B1: i = 0<br>B2: if i &gt;= n goto B4<br>B3: … <strong>t5 = x + 1</strong>（每次迭代都算）…<br>B4: <strong>v = x + 1</strong></td><td>B1: i = 0<br>&nbsp;&nbsp;&nbsp;<strong>t5 = x + 1</strong>（只算一次）<br>B2: if i &gt;= n goto B4<br>B3: …（不再算 t5）…<br>B4: <strong>v = t5</strong></td></tr>
+      </table>
+    </div>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>循环优化的本质是把「每次迭代都付的钱」改成「进循环前付一次」。外提对付不变式，强度削弱（9.4）对付归纳变量——一个是把计算搬走，一个是把计算变便宜。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>以为「不变式无脑外提总是安全」。反例：若循环体在某条路径上可能一次都不执行，而提出的语句可能出错（如除以零、数组越界）或改变被读的值，外提就会让本来不执行的语句强制执行。前置条件里的「支配所有出口或不活跃」正是在防这类事故。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 9.3-1</div>
+              <div class="q-text">循环不变式外提的三条前置条件各是什么？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              ① 所在块支配循环所有出口，或被定值变量离开循环后不活跃；② 该变量在循环中只有这一条定值；③ 循环内对其运算分量的使用不由循环内其他定值到达。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 9.3-2</div>
+              <div class="q-text">全局公共子表达式消除比局部的多查了哪两件事？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              ① 上次计算的块要支配本次使用的块（所有路径都经过它）；② 两次之间运算分量的到达定值必须相同（不能中途被重定值）。跨块时这两条只能依赖数据流分析确认。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============================================================
+      9.4 强度削弱
+    ============================================================ -->
+    <h2><span class="sec-no">9.4</span>把乘法变加法：归纳变量与强度削弱</h2>
+
+    <p>循环体里还剩一条乘法每次迭代都算：t1 = 4 * i。它和不变式不同——值确实每次都变，但变得<strong>极有规律</strong>：i 每次加 1，4 * i 就每次加 4。</p>
+
+    <p>形如「每次迭代增加同一个常量」的变量叫<span class="term">归纳变量</span>（Induction Variable）：i 是基本归纳变量，t1 = 4 * i 属于 i 的归纳变量族（线性函数 4i + 0）。<span class="term">强度削弱</span>（Strength Reduction）把乘法换成加法：引进新变量跟踪 4 * i，进循环前初始化，每次迭代加 4。</p>
+
+    <p><strong>完整推导（一步不跳）。</strong>设新变量仍叫 t1：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>步骤</th><th>动作</th><th>依据</th></tr>
+        <tr><td>1</td><td>前头块加初始化：t1 = 4 * 0 = 0（一般形式 t1 = 4 * i₀，i₀ 是 i 的初值）</td><td>进循环时 i = 0，t1 应等于 4·i = 0</td></tr>
+        <tr><td>2</td><td>循环体里 t1 = 4 * i 改为直接使用 t1 的当前值</td><td>维护不变式「t1 ≡ 4·i」</td></tr>
+        <tr><td>3</td><td>在 i = i + 1 之后补一句 t1 = t1 + 4</td><td>i 增 1 ⟹ 4·i 增 4，加法跟上</td></tr>
+        <tr><td>4</td><td>复写传播与死代码消除收尾</td><td>中间引入的临时名被清掉</td></tr>
+      </table>
+    </div>
+
+    <p><strong>还能再进一步：归纳变量消除。</strong>削弱之后，i 在循环体里只剩两个用处：判断 if i &gt;= n 和自我递增 i = i + 1。判断可以改写到 t1 身上：i &gt;= n ⟺ 4·i &gt;= 4·n ⟺ t1 &gt;= n4（前头块预计算 n4 = 4 * n）。于是 i 整个变成死代码，删掉 i = 0 与 i = i + 1。最终全章示例的优化终点：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>块</th><th>优化后代码</th><th>说明</th></tr>
+        <tr><td>B1（前头块）</td><td>t5 = x + 1<br>n4 = 4 * n<br>t1 = 0</td><td>不变式外提 + 强度削弱初始化，都只算一次</td></tr>
+        <tr><td>B2</td><td>if t1 &gt;= n4 goto B4</td><td>归纳变量消除后的循环判断</td></tr>
+        <tr><td>B3</td><td>t2 = a [ t1 ]<br>t4 = b [ t1 ]<br>t6 = t4 * t5<br>t7 = t2 + t6<br>a [ t1 ] = t7<br>t1 = t1 + 4<br>goto B2</td><td>循环体 7 条：0 次 i*4 乘法，只剩 1 次乘法（t4 * t5，那是业务本身）</td></tr>
+        <tr><td>B4</td><td>v = t5</td><td>全局公共子表达式消除的收获</td></tr>
+      </table>
+    </div>
+
+    <p>对比账：原始循环体 12 条语句、每次迭代 2 次乘法（4*i 与 t4*t5）；现在 7 条、1 次乘法。n = 1000 时省下约 5000 条中间指令和 1000 次乘法。<strong>语义为什么不变</strong>：每一步都只替换了「必相等」的值——4·i 与 t1 在每轮迭代开始时相等（归纳不变式，可对迭代次数做数学归纳证明），i &gt;= n 与 t1 &gt;= 4n 在 i ≥ 0 时等价。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>强度削弱把「位置相关的贵运算」换成「增量相关的便宜运算」：乘法换加法只是一档，同思路还能把幂运算换乘法、把数组寻址换指针自增。识别前提是变量随循环<strong>线性</strong>变化——这正是数据流分析能自动发现的事实。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>以为「见到循环里的乘法就削」。两个坑：① 若乘数不是归纳变量而是每次随机变化，没有增量规律可循，削弱无从谈起；② 归纳变量消除改写循环判断时，若步长或初值为负、或循环可能溢出，t1 &gt;= 4n 与 i &gt;= n 的等价性会被破坏——优化器必须先确认符号与范围，否则宁可不削。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 9.4-1</div>
+              <div class="q-text">什么是归纳变量？强度削弱对它做什么？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              归纳变量：每次迭代都增减同一常量的变量（及其线性函数族）。强度削弱：用「进循环前初始化 + 每次迭代加一个常量」的加法序列，替换掉对它的乘法计算。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 9.4-2</div>
+              <div class="q-text">强度削弱之后为什么往往能把 i 本身也删掉？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              削弱后 i 只剩循环判断和自增两个用处；把判断改写到族内变量上（i &gt;= n ⟺ t1 &gt;= 4n），i 就再无读者，其定值成为死代码，可一并消除。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============================================================
+      9.5 数据流分析
+    ============================================================ -->
+    <h2><span class="sec-no">9.5</span>凭什么敢改：数据流分析与保守原则</h2>
+
+    <p>前面每条优化后面都跟着一句「为什么语义不变」，理由全是「某个值到这里一定还等于那个值」。这种事实不能靠眼睛瞄，要靠一套系统在流图上算出来——<span class="term">数据流分析</span>（Data-Flow Analysis）。它的典型代表是<span class="term">到达定值</span>（Reaching Definitions）：问「变量 x 的哪些定值，可能沿着某条路径到达这个点」。</p>
+
+    <p>为每个基本块 B 定义两个集合：<span class="term">gen</span>[B]（B 内生成、且块尾仍有效的定值）与 <span class="term">kill</span>[B]（B 内对同一变量的重定值，把别处的定值杀掉）。然后解<strong>前向</strong>方程组：</p>
+
+    <div class="formula">IN[B] = ⋃<sub>P 是 B 的前驱</sub> OUT[P]　　OUT[B] = gen[B] ∪ ( IN[B] − kill[B] )</div>
+
+    <p><strong>完整手算例。</strong>取一个简化小流图（变量只有 i 和 s，共 4 条定值）：</p>
+
+    <div class="figure">
+      <div class="mermaid">
+flowchart TB
+  B1["B1：d1 i = 0；d2 s = 0"] --> B2["B2：循环头判断"]
+  B2 --> B3["B3：d3 s = s + t2；d4 i = i + 1"]
+  B3 --> B2
+  B2 --> B4["B4：出口"]
+  classDef hot fill:#fbeedd,stroke:#c4651f,stroke-width:2.5px,color:#c4651f;
+  class B2 hot;
+      </div>
+      <div class="caption">图 9.2　到达定值手算用的小流图。B2 有两个前驱（B1 与 B3），正是「并」发生的地方。</div>
+    </div>
+
+    <p>先算 gen/kill（d1 定 i、d2 定 s、d3 定 s、d4 定 i；同变量的定值互相杀）：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>块</th><th>gen（本块生成且活到块尾的定值）</th><th>kill（本块杀掉的别处定值）</th></tr>
+        <tr><td>B1</td><td>{d1, d2}</td><td>{d3, d4}（B3 里对 s、i 的定值全被杀）</td></tr>
+        <tr><td>B2</td><td>∅（判断语句不定值）</td><td>∅</td></tr>
+        <tr><td>B3</td><td>{d3, d4}</td><td>{d1, d2}</td></tr>
+        <tr><td>B4</td><td>∅</td><td>∅</td></tr>
+      </table>
+    </div>
+
+    <p>初始：所有 IN/OUT 为 ∅。按 B1 → B2 → B3 → B4 的顺序迭代，<strong>第一轮</strong>：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>块</th><th>IN = 各前驱 OUT 之并</th><th>OUT = gen ∪ (IN − kill)</th></tr>
+        <tr><td>B1</td><td>∅（无前驱）</td><td>{d1,d2} ∪ (∅ − {d3,d4}) = <strong>{d1,d2}</strong></td></tr>
+        <tr><td>B2</td><td>OUT[B1] ∪ OUT[B3] = {d1,d2} ∪ ∅ = <strong>{d1,d2}</strong></td><td>∅ ∪ ({d1,d2} − ∅) = <strong>{d1,d2}</strong></td></tr>
+        <tr><td>B3</td><td>OUT[B2] = <strong>{d1,d2}</strong></td><td>{d3,d4} ∪ ({d1,d2} − {d1,d2}) = <strong>{d3,d4}</strong></td></tr>
+        <tr><td>B4</td><td>OUT[B2] = <strong>{d1,d2}</strong></td><td><strong>{d1,d2}</strong></td></tr>
+      </table>
+    </div>
+
+    <p><strong>第二轮</strong>（第一轮的 OUT 反馈回来，回边 B3 → B2 开始起作用）：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>块</th><th>IN</th><th>OUT</th><th>相比上轮</th></tr>
+        <tr><td>B1</td><td>∅</td><td>{d1,d2}</td><td>不变</td></tr>
+        <tr><td>B2</td><td>{d1,d2} ∪ {d3,d4} = <strong>{d1,d2,d3,d4}</strong></td><td>{d1,d2,d3,d4}</td><td>✱ 变了：回边把 B3 的定值带回循环头</td></tr>
+        <tr><td>B3</td><td>{d1,d2,d3,d4}</td><td>{d3,d4} ∪ ({d1,d2,d3,d4} − {d1,d2}) = {d3,d4}</td><td>OUT 不变</td></tr>
+        <tr><td>B4</td><td>{d1,d2,d3,d4}</td><td>{d1,d2,d3,d4}</td><td>✱ 变了</td></tr>
+      </table>
+    </div>
+
+    <p>第三轮各集合不再变化——到达<strong>不动点</strong>，迭代结束。读法示例：B2 入口处的 i 可能来自 d1（首次进循环）也可能来自 d4（上一圈迭代），两者都「到达」——所以 9.3 说「B3 里算 t1 时的 i 与 B4 处的 i 不是同一回事」，凭据就在这里。</p>
+
+    <p><strong><span class="term">活跃变量分析</span>（Live-Variable Analysis）简述：</strong>方向相反（后向），方程是 IN[B] = use[B] ∪ ( OUT[B] − def[B] )，OUT[B] 取各后继 IN 之并；回答「离开这点后变量还会不会被读」。9.2 删 t9、9.4 删 i，判活的都是它。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>所有数据流分析都是同一个模子：给每块定 gen/kill（或 use/def）局部事实，沿流图边反复「并/交 + 传递」直到不动点。方向（前向/后向）、汇合运算（并=可能，交=必然）、传递函数三选一组合，就得到到达定值、活跃变量、可用表达式等不同分析。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>以为「分析算不出 = 可以优化」。恰恰相反，全章奉行<strong>保守原则</strong>：宁可不优化，不可改语义。分析只能回答「必然成立」的事实；凡是不能证明安全的变换，一律不做。指针别名、数组下标越界都可能让分析给出「也许被改」的答案，优化器就只能收手——这不是无能，是底线。由此也引出本章的两个遗留问题：① 先做哪个优化收益不同（阶段排序问题）；② 过程内分析看不到函数调用彼岸，极限已至——过程间分析与硬件级并行，交给第10、11章。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 9.5-1</div>
+              <div class="q-text">默写到达定值的 IN/OUT 方程，并说明迭代何时停止。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              IN[B] = ⋃ 前驱 OUT[P]；OUT[B] = gen[B] ∪ (IN[B] − kill[B])。从全 ∅ 起反复代入，直到一整轮没有任何集合变化（不动点）即停。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 9.5-2</div>
+              <div class="q-text">活跃变量分析与到达定值在方向和汇合运算上有何不同？各服务什么优化？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              活跃变量：后向（IN 由 OUT 算），汇合用并（任一后继要用就算活跃），服务死代码消除与寄存器分配。到达定值：前向（OUT 由 IN 算），汇合用并（任一路径可达即算），服务常量/复写传播与公共子表达式判定。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============================================================
+      概念卡
+    ============================================================ -->
+    <h2><span class="sec-no">🃏</span>概念卡：本章概念的一分钟画像</h2>
+    <p>翻面前先自问：这个概念我能用一句话讲清楚吗？</p>
+    <div class="flip-grid">
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 1</div>
+            <div class="q-text">基本块（Basic Block）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">只能从首句进入、末句离开的最长直线三地址码序列。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">给优化划定「控制流平凡」的安全操作范围。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">像一段没有出口匝道的直高速公路。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为跳转语句自动开新块——开新块的是「跳转目标」和「跳转之后那条」。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">一切局部优化、第10章基本块调度的操作对象。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 2</div>
+            <div class="q-text">流图（Flow Graph）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">以基本块为节点、块间可能控制流为边的有向图。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">让「循环、分支、汇合」变成可计算的图结构。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">程序的地铁线路图，回边圈出的环就是循环。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">把流图当执行顺序——它只画「可能怎么走」，不画「实际走哪条」。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">数据流分析、循环识别、第11章并行性分析都建在流图上。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 3</div>
+            <div class="q-text">公共子表达式消除（CSE）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">表达式已算过且运算分量未被重定值时，用旧结果替换重复计算。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">消去源程序与地址计算中大量重复求值。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">算过的账抄答案，前提是题目没换。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">只看字面相同就消，漏查「运算分量中途被改」。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">局部（块内）与全局（跨块，需可用表达式分析）两档。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 4</div>
+            <div class="q-text">复写传播（Copy Propagation）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">复写语句 x = y 之后，用 y 替换 x 的后续引用。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">消去中间代码生成器制造的大量过渡变量。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">传话游戏只传一手，删掉中间人。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">忘了 y 也可能中途被重定值，那时不能替。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">几乎每轮优化之后跑一遍，为死代码消除制造素材。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 5</div>
+            <div class="q-text">循环不变式外提（LICM）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">把运算分量在循环内不变的计算移到前头块只算一次。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">循环把任何浪费放大 n 倍，不变式是最肥的那块肉。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">每天上班前买一次的咖啡，不用每层楼都买。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">忽略前置条件无脑外提，可能引入本不执行的异常或错误值。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">识别出循环之后第一批做的优化之一。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 6</div>
+            <div class="q-text">强度削弱（Strength Reduction）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">把循环内对归纳变量的贵运算换成等价的廉价增量运算（乘换加）。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">数组寻址的 i*4 类乘法在循环里每次都算，太贵。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">爬楼梯不数「第几层×台阶数」，每上一层迈固定步数。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">非线性变化（如 i*i）没有固定增量，削不动。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">识别归纳变量之后；常与归纳变量消除连做。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 7</div>
+            <div class="q-text">到达定值（Reaching Definitions）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">前向数据流分析：计算可能到达每点的变量定值集合。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">回答「这处使用的值是谁定的」，是一切「必相等」论证的依据。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">每条使用边上贴着一张「来源清单」。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">把「可能到达」当「唯一来源」——汇合是并集，清单越长越不敢动。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">常量传播、复写传播、循环不变式与归纳变量识别都靠它。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 8</div>
+            <div class="q-text">活跃变量（Live Variable）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">后向数据流分析：变量在某点之后是否还会被读。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">判定一条定值语句是不是死代码。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">问「之后还有人找你吗」，没人找就可以退场。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">与到达定值方向记反：活跃从后往前传，到达定值从前往后传。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">死代码消除；第8章寄存器分配的活跃区间也由此来。</span></div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- ============================================================
+      分层习题
+    ============================================================ -->
+    <h2><span class="sec-no">📝</span>分层习题</h2>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>判断并说明理由：「只要两段代码算出的结果相同，优化器就可以把其中一段换成另一段。」</div>
+      <details>
+        <summary>提示</summary>
+        <p>想想「结果相同」是只指这一条语句的输出，还是包括之后所有可观察的行为？副作用和活跃性扮演什么角色？</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">错误。「结果相同」只是必要条件之一，远非充分：① 被替换的语句可能有副作用（数组存储、函数调用、可能的异常如除零），换顺序或删掉会改变可观察行为；② 替换后变量的活跃性可能改变，波及后续的寄存器分配与死代码判定；③ 「相同」必须在当前上下文中可证明——这正是数据流分析的工作，不能证明时按保守原则不许换。所以正确说法是：只有在能证明语义等价（含副作用与活跃性）时才可以替换。</div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>下列关于基本块首领的说法，哪一个是错的？A. 第一条语句是首领；B. 跳转的目标是首领；C. 跳转语句本身一定是首领；D. 紧跟跳转之后的语句是首领。</div>
+      <details>
+        <summary>提示</summary>
+        <p>逐条对照首领三规则，注意「一定」两个字。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">C 错。首领三规则是：第一条、跳转目标、跳转之后那条。跳转语句<strong>本身</strong>不是天然首领——它只有当恰好是别的跳转的目标（或第一条）时才是首领。例如本章 B3 里的 (14) goto (2) 就只是块尾而非首领。A、B、D 正是三规则原文。</div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>对下面三地址码用首领规则划分基本块并画出流图：<br>(1) a = 1　(2) b = 2　(3) if a &lt; b goto (7)　(4) c = a + b　(5) b = c　(6) goto (8)　(7) c = a − b　(8) d = c</div>
+      <details>
+        <summary>提示</summary>
+        <p>先标首领（规则 1/2/3 逐条过一遍 8 条语句），再切块，最后按跳转关系连边。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">标首领：(1) 规则1 ✓；(2) 否；(3) 否（不是跳转目标，也不紧跟跳转）；(4) 规则3 ✓（紧跟 (3)）；(5) 否；(6) 否；(7) 规则2 ✓（(3) 的目标）；(8) 规则2 ✓（(6) 的目标）且规则3 ✓。<br>切块：B1={(1)(2)(3)}，B2={(4)(5)(6)}，B3={(7)}，B4={(8)}。<br>流图：B1 → B2（条件为假顺序落）与 B1 → B3（goto (7)）；B2 → B4（goto (8)）；B3 → B4（顺序落入 (8)）。B4 是唯一汇点。</div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>对本章图 9.2 的小流图，若 B3 改为 d3: s = s + t2；d5: i = d4 的值减半（即 d5 也定值 i），重新列出 gen/kill 表并给出第一轮 IN/OUT。</div>
+      <details>
+        <summary>提示</summary>
+        <p>新增的 d5 定值 i：它会进 B3 的 gen 吗？会被谁杀？i 的定值现在有 d1、d4、d5 三条。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">gen/kill：B1 不变 gen={d1,d2}、kill={d3,d4,d5}；B2 空；B3 内 d4 定 i 后又被 d5 重定，故活到块尾的只有 {d3, d5}，kill={d1,d2,d4}（d5 杀 d4 与 d1，d3 杀 d2）；B4 空。<br>第一轮：B1：IN=∅，OUT={d1,d2}。B2：IN={d1,d2}∪∅={d1,d2}，OUT={d1,d2}。B3：IN={d1,d2}，OUT={d3,d5} ∪ ({d1,d2} − {d1,d2,d4}) = {d3,d5}。B4：IN={d1,d2}，OUT={d1,d2}。第二轮 B2 的 IN 会并入 {d3,d5} 变为 {d1,d2,d3,d5}（d4 永远到不了循环头——它在块内就被 d5 杀了）。</div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l3">L3 建模应用</span>给定函数：for (i = 0; i &lt; 100; i++) a[i] = a[i] + b[i] * c;（c 为循环外常量）。写出原始三地址码，依次执行局部公共子表达式消除、循环不变式识别、强度削弱与归纳变量消除，给出每一步的完整代码，并统计循环体条数与每次迭代乘法次数的变化。</div>
+      <details>
+        <summary>提示</summary>
+        <p>仿照本章主线示例：b[i] 与 a[i] 各自产生一次 4*i；c 是不变量但注意 b[i]*c 里 b[i] 每次变，整条不是不变式；归纳变量是 i 与 4*i。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">原始循环体（B3）：t1=4*i；t2=a[t1]；t3=4*i；t4=b[t3]；t5=t4*c；t6=t2+t5；t7=4*i；a[t7]=t6；t9=i+1；i=t9；goto B2，共 11 条、每次迭代 2 次乘法（4*i 与 t4*c）。<br>① 局部 CSE：删 t3、t7，统一用 t1 → 9 条。② 复写传播+死代码：t9=i+1；i=t9 合并为 i=i+1 → 8 条。③ 不变式识别：c 不变但没有整条可外提（t4 每轮变），本例跳过（或把地址 c 的加载外提）。④ 强度削弱：前头块 t1=0，循环尾 t1=t1+4；⑤ 归纳变量消除：判断改写为 if t1 &gt;= 400 goto B4，删 i=0 与 i=i+1。<br>最终循环体 6 条：t2=a[t1]；t4=b[t1]；t5=t4*c；t6=t2+t5；a[t1]=t6；t1=t1+4。每次迭代乘法 1 次（只剩业务的 t4*c），循环体从 11 条减到 6 条，100 次迭代省约 500 条指令、100 次乘法。</div>
+      </details>
+    </div>
+
+    <!-- ============================================================
+      自测
+    ============================================================ -->
+    <h2><span class="sec-no">✍️</span>本章自测</h2>
+    <p class="quiz-hint">点击选项判分，答错会给出原因。</p>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 1</div>
+      <div class="q-stem">三地址码序列中，下列哪条语句<strong>不一定</strong>是基本块首领？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 整个序列的第一条语句</li>
+        <li data-opt="b">B. 一条无条件 goto 语句本身</li>
+        <li data-opt="c">C. 某个 goto 的目标语句</li>
+        <li data-opt="d">D. 紧跟在条件跳转之后的语句</li>
+      </ul>
+      <div class="quiz-explain">B 对：跳转语句本身不在首领三规则之列，除非它同时是别人的跳转目标。A 是规则1，C 是规则2，D 是规则3，三者必然为首领。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="c">
+      <div class="q-no">自测 2</div>
+      <div class="q-stem">块内两次出现 x + y，要把第二次换成第一次的结果，必须核实什么？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 两次书写完全相同即可</li>
+        <li data-opt="b">B. 两次之间没有任何其他语句</li>
+        <li data-opt="c">C. 两次之间 x 与 y 都没有被重新定值</li>
+        <li data-opt="d">D. x + y 的结果之后一定会被用到</li>
+      </ul>
+      <div class="quiz-explain">C 对：语义等价的关键是运算分量没变。A 错：字面相同但中途 x 被改则值不同；B 错：中间可以有别的语句，只要不碰 x、y；D 错：是否被用到是死代码问题，与消除本身的正确性无关。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="d">
+      <div class="q-no">自测 3</div>
+      <div class="q-stem">关于循环不变式外提，下列哪条<strong>不是</strong>前置条件？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 被提语句所在块支配循环所有出口（或变量离开后不活跃）</li>
+        <li data-opt="b">B. 被定值变量在循环中只有这一条定值</li>
+        <li data-opt="c">C. 循环内对运算分量的使用不能来自其他循环内定值</li>
+        <li data-opt="d">D. 被提语句必须是循环体内的第一条语句</li>
+      </ul>
+      <div class="quiz-explain">D 对（即它不属于前置条件）：外提与语句在循环体内的位置无关。A、B、C 正是龙书给出的三条充分条件，缺一不可（或满足 A 的等价豁免）。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="a">
+      <div class="q-no">自测 4</div>
+      <div class="q-stem">对 t = 4 * i（i 每轮加 1）做强度削弱后，为什么常能连 i 一起删掉？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 循环判断可等价改写到 t 身上（i &gt;= n ⟺ t &gt;= 4n），i 再无读者成死代码</li>
+        <li data-opt="b">B. i 是局部变量，优化器一律删除</li>
+        <li data-opt="c">C. 加法比加法快，所以 i 没用了</li>
+        <li data-opt="d">D. 因为 t 和 i 存在同一个寄存器里</li>
+      </ul>
+      <div class="quiz-explain">A 对：削弱后 i 只剩判断与自增，判断改写后 i 的定值变死代码。B 错：局部变量与能否删除无关，出循环后仍被读的 i 不能删。C 错：不构成逻辑。D 错：寄存器分配是第8章的事，与此处中间代码层的消除无关。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 5</div>
+      <div class="q-stem">到达定值分析在某点给出「x 的定值可能来自 d1 或 d4」。优化器据此应当？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 任选一个当作唯一定值做常量传播</li>
+        <li data-opt="b">B. 放弃把 x 当常量传播，因为来源不唯一</li>
+        <li data-opt="c">C. 报错，说明程序有未初始化变量</li>
+        <li data-opt="d">D. 把 d1 和 d4 合并成一条定值</li>
+      </ul>
+      <div class="quiz-explain">B 对：汇合是「并」，来源不唯一就无法确定 x 的值，按保守原则放弃相关优化。A 错：任选可能选错，直接改语义；C 错：多来源是静态分析的常态（如循环回边），不是程序错误；D 错：定值在不同路径上，合并是无中生有。</div>
+    </div>
+
+    <!-- ============================================================
+      三句话复述
+    ============================================================ -->
+    <div class="retell">
+      <h3>🗣️ 用自己的话，三句话讲完本章</h3>
+      <p>对着空气（或室友）说出这三句。说卡壳的那句，回去重读对应小节。</p>
+      <details>
+        <summary>句1：这章解决什么问题？——</summary>
+        <div class="retell-answer">参考答案：不改变程序语义的前提下，让中间代码跑得更快——把翻译前就存在的重复计算、无效语句和循环内浪费，系统地找出来并消掉。</div>
+      </details>
+      <details>
+        <summary>句2：核心机制是什么？——</summary>
+        <div class="retell-answer">参考答案：先把代码切成基本块连成流图；块内做公共子表达式消除、复写传播、死代码消除，循环里做不变式外提与强度削弱；每一步「敢改」的凭据都来自数据流分析（到达定值、活跃变量），拿不准就按保守原则不动。</div>
+      </details>
+      <details>
+        <summary>句3：它和前后章怎么分工？——</summary>
+        <div class="retell-answer">参考答案：第8章负责「翻成目标码」，本章负责「翻译前先瘦身」，两者常交替进行；本章的极限是过程内、顺序语义的优化，单条指令怎么排、多核怎么用，交给第10章指令级并行与第11章并行性与局部性。</div>
+      </details>
+    </div>
+
+    <!-- ============================================================
+      间隔复习计划
+    ============================================================ -->
+    <div class="review-plan">
+      <h3>🔁 间隔复习计划</h3>
+      <p>回忆本身比重读有效 10 倍。到点只做一件事：翻卡 + 重做标记题。</p>
+      <table>
+        <tr><th>时间点</th><th>复习内容</th><th>预计用时</th></tr>
+        <tr><td>第 1 天</td><td>概念卡 1–8 全部 + 回忆 9.1-1、9.3-1、9.5-1</td><td>10 分钟</td></tr>
+        <tr><td>第 3 天</td><td>概念卡 3、5、6、7（优化变换与分析是易混点）+ 回忆 9.2-1、9.4-1 + 自测错题</td><td>8 分钟</td></tr>
+        <tr><td>第 7 天</td><td>重做习题 L2-1（划基本块）与 L2-2（gen/kill 迭代）+ 三句话复述</td><td>12 分钟</td></tr>
+        <tr><td>第 15 天</td><td>只做合上书挑战；6 条全过即本章毕业，卡在哪条回翻哪节</td><td>15 分钟</td></tr>
+      </table>
+    </div>
+
+    <!-- ============================================================
+      合上书挑战
+    ============================================================ -->
+    <div class="final-challenge">
+      <h3>📕 合上书挑战</h3>
+      <p class="fc-sub">现在关掉这个页面，拿一张纸，凭记忆完成以下任务。全部做完再回来核对——这是本章真正的毕业考试。</p>
+      <ol id="challenge-list">
+        <li><span class="fc-check"></span>默写首领三规则，并对一段含两个 goto 的 8 句三地址码划分基本块。</li>
+        <li><span class="fc-check"></span>默写本章示例程序优化前 B3 的 12 条语句，并依次演示局部公共子表达式消除、复写传播、死代码消除三步。</li>
+        <li><span class="fc-check"></span>写出循环不变式外提的三条前置条件，并各举一个违反它就不能提的情形。</li>
+        <li><span class="fc-check"></span>对 for (i=0;i&lt;n;i++) 里的 t = 4*i 完整做强度削弱与归纳变量消除，写出最终循环体。</li>
+        <li><span class="fc-check"></span>默写到达定值的 IN/OUT 方程，并对图 9.2 的小流图手算到不动点（写出 gen/kill 表与两轮迭代）。</li>
+        <li><span class="fc-check"></span>一句话回答本章主线问题：不改变程序语义的前提下，如何让中间代码跑得更快？</li>
+      </ol>
+    </div>
+
+    <div class="complete-zone">
+      <button class="btn-complete" id="btn-complete" onclick="markDone()">✓ 我已完成本章（含合上书挑战）</button>
+    </div>
+
+    <div class="chapter-nav">
+      <a href="chapter-08.html"><span class="nav-dir">← 上一章</span>第8章 代码生成</a>
+      <a href="chapter-10.html" class="next"><span class="nav-dir">下一章 →</span>第10章 指令级并行</a>
+    </div>
+
+  </div>
+</div>
+
+<footer class="footer">
+  <div class="wrap">第9章 机器无关优化 · 编译原理互动讲义 · 基于 Aho, Lam, Sethi &amp; Ullman《编译原理》(第2版)</div>
+</footer>
+
+<script src="/lectures-assets/mermaid.min.js"></script>
+<script>
+mermaid.initialize({
+  startOnLoad: true,
+  theme: "base",
+  themeVariables: {
+    primaryColor: "#e3edf7",
+    primaryBorderColor: "#1d5f9e",
+    primaryTextColor: "#1d5f9e",
+    lineColor: "#5c554b",
+    secondaryColor: "#fbeedd",
+    tertiaryColor: "#f5f1e8",
+    fontFamily: "-apple-system, PingFang SC, sans-serif",
+    fontSize: "14px"
+  },
+  flowchart: { curve: "linear", htmlLabels: false }
+});
+</script>
+<script>
+// 自测题判分（原样复用，勿改）
+document.querySelectorAll(".quiz-block").forEach(block => {
+  const answer = block.dataset.answer;
+  const explain = block.querySelector(".quiz-explain");
+  block.querySelectorAll(".quiz-opts li").forEach(li => {
+    li.addEventListener("click", () => {
+      const opts = block.querySelectorAll(".quiz-opts li");
+      opts.forEach(o => o.classList.add("disabled"));
+      if (li.dataset.opt === answer) {
+        li.classList.add("correct");
+      } else {
+        li.classList.add("wrong");
+        block.querySelector(`[data-opt="${answer}"]`).classList.add("correct");
+      }
+      explain.classList.add("show");
+    });
+  });
+});
+
+// 合上书清单打勾（原样复用，勿改）
+document.querySelectorAll("#challenge-list li").forEach(li => {
+  li.addEventListener("click", () => li.classList.toggle("checked"));
+});
+
+// 完成标记 → localStorage（章号：9）
+const KEY = "comp_progress_v1";
+function loadProgress() {
+  try { return JSON.parse(localStorage.getItem(KEY)) || {}; } catch (e) { return {}; }
+}
+const progress = loadProgress();
+const btn = document.getElementById("btn-complete");
+if (progress[9] && progress[9].done) {
+  btn.textContent = "✓ 已完成 · 再次点击重置";
+  btn.classList.add("done");
+}
+function markDone() {
+  const p = loadProgress();
+  if (p[9] && p[9].done) {
+    delete p[9];
+    btn.textContent = "✓ 我已完成本章（含合上书挑战）";
+    btn.classList.remove("done");
+  } else {
+    p[9] = { done: true, completedAt: Date.now(), reviewsDone: 0 };
+    btn.textContent = "✓ 已完成 · 复习提醒已开启";
+    btn.classList.add("done");
+  }
+  localStorage.setItem(KEY, JSON.stringify(p));
+}
+</script>
+
+</body>
+</html>

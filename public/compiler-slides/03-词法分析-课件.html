@@ -1,0 +1,743 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第3章 词法分析 · 编译原理课件</title>
+<script>
+window.MathJax = {
+  tex: {
+    inlineMath: [['$', '$'], ['\\(', '\\)']],
+    displayMath: [['$$', '$$'], ['\\[', '\\]']],
+    processEscapes: true,
+    tags: 'none'
+  },
+  svg: { fontCache: 'global', scale: 1.05 },
+  options: { skipHtmlTags: ['script','noscript','style','textarea','pre','code'] }
+};
+</script>
+<script src="/lectures-assets/tex-svg.js" async></script>
+<style>
+  :root{
+    --primary:#1a365d; --accent:#2b6cb0; --accent-light:#ebf8ff; --accent-border:#bee3f8;
+    --text:#2d3748; --muted:#718096; --border:#e2e8f0; --bg-light:#f7fafc;
+    --success:#38a169; --danger:#e53e3e; --warning:#dd6b20; --warn-bg:#fffaf0;
+  }
+  *{margin:0;padding:0;box-sizing:border-box;}
+  html,body{width:100%;height:100%;overflow:hidden;background:#0f172a;}
+  body{
+    font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Hiragino Sans GB","Microsoft YaHei","WenQuanYi Micro Hei",sans-serif;
+    color:var(--text);
+  }
+  #stage{
+    position:absolute; left:50%; top:50%;
+    width:1280px; height:720px;
+    transform:translate(-50%,-50%) scale(1);
+    transform-origin:center center;
+    background:#ffffff;
+    box-shadow:0 0 40px rgba(0,0,0,.4);
+    overflow:hidden;
+  }
+  .slide{
+    position:absolute; inset:0;
+    padding:36px 60px 52px;
+    display:none;
+    flex-direction:column;
+    background:#ffffff;
+    opacity:0;
+    transition:opacity .35s ease;
+  }
+  .slide.active{ display:flex; opacity:1; }
+
+  #progress{ position:absolute; top:0; left:0; height:6px; background:var(--accent); width:0; z-index:50; transition:width .35s; }
+
+  /* 封面 / 结束页 */
+  .slide-cover{ justify-content:center; align-items:center; text-align:center; }
+  .slide-cover{ background:linear-gradient(135deg,#1a365d 0%,#2b6cb0 100%); color:#fff; }
+  .slide-cover .kicker{ font-size:22px; letter-spacing:6px; opacity:.85; margin-bottom:18px;}
+  .slide-cover h1{ font-size:64px; font-weight:800; line-height:1.2; margin-bottom:22px; letter-spacing:2px;}
+  .slide-cover .sub{ font-size:26px; opacity:.92; margin-bottom:36px;}
+  .slide-cover .meta{ font-size:19px; opacity:.85; line-height:2;}
+  .slide-cover .divider{ width:160px;height:5px;background:#fff;opacity:.6;margin:0 auto 30px;border-radius:3px;}
+  .slide-cover .question{ font-size:24px; background:rgba(255,255,255,.12); border:1px solid rgba(255,255,255,.35); border-radius:12px; padding:12px 28px; margin-bottom:30px;}
+
+  /* 页头：结论式标题 */
+  .slide-head{ display:flex; align-items:baseline; gap:16px; border-bottom:3px solid var(--accent); padding-bottom:9px; margin-bottom:12px;}
+  .slide-head .sec{ font-size:17px; color:var(--accent); font-weight:700; background:var(--accent-light); padding:3px 11px; border-radius:6px; white-space:nowrap;}
+  .slide-head h3{ font-size:29px; color:var(--primary); font-weight:700;}
+  .slide-body{ flex:1; display:flex; flex-direction:column; justify-content:center; min-height:0; }
+
+  p{ font-size:21px; line-height:1.65; margin-bottom:8px;}
+  .lead{ font-size:23px; color:#374151; line-height:1.75;}
+  ul,ol{ margin:0 0 8px 26px; font-size:21px; line-height:1.7;}
+  li{ margin-bottom:5px;}
+  strong{ color:var(--primary); }
+
+  /* 公式块 */
+  .formula{ background:var(--accent-light); border-left:5px solid var(--accent); border-radius:0 10px 10px 0; padding:9px 22px; margin:9px 0; text-align:center; font-size:23px;}
+  .formula-concl{ background:#fffaf0; border-left:5px solid var(--warning);}
+  .MathJax{ font-size:1.05em !important; }
+  mjx-container[display="true"]{ margin:6px 0 !important; }
+
+  /* 表格 */
+  table{ width:100%; border-collapse:collapse; margin:10px 0; font-size:20px;}
+  th{ background:var(--accent); color:#fff; padding:8px 12px; text-align:center; font-weight:600;}
+  td{ padding:7px 12px; border:1px solid var(--border); text-align:center; vertical-align:middle;}
+  tr:nth-child(even) td{ background:var(--bg-light);}
+  td.l{ text-align:left; }
+  table.small{ font-size:18px; }
+  table.small td, table.small th{ padding:6px 10px; }
+
+  /* 组件 */
+  .card{ background:var(--accent-light); border:1px solid var(--accent-border); border-radius:12px; padding:12px 20px; margin:10px 0;}
+  .tip{ background:#ebf8ff; border-left:5px solid var(--accent); border-radius:0 10px 10px 0; padding:10px 20px; margin:10px 0; font-size:20px; color:#2c5282;}
+  .deep{ background:#f0fff4; border-left:5px solid var(--success); border-radius:0 10px 10px 0; padding:10px 20px; margin:10px 0; font-size:20px; color:#22543d;}
+  .warn{ background:var(--warn-bg); border-left:5px solid var(--warning); border-radius:0 10px 10px 0; padding:10px 20px; margin:10px 0; font-size:20px; color:#744210;}
+  .trap{ background:#fef2f2; border-left:5px solid var(--danger); border-radius:0 10px 10px 0; padding:10px 20px; margin:10px 0; font-size:20px; color:#7f1d1d;}
+
+  .pause{
+    background:var(--warn-bg); border:2px dashed var(--warning); border-radius:14px;
+    padding:10px 22px; margin:10px 0; display:flex; align-items:center; gap:16px;
+  }
+  .pause .icon{ font-size:36px; line-height:1; }
+  .pause .txt b{ color:var(--warning); font-size:21px; }
+  .pause .txt p{ font-size:18px; color:#744210; margin:3px 0 0; }
+
+  .cols{ display:flex; gap:28px; align-items:stretch; }
+  .col{ flex:1; min-width:0; }
+
+  /* 推导分步：仅互动模式隐藏，截图(autohide)模式全部可见——此规则不可删 */
+  .step{ opacity:0; transform:translateY(8px); transition:opacity .3s ease, transform .3s ease; }
+  .step.on{ opacity:1; transform:none; }
+  body.autohide .step{ opacity:1 !important; transform:none !important; }
+  .step-hint{ font-size:14px; color:var(--muted); margin-top:4px;}
+  body.autohide .step-hint{ display:none; }
+
+  /* 因果链 */
+  .chain{ margin:6px 0; }
+  .chain .link{ display:flex; align-items:center; gap:14px; margin:6px 0;}
+  .chain .no{ width:34px; height:34px; border-radius:50%; background:var(--accent); color:#fff; font-size:18px; font-weight:700; display:flex; align-items:center; justify-content:center; flex-shrink:0;}
+  .chain .txt{ font-size:21px; line-height:1.5;}
+  .chain .txt strong{ color:var(--primary); }
+
+  /* mermaid 容器：高度封顶，防止溢出 720px 舞台 */
+  .mmd{ background:var(--bg-light); border:1px solid var(--border); border-radius:12px; padding:10px 14px; display:flex; justify-content:center; align-items:center; margin:8px 0;}
+  .mmd .mermaid{ display:flex; justify-content:center; width:100%; visibility:hidden; }
+  .mmd .mermaid[data-done]{ visibility:visible; }
+  .mmd .mermaid svg{ max-width:100%; height:auto; max-height:230px; }
+  .mmd.mmd-tall .mermaid svg{ max-height:330px; }
+  .mmd.mmd-sm svg{ max-height:150px; }
+  .mmd-row{ display:flex; gap:18px; }
+  .mmd-row .mmd{ flex:1; flex-direction:column; }
+  .mmd .cap{ font-size:17px; color:var(--muted); margin-top:6px; text-align:center;}
+  .mmd .cap b{ color:var(--text); }
+
+  #footer{ position:absolute; bottom:0; left:0; right:0; height:40px; display:flex; align-items:center; justify-content:space-between; padding:0 30px; font-size:15px; color:#94a3b8; background:rgba(247,250,252,.85); border-top:1px solid var(--border); z-index:40;}
+  #footer .brand{ font-weight:600; color:var(--accent); }
+
+  .nav{ position:absolute; bottom:48px; right:40px; display:flex; gap:12px; z-index:45;}
+  .nav button{ width:54px; height:54px; border-radius:50%; border:none; background:var(--accent); color:#fff; font-size:24px; cursor:pointer; box-shadow:0 3px 10px rgba(43,108,176,.4); display:flex; align-items:center; justify-content:center;}
+  .nav button:hover{ background:var(--primary); }
+  .nav button:disabled{ background:#cbd5d0; cursor:default; box-shadow:none;}
+
+  #hint{ position:absolute; bottom:48px; left:40px; font-size:14px; color:#94a3b8; z-index:45;}
+
+  body.autohide #progress, body.autohide #footer, body.autohide .nav, body.autohide #hint{ display:none !important; }
+</style>
+</head>
+<body>
+<div id="stage">
+
+  <div id="progress"></div>
+
+  <section class="slide slide-cover active" data-narration="大家好，欢迎来到编译原理第三章，词法分析。上一章我们手工写了一个扫描器，每次读一个字符，判断它是字母、数字还是运算符，代码能跑，但每换一种语言就得重写一遍。这一章，我们要把认字这件事彻底机械化。本章要回答的主线问题是：字符流凭什么切成一个个单词？换个问法，一个正则表达式怎样变成一台可以执行的识别机器？学完本章，你应该能手算 Thompson 构造，把正则表达式拼成不确定有穷自动机；能填子集构造的转换表，把它变成确定有穷自动机；还能做划分求精，把它压到最小。我们从最朴素的问题出发：认字这件事，能不能交给机器自动完成？">
+    <div class="kicker">编译原理 · 第 3 章 · 第①段 前端：词法与语法</div>
+    <h1>词法分析</h1>
+    <div class="sub">Lexical Analysis —— 把字符流机械地切成记号流</div>
+    <div class="question">本章要回答：字符流凭什么切成一个个单词？</div>
+    <div class="meta">
+      配套讲义：《编译原理互动讲义》第3章 · 基于 Aho/Lam/Sethi/Ullman《编译原理》（第2版）<br>
+      ← → 或空格翻页 · 推导页逐步显示
+    </div>
+  </section>
+
+  <section class="slide" data-narration="先看本章在全书的位置。全书分四段：第一段是前端，讲词法与语法，覆盖一到四章；第二段是语义与中间代码，五到七章；第三段是后端与优化，八到十一章；第四段是全书收束，第十二章回到形式语言与自动机的理论地基。本章在第一段的正中间。上一章，也就是第二章，我们手工写了一个扫描器，用 peek 逐字符预读，第一次跑通了词法、语法、翻译的全流水线，但那是手工作坊。本章要做的是：用正则表达式和有穷自动机，把词法分析完全机械化。本章交出的产品是记号流，下一章第四章就在这条记号流上做语法分析，把单词拧成语法树。">
+    <div class="slide-head"><span class="sec">定位</span><h3>本章把第2章的手工扫描器机械化，为第4章交出记号流</h3></div>
+    <div class="slide-body">
+      <div class="mmd mmd-sm">
+        <div class="mermaid">
+flowchart TB
+  S1["第①段 前端：词法与语法<br>Ch1–4 · 本章在 Ch3"]:::here --> S2["第②段 语义与中间代码<br>Ch5–7"]
+  S2 --> S3["第③段 后端与优化<br>Ch8–11"]
+  S3 --> S4["第④段 全书收束<br>Ch12"]
+  classDef here fill:#2b6cb0,color:#ffffff,stroke:#1a365d,stroke-width:3px
+        </div>
+      </div>
+      <div class="cols" style="margin-top:8px;">
+        <div class="col"><div class="card">📥 <strong>上一章给了什么</strong><br>第2章：手写的扫描器 ＋ peek 逐字符预读，跑通最小流水线</div></div>
+        <div class="col"><div class="card">⚙️ <strong>本章解决什么</strong><br>用正则表达式与有穷自动机，把词法分析机械化</div></div>
+        <div class="col"><div class="card">📤 <strong>交给下一章什么</strong><br>干净的记号流，交给第4章的语法分析器</div></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="slide" data-narration="本章的逻辑主线是一条五环链。第一环，字符流只是一堆字节，机器需要一份词形说明书，这就是正则表达式。第二环，说明书只是规格，机器不会照着执行，于是用 Thompson 构造把它拼成一台不确定有穷自动机。第三环，这台自动机每一步可能同时站在好几个状态，没法直接跑，于是用子集构造把它变成确定有穷自动机。第四环，确定自动机里可能混着等价状态，用划分求精把它压到最小。第五环，扫描时还会有歧义，最长匹配和优先级负责裁决，干净的记号流交给语法分析器。这条链对应讲义的 3.2 到 3.5 节，我们一环一环往下走。">
+    <div class="slide-head"><span class="sec">主线</span><h3>规格变机器：正则 → NFA → DFA → 最小 DFA，一条链走到底</h3></div>
+    <div class="slide-body">
+      <div class="chain">
+        <div class="link"><span class="no">1</span><span class="txt">字符流只是字节，机器需要<strong>词形说明书</strong> → 正则表达式</span></div>
+        <div class="link"><span class="no">2</span><span class="txt">规格机器不会执行 → <strong>Thompson 构造</strong>拼出 NFA</span></div>
+        <div class="link"><span class="no">3</span><span class="txt">NFA 每步有多条路，无法直接跑 → <strong>子集构造</strong>变成 DFA</span></div>
+        <div class="link"><span class="no">4</span><span class="txt">DFA 可能有多余状态 → <strong>划分求精</strong>得到最小 DFA</span></div>
+        <div class="link"><span class="no">5</span><span class="txt">歧义靠<strong>最长匹配＋优先级</strong>裁决 → 记号流交给语法分析器</span></div>
+      </div>
+      <div class="tip">这条链就是本章的目录：五环对应讲义 3.2 正则表达式、3.3 Thompson 构造、3.4 子集构造、3.5 DFA 最小化。</div>
+    </div>
+  </section>
+
+  <section class="slide" data-narration="为什么词法分析要独立成一个阶段？回看第二章的手写扫描器：每次读一个字符，用 peek 预读一下，判断是字母、数字还是运算符。代码能跑，但有两个硬伤。第一，每换一种语言就要重写一遍，词法规则全埋在流程语句里；第二，它和语法分析器缠在一起，改一处动全身。把词法分析独立出来，好处立刻显现：空白和注释在扫描时就被过滤，语法分析器只看到干净的记号流；count、sum、x1 统统归为一个类别 id，语法规则里只需要写一次；扫描器天然按行工作，每个记号带上行列号，报错才能指到人看得懂的位置。一句话，认字与组句分家，各换各的，互不拖累。">
+    <div class="slide-head"><span class="sec">动机</span><h3>手写扫描器能跑，但换语言就得重写——认字必须与组句分家</h3></div>
+    <div class="slide-body">
+      <p>第2章我们手工写了扫描器：读一个字符、用 <strong>peek</strong> 预读、判断是不是字母数字运算符。能跑，但有两个硬伤：</p>
+      <div class="cols">
+        <div class="col"><div class="card">😣 <strong>手写派的痛</strong><br>每换一种语言重写一遍；与语法分析器缠在一起，改一处动全身</div></div>
+        <div class="col"><div class="card">😌 <strong>独立出来的收益</strong><br>去空白与注释 · 统一归为 id · 按行扫描自带行列号报错</div></div>
+      </div>
+      <div class="deep">分工一句话：<strong>词法分析器（Scanner）</strong>把字符流切成记号流；<strong>语法分析器（Parser）</strong>在记号流上分析结构。本章只解决前一半。</div>
+    </div>
+  </section>
+
+  <section class="slide" data-narration="切分之前，先把三个最容易混淆的术语钉死。词素，英文 lexeme，是源程序里实际出现的一段字符，比如 if、count、3.14。记号，英文 token，是这段字符的类别标签：count 的记号是 id，3.14 的记号是 num。模式，英文 pattern，是描述某类词素长什么样的规则，比如标识符等于字母开头、后接任意个字母或数字。口诀是：词素是实物，记号是类别标签，模式是标签的长相说明书。扫描器每读到一段词素，就贴上一张记号标签。注意，词素可以有无穷多个，标识符你想取什么名字都行；但记号只有有限个，一张表就列得完。这个区别后面反复要用。">
+    <div class="slide-head"><span class="sec">定义</span><h3>词素是实物，记号是类别标签，模式是类别的长相说明书</h3></div>
+    <div class="slide-body">
+      <table>
+        <thead><tr><th>术语</th><th>含义</th><th>例子</th></tr></thead>
+        <tbody>
+          <tr><td class="l"><strong>词素</strong>（Lexeme）</td><td class="l">源程序中实际出现的一段字符</td><td class="l">if、count、3.14、&lt;=</td></tr>
+          <tr><td class="l"><strong>记号</strong>（Token）</td><td class="l">词素的类别，编译器内部的抽象名字</td><td class="l">if → <strong>if</strong>，count → <strong>id</strong>，3.14 → <strong>num</strong></td></tr>
+          <tr><td class="l"><strong>模式</strong>（Pattern）</td><td class="l">描述某类词素长什么样的规则</td><td class="l">标识符 = 字母开头，后接字母或数字</td></tr>
+        </tbody>
+      </table>
+      <div class="deep">词素可以有<strong>无穷多个</strong>（id 对应 count、sum、x1……），记号只有<strong>有限个</strong>。扫描器的工作：读到词素 → 贴上记号标签。</div>
+    </div>
+  </section>
+
+  <section class="slide" data-narration="记号不是一张裸标签，它还带着属性一起往下游走。看讲义里这个例子：count 等于 count 加一。扫描器扫过去，产出五个记号。第一个 count，记号是 id，属性是指向符号表里 count 那一项的指针；等号，记号是 assign，不需要属性；第二个 count，还是 id，还是指向同一个符号表项；加号，记号是 plus；数字一，记号是 num，属性是整数值一。为什么要属性？因为下游不光要知道「这是一个标识符」，还要知道「这是哪一个标识符」，名字、数值这些信息全靠属性带过去。所以更准确地说，词法分析器交出的是一串串「记号加属性」的对偶，语法分析器消费的就是它们。">
+    <div class="slide-head"><span class="sec">例子</span><h3>记号不是裸标签——它带着属性值一起交给下游</h3></div>
+    <div class="slide-body">
+      <p>扫描器读 <strong>count = count + 1</strong>，产出五行「记号＋属性」：</p>
+      <table>
+        <thead><tr><th>词素</th><th>记号</th><th>属性</th></tr></thead>
+        <tbody>
+          <tr><td>count</td><td>id</td><td class="l">指向符号表中 count 的指针</td></tr>
+          <tr><td>=</td><td>assign</td><td>—</td></tr>
+          <tr><td>count</td><td>id</td><td class="l">指向符号表中 count 的指针</td></tr>
+          <tr><td>+</td><td>plus</td><td>—</td></tr>
+          <tr><td>1</td><td>num</td><td class="l">整数值 1</td></tr>
+        </tbody>
+      </table>
+      <div class="tip">💡 下游不只要知道「这是一个标识符」，还要知道「这是哪一个」——名字与数值全靠属性带过去。</div>
+    </div>
+  </section>
+
+  <section class="slide" data-narration="扫描时经常有几个模式同时匹配当前前缀，谁来赢？两条规则。第一条叫最长匹配，英文 maximal munch：谁吃掉的字符最长，谁就赢。经典例子是小于等于号：扫描到它时，小于号能匹配一个字符，小于等于号能匹配两个，最长匹配当选，于是它被识别为一个关系运算符记号，而不是先吐出小于号、再吐等号。第二条是优先级裁决：如果两个模式吃得一样长，比如关键字 if 和标识符模式都能吃掉 i f 两个字符，那么写在前面、先定义的规则胜出，所以关键字规则要排在标识符规则之前。两条规则叠加：if 是关键字，ifx 就归入标识符。记住分工：最长匹配管长度，优先级管平局。">
+    <div class="slide-head"><span class="sec">裁决</span><h3>多个模式同时匹配：最长匹配先吃，优先级裁决平局</h3></div>
+    <div class="slide-body">
+      <div class="cols">
+        <div class="col">
+          <div class="card">📏 <strong>最长匹配（Maximal Munch）</strong><br>多个模式都能匹配当前前缀时，选吃掉字符最多的那个</div>
+          <p>扫到 <strong>&lt;=</strong>：&lt; 吃 1 个字符，&lt;= 吃 2 个 → 整体识别为一个 <strong>relop</strong>，不拆成两个记号。</p>
+        </div>
+        <div class="col">
+          <div class="card">🥇 <strong>优先级裁决平局</strong><br>吃得一样长时，定义顺序靠前的规则胜出</div>
+          <p><strong>if</strong> 与 id 模式等长匹配 → if 的规则写在 id 前面，返回关键字；<strong>ifx</strong> 更长 → 由最长匹配归为 id。</p>
+        </div>
+      </div>
+      <div class="warn">口诀：<strong>最长匹配管长度，优先级管平局</strong>——关键字定义永远排在标识符之前。</div>
+    </div>
+  </section>
+
+  <section class="slide" data-narration="独立出来以后，拿什么描述每类记号的长相？答案是正则表达式，只需要三种基本构造加三种运算。基本构造是：空串，写作 ε，不匹配任何字符；单字符 a，匹配它本身。三种运算是：并，竖线，r 并 s 表示匹配 r 或者 s；连接，直接挨着写，表示先 r 后 s；闭包，星号，表示零次或多次重复。优先级从高到低是：星号、连接、并，括号用来打破优先级。工程上还有三个顺手的扩展：加号表示一次或多次，问号表示零次或一次，方括号字符类表示范围里任选一个。要特别提醒：正则表达式只是规格说明书，只说什么样的串合法，不说怎么一步步去认——把规格变成执行，是后面三节的事。">
+    <div class="slide-head"><span class="sec">规格</span><h3>三种构造加三种运算，正则表达式就能写完所有词形</h3></div>
+    <div class="slide-body">
+      <div class="cols">
+        <div class="col">
+          <div class="card">🧱 <strong>基本构造</strong><br>ε（空串） · 单字符 a</div>
+          <div class="card">🔧 <strong>三种运算</strong><br>并 r|s · 连接 rs · 闭包 r*</div>
+          <div class="deep">优先级：<strong>* ＞ 连接 ＞ |</strong>，括号打破优先级。</div>
+        </div>
+        <div class="col">
+          <table class="small">
+            <thead><tr><th>扩展</th><th>含义</th><th>例子</th></tr></thead>
+            <tbody>
+              <tr><td>r+</td><td class="l">正闭包：1 次或多次</td><td class="l">digit+ 一个或多个数字</td></tr>
+              <tr><td>r?</td><td class="l">可选：0 次或 1 次</td><td class="l">(+|-)? 可选符号</td></tr>
+              <tr><td>[a-z]</td><td class="l">字符类：范围内任选一个</td><td class="l">[a-zA-Z] 任意字母</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+      <div class="tip">💡 正则是<strong>规格说明书</strong>，不是执行程序：只说什么串合法，不说怎么去认。</div>
+    </div>
+  </section>
+
+  <section class="slide" data-narration="多个正则表达式可以起名字、分层引用，这叫正则定义：先定义 letter 是字母、digit 是数字，标识符就是 letter 后面跟「letter 或 digit」的闭包。本章反复用的是三张底牌。第一，id，字母开头，后接任意个字母或数字——第一个位置必须是字母，所以 9abc 不是合法标识符。第二，num，一个或多个数字，后面可选地跟小数部分，再可选地跟科学计数法的指数部分。第三，relop，六种关系运算符的并：小于、小于等于、等于、不等于、大于、大于等于。这三条定义先记住长相，等会的自动机就是从这类规格机械地造出来的。">
+    <div class="slide-head"><span class="sec">规格</span><h3>正则定义给模式起名字：id、num、relop 是本章三张底牌</h3></div>
+    <div class="slide-body">
+      <div class="formula">letter → a | b | … | z | A | … | Z　　digit → 0 | 1 | … | 9　　id → letter ( letter | digit )*</div>
+      <table>
+        <thead><tr><th>记号</th><th>正则定义</th><th>说明</th></tr></thead>
+        <tbody>
+          <tr><td><strong>id</strong></td><td class="l">letter ( letter | digit )*</td><td class="l">字母开头，后接字母或数字</td></tr>
+          <tr><td><strong>num</strong></td><td class="l">digit+ ( . digit+ )? ( E ( + | - )? digit+ )?</td><td class="l">整数、小数、科学计数法</td></tr>
+          <tr><td><strong>relop</strong></td><td class="l">&lt; | &lt;= | = | &lt;&gt; | &gt; | &gt;=</td><td class="l">六种关系运算符</td></tr>
+        </tbody>
+      </table>
+      <div class="warn">id 的第一个位置必须是 letter，digit 不在可选范围——所以 <strong>9abc 不匹配</strong> id。</div>
+    </div>
+  </section>
+
+  <section class="slide" data-narration="机器不认规格，只认状态转移。Thompson 构造回答：给定任意正则表达式，怎么机械地拼出一台等价的不确定有穷自动机？它只有五种积木。看这三张小图：左边是基本片段，空串和单字符都是一个新的初态加一个新的终态，中间一条边；中间是并，新初态用两条空串边分别走进两支，两支的终态再用空串边汇到新终态；右边是闭包，新初态可以直接跳到新终态表示零次，也可以绕进主体、再跳回来表示重复。连接最简单，不新增状态，直接把前一段的终态缝到后一段的初态。关键观察：每条规则最多新增两个状态，所以正则长度是 n，造出来的自动机状态数不超过 2n，大小和规格成正比。">
+    <div class="slide-head"><span class="sec">构造</span><h3>Thompson 构造只有五种积木，每条规则最多新增两个状态</h3></div>
+    <div class="slide-body">
+      <div class="mmd-row">
+        <div class="mmd">
+          <div class="mermaid">
+flowchart TB
+  i1["i"] -->|"ε"| f1["f"]
+  i2["i"] -->|"a"| f2["f"]
+          </div>
+          <div class="cap"><b>基本片段</b><br>ε 与单字符 a：各 2 个新状态</div>
+        </div>
+        <div class="mmd">
+          <div class="mermaid">
+flowchart TB
+  i["i"] -->|"ε"| r["r 的 NFA"]
+  i -->|"ε"| s["s 的 NFA"]
+  r -->|"ε"| f["f"]
+  s -->|"ε"| f
+          </div>
+          <div class="cap"><b>并 r|s</b><br>新初态分叉，新终态汇合：＋2 状态</div>
+        </div>
+        <div class="mmd">
+          <div class="mermaid">
+flowchart TB
+  i["i"] -->|"ε"| r["r 的 NFA"]
+  r -->|"ε"| f["f"]
+  i -->|"ε"| f
+  f -->|"ε"| i
+          </div>
+          <div class="cap"><b>闭包 r*</b><br>直通边表零次，回边表重复：＋2 状态</div>
+        </div>
+      </div>
+      <div class="deep">连接 rs 不新增状态，直接缝合。正则长度 n → NFA 状态数 <strong>≤ 2n</strong>。</div>
+    </div>
+  </section>
+
+  <section class="slide" data-narration="现在做本章最重要的完整手算：给「a 并 b 的闭包，接上 a b b」这个正则拼自动机。从内到外，五步。第一步，字符 a，状态二读 a 到状态三；字符 b，状态四读 b 到状态五。第二步，并：新初态一、新终态六；一用空串边走进二和四，三和五用空串边汇到六。第三步，星：新初态零、新终态七；零用空串边走进一和七，六用空串边绕回一、或者直接到七。第四步，连接尾巴 a b b：七读 a 到八，八读 b 到九，九读 b 到十。第五步，收工：恰好十一个状态，编号零到十，十是唯一的接受态。下一页把这台自动机画出来看。">
+    <div class="slide-head"><span class="sec">手算</span><h3>从内到外拼五步，(a|b)*abb 得到 11 个状态的 NFA</h3></div>
+    <div class="slide-body">
+      <div class="step"><p><strong>① 字符块</strong>：a → 状态 2 —a→ 3；b → 状态 4 —b→ 5</p></div>
+      <div class="step"><p><strong>② 并 a|b</strong>：新初态 1、新终态 6；1 —ε→ 2、4；3 —ε→ 6，5 —ε→ 6</p></div>
+      <div class="step"><p><strong>③ 星 (a|b)*</strong>：新初态 0、新终态 7；0 —ε→ 1、7；6 —ε→ 1、7</p></div>
+      <div class="step"><p><strong>④ 连接 abb</strong>：7 —a→ 8，8 —b→ 9，9 —b→ 10</p></div>
+      <div class="step">
+        <div class="formula formula-concl">共 11 个状态（编号 0–10），状态 10 是唯一接受态</div>
+      </div>
+      <p class="step-hint">按空格 / → 逐步展开拼装过程</p>
+    </div>
+  </section>
+
+  <section class="slide" data-narration="十一个状态一张图太挤，我们拆成左右两块看。左边这块是「a 并 b」的闭包环：零是总初态，空串边走进一、或者直奔七；一在分岔，走进二就是读 a 到三，走进四就是读 b 到五；三和五都汇到六；六再跳回一继续循环，或者跳到七离开循环。右边这块是尾巴 a b b：七读 a 到八，八读 b 到九，九读 b 到十。十用橙色标出，它是接受态，图里的双圈语义就用这个颜色表达。注意这台机器的不确定性：状态一面对空串有两条路，状态六也是——机器没法直接执行它，这正是下一节子集构造要解决的问题。">
+    <div class="slide-head"><span class="sec">看图</span><h3>11 状态拆成两块看：左边是 (a|b)* 循环环，右边是 abb 尾巴</h3></div>
+    <div class="slide-body">
+      <div class="mmd-row">
+        <div class="mmd mmd-tall">
+          <div class="mermaid">
+flowchart TB
+  s0["0"] -->|"ε"| s1["1"]
+  s0 -->|"ε"| s7["7"]
+  s1 -->|"ε"| s2["2"]
+  s1 -->|"ε"| s4["4"]
+  s2 -->|"a"| s3["3"]
+  s4 -->|"b"| s5["5"]
+  s3 -->|"ε"| s6["6"]
+  s5 -->|"ε"| s6
+  s6 -->|"ε"| s1
+  s6 -->|"ε"| s7
+          </div>
+          <div class="cap"><b>(a|b)* 循环环</b>（状态 0–7）<br>6 跳回 1 继续循环，跳到 7 离开循环</div>
+        </div>
+        <div class="mmd mmd-tall">
+          <div class="mermaid">
+flowchart TB
+  t7["7"] -->|"a"| t8["8"]
+  t8 -->|"b"| t9["9"]
+  t9 -->|"b"| t10["10 ✔"]:::acc
+  classDef acc fill:#fffaf0,stroke:#dd6b20,stroke-width:3px
+          </div>
+          <div class="cap"><b>abb 尾巴</b>（状态 7–10）<br>橙色状态 10 = 接受态（讲义图中的双圈）</div>
+        </div>
+      </div>
+      <div class="warn">不确定性就在眼前：状态 0、1、6 面对 ε 都有两条路——机器不知道选哪条。</div>
+    </div>
+  </section>
+
+  <section class="slide" data-narration="把这台自动机写成转移表，看得更清楚。每一行是一个状态，三列分别是读 a、读 b、走空串边能到达的状态集合。看第零行：空串列是集合一、七，对应图里零的两条空串边；第一行空串列是二、四；第六行空串列又是一、七，这就是闭包环的回路。读字符的列很稀疏：二读 a 到三，四读 b 到五，七读 a 到八，八读 b 到九，九读 b 到十，其余全是空。第十行三列全空——它是终点，到了就意味着成功识别。这张表就是下一节子集构造的原料：我们要从它算出一张没有空串列、每格唯一的新表。">
+    <div class="slide-head"><span class="sec">账本</span><h3>把 NFA 写成转移表，ε 列就是子集构造的原料</h3></div>
+    <div class="slide-body">
+      <table class="small">
+        <thead><tr><th>状态</th><th>输入 a</th><th>输入 b</th><th>ε</th></tr></thead>
+        <tbody>
+          <tr><td>0</td><td>—</td><td>—</td><td>{1, 7}</td></tr>
+          <tr><td>1</td><td>—</td><td>—</td><td>{2, 4}</td></tr>
+          <tr><td>2</td><td>{3}</td><td>—</td><td>—</td></tr>
+          <tr><td>3</td><td>—</td><td>—</td><td>{6}</td></tr>
+          <tr><td>4</td><td>—</td><td>{5}</td><td>—</td></tr>
+          <tr><td>5</td><td>—</td><td>—</td><td>{6}</td></tr>
+          <tr><td>6</td><td>—</td><td>—</td><td>{1, 7}</td></tr>
+          <tr><td>7</td><td>{8}</td><td>—</td><td>—</td></tr>
+          <tr><td>8</td><td>—</td><td>{9}</td><td>—</td></tr>
+          <tr><td>9</td><td>—</td><td>{10}</td><td>—</td></tr>
+          <tr><td>10</td><td>—</td><td>—</td><td>—</td></tr>
+        </tbody>
+      </table>
+      <div class="tip">💡 状态 10 整行全空：它是终点。子集构造要做的，就是消掉 ε 列、让每格只剩一个去向。</div>
+    </div>
+  </section>
+
+  <section class="slide" data-narration="不确定自动机每步不知道选哪条路，机器执行不了，必须变成确定有穷自动机：每个状态对每个输入符号只有唯一出边，没有空串转移。子集构造的核心思想一句话：确定自动机的一个状态，等于不确定自动机的一个状态集合。读入一个字符后，从「当前可能处于哪些状态」，跳到「读完这个字符后可能处于哪些状态」。两个定义必须钉死。空闭包：从一个状态集合出发，只走空串边能到达的所有状态——注意是传递的，要一直走到没有新状态为止。move：从集合里某个状态出发，读入字符 a 后能到达的状态集合，这一步不走空串边。记住节奏：每算一次 move，立刻补一次空闭包。">
+    <div class="slide-head"><span class="sec">思想</span><h3>DFA 的一个状态，就是 NFA 的一个状态集合</h3></div>
+    <div class="slide-body">
+      <div class="cols">
+        <div class="col"><div class="card">🌀 <strong>ε-闭包（ε-closure）</strong><br>从状态集合出发，只走 ε-边能到达的所有状态——<strong>传递</strong>，走到没有新状态为止</div></div>
+        <div class="col"><div class="card">👣 <strong>move(T, a)</strong><br>从集合 T 中某个状态出发，读入字符 a 能到达的状态集合——这一步不走 ε</div></div>
+      </div>
+      <div class="formula formula-concl">DFA 状态 = ε-闭包（ move(上一状态集, 当前字符) ）</div>
+      <div class="deep">读法：NFA 里「可能在这也可能在那」的迷茫，被 DFA 里「我正处在这个集合」的确定所替代。</div>
+    </div>
+  </section>
+
+  <section class="slide" data-narration="现在完整手算一遍。第一步，初态大写 A 等于状态零的空闭包：零本身，空串边到一和七，一再到二和四，所以 A 是集合零一二四七，共五个状态。接下来轮到你了：从 A 出发，读 a、读 b 各落到哪个集合？再往下还有几个新状态？先暂停视频自己推一遍。推出来了吗？好，对答案。A 里只有二读 a 到三、七读 a 到八，move 结果是三八，补空闭包后是一二三四六七八，命名为 B；A 里只有四读 b 到五，闭包后是一二四五六七，命名为 C。继续展开：B 读 b 得到含九的新集合 D；D 读 b 得到含十的集合 E。E 装着原自动机的接受态十，所以 E 是唯一接受态。一共五个状态，一个不多。">
+    <div class="slide-head"><span class="sec">演练</span><h3>A 到 E 五个 DFA 状态，是六步 move＋闭包算出来的</h3></div>
+    <div class="slide-body">
+      <div class="step"><p><strong>① 初态</strong>：A = ε-closure({0}) = {0, 1, 2, 4, 7}（0 出发走 ε：加 1、7；从 1 再加 2、4）</p></div>
+      <div class="pause"><div class="icon">✍️</div><div class="txt"><b>暂停推导</b><p>从 A 出发：先算 move(A, a) 与 move(A, b)，各补一次 ε-闭包；再继续展开新状态，直到没有新集合。交付物：完整的 A–E 五状态清单。</p></div></div>
+      <div class="step"><p><strong>② A 的出边</strong>：move(A,a)={3,8} → 闭包 {1,2,3,4,6,7,8} = <strong>B</strong>；move(A,b)={5} → 闭包 {1,2,4,5,6,7} = <strong>C</strong></p></div>
+      <div class="step"><p><strong>③ 继续展开</strong>：B 读 b → {1,2,4,5,6,7,9} = <strong>D</strong>；D 读 b → {1,2,4,5,6,7,10} = <strong>E</strong>（含 10，接受）</p></div>
+      <div class="step"><p><strong>④ 收尾</strong>：C 读 a→B、读 b→C；E 读 a→B、读 b→C。共 5 个状态，没有新集合，收工。</p></div>
+      <p class="step-hint">按空格 / → 逐步揭示答案</p>
+    </div>
+  </section>
+
+  <section class="slide" data-narration="六步算完，收获一台五个状态的确定自动机。左边这张表是总账：A 是初态，读 a 到 B、读 b 到 C；B 读 a 自环、读 b 到 D；C 读 a 到 B、读 b 自环；D 读 a 到 B、读 b 到 E；E 读 a 回 B、读 b 回 C。E 是接受态，图里用橙色标出，对应讲义里的双圈。右边把表画成图：每个状态对 a 和 b 各有一条、且只有一条出边，没有空串，这就是「确定」两个字的含义。代价是状态数理论上可能指数膨胀，但对词法分析的实际语言通常很温和——这个例子从十一个状态收缩到五个。下一页拿真实输入验收这台机器。">
+    <div class="slide-head"><span class="sec">结果</span><h3>五个状态的 DFA：A 是初态，E 是唯一接受态</h3></div>
+    <div class="slide-body">
+      <div class="cols">
+        <div class="col">
+          <table class="small">
+            <thead><tr><th>DFA</th><th>NFA 状态集合</th><th>a</th><th>b</th></tr></thead>
+            <tbody>
+              <tr><td>A（初态）</td><td>{0,1,2,4,7}</td><td>B</td><td>C</td></tr>
+              <tr><td>B</td><td>{1,2,3,4,6,7,8}</td><td>B</td><td>D</td></tr>
+              <tr><td>C</td><td>{1,2,4,5,6,7}</td><td>B</td><td>C</td></tr>
+              <tr><td>D</td><td>{1,2,4,5,6,7,9}</td><td>B</td><td>E</td></tr>
+              <tr><td>E（接受）</td><td>{1,2,4,5,6,7,10}</td><td>B</td><td>C</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="col">
+          <div class="mmd mmd-tall">
+            <div class="mermaid">
+flowchart TB
+  A["A 初态"] -->|"a"| B["B"]
+  A -->|"b"| C["C"]
+  B -->|"a"| B
+  B -->|"b"| D["D"]
+  C -->|"a"| B
+  C -->|"b"| C
+  D -->|"a"| B
+  D -->|"b"| E["E ✔"]:::acc
+  E -->|"a"| B
+  E -->|"b"| C
+  classDef acc fill:#fffaf0,stroke:#dd6b20,stroke-width:3px
+            </div>
+            <div class="cap">橙色 E = 接受态（讲义图中的双圈）</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="slide" data-narration="新机器造好了，拿输入串 aababb 走一遍验收。从 A 出发：读第一个 a 到 B；再读 a，B 自环还在 B；读 b 到 D；读 a 回到 B；读 b 又到 D；最后一个 b，到 E——E 是接受态，识别成功。右边这张表把每一步已读的前缀和所处状态列出来，你可以逐行核对。这个轨迹还透露了机器的本质：它一直在追踪「目前已读的后缀离 abb 还差几步」。B 表示结尾是 a，D 表示结尾已经是 ab，E 表示 abb 齐了。理解这一点，下一节最小化合并状态时就顺理成章。">
+    <div class="slide-head"><span class="sec">验证</span><h3>用 aababb 走一遍：A B B D B D E，落在接受态</h3></div>
+    <div class="slide-body">
+      <div class="cols">
+        <div class="col">
+          <div class="formula formula-concl">A —a→ B —a→ B —b→ D —a→ B —b→ D —b→ E（接受）</div>
+          <div class="deep">本质：机器在追踪「已读后缀离 abb 的进度」——B：结尾是 a；D：结尾是 ab；E：abb 齐了。</div>
+        </div>
+        <div class="col">
+          <table class="small">
+            <thead><tr><th>已读前缀</th><th>当前状态</th></tr></thead>
+            <tbody>
+              <tr><td>（空）</td><td>A</td></tr>
+              <tr><td>a</td><td>B</td></tr>
+              <tr><td>aa</td><td>B</td></tr>
+              <tr><td>aab</td><td>D</td></tr>
+              <tr><td>aaba</td><td>B</td></tr>
+              <tr><td>aabab</td><td>D</td></tr>
+              <tr><td>aababb</td><td><strong>E ✔ 接受</strong></td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="slide" data-narration="子集构造保证正确，不保证最省。五个状态里可能混着等价状态：它们对未来任何输入的行为完全一样，却占着不同编号。最小化的方法叫划分求精。第一步，按接受与非接受把所有状态劈成两组——接受态和非接受态对空后缀的答案就不同，绝不可能等价。然后反复检查：同一组里，如果两个状态对某个输入符号跳进了不同的组，说明它们对某个后缀的行为不同，必须拆开。拆到不能再拆为止，每一组就是一个等价类，合并成一个状态。所以最小化的本质是按未来行为分类：对所有可能后缀给出相同接受或拒绝答案的状态，就是同一个状态。">
+    <div class="slide-head"><span class="sec">求精</span><h3>对未来行为完全一样的状态是等价的，就该合并</h3></div>
+    <div class="slide-body">
+      <div class="chain">
+        <div class="link"><span class="no">1</span><span class="txt"><strong>初始划分</strong>：按接受 / 非接受劈成两组</span></div>
+        <div class="link"><span class="no">2</span><span class="txt"><strong>反复检查</strong>：同组两状态对某输入跳进不同组 → 拆开</span></div>
+        <div class="link"><span class="no">3</span><span class="txt"><strong>收敛</strong>：不能再拆时，每组是一个等价类，合并为一个状态</span></div>
+      </div>
+      <div class="formula">初始划分　Π₀ = { {A, B, C, D}, {E} }</div>
+      <div class="tip">💡 判断标准不是「长得像不像」，而是「对所有后缀的行为一致」——结构不同也能合并。</div>
+    </div>
+  </section>
+
+  <section class="slide" data-narration="对刚才的五个状态做三轮检查。初始划分：非接受态 A B C D 一组，接受态 E 自己一组。第一轮，检查组内四个状态：A B C 读 a 读 b 都落在组内，行为一致；唯独 D 读 b 跳到 E，是异组——D 站在「再读一个 b 就成功」的位置，别人都不是，把 D 拆出去。第二轮看剩下的 A B C：B 读 b 跳到 D，现在 D 已经是异组了，B 又显得与众不同，把 B 也拆出去。第三轮看 A 和 C：读 a 都到 B，读 b 都回到本组，对所有后缀行为完全一致，不再拆。最终四组：A 与 C 合一，B、D、E 各自独立。每一轮拆分的理由，都能对应到「未来行为不同」这五个字。">
+    <div class="slide-head"><span class="sec">手算</span><h3>三轮检查：第一轮拆出 D，第二轮拆出 B，第三轮 A、C 留下</h3></div>
+    <div class="slide-body">
+      <div class="step">
+        <p><strong>① 第一轮看 {A,B,C,D}</strong>：A/B/C 读 a、b 都落组内；D 读 b → E（异组），拆出 D</p>
+        <div class="formula">Π₁ = { {A, B, C}, {D}, {E} }</div>
+      </div>
+      <div class="step">
+        <p><strong>② 第二轮看 {A,B,C}</strong>：B 读 b → D（异组），与 A/C 不一致，拆出 B</p>
+        <div class="formula">Π₂ = { {A, C}, {B}, {D}, {E} }</div>
+      </div>
+      <div class="step">
+        <p><strong>③ 第三轮看 {A,C}</strong>：读 a 都到 B，读 b 都回本组，行为完全一致，不再拆</p>
+        <div class="formula formula-concl">最终 Π = { {A,C}, {B}, {D}, {E} }　—— 最小 DFA 共 4 个状态</div>
+      </div>
+      <p class="step-hint">按空格 / → 逐步展开三轮检查</p>
+    </div>
+  </section>
+
+  <section class="slide" data-narration="把 A 和 C 合并成新状态 AC，就得到四个状态的最小确定自动机。看左边的表：AC 是初态，读 a 到 B，读 b 自环；B 读 a 自环、读 b 到 D；D 读 b 到 E；E 是唯一的接受态，读 b 回到 AC。可以证明，对这个语言，四个状态是下限。直观地说，机器必须记住四种进度：什么像样的尾巴都没有、结尾是 a、结尾是 ab、abb 已经齐了——四种进度对应四种必不可少的状态，少一个就分不清某两个串。注意，最小化保持语言不变，它只是把冗余压掉，生成的扫描器表项更少、更省内存。词法分析工具在产出最终代码前，都会做这一步。">
+    <div class="slide-head"><span class="sec">结果</span><h3>合并 A 和 C，4 状态最小 DFA 是可证明的最少</h3></div>
+    <div class="slide-body">
+      <div class="cols">
+        <div class="col">
+          <table>
+            <thead><tr><th>状态</th><th>输入 a</th><th>输入 b</th></tr></thead>
+            <tbody>
+              <tr><td>AC（初态）</td><td>B</td><td>AC</td></tr>
+              <tr><td>B</td><td>B</td><td>D</td></tr>
+              <tr><td>D</td><td>B</td><td>E</td></tr>
+              <tr><td>E（接受）</td><td>B</td><td>AC</td></tr>
+            </tbody>
+          </table>
+          <div class="deep">四种「abb 后缀进度」= 四个必不可少的状态，少一个就分不清某两个串。</div>
+        </div>
+        <div class="col">
+          <div class="mmd mmd-tall">
+            <div class="mermaid">
+flowchart TB
+  AC["AC 初态"] -->|"a"| B["B"]
+  AC -->|"b"| AC
+  B -->|"a"| B
+  B -->|"b"| D["D"]
+  D -->|"a"| B
+  D -->|"b"| E["E ✔"]:::acc
+  E -->|"a"| B
+  E -->|"b"| AC
+  classDef acc fill:#fffaf0,stroke:#dd6b20,stroke-width:3px
+            </div>
+            <div class="cap">橙色 E = 接受态（讲义图中的双圈）</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="slide" data-narration="扫三个雷。第一个，把词素和记号混为一谈，说「记号 if 就是字符串 if」。错。词素 if 是源文件里的两个字符，记号 if 是编译器内部的一个编码；词素可以有无穷多个，记号只有有限个。第二个，以为空闭包只算一层。错。空闭包是传递闭包，必须一直走到没有新的空串边为止；状态零的空闭包不仅要加一和七，还要从一继续加二和四，少一个后面全错。第三个，以为正则表达式无所不能，比如匹配任意层数的配对括号。错。正则没有记忆，数不了还没配对的左括号有几个；配对括号需要上下文无关文法，那是第四章的武器。三个雷排完，本章考试的坑基本也就排完了。">
+    <div class="slide-head"><span class="sec">避坑</span><h3>本章最容易踩的三个雷：词素当记号、闭包算一层、正则当万能</h3></div>
+    <div class="slide-body">
+      <div class="trap">❌ <strong>把词素和记号混为一谈</strong>：「记号 if 就是字符串 if」<br>✅ 词素是源文件里的字符，记号是编译器内部的类别编码；词素无穷多，记号有限个。</div>
+      <div class="trap">❌ <strong>以为 ε-闭包只算一层</strong><br>✅ ε-闭包是传递闭包，走到没有新 ε-边为止：ε-closure({0}) 加 1、7 后，还要从 1 再加 2、4。</div>
+      <div class="trap">❌ <strong>以为正则能匹配任意嵌套结构</strong>，如任意层数的配对括号<br>✅ 正则没有记忆，数不了未配对的左括号；配对括号要交给第4章的上下文无关文法。</div>
+    </div>
+  </section>
+
+  <section class="slide" data-narration="把相邻三章的分工摆在一起看。第二章是手工作坊：扫描器靠 peek 逐字符预读，识别逻辑埋在流程语句里，能跑但不可复用。本章是机械化工厂：词形用正则定义写规格，Thompson 构造、子集构造、最小化三步全自动，换语言只换规格、不换机器。第四章是下一道工序：它不关心单词内部长什么样，只消费本章交出的记号流，用上下文无关文法把记号序列拧成语法树。所以本章在整个编译器里，是规格与机器之间的那座桥。钩子留给你：记号流切干净了，凭什么认定一串记号能组成一棵合法的语法树？这正是第四章要回答的问题。">
+    <div class="slide-head"><span class="sec">接口</span><h3>第2章给手工扫描器，本章给自动机工厂，第4章在记号流上盖语法树</h3></div>
+    <div class="slide-body">
+      <table>
+        <thead><tr><th></th><th>第2章 语法制导翻译器</th><th>第3章 词法分析（本章）</th><th>第4章 语法分析</th></tr></thead>
+        <tbody>
+          <tr><td class="l"><strong>怎么认词</strong></td><td class="l">手写扫描器，peek 逐字符预读</td><td class="l">正则定义写规格，自动机全自动生成</td><td class="l">不关心词形，直接消费记号流</td></tr>
+          <tr><td class="l"><strong>产物</strong></td><td class="l">能跑的最小流水线</td><td class="l">机械化的词法分析器，交出记号流</td><td class="l">把记号流拧成语法树</td></tr>
+          <tr><td class="l"><strong>换语言时</strong></td><td class="l">重写扫描器</td><td class="l">只换正则定义，机器不变</td><td class="l">只换文法</td></tr>
+        </tbody>
+      </table>
+      <div class="tip">钩子：记号流只是平整的标签序列，程序却是嵌套结构——凭什么拧成一棵树？第4章回答。</div>
+    </div>
+  </section>
+
+  <section class="slide" data-narration="回到章首的主线问题：字符流凭什么切成一个个单词？一句话答案：因为每类单词的词形都能写成正则表达式，而正则表达式可以通过 Thompson 构造、子集构造、最小化，机械地变成一台最小确定自动机，扫一遍字符流，就能稳定地切出记号。这就是本章的全部秘密：规格变机器，全程无手工。但故事没讲完。切出来的记号流只是一串平整的标签，程序不是标签的直线，而是嵌套的结构。记号流凭什么拧成一棵语法树？词法分析管认词，组句的事它管不了——这个遗留问题，正是第四章语法分析存在的理由。">
+    <div class="slide-head"><span class="sec">收束</span><h3>字符流凭什么切成单词？词形写成正则，正则机械地变成最小 DFA</h3></div>
+    <div class="slide-body">
+      <div class="chain">
+        <div class="link"><span class="no">问</span><span class="txt"><strong>主线问题</strong>：字符流凭什么切成一个个单词？</span></div>
+        <div class="link"><span class="no">答</span><span class="txt">词形 → 正则表达式 →（Thompson）→ NFA →（子集构造）→ DFA →（划分求精）→ 最小 DFA，扫一遍即切出记号</span></div>
+        <div class="link"><span class="no">留</span><span class="txt"><strong>遗留问题</strong>：记号流凭什么拧成语法树？—— 交给第4章</span></div>
+      </div>
+      <div class="deep">本章的秘密一句话：<strong>规格变机器，全程无手工</strong>。</div>
+    </div>
+  </section>
+
+  <section class="slide" data-narration="三句话讲完第三章。第一句，解决什么：把字符流切成记号流，让编译器前端的第一阶段独立、可替换、可机械化。第二句，核心机制：正则表达式描述词形，Thompson 构造拼出不确定自动机，子集构造变成确定自动机，划分求精压到最小，四个环节一条链，把规格变成可执行机器。第三句，承上启下：第二章手工写了扫描器，本章把扫描器的生成完全机械化，第四章将在本章输出的记号流上做语法分析。页面下方这条链就是本章的必背图，合上书也要能默写：正则，经 Thompson 到不确定自动机，经子集构造到确定自动机，经划分求精到最小自动机。">
+    <div class="slide-head"><span class="sec">小结</span><h3>三句话讲完第3章</h3></div>
+    <div class="slide-body">
+      <div class="chain">
+        <div class="link"><span class="no">1</span><span class="txt"><strong>解决什么</strong>：把字符流切成记号流，前端第一阶段独立、可替换、可机械化</span></div>
+        <div class="link"><span class="no">2</span><span class="txt"><strong>核心机制</strong>：正则描述词形 → Thompson 构造 NFA → 子集构造 DFA → 划分求精最小化，规格变机器</span></div>
+        <div class="link"><span class="no">3</span><span class="txt"><strong>承上启下</strong>：第2章手写扫描器，本章机械化生成，第4章在记号流上做语法分析</span></div>
+      </div>
+      <div class="formula formula-concl">正则表达式 → NFA → DFA → 最小 DFA　—— 合上书也要能默写</div>
+    </div>
+  </section>
+
+  <section class="slide slide-cover" data-narration="第三章到此毕业。合上书，拿一张纸，接受四项挑战。第一，默写 id、num、relop 三条正则定义，一个符号都不能错。第二，画出「a 并 b 闭包接 a b b」的 Thompson 自动机，十一个状态，编号零到十。第三，对同一台自动机填出子集构造的转换表，A 到 E 五行，并用 aababb 走一遍验证接受。第四，把这台五状态机器最小化到四个状态，说清每一轮拆分的理由。四项全过，词法分析这关才算真的拿下。下一章预告：第四章语法分析——上下文无关文法搭骨架，自顶向下的 LL 和自底向上的 LR，把记号流拧成语法树。我们第四章见。">
+    <div class="kicker">本 章 结 束</div>
+    <h1>词形写成正则，正则跑出机器</h1>
+    <div class="sub">毕业挑战：合上书，拿一张纸</div>
+    <div class="divider"></div>
+    <div class="meta">
+      ☑ 默写 id、num、relop 的正则定义　　☑ 画出 (a|b)*abb 的 11 状态 Thompson NFA<br>
+      ☑ 填出 A–E 子集构造转换表并用 aababb 验证　　☑ 最小化到 4 状态并说清每轮拆分理由<br><br>
+      下一章 · 第4章 语法分析：上下文无关文法搭骨架，LL 与 LR 分析器把记号流拧成语法树
+    </div>
+  </section>
+
+  <div id="footer">
+    <span class="brand">第3章 词法分析 · 编译原理课件</span>
+    <span id="pagenum">1 / 25</span>
+  </div>
+
+  <div class="nav">
+    <button id="prev" title="上一页 (←)">‹</button>
+    <button id="next" title="下一页 (→ / 空格)">›</button>
+  </div>
+  <div id="hint">← → 翻页 · 空格下一页 · 推导页逐步显示 · 点击左右半屏翻页</div>
+
+</div>
+
+<script src="/lectures-assets/mermaid.min.js"></script>
+<script>
+mermaid.initialize({
+  startOnLoad: false,   // 必须为 false：display:none 的隐藏页渲染会得到 0 宽高的退化 SVG，
+                        // 改为页面激活时懒渲染（见 renderMermaid）
+  theme: "base",
+  themeVariables: {
+    primaryColor: "#ebf8ff",
+    primaryBorderColor: "#2b6cb0",
+    primaryTextColor: "#1a365d",
+    lineColor: "#718096",
+    fontFamily: "-apple-system, PingFang SC, sans-serif",
+    fontSize: "15px"
+  },
+  flowchart: { curve: "linear", htmlLabels: false }
+});
+</script>
+<script>
+(function(){
+  const slides = Array.from(document.querySelectorAll('.slide'));
+  const total = slides.length;
+  let idx = 0;
+
+  const params = new URLSearchParams(location.search);
+  const startSlide = parseInt(params.get('slide'), 10);
+  if (params.get('autohide') === '1') document.body.classList.add('autohide');
+  if (!isNaN(startSlide) && startSlide >= 1 && startSlide <= total) idx = startSlide - 1;
+
+  const progress = document.getElementById('progress');
+  const pagenum = document.getElementById('pagenum');
+  const prevBtn = document.getElementById('prev');
+  const nextBtn = document.getElementById('next');
+
+  // 推导分步：每页记住已展开的步数；autohide（截图）模式下 CSS 强制全显
+  const stepState = new Map();
+  function stepsOf(i){ return Array.from(slides[i].querySelectorAll('.step')); }
+  function applySteps(){
+    stepsOf(idx).forEach((el, k)=> el.classList.toggle('on', k < (stepState.get(idx) || 0)));
+  }
+  // 前进一步：先展开本页下一步，全部展开后才翻页
+  function forward(){
+    const steps = stepsOf(idx);
+    const shown = stepState.get(idx) || 0;
+    if (shown < steps.length){ stepState.set(idx, shown + 1); applySteps(); return; }
+    go(idx + 1);
+  }
+  // 后退一步：先收起本页最后一步，收完才回上一页
+  function backward(){
+    const steps = stepsOf(idx);
+    const shown = stepState.get(idx) || 0;
+    if (shown > 0){ stepState.set(idx, shown - 1); applySteps(); return; }
+    go(idx - 1);
+  }
+
+  // mermaid 懒渲染：只在页面激活（有真实宽高）时渲染该页的图，渲染后打 data-done 防重复
+  function renderMermaid(slide){
+    if (typeof mermaid === 'undefined') return;
+    const nodes = Array.from(slide.querySelectorAll('.mermaid:not([data-done])'));
+    if (!nodes.length) return;
+    nodes.forEach(n => n.setAttribute('data-done', ''));
+    mermaid.run({ nodes }).catch(err => {
+      nodes.forEach(n => n.removeAttribute('data-done'));
+      console.error('mermaid 渲染失败：', err);
+    });
+  }
+
+  function render(){
+    slides.forEach((s,i)=> s.classList.toggle('active', i===idx));
+    progress.style.width = ((idx+1)/total*100) + '%';
+    pagenum.textContent = (idx+1) + ' / ' + total;
+    prevBtn.disabled = (idx===0);
+    nextBtn.disabled = (idx===total-1);
+    applySteps();
+    renderMermaid(slides[idx]);
+  }
+  function go(n){ idx = Math.max(0, Math.min(total-1, n)); render(); }
+
+  prevBtn.addEventListener('click', e=>{ e.stopPropagation(); backward(); });
+  nextBtn.addEventListener('click', e=>{ e.stopPropagation(); forward(); });
+
+  document.addEventListener('keydown', e=>{
+    if(e.key==='ArrowRight'||e.key===' '||e.key==='PageDown'){ e.preventDefault(); forward(); }
+    else if(e.key==='ArrowLeft'||e.key==='PageUp'){ e.preventDefault(); backward(); }
+    else if(e.key==='Home'){ stepState.set(idx, 0); go(0); }
+    else if(e.key==='End'){ go(total-1); }
+  });
+
+  document.getElementById('stage').addEventListener('click', e=>{
+    if(e.target.closest('.nav')) return;
+    const x = e.clientX;
+    if(x < window.innerWidth*0.5) backward(); else forward();
+  });
+
+  function fit(){
+    const s = Math.min(window.innerWidth/1280, window.innerHeight/720);
+    document.getElementById('stage').style.transform = 'translate(-50%,-50%) scale(' + s + ')';
+  }
+  window.addEventListener('resize', fit);
+  fit();
+  render();
+})();
+</script>
+</body>
+</html>

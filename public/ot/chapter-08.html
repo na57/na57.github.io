@@ -1,0 +1,694 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第8章 扩展与前沿：GW、非平衡、多边际 · 最优传输互动讲义</title>
+<link rel="stylesheet" href="/lectures-assets/style.css">
+</head>
+<body>
+
+<nav class="topbar">
+  <div class="topbar-inner">
+    <span class="brand"><a href="index.html" style="color:inherit">← 学习地图</a></span>
+    <span class="crumb">④ 应用与前沿 / 第8章</span>
+  </div>
+</nav>
+
+<div class="wrap">
+
+  <div class="lecture-head">
+    <span class="ch-label">CHAPTER 08 · 应用与前沿</span>
+    <h1>扩展与前沿：GW、非平衡、多边际</h1>
+    <p class="lead">本章回答的核心问题：前七章的 OT 有三个隐藏假设——两边住在同一空间、质量严格守恒、一次只对齐两个分布。现实会逐条撕掉它们：词向量与图形不共享坐标（跨空间）、细胞会分裂（质量变化）、多视角数据要同时对齐（多边际）。本章给每条假设配一个扩展，并给全书主线收尾。</p>
+  </div>
+
+  <div class="position-bar">
+    <strong>本章在主线上的位置：</strong>第7章把 OT 装进机器学习流水线 → <u>本章拆掉经典 OT 的三条隐藏假设：GW 处理跨空间对齐（比内部距离结构而非坐标）、非平衡 OT 允许质量产生与湮灭（KL 松弛边际）、多边际 OT 同时对齐 k 个分布（重心是其特例）</u> → 全书收束：从搬土方到梯度流。<br>
+    第8章回答主线上的第8个问题：<strong>当对象不在同一空间、质量不守恒、或要同时对齐多个分布时，OT 框架怎么扩？</strong>
+    <div class="map-inline">
+      <span class="node">① Ch1–2 问题与定义</span><span class="arrow">→</span>
+      <span class="node">② Ch3–4 离散与算法</span><span class="arrow">→</span>
+      <span class="node">③ Ch5–6 对偶几何与连续引擎</span><span class="arrow">→</span>
+      <span class="node">④ Ch7 机器学习应用</span><span class="arrow">→</span>
+      <span class="node here">④ Ch8 扩展与前沿（拆三条假设）</span>
+    </div>
+  </div>
+
+  <div class="objectives">
+    <h4>🎯 学完本章，合上书你应该能：</h4>
+    <ol>
+      <li>写出 GW² 的二次分配形式，说出它为什么不需要共同空间、为什么非凸；</li>
+      <li>手算一步固定点迭代：2 点空间 a=b=(0.5,0.5)、d_X=[[0,1],[1,0]]、d_Y=[[0,2],[2,0]]、π⁰=diag(0.5)，得 M=[[0.5,2.5],[2.5,0.5]]、解保持对角、GW²=0.5；</li>
+      <li>写出非平衡 OT 的 KL 松弛目标，说出 τ 与广义 Sinkhorn 缩放幂 τ/(τ+ε) 的含义，手算质量 √(ab) 的例子；</li>
+      <li>写出多边际 OT 的定义与 k 条边际约束，指出 Wasserstein 重心是其特例，说出 O(n^k) 的组合爆炸与多边际 Sinkhorn 的 k 个缩放向量；</li>
+      <li>写出 Benamou–Brenier 动态公式与连续性方程，用一句话说出 JKO 格式在做什么。</li>
+    </ol>
+  </div>
+
+  <div class="lecture">
+
+    <div class="figure">
+      <div class="mermaid">
+flowchart TB
+  A["经典 OT 的三条隐藏假设：同空间 质量守恒 两两对齐"] --> B["拆假设一：跨空间无公共坐标 只能比内部距离结构"]
+  B --> C["GW：二次分配 比较 d_X 与 d_Y 的逐对差异"]
+  C --> D["计算：非凸 固定点迭代 每步解一个线性 OT"]
+  A --> E["拆假设二：质量可生可灭 KL 松弛两条边际约束"]
+  E --> F["广义 Sinkhorn：行缩放列缩放带上幂 τ 除以 τ 加 ε"]
+  A --> G["拆假设三：k 个分布同时对齐 k 条边际约束"]
+  G --> H["多边际 OT：重心是特例 代价是张量 O 的 n 的 k 次方"]
+  D --> I["代价：三个扩展各自放松一点 计算与理论各付一笔账"]
+  F --> I
+  H --> I
+  classDef hot fill:#fbeedd,stroke:#c4651f,stroke-width:2.5px,color:#c4651f;
+  classDef danger fill:#fae9e7,stroke:#b03a2e,stroke-width:2.5px,color:#b03a2e;
+  class C hot;
+  class I danger;
+      </div>
+      <div class="caption">本章推导主线：三条隐藏假设逐一被拆掉 → GW 用内部距离结构跨空间对齐（非凸，固定点迭代）→ 非平衡 OT 用 KL 松弛允许质量生灭（广义 Sinkhorn）→ 多边际 OT 同时约束 k 条边际（重心特例，组合爆炸）→ 每个扩展都在计算与理论上各付一笔账。</div>
+    </div>
+
+    <h2><span class="sec-no">8.1</span>Gromov–Wasserstein：没有共同坐标，就比"内部距离结构"</h2>
+
+    <p>第7章的对齐都假设两边住在同一空间 ℝᵈ，可以算 c(x,y) = ‖x−y‖。但有一类对齐根本没有公共坐标：英文词向量对法文词向量、两个不同扫描仪出的三维形状、两张蛋白质接触图。坐标系本身不可比，<strong>唯一可比的是每个空间内部的"谁离谁远"</strong>。<span class="term">Gromov–Wasserstein 距离</span>（Gromov–Wasserstein Distance）的想法：不比点，比距离矩阵。设 (X, d_X, a) 与 (Y, d_Y, b) 是两个带测度的度量空间，</p>
+
+    <div class="formula">GW²(a, b) = min<sub>π ∈ Π(a,b)</sub> ∑<sub>i,j,k,l</sub> | d<sub>X</sub>(xᵢ, xₖ) − d<sub>Y</sub>(yⱼ, yₗ) |² π<sub>ij</sub> π<sub>kl</sub></div>
+
+    <p>读法：耦合 π 把 xᵢ 配给 yⱼ、把 xₖ 配给 yₗ；若这两对的"内部距离"一致（d_X(xᵢ,xₖ) ≈ d_Y(yⱼ,yₗ)），惩罚为零。<strong>π 的任务是保结构：近者仍配近者，远者仍配远者</strong>。GW 为零当且仅当两空间"等距同构"（允许重标号与刚体变换）——所以它天生对旋转、平移、坐标轴置换免疫，这正是形状匹配想要的。</p>
+
+    <p>代价是结构：目标里出现 π_ij·π_kl，是 π 的<strong>二次函数</strong>——<span class="term">二次分配问题</span>（Quadratic Assignment Problem, QAP），非凸、NP-hard，不再有 LP 的漂亮理论，也没有全局最优保证。工程上用<span class="term">固定点迭代</span>（Fixed-point Iteration，条件梯度的特例）：固定当前 πⁿ，把目标对 π 的梯度算出来当作线性成本 M，解一个普通（熵正则）线性 OT 得 πⁿ⁺¹，反复迭代。每步只解一个第3、4章就会的问题。</p>
+
+    <div class="box insight">
+      <span class="box-tag">✅ 手算示例：一步固定点迭代，全步骤</span>
+      <p>两个 2 点空间：X = {x₁,x₂}，d_X = [[0,1],[1,0]]；Y = {y₁,y₂}，d_Y = [[0,2],[2,0]]；权重 a = b = (0.5, 0.5)。初始 π⁰ = diag(0.5, 0.5)（x₁↔y₁、x₂↔y₂）。</p>
+      <p>第 1 步：算梯度成本矩阵 M_ij = Σ_{k,l} (d_X(i,k) − d_Y(j,l))² π⁰_kl。π⁰ 只有对角两项 0.5，故 M_ij = 0.5(d_X(i,1) − d_Y(j,1))² + 0.5(d_X(i,2) − d_Y(j,2))²。</p>
+      <p>第 2 步：逐个元素。M₁₁ = 0.5(0−0)² + 0.5(1−2)² = <strong>0.5</strong>；M₁₂ = 0.5(0−2)² + 0.5(1−0)² = 2 + 0.5 = <strong>2.5</strong>；M₂₁ = 0.5(1−0)² + 0.5(0−2)² = <strong>2.5</strong>；M₂₂ = 0.5(1−2)² + 0.5(0−0)² = <strong>0.5</strong>。</p>
+      <p>第 3 步：解线性 OT min ⟨M, π⟩，边际 (0.5,0.5)。对角成本 0.5 远低于交叉 2.5，最优保持对角：π¹ = diag(0.5) = π⁰——<strong>一步收敛到固定点</strong>。</p>
+      <p>第 4 步：算 GW²。非零项只有 (i,j)=(k,l) 与两对交叉：(1,1,2,2) 与 (2,2,1,1) 各贡献 (1−2)²·0.5·0.5 = 0.25。GW² = 0.25 + 0.25 = <strong>0.5</strong>。</p>
+      <p>几何读法：两个空间结构相同（两点对称），只是尺度差一倍——GW² = 0.5 精确度量了"结构对、尺度错"的失配，而经典 W 在这种坐标不可比时根本无从定义。</p>
+    </div>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>GW 把"分布"升级为"度量空间 + 分布"（metric measure space）。比较对象从坐标变成关系——这与第5章的思想一脉相承：W 是"分布的几何"，GW 是"几何的几何"。固定点迭代的每步都在说：当前配对下，哪些配对让结构误差最小？</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>把 GW 当成距离直接套第5章的性质。GW² 是二次型、非凸：固定点迭代只保证收敛到局部极小，初值不同答案不同（上例若从 π⁰ = 反对角出发会收敛到另一个解）。另外 GW 只能定义到"等距同构类"上——两个经刚体变换后完全重合的形状 GW = 0，这在形状分析里是特性，在需要区分朝向的任务里就是盲区。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 8.1-1</div>
+              <div class="q-text">写出 GW² 的定义式，说出它相比经典 OT 多输入了什么、免疫什么。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              GW² = min_π Σ|d_X(xᵢ,xₖ) − d_Y(yⱼ,yₗ)|²π_ijπ_kl。多输入了两个内部距离矩阵；对刚体变换与重标号免疫（等距同构下 GW=0）。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 8.1-2</div>
+              <div class="q-text">固定点迭代的一步在做什么？本章算例的 M、π¹、GW² 各是多少？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              把 GW 目标在当前 π 处的梯度当线性成本，解一个线性 OT 得下一步。例中 M=[[0.5,2.5],[2.5,0.5]]，π¹=diag(0.5)=π⁰ 一步收敛，GW²=0.5。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <h2><span class="sec-no">8.2</span>非平衡 OT：质量不守恒时，把硬约束换成软惩罚</h2>
+
+    <p>经典 OT 的铁律：a、b 都是概率分布，总质量都为 1，耦合的两条边际约束是硬等式。但第7章没处理的场景大量存在：单细胞发育中细胞会分裂，总质量随时间增长；两张照片亮度总量不同；分布被裁剪、遮挡、部分观测。<span class="term">非平衡 OT</span>（Unbalanced OT）的修法：硬约束软化为<span class="term">KL 惩罚</span>（KL Penalty，也可用 TV 等散度），允许 P 的边际偏离 a、b，但按偏离程度付费：</p>
+
+    <div class="formula">min<sub>P ≥ 0</sub> ⟨C, P⟩ + τ·KL(P𝟙 ∥ a) + τ·KL(Pᵀ𝟙 ∥ b)</div>
+
+    <p>其中 KL 用非归一化版本 KL(u∥v) = Σ u log(u/v) − u + v。τ 是"边际违规的单价"：τ → ∞ 收回经典 OT（不敢偏离）；τ 有限时，搬运太贵就让质量就地产生或湮灭——<strong>OT 从"守恒搬运"变成"搬运与买卖的混合经济"</strong>。</p>
+
+    <div class="box insight">
+      <span class="box-tag">✅ 手算示例：质量怎么变——几何平均 √2</span>
+      <p>一点情形：a = 1·δ₀，b = 2·δ₀（同一点，目标要求两倍质量），c(0,0) = 0。设 P 在 (0,0) 放质量 m。</p>
+      <p>目标：f(m) = τ·KL(m∥1) + τ·KL(m∥2) = τ(m log m − m + 1) + τ(m log(m/2) − m + 2)。</p>
+      <p>一阶条件：f′(m) = τ log m + τ log(m/2) = τ log(m²/2) = 0 ⟹ m² = 2 ⟹ <strong>m = √2 ≈ 1.414</strong>。</p>
+      <p>读法：最优质量是两端的几何平均——源头"多产"0.414、终端"少收"0.586，两边各付一半 KL 罚款，谁也不用全额搬。<strong>质量不是被搬过去的，是在最优处被创造出来的</strong>。τ 越大罚款越贵，m 越贴近"少创造、多搬运"的经典行为。</p>
+    </div>
+
+    <p>好消息是算法几乎不用换。<span class="term">广义 Sinkhorn</span>（Generalized Sinkhorn）仍是交替缩放，只是行/列缩放带上幂指数：</p>
+
+    <div class="formula">u ← ( a ∕ (Kv) )<sup>τ∕(τ+ε)</sup>，&nbsp;&nbsp;v ← ( b ∕ (Kᵀu) )<sup>τ∕(τ+ε)</sup></div>
+
+    <p>幂 τ/(τ+ε) ∈ (0,1)：τ → ∞ 时幂趋于 1，收回第4章的标准 Sinkhorn（硬边际）；τ 有限时每次只朝目标走"τ/(τ+ε) 步"，边际被允许保留偏差——软约束直接写进了迭代的指数里。KL 换成 TV 时，缩放公式再变，但"交替缩放"的骨架不变，这正是 Sinkhorn 框架的弹性。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>非平衡 OT 的统一视角：边际约束从"等式"降级为"散度惩罚"，τ 就是汇率——搬运成本与质量生灭成本在市场上竞争。单细胞 RNA 测序的轨迹推断（Waddington-OT）用的正是它：细胞分裂使总质量增长，KL 松弛让"今天的细胞"可以比"昨天的"多。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>先归一化再跑经典 Sinkhorn。归一化把"质量差"这个最重要的信号（细胞增殖率、遮挡比例）当噪声洗掉了——非平衡 OT 的全部价值恰在于保留并定价这个差。另一个误区：τ 取默认。τ 是物理量（每公斤质量的生灭价格），必须按场景标定，τ 太小则什么都不搬、全靠就地生灭。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 8.2-1</div>
+              <div class="q-text">写出非平衡 OT 的目标式，说出 τ 的经济含义与 τ→∞ 的极限。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              min ⟨C,P⟩ + τKL(P1∥a) + τKL(Pᵀ1∥b)。τ 是边际违规单价（质量生灭的汇率）；τ→∞ 收回经典硬边际 OT。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 8.2-2</div>
+              <div class="q-text">广义 Sinkhorn 的缩放公式与标准版差在哪？本章手算的最优质量是多少？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              行/列缩放带幂 τ/(τ+ε)，每步只朝硬边际走一部分。例中 a=1、b=2 时最优质量 m=√2（几何平均，生灭各付一半罚款）。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <h2><span class="sec-no">8.3</span>多边际 OT：k 个分布一起对齐，重心是它的特例</h2>
+
+    <p>第7章的 Wasserstein 重心要同时顾及 k 个分布——这已不是"两两耦合"能表达的。<span class="term">多边际 OT</span>（Multi-marginal OT）直接定义在 k 元联合张量上：给定 k 个分布 a₁…a_k 与 k 元成本 c(x₁,…,x_k)，</p>
+
+    <div class="formula">min<sub>π ∈ Π(a₁,…,a_k)</sub> ∫ c(x₁,…,x_k) dπ(x₁,…,x_k)</div>
+
+    <p>可行集 Π(a₁,…,a_k) 要求 π 的 <strong>k 条边际</strong>（沿每个坐标轴投影）分别等于 a₁…a_k——第2章的两条边际约束升级为 k 条。耦合 π 是一张 k 维"运输表"：π(x₁,…,x_k) 表示 k 个分布各出一点组成"对齐的 k 元组"的概率。</p>
+
+    <p>最重要的特例就是第7章的重心：取成本为各点到均值的平方距离之和</p>
+
+    <div class="formula">c(x₁,…,x_k) = ∑<sub>i=1..k</sub> ‖ xᵢ − x̄ ‖²，&nbsp;&nbsp;x̄ = <span class="frac"><span class="num-part">1</span><span class="den-part">k</span></span> ∑<sub>i</sub> xᵢ</div>
+
+    <p>此时多边际 OT 的解恰好编码了"对齐的 k 元组的均值"，把所有 k 元组的均值按 π 加权就得到 Wasserstein 重心——<strong>重心 = 多边际 OT 的均值投影</strong>。Agueh–Carlier 正是用这条线把重心问题化成了多边际 LP。</p>
+
+    <div class="box insight">
+      <span class="box-tag">✅ 手算示例：3 边际、2 点、全体一致免费</span>
+      <p>k = 3，每个分布 a₁ = a₂ = a₃ = (0.5, 0.5) 在 {0,1} 上，成本用上式（到均值的平方和）。</p>
+      <p>第 1 步：列成本。k 元组 (0,0,0)、(1,1,1)：x̄ = 0 或 1，c = 0。混合型如 (0,0,1)：x̄ = 1/3，c = (1/3)² + (1/3)² + (2/3)² = 1/9 + 1/9 + 4/9 = <strong>2/3</strong>。由对称性，所有 6 个混合组 c = 2/3。</p>
+      <p>第 2 步：构造可行解。π 在 (0,0,0) 与 (1,1,1) 上各放 0.5：每条边际投影都给出 (0.5, 0.5) ✓。成本 = 0.5·0 + 0.5·0 = <strong>0</strong>。</p>
+      <p>第 3 步：最优性。c ≥ 0 且达到 0，故为全局最优。读法：三方完全一致时对齐免费；任何"意见不合"的 k 元组都按到均值的距离付分裂税——重心成本结构奖励共识、惩罚分歧。</p>
+      <p>第 4 步：看规模。每个分布 n 个点时，π 是 nᵏ 维张量，边际约束 k·n 条——<strong>O(nᵏ) 组合爆炸</strong>：n=100、k=5 就是 10¹⁰ 个变量，LP 直接无解。</p>
+    </div>
+
+    <p>救场还是熵正则。<span class="term">多边际 Sinkhorn</span>（Multi-marginal Sinkhorn）：熵正则化后最优解仍是缩放形式 π = diag(u₁) K diag(u₂) … diag(u_k)，K = exp(−C/ε) 是 k 维核张量，<strong>k 个缩放向量</strong> u₁…u_k 交替更新（每个向量固定其余，让对应边际达标），每步复杂度仍为核张量的缩放入出。代价也照旧：ε 引入偏差（第4章的账），张量本身的存储 O(nᵏ) 仍在——实践中常用低秩/采样近似绕开显式张量。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>全书算法主线在这里汇拢：LP（Ch3）→ 熵正则 Sinkhorn（Ch4）→ 对偶（Ch5）→ 连续工具（Ch6）→ 应用（Ch7）→ 三个扩展全部沿用同一骨架——GW 每步解线性 OT、非平衡改缩放幂、多边际加缩放向量。<strong>框架的每个扩展都是老算法的再参数化</strong>，这就是 OT 作为"平台"的威力。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>把多边际问题拆成两两 OT 依次做。两两对齐不满足传递性（A 对齐 B、B 对齐 C 不蕴含 A、B、C 三方一致），只有 k 元张量上的联合约束能表达"全体一致"（上例的免费条款）。另一个误区：忘了重心的正确算法是多边际而非"轮流求两两 W₂ 平均"——轮流平均不收敛到真重心。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 8.3-1</div>
+              <div class="q-text">写出多边际 OT 的定义；约束有几条？张量规模多大？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              min_π ∫c(x₁..x_k)dπ，π 的 k 条轴向边际各等于 a₁..a_k。π 是 O(nᵏ) 张量——组合爆炸。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 8.3-2</div>
+              <div class="q-text">Wasserstein 重心为什么是多边际 OT 的特例？多边际 Sinkhorn 有几个缩放向量？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              取 c = Σ‖xᵢ − x̄‖²，解的 k 元组均值加权即重心。熵正则后 π = diag(u₁)K…diag(u_k)，k 个缩放向量交替更新。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <h2><span class="sec-no">8.4</span>全书收束：从搬土方到梯度流</h2>
+
+    <p>八章走完了。回看主线：第1章把"搬土方"写成概率度量问题，第2章立起 Monge/Kantorovich 两种形式，第3章确认它是 LP，第4章用熵正则换来 Sinkhorn 的速度，第5章把最优值锻造成真距离 W_p 并展开对偶与几何，第6章把工具带进连续域（Brenier、半离散、S_ε、SW），第7章装进机器学习流水线，本章拆掉三条隐藏假设。剩下的前沿指针，记两个就够：</p>
+
+    <p>其一，<span class="term">Benamou–Brenier 动态公式</span>（Benamou–Brenier Formula）：W₂² 不只能静态定义，它等于"最优流"的动能——在所有把 ρ₀ 连续演化到 ρ₁ 的速度场 v 中，</p>
+
+    <div class="formula">W₂²(ρ₀, ρ₁) = min<sub>(ρ, v)</sub> ∫₀¹ ∫ ‖v(x,t)‖² ρ(x,t) dx dt，&nbsp;&nbsp;满足连续性方程 ∂ₜρ + ∇·(ρv) = 0</div>
+
+    <p>连续性方程就是质量守恒的微分形式。这条公式把 OT 接进流体力学与扩散：第5章的位移插值正是沿测地线的等速流。其二，<span class="term">JKO 格式</span>（Jordan–Kinderlehrer–Otto Scheme）：要模拟热方程、多孔介质方程这类扩散/聚集过程，可以按时间步反复解 min_ρ W₂²(ρ, ρⁿ)/(2h) + F(ρ)——<strong>用 W₂ 距离当"惯性"、用能量 F 当"驱动力"，Wasserstein 几何让一大类 PDE 变成了梯度下降</strong>。这是 OT 通向分析学的大门，也是全书"几何"二字最深的兑现。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 一句话主线（全书的答案）</span>
+      <p>搬土方之问 → Monge/Kantorovich 立义 → LP 与 Sinkhorn 给算法 → 对偶成距离、连续域给工具 → 机器学习落地 → GW、非平衡、多边际拆掉最后的假设——OT 是一台"给分布世界造几何"的机器：先定义什么是"远"，再让一切计算沿这个"远"展开。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 8.4-1</div>
+              <div class="q-text">写出 Benamou–Brenier 公式与连续性方程，各配一句白话。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              W₂² = min ∫₀¹∫‖v‖²ρ dx dt，约束 ∂ₜρ + ∇·(ρv) = 0。白话：W₂² 是把一个分布"流"成另一个的最小动能；约束即质量不生不灭。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 8.4-2</div>
+              <div class="q-text">用一句话说出 JKO 格式在做什么。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              每个时间步解 min_ρ W₂²(ρ,ρⁿ)/(2h) + F(ρ)：用 W₂ 当惯性、能量 F 当驱动力，把扩散类 PDE 变成 Wasserstein 空间里的梯度下降。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <h2><span class="sec-no">🃏</span>概念卡</h2>
+    <p>本章 6 张核心概念卡。先默答再翻面，背面的"何时用"把这章接回全书。</p>
+
+    <div class="flip-grid">
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 1</div>
+            <div class="q-text">Gromov–Wasserstein 距离</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">min_π Σ|d_X(xᵢ,xₖ) − d_Y(yⱼ,yₗ)|²π_ijπ_kl：比内部距离结构而非坐标。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">跨空间对齐：词向量跨语言、形状跨扫描仪，无公共坐标。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">两张城市地图不叠坐标，只比"任意两城的相对远近"是否一致。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">当普通距离用；它定义在等距同构类上，朝向信息天然丢失。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">形状匹配、跨模态对齐；需要保结构而非保坐标时。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 2</div>
+            <div class="q-text">二次分配与固定点迭代</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">GW 目标含 π_ijπ_kl 是二次非凸；迭代：梯度当线性成本→解线性 OT→更新。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">非凸 GW 怎么算：化整为零，每步回到第3、4章会解的问题。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">摸着石头过河：按当前配对的结构误差，挑下一步最省力的配对。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">期望全局最优；初值不同收敛到不同局部极小（反对角初值即另一解）。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">一切 GW 计算；理解 QAP 类问题"只能局部优化"的通用范式。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 3</div>
+            <div class="q-text">非平衡 OT（KL 松弛）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">min ⟨C,P⟩ + τKL(P1∥a) + τKL(Pᵀ1∥b)：硬边际换软惩罚。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">质量不守恒：细胞分裂、遮挡、亮度总量变化。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">搬运与就地生灭竞争，τ 是生灭的汇率。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">先归一化再跑经典 OT；归一化洗掉的恰是最重要的质量差信号。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">单细胞轨迹推断、部分观测、任何"总量会变"的对齐。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 4</div>
+            <div class="q-text">广义 Sinkhorn</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">行/列缩放带幂 τ/(τ+ε)：u←(a/(Kv))^{τ/(τ+ε)}。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">非平衡 OT 仍想要 Sinkhorn 式交替算法。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">每步只朝硬边际走 τ/(τ+ε) 步，剩下的偏差被允许保留。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为换了算法；骨架不变，软约束被写进了缩放的指数。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">非平衡 OT 的一切数值计算；τ→∞ 退回第4章标准版。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 5</div>
+            <div class="q-text">多边际 OT 与重心结构</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">min_π ∫c(x₁..x_k)dπ，k 条轴向边际约束；c = Σ‖xᵢ−x̄‖² 时解出重心。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">k 个分布同时一致对齐，两两耦合表达不了"全体一致"。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">k 方会谈：共识免费，分歧按到均值的距离纳税。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">拆成两两 OT 轮流做；两两对齐无传递性，到不了真重心。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">Wasserstein 重心、多视角对齐；多边际 Sinkhorn 用 k 个缩放向量。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 6</div>
+            <div class="q-text">Benamou–Brenier 与 JKO</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">W₂² = min ∫₀¹∫‖v‖²ρ dxdt（连续性方程约束）；JKO：逐步 min W₂²/(2h) + F。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">把 OT 从静态最优接到动态演化与 PDE。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">W₂² 是最省动能的流；PDE 是 Wasserstein 空间里的梯度下降。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">当成新距离；它是 W₂ 的另一副面孔（位移插值即其测地线）。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">梯度流、扩散方程数值、全书几何主线的最深兑现。</span></div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+    <h2><span class="sec-no">📝</span>分层习题</h2>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>判断对错：GW 距离为零当且仅当两个分布在同一坐标系下逐点重合。</div>
+      <details>
+        <summary>提示</summary>
+        <p>GW 比的是什么？旋转一个形状后 GW 变吗？</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p>错。GW = 0 当且仅当两个度量测度空间等距同构——允许重标号与刚体变换。旋转、平移、镜像一个形状后 GW 仍为零，这恰是 GW 的设计目标（形状匹配要对姿态免疫）。把"坐标重合"当成判定标准，等于把 GW 又拉回了需要共同空间的经典 W——两个概念的根本区别正在于此。易错点：在需要区分左右手（镜像）的任务里误用 GW，会发现它把互为镜像的形状判成零距离。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>选择：非平衡 OT 中 τ 的作用是（A）控制熵正则强度（B）控制边际违规的惩罚单价，τ→∞ 收回经典 OT（C）控制迭代步数（D）控制质量总量。</div>
+      <details>
+        <summary>提示</summary>
+        <p>τ 出现在目标式的哪一项前面？广义 Sinkhorn 的幂里它扮演什么角色？</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p>B。τ 乘在两个 KL 惩罚项前，是"每公斤边际违规的价格"：τ→∞ 违规无限贵，回到硬边际的经典 OT；τ 有限则允许生灭。A 错：熵正则强度由 ε 控制（第4章的参数），τ 与 ε 在广义 Sinkhorn 的幂 τ/(τ+ε) 里各司其职；C 错：迭代步数由收敛阈值决定；D 错：质量总量由最优解内生决定（如本章的 √2），τ 只影响它的权衡。易错点：τ 与 ε 都出现在公式里，常记混——ε 管光滑，τ 管守恒。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>GW 固定点迭代的另一半：同 8.1 算例，但初值取反对角 π⁰ = [[0, 0.5],[0.5, 0]]（x₁↔y₂、x₂↔y₁）。(i) 重算梯度成本矩阵 M；(ii) 解线性 OT 给出 π¹；(iii) 算此配对下的 GW²，与 8.1 的 0.5 比较，说明非凸性的后果。</div>
+      <details>
+        <summary>提示</summary>
+        <p>M_ij = 0.5(d_X(i,1) − d_Y(j,2))² + 0.5(d_X(i,2) − d_Y(j,1))²（注意 π⁰ 的支持在反对角）。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p>(i) M₁₁ = 0.5(0−2)² + 0.5(1−0)² = 2 + 0.5 = <strong>2.5</strong>；M₁₂ = 0.5(0−0)² + 0.5(1−2)² = <strong>0.5</strong>；M₂₁ = 0.5(1−2)² + 0.5(0−0)² = <strong>0.5</strong>；M₂₂ = 0.5(1−0)² + 0.5(0−2)² = <strong>2.5</strong>。M = [[2.5, 0.5],[0.5, 2.5]]。</p>
+          <p>(ii) 反对角成本 0.5 远低于对角 2.5，线性 OT 最优保持反对角：π¹ = π⁰——一步收敛到固定点。</p>
+          <p>(iii) GW²：非零交叉项 (1,2,2,1) 与 (2,1,1,2)：(d_X(1,2) − d_Y(2,1))²·0.25 = (1−2)²·0.25 = 0.25，两项合计 <strong>0.5</strong>。数值与 8.1 相同！读法：本例两个空间对称，两种配对 GW² 都是 0.5——两个局部极小值相同是巧合（对称性使然）；一般问题中不同初值收敛到 GW² 不同的局部解，这就是非凸的代价：没有全局保证，要多初值重启。易错点：以为"一步收敛"等于"全局最优"——它只是说明初值已经坐在局部极小上。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>非平衡 OT 的 τ 依赖：a = 1·δ₀，b = 2·δ₀，c(0,0) = 0 改为 c(0,0) = c₀ &gt; 0（搬运也要花钱）。目标 f(m) = c₀·m + τ(m log m − m + 1) + τ(m log(m/2) − m + 2)。(i) 写出一阶条件；(ii) 求 m*（用 c₀、τ 表示）；(iii) 讨论 c₀ → ∞ 与 τ → ∞ 两个极限，给出经济读法。</div>
+      <details>
+        <summary>提示</summary>
+        <p>对 m 求导，log m 与 log(m/2) 的系数都是 τ，c₀ 是常数项。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p>(i) f′(m) = c₀ + τ log m + τ log(m/2) = c₀ + τ log(m²/2) = 0。</p>
+          <p>(ii) log(m²/2) = −c₀/τ ⟹ m² = 2e^{−c₀/τ} ⟹ <strong>m* = √2 · e^{−c₀/(2τ)}</strong>。</p>
+          <p>(iii) c₀ → ∞（搬运无限贵）：m* → 0——宁可完全不生不灭也不搬，退化为"两边各自为政"。τ → ∞（违规无限贵）：m* → √2……注意此时 KL 惩罚把 m 锁向使两项 KL 都小的折中（几何平均），若再加上"总质量必须守恒"的硬约束（经典 OT），问题根本无可行解（1 ≠ 2）——这正说明非平衡松弛的必要性。经济读法：c₀/τ 是"搬运与生灭的比价"，比价越高越倾向不生不灭；m* 随比价指数衰减。易错点：把 τ→∞ 读成"回到经典"——经典问题在此不可行，τ→∞ 是"尽量接近经典"的极限。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l3">L3 建模应用</span>你实验室有三个平台测同一批细胞的基因表达：RNA-seq（平台 A）、ATAC-seq（平台 B）、蛋白组（平台 C）。三个平台 feature 空间完全不同、细胞数不同（各自 8000 / 9500 / 12000，且有细胞在部分平台死亡丢失）。要得到一个"对齐的细胞图谱"用于下游发育分析。给出完整方案：用本章哪几件工具、各自解决哪个假设缺口、怎么组合、怎么验收。</div>
+      <details>
+        <summary>提示</summary>
+        <p>空间不同 → ？质量不守恒 → ？三方同时 → ？</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p>三个缺口各配一件工具：</p>
+          <p>(i) 空间不同（无公共坐标）→ GW：每个平台内部算细胞-细胞距离矩阵 d_A、d_B、d_C（用各自 feature 的相关距离），用 GW 系列方法对齐结构。平台两两间没有可比的 c(x,y)，经典 W 无从定义。</p>
+          <p>(ii) 质量不守恒（细胞死亡/丢失、数量不同）→ 非平衡松弛：边际用 KL 惩罚而非硬等式，τ 按"细胞死亡比例"的生物学先验标定；绝不做"先归一化到同细胞数"。</p>
+          <p>(iii) 三方同时（两两对齐无传递性）→ 多边际/多向推广：用 GW 的多边际版（或多张量联合）让三个平台共享一个对齐结构，避免 A↔B、B↔C 分别对齐后 A 与 C 对不上。</p>
+          <p>组合：目标 = 多边际 GW（保结构）+ τ·KL 边际松弛（容许生灭），算法 = 固定点迭代（每步解一个非平衡多边际 Sinkhorn 子问题：k 个缩放向量、幂 τ/(τ+ε)），初值多重启几次取 GW 值最小者。</p>
+          <p>验收：三项——结构保持度（同一细胞群在三个平台的邻居重合率）；生物学合理性（发育轨迹的伪时间排序与已知标记基因一致）；稳健性（重抽样后对齐的耦合矩阵变化小）。下游发育分析若用到质量增长（细胞增殖），非平衡项的 τ 还要与增殖率联合校验。</p>
+        </div>
+      </details>
+    </div>
+
+    <h2><span class="sec-no">✍️</span>本章自测</h2>
+    <p class="quiz-hint">点击选项判分，答错会给出原因。</p>
+
+    <div class="quiz-block" data-answer="c">
+      <div class="q-no">自测 1</div>
+      <div class="q-stem">GW 距离相比经典 Wasserstein 距离，关键的新增输入与免疫性是：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 新增坐标矩阵，免疫噪声</li>
+        <li data-opt="b">B. 新增标签，免疫类别不平衡</li>
+        <li data-opt="c">C. 新增两个内部距离矩阵，免疫刚体变换与重标号</li>
+        <li data-opt="d">D. 新增熵正则，免疫局部极小</li>
+      </ul>
+      <div class="quiz-explain">解析：选 C，GW 只比内部距离结构，故对旋转/平移/置换天然免疫。A 错：恰恰是不需要坐标（坐标不可比才用 GW）；B 错：标签是域适应的类感知成本（第7章），与 GW 无关；D 错：熵正则只用于每步线性子问题，GW 的非凸性不因它消失。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 2</div>
+      <div class="q-stem">8.1 算例中，固定点迭代从 π⁰ = diag(0.5) 出发，一步后的 M、π¹、GW² 分别是：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. M=[[2.5,0.5],[0.5,2.5]]，π¹ 反对角，GW²=1</li>
+        <li data-opt="b">B. M=[[0.5,2.5],[2.5,0.5]]，π¹ 保持对角，GW²=0.5</li>
+        <li data-opt="c">C. M=[[0.5,2.5],[2.5,0.5]]，π¹ 均匀分布，GW²=0</li>
+        <li data-opt="d">D. M=[[1,2],[2,1]]，π¹ 保持对角，GW²=0.25</li>
+      </ul>
+      <div class="quiz-explain">解析：选 B。A 错：那是从反对角初值出发的情形（L2 习题），M 转置、解也翻转——说明 GW 非凸、依赖初值；C 错：均匀耦合的 ⟨M,π⟩ 更高，不是线性 OT 的解；D 错：M 的每个元素是两项平方差的加权和（0.5 权重），不是简单差值。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="a">
+      <div class="q-no">自测 3</div>
+      <div class="q-stem">a = 1·δ₀、b = 2·δ₀、c(0,0)=0 的非平衡 OT（KL 松弛）最优质量为：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. √2</li>
+        <li data-opt="b">B. 1.5</li>
+        <li data-opt="c">C. 2</li>
+        <li data-opt="d">D. 1</li>
+      </ul>
+      <div class="quiz-explain">解析：选 A，一阶条件 τ log(m²/2)=0 给 m=√2（几何平均）。B 错：算术平均 1.5 不满足 KL 的一阶条件——KL 的导数是 log，乘积结构给出几何而非算术平均；C 错：完全迁就 b 等于把全部违规罚在源头一边；D 错：同理完全迁就 a。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="d">
+      <div class="q-no">自测 4</div>
+      <div class="q-stem">关于多边际 OT，正确的是：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 可以拆成两两 OT 依次求解而不损失精度</li>
+        <li data-opt="b">B. 耦合张量规模是 O(n²)</li>
+        <li data-opt="c">C. Wasserstein 重心与多边际 OT 无关</li>
+        <li data-opt="d">D. 取成本 c = Σ‖xᵢ−x̄‖² 时解编码重心；张量 O(nᵏ) 组合爆炸，多边际 Sinkhorn 用 k 个缩放向量</li>
+      </ul>
+      <div class="quiz-explain">解析：选 D。A 错：两两对齐无传递性（A↔B、B↔C 不蕴含三方一致），多边际约束不可拆分；B 错：k 个分布时是 O(nᵏ) 张量，n=100、k=5 即 10¹⁰；C 错：重心恰是多边际 OT 在"到均值平方和"成本下的特例（Agueh–Carlier）。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 5</div>
+      <div class="q-stem">Benamou–Brenier 公式中，W₂²(ρ₀,ρ₁) 等于：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 所有耦合下的期望平方距离（那是静态定义，本题问动态形式）</li>
+        <li data-opt="b">B. 满足连续性方程 ∂ₜρ+∇·(ρv)=0 的所有流中，动能 ∫₀¹∫‖v‖²ρ dxdt 的最小值</li>
+        <li data-opt="c">C. 两个分布密度的 L² 距离</li>
+        <li data-opt="d">D. 最优映射 T 的 Lipschitz 常数</li>
+      </ul>
+      <div class="quiz-explain">解析：选 B——W₂² 的流体动力学面孔，位移插值即其测地线。A 错：那是 Kantorovich 静态定义，与 BB 公式等价但不是本题所问；C 错：L² 距离没有几何搬运含义，错位密度会算出很大值；D 错：Lipschitz 常数是函数性质，与 W₂ 的值无此关系。</div>
+    </div>
+
+    <div class="retell">
+      <h3>🗣️ 用自己的话，三句话讲完本章</h3>
+      <p>对着空气（或室友）说出这三句。说卡壳的那句，回去重读对应小节。</p>
+      <details>
+        <summary>句1：这章解决什么问题？——</summary>
+        <div class="retell-answer">参考答案：经典 OT 的三条隐藏假设——同一空间、质量守恒、两两对齐——在现实中常被撕掉：跨空间对齐（词向量、形状）、质量生灭（细胞分裂、遮挡）、多分布同时对齐（重心、多视角），本章给每条假设配一个扩展。</div>
+      </details>
+      <details>
+        <summary>句2：核心机制是什么？——</summary>
+        <div class="retell-answer">参考答案：GW 比内部距离结构（二次分配、非凸、固定点迭代每步解线性 OT）；非平衡 OT 把硬边际换成 KL 惩罚（τ 定汇率，广义 Sinkhorn 缩放带幂 τ/(τ+ε)）；多边际 OT 在 k 元张量上约束 k 条边际（重心是特例，熵正则后 k 个缩放向量）；全部沿用"老算法再参数化"的骨架。</div>
+      </details>
+      <details>
+        <summary>句3：它和前后章怎么分工？——</summary>
+        <div class="retell-answer">参考答案：第1–4章立定义与算法，第5–6章造几何与连续工具，第7章落地机器学习，本章拆掉最后的假设并收束全书；Benamou–Brenier 与 JKO 把 OT 通向梯度流与 PDE，是继续深入的门。</div>
+      </details>
+    </div>
+
+    <div class="review-plan">
+      <h3>🔁 间隔复习计划</h3>
+      <p>回忆本身比重读有效 10 倍。到点只做一件事：翻卡 + 重做标记题。</p>
+      <table>
+        <tr><th>时间点</th><th>复习内容</th><th>预计用时</th></tr>
+        <tr><td>第 1 天</td><td>概念卡 1–6 全部 + 回忆卡 8.1-1、8.2-2</td><td>12 分钟</td></tr>
+        <tr><td>第 3 天</td><td>概念卡 1、3、5（GW、非平衡、多边际）+ 重做 L2 第一题（反对角初值）</td><td>12 分钟</td></tr>
+        <tr><td>第 7 天</td><td>三句话复述 + 自测错题 + 默写 GW² 定义与非平衡目标式</td><td>10 分钟</td></tr>
+        <tr><td>第 15 天</td><td>只做合上书挑战；能全过就毕业</td><td>15 分钟</td></tr>
+      </table>
+    </div>
+
+    <div class="final-challenge">
+      <h3>📕 合上书挑战</h3>
+      <p class="fc-sub">现在关掉这个页面，拿一张纸，凭记忆完成以下任务。全部做完再回来核对——这是本章真正的毕业考试。</p>
+      <ol id="challenge-list">
+        <li><span class="fc-check"></span>写出 GW² 定义，说出它比经典 OT 多输入什么、免疫什么、为什么非凸</li>
+        <li><span class="fc-check"></span>重演 2 点算例的一步固定点迭代：M=[[0.5,2.5],[2.5,0.5]]、π¹=diag(0.5)、GW²=0.5，并说出反对角初值的后果</li>
+        <li><span class="fc-check"></span>写出非平衡 OT 目标式与广义 Sinkhorn 缩放公式；手推 a=1、b=2、c₀=0 时 m=√2，含 c₀ 时 m=√2·e^{−c₀/(2τ)}</li>
+        <li><span class="fc-check"></span>写出多边际 OT 定义与 k 条边际约束，重算 3 边际 2 点例（混合组成本 2/3、最优 0），说出 O(nᵏ) 与 k 个缩放向量</li>
+        <li><span class="fc-check"></span>写出 Benamou–Brenier 公式与连续性方程，一句话说出 JKO 格式</li>
+        <li><span class="fc-check"></span>回答本章的主线问题：当对象不在同一空间、质量不守恒、或要同时对齐多个分布时，OT 框架怎么扩？（一句话）</li>
+      </ol>
+    </div>
+
+    <div class="complete-zone">
+      <button class="btn-complete" id="btn-complete" onclick="markDone()">✓ 我已完成本章（含合上书挑战）</button>
+    </div>
+
+    <div class="chapter-nav">
+      <a href="chapter-07.html"><span class="nav-dir">← 上一章</span>第7章 应用：机器学习中的 OT</a>
+      <a href="index.html" class="next"><span class="nav-dir">回到学习地图 →</span>全书完 · 复习中心在等你</a>
+    </div>
+
+  </div>
+</div>
+
+<footer class="footer">
+  <div class="wrap">第8章 扩展与前沿：GW、非平衡、多边际 · 最优传输互动讲义 · 基于 Peyré &amp; Cuturi (2019)</div>
+</footer>
+
+<script src="/lectures-assets/mermaid.min.js"></script>
+<script>
+mermaid.initialize({
+  startOnLoad: true,
+  theme: "base",
+  themeVariables: {
+    primaryColor: "#e3edf7",
+    primaryBorderColor: "#1d5f9e",
+    primaryTextColor: "#1d5f9e",
+    lineColor: "#5c554b",
+    secondaryColor: "#fbeedd",
+    tertiaryColor: "#f5f1e8",
+    fontFamily: "-apple-system, PingFang SC, sans-serif",
+    fontSize: "14px"
+  },
+  flowchart: { curve: "linear", htmlLabels: false }
+});
+</script>
+<script>
+// 自测题判分
+document.querySelectorAll(".quiz-block").forEach(block => {
+  const answer = block.dataset.answer;
+  const explain = block.querySelector(".quiz-explain");
+  block.querySelectorAll(".quiz-opts li").forEach(li => {
+    li.addEventListener("click", () => {
+      const opts = block.querySelectorAll(".quiz-opts li");
+      opts.forEach(o => o.classList.add("disabled"));
+      if (li.dataset.opt === answer) {
+        li.classList.add("correct");
+      } else {
+        li.classList.add("wrong");
+        block.querySelector(`[data-opt="${answer}"]`).classList.add("correct");
+      }
+      explain.classList.add("show");
+    });
+  });
+});
+
+// 合上书清单打勾
+document.querySelectorAll("#challenge-list li").forEach(li => {
+  li.addEventListener("click", () => li.classList.toggle("checked"));
+});
+
+// 完成标记 → localStorage
+const KEY = "ot_progress_v1";
+const CH = "8";
+function loadProgress() {
+  try { return JSON.parse(localStorage.getItem(KEY)) || {}; } catch (e) { return {}; }
+}
+const progress = loadProgress();
+const btn = document.getElementById("btn-complete");
+if (progress[CH] && progress[CH].done) {
+  btn.textContent = "✓ 已完成 · 再次点击重置";
+  btn.classList.add("done");
+}
+function markDone() {
+  const p = loadProgress();
+  if (p[CH] && p[CH].done) {
+    delete p[CH];
+    btn.textContent = "✓ 我已完成本章（含合上书挑战）";
+    btn.classList.remove("done");
+  } else {
+    p[CH] = { done: true, completedAt: Date.now(), reviewsDone: 0 };
+    btn.textContent = "✓ 已完成 · 复习提醒已开启";
+    btn.classList.add("done");
+  }
+  localStorage.setItem(KEY, JSON.stringify(p));
+}
+</script>
+
+</body>
+</html>

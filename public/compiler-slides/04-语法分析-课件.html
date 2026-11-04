@@ -1,0 +1,690 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第4章 语法分析 · 编译原理课件</title>
+<script>
+window.MathJax = {
+  tex: {
+    inlineMath: [['$', '$'], ['\\(', '\\)']],
+    displayMath: [['$$', '$$'], ['\\[', '\\]']],
+    processEscapes: true,
+    tags: 'none'
+  },
+  svg: { fontCache: 'global', scale: 1.05 },
+  options: { skipHtmlTags: ['script','noscript','style','textarea','pre','code'] }
+};
+</script>
+<script src="/lectures-assets/tex-svg.js" async></script>
+<style>
+  :root{
+    --primary:#1a365d; --accent:#2b6cb0; --accent-light:#ebf8ff; --accent-border:#bee3f8;
+    --text:#2d3748; --muted:#718096; --border:#e2e8f0; --bg-light:#f7fafc;
+    --success:#38a169; --danger:#e53e3e; --warning:#dd6b20; --warn-bg:#fffaf0;
+  }
+  *{margin:0;padding:0;box-sizing:border-box;}
+  html,body{width:100%;height:100%;overflow:hidden;background:#0f172a;}
+  body{
+    font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Hiragino Sans GB","Microsoft YaHei","WenQuanYi Micro Hei",sans-serif;
+    color:var(--text);
+  }
+  #stage{
+    position:absolute; left:50%; top:50%;
+    width:1280px; height:720px;
+    transform:translate(-50%,-50%) scale(1);
+    transform-origin:center center;
+    background:#ffffff;
+    box-shadow:0 0 40px rgba(0,0,0,.4);
+    overflow:hidden;
+  }
+  .slide{
+    position:absolute; inset:0;
+    padding:36px 60px 52px;
+    display:none;
+    flex-direction:column;
+    background:#ffffff;
+    opacity:0;
+    transition:opacity .35s ease;
+  }
+  .slide.active{ display:flex; opacity:1; }
+
+  #progress{ position:absolute; top:0; left:0; height:6px; background:var(--accent); width:0; z-index:50; transition:width .35s; }
+
+  /* 封面 / 结束页 */
+  .slide-cover{ justify-content:center; align-items:center; text-align:center; }
+  .slide-cover{ background:linear-gradient(135deg,#1a365d 0%,#2b6cb0 100%); color:#fff; }
+  .slide-cover .kicker{ font-size:22px; letter-spacing:6px; opacity:.85; margin-bottom:18px;}
+  .slide-cover h1{ font-size:64px; font-weight:800; line-height:1.2; margin-bottom:22px; letter-spacing:2px;}
+  .slide-cover .sub{ font-size:26px; opacity:.92; margin-bottom:36px;}
+  .slide-cover .meta{ font-size:19px; opacity:.85; line-height:2;}
+  .slide-cover .divider{ width:160px;height:5px;background:#fff;opacity:.6;margin:0 auto 30px;border-radius:3px;}
+  .slide-cover .question{ font-size:24px; background:rgba(255,255,255,.12); border:1px solid rgba(255,255,255,.35); border-radius:12px; padding:12px 28px; margin-bottom:30px;}
+
+  /* 页头：结论式标题 */
+  .slide-head{ display:flex; align-items:baseline; gap:16px; border-bottom:3px solid var(--accent); padding-bottom:9px; margin-bottom:12px;}
+  .slide-head .sec{ font-size:17px; color:var(--accent); font-weight:700; background:var(--accent-light); padding:3px 11px; border-radius:6px; white-space:nowrap;}
+  .slide-head h3{ font-size:29px; color:var(--primary); font-weight:700;}
+  .slide-body{ flex:1; display:flex; flex-direction:column; justify-content:center; min-height:0; }
+
+  p{ font-size:21px; line-height:1.65; margin-bottom:8px;}
+  .lead{ font-size:23px; color:#374151; line-height:1.75;}
+  ul,ol{ margin:0 0 8px 26px; font-size:21px; line-height:1.7;}
+  li{ margin-bottom:5px;}
+  strong{ color:var(--primary); }
+
+  /* 公式块 */
+  .formula{ background:var(--accent-light); border-left:5px solid var(--accent); border-radius:0 10px 10px 0; padding:9px 22px; margin:9px 0; text-align:center; font-size:23px;}
+  .formula-concl{ background:#fffaf0; border-left:5px solid var(--warning);}
+  .MathJax{ font-size:1.05em !important; }
+  mjx-container[display="true"]{ margin:6px 0 !important; }
+
+  /* 表格 */
+  table{ width:100%; border-collapse:collapse; margin:10px 0; font-size:20px;}
+  th{ background:var(--accent); color:#fff; padding:8px 12px; text-align:center; font-weight:600;}
+  td{ padding:7px 12px; border:1px solid var(--border); text-align:center; vertical-align:middle;}
+  tr:nth-child(even) td{ background:var(--bg-light);}
+  td.l{ text-align:left; }
+  table.small{ font-size:18px; }
+  table.small td, table.small th{ padding:6px 10px; }
+
+  /* 组件 */
+  .card{ background:var(--accent-light); border:1px solid var(--accent-border); border-radius:12px; padding:12px 20px; margin:10px 0;}
+  .tip{ background:#ebf8ff; border-left:5px solid var(--accent); border-radius:0 10px 10px 0; padding:10px 20px; margin:10px 0; font-size:20px; color:#2c5282;}
+  .deep{ background:#f0fff4; border-left:5px solid var(--success); border-radius:0 10px 10px 0; padding:10px 20px; margin:10px 0; font-size:20px; color:#22543d;}
+  .warn{ background:var(--warn-bg); border-left:5px solid var(--warning); border-radius:0 10px 10px 0; padding:10px 20px; margin:10px 0; font-size:20px; color:#744210;}
+  .trap{ background:#fef2f2; border-left:5px solid var(--danger); border-radius:0 10px 10px 0; padding:10px 20px; margin:10px 0; font-size:20px; color:#7f1d1d;}
+
+  .pause{
+    background:var(--warn-bg); border:2px dashed var(--warning); border-radius:14px;
+    padding:10px 22px; margin:10px 0; display:flex; align-items:center; gap:16px;
+  }
+  .pause .icon{ font-size:36px; line-height:1; }
+  .pause .txt b{ color:var(--warning); font-size:21px; }
+  .pause .txt p{ font-size:18px; color:#744210; margin:3px 0 0; }
+
+  .cols{ display:flex; gap:28px; align-items:stretch; }
+  .col{ flex:1; min-width:0; }
+
+  /* 推导分步：仅互动模式隐藏，截图(autohide)模式全部可见——此规则不可删 */
+  .step{ opacity:0; transform:translateY(8px); transition:opacity .3s ease, transform .3s ease; }
+  .step.on{ opacity:1; transform:none; }
+  body.autohide .step{ opacity:1 !important; transform:none !important; }
+  .step-hint{ font-size:14px; color:var(--muted); margin-top:4px;}
+  body.autohide .step-hint{ display:none; }
+
+  /* 因果链 */
+  .chain{ margin:6px 0; }
+  .chain .link{ display:flex; align-items:center; gap:14px; margin:6px 0;}
+  .chain .no{ width:34px; height:34px; border-radius:50%; background:var(--accent); color:#fff; font-size:18px; font-weight:700; display:flex; align-items:center; justify-content:center; flex-shrink:0;}
+  .chain .txt{ font-size:21px; line-height:1.5;}
+  .chain .txt strong{ color:var(--primary); }
+
+  /* mermaid 容器：高度封顶，防止溢出 720px 舞台 */
+  .mmd{ background:var(--bg-light); border:1px solid var(--border); border-radius:12px; padding:10px 14px; display:flex; justify-content:center; align-items:center; margin:8px 0;}
+  .mmd .mermaid{ display:flex; justify-content:center; width:100%; visibility:hidden; }
+  .mmd .mermaid[data-done]{ visibility:visible; }
+  .mmd .mermaid svg{ max-width:100%; height:auto; max-height:230px; }
+  .mmd.mmd-tall .mermaid svg{ max-height:330px; }
+  .mmd.mmd-sm svg{ max-height:150px; }
+  .mmd-row{ display:flex; gap:18px; }
+  .mmd-row .mmd{ flex:1; flex-direction:column; }
+  .mmd .cap{ font-size:17px; color:var(--muted); margin-top:6px; text-align:center;}
+  .mmd .cap b{ color:var(--text); }
+
+  #footer{ position:absolute; bottom:0; left:0; right:0; height:40px; display:flex; align-items:center; justify-content:space-between; padding:0 30px; font-size:15px; color:#94a3b8; background:rgba(247,250,252,.85); border-top:1px solid var(--border); z-index:40;}
+  #footer .brand{ font-weight:600; color:var(--accent); }
+
+  .nav{ position:absolute; bottom:48px; right:40px; display:flex; gap:12px; z-index:45;}
+  .nav button{ width:54px; height:54px; border-radius:50%; border:none; background:var(--accent); color:#fff; font-size:24px; cursor:pointer; box-shadow:0 3px 10px rgba(43,108,176,.4); display:flex; align-items:center; justify-content:center;}
+  .nav button:hover{ background:var(--primary); }
+  .nav button:disabled{ background:#cbd5d0; cursor:default; box-shadow:none;}
+
+  #hint{ position:absolute; bottom:48px; left:40px; font-size:14px; color:#94a3b8; z-index:45;}
+
+  body.autohide #progress, body.autohide #footer, body.autohide .nav, body.autohide #hint{ display:none !important; }
+</style>
+</head>
+<body>
+<div id="stage">
+
+  <div id="progress"></div>
+
+    <section class="slide slide-cover active" data-narration="欢迎回到编译原理。上一章我们跟着词法分析器，把字符流切成一个个记号，得到 id 加 id 乘 id 这样一串扁平的东西。可它太扁了，扁到看不出究竟是先加还是先乘，更看不出谁是谁的孩子。这一章就回答主线上的第二个问题：一串单词序列，凭什么能认出它是一棵语法树。学完你手里会有两套表：一套自顶向下的预测分析表，一套自底向上的 LR 分析表，都能一格一格地把分析步骤走完，本章也是前端部分的收官之作。">
+    <div class="kicker">编译原理 · 第 4 章 · 第①段 前端：词法与语法</div>
+    <h1>语法分析</h1>
+    <div class="sub">Parsing —— 从扁平记号流到嵌套语法树</div>
+    <div class="question">本章要回答：单词序列凭什么认出是一棵语法树？</div>
+    <div class="meta">
+      配套讲义：《编译原理互动讲义》第4章 · 基于 Aho/Lam/Sethi/Ullman《编译原理》（第2版）<br>
+      ← → 或空格翻页 · 推导页逐步显示
+    </div>
+  </section>
+
+    <section class="slide" data-narration="先把位置摆清楚。全书分四段：第一段第一章到第四章是前端，管词法和语法；第二段第五章到第七章管语义与中间代码；第三段第八章到第十一章是后端与优化；第四段第十二章收束到形式语言与自动机。我们正站在第一段的最后一章。上一章词法分析交来的是记号流，这一章把它组装成语法树，前端到此收官；下一章第五章会在这棵树上挂语义动作，那已经是第二段的事了。这张地图先存进脑子，后面每开一章都回来对一次位置。">
+    <div class="slide-head"><span class="sec">定位</span><h3>本章是第①段「前端：词法与语法」的收官章</h3></div>
+    <div class="slide-body">
+      <div class="mmd">
+        <div class="mermaid">
+flowchart TB
+  A["第①段 Ch1–4 前端：词法与语法<br>本章在此收官"]:::here
+  A --> B["第②段 Ch5–7 语义与中间代码"]
+  B --> C["第③段 Ch8–11 后端与优化"]
+  C --> D["第④段 Ch12 全书收束"]
+  classDef here fill:#2b6cb0,color:#ffffff,stroke:#1a365d,stroke-width:3px
+        </div>
+      </div>
+      <table class="small">
+        <thead><tr><th></th><th>交接物</th><th>谁来解决</th></tr></thead>
+        <tbody>
+          <tr><td class="l"><strong>上一章给什么</strong></td><td class="l">第3章 词法分析切出的扁平记号流</td><td class="l">已到手</td></tr>
+          <tr><td class="l"><strong>本章解决什么</strong></td><td class="l">记号流 → 语法树：LL 自顶向下，LR 自底向上</td><td class="l">第4章（本章）</td></tr>
+          <tr><td class="l"><strong>交给下一章什么</strong></td><td class="l">语法树挂上语义动作，顺便算出属性值</td><td class="l">第5章 语法制导翻译（第②段开端）</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+    <section class="slide" data-narration="这一章的路不是平的，是撞了墙再绕。第一步，记号流是扁平的，嵌套结构丢了。第二步，先试自顶向下，从开始符号往下展开，可左递归会让程序原地打转。第三步，于是先算 FIRST 集合和 FOLLOW 集合，把该选哪条产生式变成能算出来的事。第四步，压成一张预测分析表，配一个栈，无回溯地跑完。第五步，换一条腿，自底向上找句柄归约，用项集记录进度，再用 FOLLOW 消掉冲突。两条腿共用同一套集合，这就是全章的骨架。">
+    <div class="slide-head"><span class="sec">主线</span><h3>撞两次墙，造两张表：LL 一张，LR 一张</h3></div>
+    <div class="slide-body">
+      <div class="chain">
+        <div class="link"><span class="no">1</span><span class="txt">记号流是<strong>扁平</strong>的，语法的嵌套结构在词法分析后丢了</span></div>
+        <div class="link"><span class="no">2</span><span class="txt">先试<strong>自顶向下</strong>：从开始符号往下展开 —— 左递归会让它原地打转</span></div>
+        <div class="link"><span class="no">3</span><span class="txt">先算 <strong>FIRST</strong> 与 <strong>FOLLOW</strong>：把「该选哪条产生式」变成可算的集合</span></div>
+        <div class="link"><span class="no">4</span><span class="txt">压成 <strong>LL(1) 预测分析表</strong>：表 ＋ 栈 ＋ 指针，无回溯跑完</span></div>
+        <div class="link"><span class="no">5</span><span class="txt">换<strong>自底向上</strong>：LR(0) 项集记录进度，SLR 用 FOLLOW 消移入-归约冲突</span></div>
+      </div>
+      <div class="tip">这条链就是本章目录：4.1 角色 → 4.2 FIRST/FOLLOW → 4.3 预测分析 → 4.4 项集族 → 4.5 SLR 表。</div>
+    </div>
+  </section>
+
+    <section class="slide" data-narration="先看一个具体的麻烦。词法分析交来的是一串记号：id 加 id 乘 id。它是扁平的，没有任何括号告诉你谁先算。按先加后乘读，结果是一回事；按先乘后加读，结果完全是另一回事。编译器不能猜，必须按文法唯一地定下来。所以语法分析器干的事，就是把这串扁平的记号重新拧成一棵嵌套的树，让乘法成为加法的孩子。树形不同，含义就不同，这不是风格问题而是对错问题。顺手它还要判断这串记号合不合法，不合法就给出清楚的报错。">
+    <div class="slide-head"><span class="sec">动机</span><h3>记号流是扁平的，光看它分不清先加还是先乘</h3></div>
+    <div class="slide-body">
+      <p>词法分析（第3章）交来的东西：<strong>id + id * id</strong> —— 一串扁平记号，没有任何嵌套信息。</p>
+      <div class="formula">id + id * id　⇒　两种读法，两个结果</div>
+      <div class="cols">
+        <div class="col"><div class="card">😇 <strong>读法一：先加后乘</strong><br>把 id + id 当一个整体再乘 —— 违反了算术直觉，但扁平记号本身没说不行</div></div>
+        <div class="col"><div class="card">🙂 <strong>读法二：先乘后加</strong><br>把 id * id 当一个整体再加 —— 这才是我们要的树，可谁来替我们定？</div></div>
+      </div>
+      <div class="tip">💡 本章方案：用上下文无关文法描述嵌套，再用一张机械可查的表驱动分析 —— 不手写递归试错。</div>
+    </div>
+  </section>
+
+  <section class="slide" data-narration="语法分析器的输入是记号流，输出是语法树，中间还要发现并报告语法错误。真出错了怎么办？先记住一个词：恐慌模式，报错之后跳到某个同步记号，比如分号，再接着往下分析。造这棵树有两条大路线。自顶向下像预言家，从开始符号一路往下猜结构再验证；自底向上像考古学家，先把碎片一片片拼起来，一路归约回开始符号。前者落地成 LL(1) 查表，后者落地成 LR 族的项集加 SLR 表，两条路最后都收敛成查表这件事。">
+    <div class="slide-head"><span class="sec">角色</span><h3>记号流进去、语法树出来；两条路线，一张地图</h3></div>
+    <div class="slide-body">
+      <div class="mmd mmd-tall">
+        <div class="mermaid">
+flowchart TB
+  S["记号流 id + id * id"] --> TD["自顶向下<br>从开始符号往下展开"]
+  S --> BU["自底向上<br>从记号往上归约"]
+  TD --> LL["LL(1) 预测分析<br>查表选产生式"]
+  BU --> LR["LR 族<br>LR(0) 项集 ＋ SLR 表"]
+        </div>
+      </div>
+      <p style="text-align:center;">语法错误处理只记一个词：<strong>恐慌模式</strong>（Panic Mode）—— 报错后跳到同步记号（如分号）再继续。</p>
+    </div>
+  </section>
+
+    <section class="slide" data-narration="整章只用一个小文法，就是带加号、乘号、括号和 id 的表达式文法。它有两种写法，两条腿各用一套。给自底向上用的，是原始的左递归写法，E 推出 E 加 T，T 推出 T 乘 F，左递归天然表达左结合。给自顶向下用的，是消掉左递归以后的写法，多出 E 撇和 T 撇两个新符号，把加号和乘号的重复挪到尾巴上。两种写法描述的语言一模一样，只是形状不同。先记住它们的长相，后面所有的表都从它们身上算出来。">
+    <div class="slide-head"><span class="sec">文法</span><h3>同一个表达式语言，两条腿各用一套写法</h3></div>
+    <div class="slide-body">
+      <div class="cols">
+        <div class="col">
+          <div class="card">⬆️ <strong>自底向上（LR）用：原左递归文法</strong><br>
+          0: E′ → E（增广）<br>
+          1: E → E + T　　2: E → T<br>
+          3: T → T * F　　4: T → F<br>
+          5: F → ( E )　　6: F → <strong>id</strong><br>
+          <span style="font-size:17px;color:var(--muted);">左递归天然表达左结合</span></div>
+        </div>
+        <div class="col">
+          <div class="card">⬇️ <strong>自顶向下（LL）用：消除左递归后</strong><br>
+          E → T E′<br>
+          E′ → + T E′ ｜ ε<br>
+          T → F T′<br>
+          T′ → * F T′ ｜ ε<br>
+          F → ( E ) ｜ <strong>id</strong><br>
+          <span style="font-size:17px;color:var(--muted);">语言不变，形状变了</span></div>
+        </div>
+      </div>
+      <div class="tip">E 管加号、T 管乘号、F 管括号与原子 —— 层次结构把优先级和结合性「编码」进了文法。</div>
+    </div>
+  </section>
+
+  <section class="slide" data-narration="为什么自顶向下非得改写法？因为原文法里函数 E 一进门，第一件事就是不消耗任何输入再调一次 E，输入指针原地不动，程序直接死循环。消除的办法很机械：把 A 推出 A α 或者 β，改写成 A 推出 β A 撇，A 撇推出 α A 撇或者空串。照这个模子套到 E 和 T 上，就得到 E 推出 T E 撇，E 撇推出加 T E 撇或者空串，T 也一样处理。顺带一提，还有个小手术叫提取左因子，本章例子用不上，先记住名字。一句话：把绕圈改成尾巴上的重复，语言不变，死循环没了。">
+    <div class="slide-head"><span class="sec">拦路虎</span><h3>左递归让递归下降死循环，消除它有固定模子</h3></div>
+    <div class="slide-body">
+      <p><strong>递归下降</strong>给每个非终结符写一个函数；E → E + T 意味着函数 E 一进门就<strong>不消耗输入</strong>再调自己 —— 直接死循环。</p>
+      <div class="formula">A → A α ｜ β　　⟹　　A → β A′，　A′ → α A′ ｜ ε</div>
+      <div class="step"><p>① 套到 E → E + T ｜ T：得 <strong>E → T E′，E′ → + T E′ ｜ ε</strong></p></div>
+      <div class="step"><p>② 套到 T → T * F ｜ F：得 <strong>T → F T′，T′ → * F T′ ｜ ε</strong></p></div>
+      <div class="step"><p>③ 另有小手术<strong>提取左因子</strong>：提出公共前缀避免反复试错（本章例子用不上，一句话带过）</p></div>
+      <p class="step-hint">按空格 / → 逐步展开推导</p>
+    </div>
+  </section>
+
+    <section class="slide" data-narration="消完左递归还剩一个真问题：分析到非终结符 E，当前输入是 id，到底该选它哪条产生式？回答它要两个集合。FIRST 管开头：一条产生式右部能推出的第一个终结符有哪些，如果它能推出空串，空串也算进去。FOLLOW 管身后：一个非终结符在句型里，可能紧跟着它出现的终结符有哪些，再加上输入结束符。直觉就是，FIRST 消除开头的不确定性，FOLLOW 消除推空以后的不确定性，两个集合合起来就把选择变成了查表。">
+    <div class="slide-head"><span class="sec">定义</span><h3>FIRST 管开头，FOLLOW 管身后，两个集合消除两种不确定</h3></div>
+    <div class="slide-body">
+      <div class="cols">
+        <div class="col"><div class="card">🚪 <strong>FIRST 集（FIRST Set）</strong><br>FIRST(α) = 串 α 能推出的所有<strong>首终结符</strong>；α 能推空则含 ε<br><span style="font-size:17px;color:var(--muted);">回答：选这条产生式，输入的第一个符号可能是什么？</span></div></div>
+        <div class="col"><div class="card">👥 <strong>FOLLOW 集（FOLLOW Set）</strong><br>FOLLOW(A) = 句型中可能<strong>紧跟在 A 后面</strong>的终结符（含 $）<br><span style="font-size:17px;color:var(--muted);">回答：A 推出了空串，下一个输入该期待什么？</span></div></div>
+      </div>
+      <div class="formula formula-concl">看当前输入落在哪个集合里，就走哪条路 —— 选择从此可以查表</div>
+      <div class="deep">读法：FIRST 是每条产生式的「门脸招牌」，FOLLOW 是非终结符消失以后的「合法接棒者」。</div>
+    </div>
+  </section>
+
+  <section class="slide" data-narration="把两个集合一次算完。FIRST 只有两条规则：终结符的 FIRST 是它自己；对右部从左往右扫，把第一个符号的首终结符并进来，它若能推空就看下一个。跟着规则走，E、T、F 都是左括号和 id，E 撇是加号和空串，T 撇是星号和空串。FOLLOW 有三条：开始符号的 FOLLOW 里有结束符；非终结符后面那段的首终结符并进来；后面那段能推空，就把左边那个非终结符的 FOLLOW 整个抄过来。最后 E 和 E 撇是右括号加结束符，T 和 T 撇多一个加号，F 再加一个星号。">
+    <div class="slide-head"><span class="sec">手算</span><h3>五个非终结符的 FIRST 与 FOLLOW，一次算全</h3></div>
+    <div class="slide-body">
+      <table class="small">
+        <thead><tr><th>非终结符</th><th>FIRST</th><th>FOLLOW</th></tr></thead>
+        <tbody>
+          <tr><td><strong>E</strong></td><td>{ ( , id }</td><td>{ ) , $ }</td></tr>
+          <tr><td><strong>E′</strong></td><td>{ + , ε }</td><td>{ ) , $ }</td></tr>
+          <tr><td><strong>T</strong></td><td>{ ( , id }</td><td>{ + , ) , $ }</td></tr>
+          <tr><td><strong>T′</strong></td><td>{ * , ε }</td><td>{ + , ) , $ }</td></tr>
+          <tr><td><strong>F</strong></td><td>{ ( , id }</td><td>{ * , + , ) , $ }</td></tr>
+        </tbody>
+      </table>
+      <div class="tip">FOLLOW(F) 里的 * 来自 T → F T′ 且 FIRST(T′) 含 *：F 充当 T 的开头，T 后能跟 *，F 后也能跟 * —— 算 FOLLOW 永远只看「B 后面是什么」。</div>
+    </div>
+  </section>
+
+    <section class="slide" data-narration="集合齐了，就能判定一个文法能不能做无回溯的预测分析。名字 LL(1) 分三部分：第一个 L 是从左向右扫输入，第二个 L 是最左推导，1 是只往前看一个记号，跟栈里放几个符号没关系。判定看三件事：同一左部的两条产生式，首终结符集合不能撞车；两条里最多一条能推空串；如果有推空的那条，走实的那条的首终结符还不能落在左部的 FOLLOW 里。三条全过，本章这个表达式文法就是 LL(1) 的，可以无回溯地预测分析。">
+    <div class="slide-head"><span class="sec">判定</span><h3>LL(1) 三条全过，才配拥有「每格至多一条」的表</h3></div>
+    <div class="slide-body">
+      <p><strong>LL(1)</strong> = 从左向右扫描（L）＋ 最左推导（L）＋ 只向前看 1 个记号（1）。对每对产生式 A → α ｜ β 查三条：</p>
+      <div class="chain">
+        <div class="link"><span class="no">①</span><span class="txt">FIRST(α) ∩ FIRST(β) = ∅ —— 两条路的首符号不撞车</span></div>
+        <div class="link"><span class="no">②</span><span class="txt">α、β 中<strong>至多一个</strong>能推出 ε</span></div>
+        <div class="link"><span class="no">③</span><span class="txt">若 ε ∈ FIRST(β)，则 FIRST(α) ∩ FOLLOW(A) = ∅ —— 走空的路不与走实的抢输入</span></div>
+      </div>
+      <div class="deep">本章表达式文法三条全过 ⇒ 是 LL(1) ⇒ 可以无回溯预测分析。</div>
+    </div>
+  </section>
+
+  <section class="slide" data-narration="集合怎么变成能跑的程序？压成一张表。行是非终结符，列是终结符加输入结束符，格子里填看到某个符号时该用哪条产生式。填法两条：对一条产生式，把它右部首终结符的每一列都填上它；如果右部能推空，再把它左部 FOLLOW 的每一列也填上它。所以空串产生式的格子完全由 FOLLOW 决定。你看 E 撇推空这条，填的是右括号和结束符两列；T 撇推空这条范围更大，加号、右括号、结束符三列都要填。其余产生式没有空串，只看 FIRST 就行。">
+    <div class="slide-head"><span class="sec">造表</span><h3>填表两条规则：FIRST 指导，ε 看 FOLLOW</h3></div>
+    <div class="slide-body">
+      <div class="chain">
+        <div class="link"><span class="no">1</span><span class="txt">对 FIRST(α) 中每个终结符 a：把 A → α 填入 <strong>M[A, a]</strong></span></div>
+        <div class="link"><span class="no">2</span><span class="txt">若 ε ∈ FIRST(α)：再对 FOLLOW(A) 中每个 b，填入 <strong>M[A, b]</strong></span></div>
+      </div>
+      <table class="small">
+        <thead><tr><th>产生式</th><th>FIRST(右部)</th><th>填入位置</th></tr></thead>
+        <tbody>
+          <tr><td class="l">E′ → ε</td><td>{ ε }</td><td class="l">FOLLOW(E′)={ ) , $ } ⇒ M[E′, )]、M[E′, $]</td></tr>
+          <tr><td class="l">T′ → ε</td><td>{ ε }</td><td class="l">FOLLOW(T′)={ + , ) , $ } ⇒ M[T′, +]、M[T′, )]、M[T′, $]</td></tr>
+          <tr><td class="l">F → ( E )</td><td>{ ( }</td><td class="l">M[F, (]（其余产生式同理，只看 FIRST）</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+    <section class="slide" data-narration="整张表就是这五乘六的样子。每一格只有一条产生式，没有一处冲突，这正是刚才三条判定全过的直接后果。读法很简单：栈顶是 E，来的记号是 id 或左括号，就展开成 T E 撇；栈顶是 E 撇，来的记号是加号就长出加 T E 撇，来的是右括号或结束符就推空。每一个空格都代表确定的语法错误，不是让你再试别的产生式。这句话很重要：LL(1) 的那个 1，已经把选择压到唯一，空格就是答案。建议你多看两眼 E 撇和 T 撇两行，它们的格子几乎全靠 FOLLOW 填出来。">
+    <div class="slide-head"><span class="sec">全表</span><h3>5×6 预测分析表：每格至多一条，空格即报错</h3></div>
+    <div class="slide-body">
+      <table class="small">
+        <thead><tr><th>非终结符</th><th>id</th><th>+</th><th>*</th><th>(</th><th>)</th><th>$</th></tr></thead>
+        <tbody>
+          <tr><td><strong>E</strong></td><td>E→TE′</td><td></td><td></td><td>E→TE′</td><td></td><td></td></tr>
+          <tr><td><strong>E′</strong></td><td></td><td>E′→+TE′</td><td></td><td></td><td>E′→ε</td><td>E′→ε</td></tr>
+          <tr><td><strong>T</strong></td><td>T→FT′</td><td></td><td></td><td>T→FT′</td><td></td><td></td></tr>
+          <tr><td><strong>T′</strong></td><td></td><td>T′→ε</td><td>T′→*FT′</td><td></td><td>T′→ε</td><td>T′→ε</td></tr>
+          <tr><td><strong>F</strong></td><td>F→id</td><td></td><td></td><td>F→(E)</td><td></td><td></td></tr>
+        </tbody>
+      </table>
+      <div class="deep">每格只有一条 = 文法通过 LL(1) 三条判定的直接后果；某格若有两条，文法就不是 LL(1)。</div>
+    </div>
+  </section>
+
+  <section class="slide" data-narration="表有了，还得配一台机器来跑。栈底先放结束符，栈顶放开始符号，再拿一个指针指着输入。每一步只看两样东西：栈顶符号和当前输入。栈顶是终结符而且跟输入一样，就双双弹掉，输入往前走一格。栈顶是非终结符，就查表换产生式：弹出它，把右部逆序压栈，这样最左边的符号才在栈顶。查到空格就报错；栈只剩结束符、输入也只剩结束符，就接受。逆序压栈这一步最容易写反，一写反分析就从右往左跑，立刻乱套。">
+    <div class="slide-head"><span class="sec">驱动</span><h3>表 ＋ 栈 ＋ 指针就能跑，右部必须逆序压栈</h3></div>
+    <div class="slide-body">
+      <div class="chain">
+        <div class="link"><span class="no">1</span><span class="txt"><strong>匹配</strong>：栈顶终结符 = 当前输入 → 双双弹出，输入指针前进一格</span></div>
+        <div class="link"><span class="no">2</span><span class="txt"><strong>展开</strong>：栈顶非终结符 → 查 M[X, a]，弹出 X，右部<strong>逆序</strong>压栈（栈顶对准最左符号）</span></div>
+        <div class="link"><span class="no">3</span><span class="txt"><strong>接受 / 报错</strong>：栈与输入都只剩 $ → 接受；查到空格 → 确定的语法错误</span></div>
+      </div>
+      <div class="formula formula-concl">预测分析器 = 一张表 M ＋ 一个栈 ＋ 一个输入指针</div>
+      <div class="tip">栈是「期待看到的符号序列」：终结符等着和输入对齐，非终结符等着继续展开，所以两者并存。</div>
+    </div>
+  </section>
+
+    <section class="slide" data-narration="现在轮到你了，输入是 id 加 id 乘 id，栈顶写在左边，输入末尾加结束符。先暂停视频自己推一遍。推出来了吗？好，对答案。开局栈里只有结束符和 E。查表，E 遇 id 长出 T E 撇；再查，T 遇 id 长出 F T 撇；F 遇 id 直接换成 id。第四步栈顶和输入都是 id，匹配掉，输入前进到加号。接着 T 撇遇加号推空，E 撇遇加号长出加 T E 撇，第七步匹配加号。然后把 T 再展开成 F T 撇，第九步 F 换成 id，后半程下一页接着走。">
+    <div class="slide-head"><span class="sec">演练</span><h3>id+id*id 栈轨迹（1–9 步）：查表展开，遇终结符就匹配</h3></div>
+    <div class="slide-body">
+      <div class="pause"><div class="icon">✍️</div><div class="txt"><b>暂停推导</b><p>拿一张纸：对 id+id*id 跑出完整 17 步栈轨迹（栈 / 输入 / 动作），直到接受。</p></div></div>
+      <table class="small">
+        <thead><tr><th>步</th><th>栈（栈顶在左）</th><th>输入</th><th>动作</th></tr></thead>
+        <tbody>
+          <tr><td>1</td><td class="l">$ E</td><td class="l">id+id*id $</td><td class="l">查 M[E,id]，输出 E→TE′</td></tr>
+          <tr><td>2</td><td class="l">$ E′ T</td><td class="l">id+id*id $</td><td class="l">查 M[T,id]，输出 T→FT′</td></tr>
+          <tr><td>3</td><td class="l">$ E′ T′ F</td><td class="l">id+id*id $</td><td class="l">查 M[F,id]，输出 F→id</td></tr>
+          <tr><td>4</td><td class="l">$ E′ T′ id</td><td class="l">id+id*id $</td><td class="l">匹配 id</td></tr>
+          <tr><td>5</td><td class="l">$ E′ T′</td><td class="l">+id*id $</td><td class="l">查 M[T′,+]，输出 T′→ε</td></tr>
+          <tr><td>6</td><td class="l">$ E′</td><td class="l">+id*id $</td><td class="l">查 M[E′,+]，输出 E′→+TE′</td></tr>
+          <tr><td>7</td><td class="l">$ E′ T +</td><td class="l">+id*id $</td><td class="l">匹配 +</td></tr>
+          <tr><td>8</td><td class="l">$ E′ T</td><td class="l">id*id $</td><td class="l">查 M[T,id]，输出 T→FT′</td></tr>
+          <tr><td>9</td><td class="l">$ E′ T′ F</td><td class="l">id*id $</td><td class="l">查 M[F,id]，输出 F→id</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="slide" data-narration="第十步匹配第二个 id，输入前进到乘号。栈顶 T 撇遇乘号，长出星号 F T 撇，第十二步匹配星号。接着 F 换 id，再匹配一次 id，输入走到结束符。栈顶 T 撇遇结束符推空，E 撇遇结束符也推空，最后栈里只剩结束符，输入也只剩结束符，接受。回头看输出的产生式序列，它就是一棵语法树的最左推导。还要注意，乘法相关的 T 撇在第十五步才清空，比加号晚，这正说明乘比加先归约：优先级不是写在分析器里的规则，而是被文法的层次结构编码进去的。">
+    <div class="slide-head"><span class="sec">演练</span><h3>id+id*id 栈轨迹（10–17 步）：输出序列就是最左推导</h3></div>
+    <div class="slide-body">
+      <table class="small">
+        <thead><tr><th>步</th><th>栈（栈顶在左）</th><th>输入</th><th>动作</th></tr></thead>
+        <tbody>
+          <tr><td>10</td><td class="l">$ E′ T′ id</td><td class="l">id*id $</td><td class="l">匹配 id</td></tr>
+          <tr><td>11</td><td class="l">$ E′ T′</td><td class="l">*id $</td><td class="l">查 M[T′,*]，输出 T′→*FT′</td></tr>
+          <tr><td>12</td><td class="l">$ E′ T′ F *</td><td class="l">*id $</td><td class="l">匹配 *</td></tr>
+          <tr><td>13</td><td class="l">$ E′ T′ F</td><td class="l">id $</td><td class="l">查 M[F,id]，输出 F→id</td></tr>
+          <tr><td>14</td><td class="l">$ E′ T′ id</td><td class="l">id $</td><td class="l">匹配 id</td></tr>
+          <tr><td>15</td><td class="l">$ E′ T′</td><td class="l">$</td><td class="l">查 M[T′,$]，输出 T′→ε</td></tr>
+          <tr><td>16</td><td class="l">$ E′</td><td class="l">$</td><td class="l">查 M[E′,$]，输出 E′→ε</td></tr>
+          <tr><td>17</td><td class="l">$</td><td class="l">$</td><td class="l"><strong>接受</strong></td></tr>
+        </tbody>
+      </table>
+      <div class="deep">* 被包在 T′ 里、比 E′ 层的 + 先归约 —— 优先级与结合性由文法层次编码，不在分析器里写规则。</div>
+    </div>
+  </section>
+
+    <section class="slide" data-narration="换一条腿。LL(1) 很优雅，可它太挑文法：左递归要消，左因子要提，很多自然文法根本进不去。自底向上换个方向走：从记号出发，反复找句柄做归约，一路归约回开始符号。归约就是推导的倒放：id 归约成 F，F 归约成 T，再和乘号 id 拼成 T 乘 F，又归约成 T，最后归约成 E。被归约掉的那一小段，就是这一步的句柄。难点不在归约本身，而在判断：栈顶这一小段现在是不是句柄，该不该立刻归约。这件事交给 LR 自动机来答。">
+    <div class="slide-head"><span class="sec">换腿</span><h3>自底向上 = 反复找句柄、把它归约掉，直到只剩开始符号</h3></div>
+    <div class="slide-body">
+      <div class="cols">
+        <div class="col"><div class="card">✂️ <strong>归约（Reduction）</strong><br>把与某条产生式右部匹配的子串替换回左部非终结符 —— 是<strong>最右推导的逆</strong>操作</div></div>
+        <div class="col"><div class="card">🧩 <strong>句柄（Handle）</strong><br>当前这一步被替换的那个子串：位置正确（在栈顶）且时机正确的完整右部</div></div>
+      </div>
+      <div class="formula">id ⇒ F ⇒ T ⇒ T * id ⇒ T * F ⇒ T ⇒ E　（自底向上的归约链）</div>
+      <div class="tip">LL(1) 太挑文法（左递归必消、左因子必提）；LR 族直接吃原左递归文法 —— 这是换腿的动机。</div>
+    </div>
+  </section>
+
+  <section class="slide" data-narration="LR 用一台有穷自动机来回答该不该归约，自动机的状态叫项集。项就是给产生式右部某个位置点一个点：点左边是已经看到的，右边是还期待的。比如 T 推出 T 乘点 F，意思是已经看到 T 和乘号，正等一个 F。项集还要取闭包：点后面若是非终结符 B，B 的所有产生式开头都得补进来，而且要连锁补到底。GOTO 就是把点往右挪一格再取闭包，相当于自动机的转移。从 I 零出发，E 撇点 E 这一个问题，连锁牵出七个项，这就是闭包的力量。">
+    <div class="slide-head"><span class="sec">项集</span><h3>点是进度条：左边已看到，右边还期待；闭包连锁补全</h3></div>
+    <div class="slide-body">
+      <div class="cols">
+        <div class="col"><div class="card">📍 <strong>项（Item）</strong><br>右部某位置加点：T → T * · F = 已看到 T*，期待 F</div>
+        <div class="card">🔗 <strong>闭包 ＋ GOTO</strong><br>点后是非终结符 B ⇒ 补入 B 的所有产生式 B → · γ，递归到底；GOTO = 点右移一格再取闭包</div></div>
+        <div class="col">
+          <div class="mmd mmd-tall">
+            <div class="mermaid">
+flowchart TB
+  A["E′ → · E"] --> B["E → · E + T"]
+  A --> C["E → · T"]
+  C --> D["T → · T * F"]
+  C --> E["T → · F"]
+  E --> F["F → · ( E )"]
+  E --> G["F → · id"]
+            </div>
+          </div>
+          <p style="text-align:center; font-size:18px; color:var(--muted);">I₀ 的闭包链：一个问题牵出七条项</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+    <section class="slide" data-narration="把十二个项集列全，先看前六个。I 零是初始闭包，七个项，覆盖开始符号往下所有可能的第一步。从 I 零读 E 到 I 一：里面 E 撇到 E 点，点后面什么都没有了，还有 E 到 E 点加 T，说明还能接加号。读 T 到 I 二：E 到 T 点是完成项，还有 T 到 T 点乘 F。读 F 到 I 三：只有一个完成项 T 到 F 点。读左括号到 I 四：它长得跟 I 零几乎一样，只是多了一个等右括号的项。读 id 到 I 五：F 到 id 点。你可以顺手验证，每条转移里的点都正好右移了一格。">
+    <div class="slide-head"><span class="sec">项集族</span><h3>LR(0) 项集 I₀–I₅：从 I₀ 出发的五条转移</h3></div>
+    <div class="slide-body">
+      <table class="small">
+        <thead><tr><th>项集</th><th>来历</th><th>内容（闭包后）</th></tr></thead>
+        <tbody>
+          <tr><td><strong>I₀</strong></td><td class="l">初始闭包</td><td class="l">E′→·E　E→·E+T　E→·T　T→·T*F　T→·F　F→·(E)　F→·id</td></tr>
+          <tr><td><strong>I₁</strong></td><td class="l">GOTO(I₀, E)</td><td class="l">E′→E·　E→E·+T</td></tr>
+          <tr><td><strong>I₂</strong></td><td class="l">GOTO(I₀, T)</td><td class="l">E→T·　T→T·*F</td></tr>
+          <tr><td><strong>I₃</strong></td><td class="l">GOTO(I₀, F)</td><td class="l">T→F·</td></tr>
+          <tr><td><strong>I₄</strong></td><td class="l">GOTO(I₀, ( )</td><td class="l">F→(·E)　E→·E+T　E→·T　T→·T*F　T→·F　F→·(E)　F→·id</td></tr>
+          <tr><td><strong>I₅</strong></td><td class="l">GOTO(I₀, id)</td><td class="l">F→id·</td></tr>
+        </tbody>
+      </table>
+      <div class="tip">一个项集 = 「分析到这里时所有可能进度快照的并集」—— 并行跟踪所有路线，这就是 LR 不回溯的原因。</div>
+    </div>
+  </section>
+
+  <section class="slide" data-narration="再看后六个。I 六从 I 一读加号来，等一个 T；I 七从 I 二读乘号来，等一个 F；I 八从 I 四读 E 来，里面是 F 到左括号 E 点右括号；I 九从 I 六读 T 来，完成项 E 到 E 加 T 点，同时还能接乘号；I 十从 I 七读 F 来，T 到 T 乘 F 点；I 十一从 I 八读右括号来，F 到左括号 E 右括号点。剩下的转移全都落回已有项集：比如 I 四读 T 又回到 I 二，读左括号又回到 I 四自己。状态被反复复用，自动机才是有穷的，这张表才造得完。">
+    <div class="slide-head"><span class="sec">项集族</span><h3>LR(0) 项集 I₆–I₁₁：转移落回旧状态，自动机所以有穷</h3></div>
+    <div class="slide-body">
+      <table class="small">
+        <thead><tr><th>项集</th><th>来历</th><th>内容（闭包后）</th></tr></thead>
+        <tbody>
+          <tr><td><strong>I₆</strong></td><td class="l">GOTO(I₁, +)</td><td class="l">E→E+·T　T→·T*F　T→·F　F→·(E)　F→·id</td></tr>
+          <tr><td><strong>I₇</strong></td><td class="l">GOTO(I₂, *)</td><td class="l">T→T*·F　F→·(E)　F→·id</td></tr>
+          <tr><td><strong>I₈</strong></td><td class="l">GOTO(I₄, E)</td><td class="l">F→(E·)　E→E·+T</td></tr>
+          <tr><td><strong>I₉</strong></td><td class="l">GOTO(I₆, T)</td><td class="l">E→E+T·　T→T·*F</td></tr>
+          <tr><td><strong>I₁₀</strong></td><td class="l">GOTO(I₇, F)</td><td class="l">T→T*F·</td></tr>
+          <tr><td><strong>I₁₁</strong></td><td class="l">GOTO(I₈, ) )</td><td class="l">F→(E)·</td></tr>
+        </tbody>
+      </table>
+      <div class="tip">其余 GOTO 全部落回已有项集：GOTO(I₄,T)=I₂、GOTO(I₄,( )=I₄、GOTO(I₆,F)=I₃、GOTO(I₉,*)=I₇ …… 不再长新状态。</div>
+    </div>
+  </section>
+
+    <section class="slide" data-narration="项集造好了，麻烦也来了。看 I 二：一边是 E 到 T 点，右部已经完整，催你归约；另一边是 T 到 T 点乘 F，说下一个是乘号就请先移入。纯 LR(0) 碰到这种格子就无所适从，这叫移入归约冲突。SLR 的解法很朴素：归约只填在左部 FOLLOW 的那几列。E 的 FOLLOW 只有右括号、加号、结束符，乘号不在里面，所以乘号那一格只留移入。道理也顺：E 后面根本不可能跟乘号，看到乘号还归约出 E，一定是错的。冲突就这么被 FOLLOW 一刀切掉了。">
+    <div class="slide-head"><span class="sec">冲突</span><h3>I₂ 里归约与移入打架，SLR 用 FOLLOW 裁决</h3></div>
+    <div class="slide-body">
+      <div class="cols">
+        <div class="col"><div class="card">⚔️ <strong>冲突现场 I₂</strong><br>E → T·　催：右部完整，该按产生式 2 归约<br>T → T·*F　拦：下一个是 * 就请移入状态 7</div></div>
+        <div class="col"><div class="card">✅ <strong>SLR 的裁决</strong><br>归约只填 FOLLOW(E) = { + , ) , $ } 那几列<br>* ∉ FOLLOW(E) ⇒ * 列只留 s7，冲突消失</div></div>
+      </div>
+      <table class="small">
+        <thead><tr><th>状态</th><th>id</th><th>+</th><th>*</th><th>(</th><th>)</th><th>$</th></tr></thead>
+        <tbody>
+          <tr><td>2</td><td></td><td>r2</td><td><strong>s7</strong></td><td></td><td>r2</td><td>r2</td></tr>
+        </tbody>
+      </table>
+      <div class="deep">SLR = LR(0) 自动机 ＋ FOLLOW 滤镜：自动机管「看到了什么」，FOLLOW 管「什么场合才允许归约」。</div>
+    </div>
+  </section>
+
+  <section class="slide" data-narration="按四条规则一格一格填，就得到十二行九列的表。左边六列是 ACTION，管终结符：s 加数字是移入并进那个状态，r 加数字是按第几条产生式归约，acc 是接受，空格是报错。右边三列是 GOTO，管非终结符，只在归约后用：弹出右部、露出栈顶状态，再查 GOTO 定新状态。抽查两格：状态二的乘号列是 s7，因为乘号不在 E 的 FOLLOW 里；状态三几乎整行 r4，因为 T 的 FOLLOW 里有加号、乘号、右括号和结束符。乘号列也能归约出 T，意味着乘号留给更外层的项去移入。">
+    <div class="slide-head"><span class="sec">全表</span><h3>SLR 的 12×9 表：ACTION 管终结符，GOTO 管非终结符</h3></div>
+    <div class="slide-body">
+      <table class="small">
+        <thead><tr><th>状态</th><th>id</th><th>+</th><th>*</th><th>(</th><th>)</th><th>$</th><th>E</th><th>T</th><th>F</th></tr></thead>
+        <tbody>
+          <tr><td>0</td><td>s5</td><td></td><td></td><td>s4</td><td></td><td></td><td>1</td><td>2</td><td>3</td></tr>
+          <tr><td>1</td><td></td><td>s6</td><td></td><td></td><td></td><td>acc</td><td></td><td></td><td></td></tr>
+          <tr><td>2</td><td></td><td>r2</td><td>s7</td><td></td><td>r2</td><td>r2</td><td></td><td></td><td></td></tr>
+          <tr><td>3</td><td></td><td>r4</td><td>r4</td><td></td><td>r4</td><td>r4</td><td></td><td></td><td></td></tr>
+          <tr><td>4</td><td>s5</td><td></td><td></td><td>s4</td><td></td><td></td><td>8</td><td>2</td><td>3</td></tr>
+          <tr><td>5</td><td></td><td>r6</td><td>r6</td><td></td><td>r6</td><td>r6</td><td></td><td></td><td></td></tr>
+          <tr><td>6</td><td>s5</td><td></td><td></td><td>s4</td><td></td><td></td><td></td><td>9</td><td>3</td></tr>
+          <tr><td>7</td><td>s5</td><td></td><td></td><td>s4</td><td></td><td></td><td></td><td></td><td>10</td></tr>
+          <tr><td>8</td><td></td><td>s6</td><td></td><td></td><td>s11</td><td></td><td></td><td></td><td></td></tr>
+          <tr><td>9</td><td></td><td>r1</td><td>s7</td><td></td><td>r1</td><td>r1</td><td></td><td></td><td></td></tr>
+          <tr><td>10</td><td></td><td>r3</td><td>r3</td><td></td><td>r3</td><td>r3</td><td></td><td></td><td></td></tr>
+          <tr><td>11</td><td></td><td>r5</td><td>r5</td><td></td><td>r5</td><td>r5</td><td></td><td></td><td></td></tr>
+        </tbody>
+      </table>
+      <p style="text-align:center; font-size:17px; color:var(--muted);">s j = 移入并进状态 j；r k = 按产生式 k 归约；acc = 接受；空格 = 报错。谱系：LL(1) ⊂ SLR ⊂ LALR ⊂ LR(1)。</p>
+    </div>
+  </section>
+
+    <section class="slide" data-narration="最后跑一遍输入 id 乘 id 加 id。开局状态零，看到 id 移入状态五。状态五按 F 推出 id 归约，弹出后露出零，查 GOTO 得状态三。状态三按 T 推出 F 归约，回到状态二。状态二看到乘号移入状态七，再移入 id，归约成 F 得状态十，按 T 推出 T 乘 F 归约，露出零回状态二，再归约成 E 到状态一。看到加号移入状态六，里面又重复同一套，最后回到状态一，遇结束符接受。看符号栈的演变：乘法的 T 乘 F 在第七步就归约完，比加法早——乘比加深，优先级是表结构自然涌现的结果。">
+    <div class="slide-head"><span class="sec">轨迹</span><h3>id*id+id 的 14 步：乘法先归约完，* 因此比 + 更深</h3></div>
+    <div class="slide-body">
+      <table class="small">
+        <thead><tr><th>步</th><th>状态栈</th><th>符号栈</th><th>输入</th><th>动作</th></tr></thead>
+        <tbody>
+          <tr><td>1</td><td>0</td><td>—</td><td class="l">id*id+id $</td><td class="l">s5</td></tr>
+          <tr><td>2</td><td>0 5</td><td>id</td><td class="l">*id+id $</td><td class="l">r6（F→id），GOTO[0,F]=3</td></tr>
+          <tr><td>3</td><td>0 3</td><td>F</td><td class="l">*id+id $</td><td class="l">r4（T→F），GOTO[0,T]=2</td></tr>
+          <tr><td>4</td><td>0 2</td><td>T</td><td class="l">*id+id $</td><td class="l">s7</td></tr>
+          <tr><td>5</td><td>0 2 7</td><td>T*</td><td class="l">id+id $</td><td class="l">s5</td></tr>
+          <tr><td>6</td><td>0 2 7 5</td><td>T*id</td><td class="l">+id $</td><td class="l">r6（F→id），GOTO[7,F]=10</td></tr>
+          <tr><td>7</td><td>0 2 7 10</td><td>T*F</td><td class="l">+id $</td><td class="l">r3（T→T*F），GOTO[0,T]=2</td></tr>
+          <tr><td>8</td><td>0 2</td><td>T</td><td class="l">+id $</td><td class="l">r2（E→T），GOTO[0,E]=1</td></tr>
+          <tr><td>9</td><td>0 1</td><td>E</td><td class="l">+id $</td><td class="l">s6</td></tr>
+          <tr><td>10</td><td>0 1 6</td><td>E+</td><td class="l">id $</td><td class="l">s5</td></tr>
+          <tr><td>11</td><td>0 1 6 5</td><td>E+id</td><td class="l">$</td><td class="l">r6（F→id），GOTO[6,F]=3</td></tr>
+          <tr><td>12</td><td>0 1 6 3</td><td>E+F</td><td class="l">$</td><td class="l">r4（T→F），GOTO[6,T]=9</td></tr>
+          <tr><td>13</td><td>0 1 6 9</td><td>E+T</td><td class="l">$</td><td class="l">r1（E→E+T），GOTO[0,E]=1</td></tr>
+          <tr><td>14</td><td>0 1</td><td>E</td><td class="l">$</td><td class="l"><strong>acc 接受</strong></td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="slide" data-narration="三个坑，逐个扫。第一个，算 T 撇的 FIRST 时只写星号，把空串漏了；只要右部能推空，空串必须进 FIRST，否则预测表会少填好几列。第二个，算 FOLLOW 的时候盯着符号前面看；FOLLOW 永远只看后面，F 的 FOLLOW 里有星号，是因为 F 当 T 的开头、而 T 后面能跟星号，不是因为星号写在 F 前面。第三个，把归约记号填满整行；那是纯 LR(0) 的做法，SLR 的归约格只填 FOLLOW 那几列，填满就会和移入撞车，这张表根本造不出来。">
+    <div class="slide-head"><span class="sec">避坑</span><h3>本章最容易踩的三个坑，全和 FOLLOW 有关</h3></div>
+    <div class="slide-body">
+      <div class="trap">❌ <strong>FIRST(T′) 只写 { * }</strong><br>✅ T′→ε 使 ε 必进 FIRST：正确是 { * , ε }；漏了它，预测表 T′ 行少填 +、)、$ 三列。</div>
+      <div class="trap">❌ <strong>算 FOLLOW 时盯着符号前面</strong><br>✅ FOLLOW 只看「B 后面是什么」：* ∈ FOLLOW(F) 是因为 T → F T′ 且 FIRST(T′) 含 *，不是因为 T′ → * F T′ 里 * 在 F 前面。</div>
+      <div class="trap">❌ <strong>SLR 的 r k 填满整行</strong><br>✅ 归约格只填 FOLLOW(左部) 那几列：状态 2 的 * 列若也填 r2，就和 s7 冲突，表根本造不出来。</div>
+    </div>
+  </section>
+
+  <section class="slide" data-narration="收一下。第一句，这章解决什么：把词法分析交来的扁平记号流，恢复成文法描述的嵌套语法树，而且能用表机械驱动，不靠手写递归试错。第二句，核心机制：先用 FIRST 和 FOLLOW 消掉选择的不确定性，自顶向下压成 LL(1) 预测分析表；再用 LR(0) 项集记录进度、FOLLOW 消冲突，自底向上压成 SLR 的 ACTION 与 GOTO 表。第三句，承上启下：上一章切词，这一章组句，前端到此收官。可语法树还只有形状没有意思，怎么顺手把语义值算出来？那是下一章语法制导翻译的事。">
+    <div class="slide-head"><span class="sec">小结</span><h3>三句话讲完第 4 章</h3></div>
+    <div class="slide-body">
+      <div class="chain">
+        <div class="link"><span class="no">1</span><span class="txt"><strong>解决什么</strong>：扁平记号流 → 嵌套语法树，且用表机械驱动，不手写递归</span></div>
+        <div class="link"><span class="no">2</span><span class="txt"><strong>核心机制</strong>：FIRST/FOLLOW 消不确定性 → LL(1) 预测表；LR(0) 项集记进度 ＋ FOLLOW 消冲突 → SLR 双表</span></div>
+        <div class="link"><span class="no">3</span><span class="txt"><strong>承上启下</strong>：第3章切词、本章组句（前端收官）；第5章在树上挂语义动作</span></div>
+      </div>
+      <div class="formula formula-concl">主线问题一句话答案：把「选哪条产生式 / 该不该归约」变成查两张从文法机械算出的表</div>
+      <div class="deep">遗留问题：语法树怎么顺便算出语义值？—— 交给第 5 章语法制导翻译。</div>
+    </div>
+  </section>
+
+  <section class="slide slide-cover" data-narration="最后留四个挑战，合上书拿张纸做。一，默写 FIRST 和 FOLLOW 的规则，并把这个文法的集合全部算出来。二，填出那张五乘六的预测分析表，再完整跑一遍 id 加 id 乘 id 的十七步栈轨迹。三，重建 I 零、I 一、I 二、I 六、I 九这几个项集，说清 I 二的冲突怎么被 FOLLOW 消掉。四，跑一遍 id 乘 id 加 id 的十四步 LR 轨迹。下一章第 5 章语法制导翻译，给这棵树挂上语义动作，第二段就从那里开始。">
+    <div class="kicker">本 章 结 束</div>
+    <h1>表是人算的，机器只查表</h1>
+    <div class="sub">毕业挑战：合上书，拿一张纸</div>
+    <div class="divider"></div>
+    <div class="meta">
+      ☑ 挑战一：默写 FIRST/FOLLOW 规则并算全五组集合<br>
+      ☑ 挑战二：填 5×6 预测表 ＋ 跑完 17 步栈轨迹<br>
+      ☑ 挑战三：重建 I₀、I₁、I₂、I₆、I₉，说清 I₂ 冲突怎么被 FOLLOW 消掉<br>
+      ☑ 挑战四：跑完 id*id+id 的 14 步 LR 轨迹<br><br>
+      下一章 · 第5章 语法制导翻译：语法树挂上语义动作，第②段语义与中间代码开篇
+    </div>
+  </section>
+
+  <div id="footer">
+    <span class="brand">第4章 语法分析 · 编译原理课件</span>
+    <span id="pagenum">1 / 25</span>
+  </div>
+
+    <div class="nav">
+    <button id="prev" title="上一页 (←)">‹</button>
+    <button id="next" title="下一页 (→ / 空格)">›</button>
+  </div>
+  <div id="hint">← → 翻页 · 空格下一页 · 推导页逐步显示 · 点击左右半屏翻页</div>
+
+</div>
+
+<script src="/lectures-assets/mermaid.min.js"></script>
+<script>
+mermaid.initialize({
+  startOnLoad: false,   // 必须为 false：display:none 的隐藏页渲染会得到 0 宽高的退化 SVG，
+                        // 改为页面激活时懒渲染（见 renderMermaid）
+  theme: "base",
+  themeVariables: {
+    primaryColor: "#ebf8ff",
+    primaryBorderColor: "#2b6cb0",
+    primaryTextColor: "#1a365d",
+    lineColor: "#718096",
+    fontFamily: "-apple-system, PingFang SC, sans-serif",
+    fontSize: "15px"
+  },
+  flowchart: { curve: "linear", htmlLabels: false }
+});
+</script>
+<script>
+(function(){
+  const slides = Array.from(document.querySelectorAll('.slide'));
+  const total = slides.length;
+  let idx = 0;
+
+  const params = new URLSearchParams(location.search);
+  const startSlide = parseInt(params.get('slide'), 10);
+  if (params.get('autohide') === '1') document.body.classList.add('autohide');
+  if (!isNaN(startSlide) && startSlide >= 1 && startSlide <= total) idx = startSlide - 1;
+
+  const progress = document.getElementById('progress');
+  const pagenum = document.getElementById('pagenum');
+  const prevBtn = document.getElementById('prev');
+  const nextBtn = document.getElementById('next');
+
+  // 推导分步：每页记住已展开的步数；autohide（截图）模式下 CSS 强制全显
+  const stepState = new Map();
+  function stepsOf(i){ return Array.from(slides[i].querySelectorAll('.step')); }
+  function applySteps(){
+    stepsOf(idx).forEach((el, k)=> el.classList.toggle('on', k < (stepState.get(idx) || 0)));
+  }
+  // 前进一步：先展开本页下一步，全部展开后才翻页
+  function forward(){
+    const steps = stepsOf(idx);
+    const shown = stepState.get(idx) || 0;
+    if (shown < steps.length){ stepState.set(idx, shown + 1); applySteps(); return; }
+    go(idx + 1);
+  }
+  // 后退一步：先收起本页最后一步，收完才回上一页
+  function backward(){
+    const steps = stepsOf(idx);
+    const shown = stepState.get(idx) || 0;
+    if (shown > 0){ stepState.set(idx, shown - 1); applySteps(); return; }
+    go(idx - 1);
+  }
+
+  // mermaid 懒渲染：只在页面激活（有真实宽高）时渲染该页的图，渲染后打 data-done 防重复
+  function renderMermaid(slide){
+    if (typeof mermaid === 'undefined') return;
+    const nodes = Array.from(slide.querySelectorAll('.mermaid:not([data-done])'));
+    if (!nodes.length) return;
+    nodes.forEach(n => n.setAttribute('data-done', ''));
+    mermaid.run({ nodes }).catch(err => {
+      nodes.forEach(n => n.removeAttribute('data-done'));
+      console.error('mermaid 渲染失败：', err);
+    });
+  }
+
+  function render(){
+    slides.forEach((s,i)=> s.classList.toggle('active', i===idx));
+    progress.style.width = ((idx+1)/total*100) + '%';
+    pagenum.textContent = (idx+1) + ' / ' + total;
+    prevBtn.disabled = (idx===0);
+    nextBtn.disabled = (idx===total-1);
+    applySteps();
+    renderMermaid(slides[idx]);
+  }
+  function go(n){ idx = Math.max(0, Math.min(total-1, n)); render(); }
+
+  prevBtn.addEventListener('click', e=>{ e.stopPropagation(); backward(); });
+  nextBtn.addEventListener('click', e=>{ e.stopPropagation(); forward(); });
+
+  document.addEventListener('keydown', e=>{
+    if(e.key==='ArrowRight'||e.key===' '||e.key==='PageDown'){ e.preventDefault(); forward(); }
+    else if(e.key==='ArrowLeft'||e.key==='PageUp'){ e.preventDefault(); backward(); }
+    else if(e.key==='Home'){ stepState.set(idx, 0); go(0); }
+    else if(e.key==='End'){ go(total-1); }
+  });
+
+  document.getElementById('stage').addEventListener('click', e=>{
+    if(e.target.closest('.nav')) return;
+    const x = e.clientX;
+    if(x < window.innerWidth*0.5) backward(); else forward();
+  });
+
+  function fit(){
+    const s = Math.min(window.innerWidth/1280, window.innerHeight/720);
+    document.getElementById('stage').style.transform = 'translate(-50%,-50%) scale(' + s + ')';
+  }
+  window.addEventListener('resize', fit);
+  fit();
+  render();
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,887 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第13章 线性因子模型 · 深度学习互动讲义</title>
+<link rel="stylesheet" href="/lectures-assets/style.css">
+</head>
+<body>
+
+<nav class="topbar">
+  <div class="topbar-inner">
+    <span class="brand"><a href="index.html" style="color:inherit">← 学习地图</a></span>
+    <span class="crumb">第三部分 · 表示与推断 / 第13章</span>
+  </div>
+</nav>
+
+<div class="wrap">
+
+  <div class="lecture-head">
+    <span class="ch-label">CHAPTER 13 · 表示与推断</span>
+    <h1>线性因子模型</h1>
+    <p class="lead">本章回答的主线问题：如何用少量隐因子解释高维观测数据？</p>
+  </div>
+
+  <!-- ===== 章首四件套之 1：全书定位 ===== -->
+  <div class="position-bar">
+    <strong>本章在主线上的位置：</strong>第12章展示了深度学习在各领域的应用，从本章起转入"表示与推断"阶段——先学会用线性潜变量模型解释数据，第14章的自编码器才有资格谈"非线性表示"。<br>
+    第13章回答主线上的问题：<strong>如何用少量隐因子解释高维观测数据？</strong>
+    <div class="map-inline">
+      <span class="node">① 数学与机器学习基础（Ch1–5）</span><span class="arrow">→</span>
+      <span class="node">② 现代深度网络（Ch6–11）</span><span class="arrow">→</span>
+      <span class="node here">③ 表示与推断（Ch12–16）</span><span class="arrow">→</span>
+      <span class="node">④ 生成模型与前沿（Ch17–20）</span>
+    </div>
+    <div class="map-inline">
+      <span class="node">Ch12 应用</span><span class="arrow">→</span>
+      <span class="node here">Ch13 线性因子模型</span><span class="arrow">→</span>
+      <span class="node">Ch14 自编码器</span><span class="arrow">→</span>
+      <span class="node">Ch15 表示学习</span>
+    </div>
+  </div>
+
+  <!-- ===== 章首四件套之 2：学习目标 ===== -->
+  <div class="objectives">
+    <h4>🎯 学完本章，合上书你应该能：</h4>
+    <ol>
+      <li>写出线性潜变量模型的生成式定义 x = Wh + μ + ε，并说清先验 p(h) 与噪声项各自的角色；</li>
+      <li>手算概率 PCA 的一步 EM：给定小矩阵 W、σ² 与一个样本 x，完整算出 E 步后验均值（含矩阵求逆的每一步），并写出 M 步更新 W 的公式且解释每一项；</li>
+      <li>说出经典 PCA 是概率 PCA 在 σ²→0 时的极限，并辨析 PCA（各向同性噪声）与因子分析（对角噪声 Ψ）在旋转不变性上的差别；</li>
+      <li>写出 ICA 的独立性判据（最大化非高斯性：峭度 kurt(h) = E[h⁴] − 3(E[h²])² 或负熵），并解释为什么"不相关"不等于"独立"；</li>
+      <li>给定混合矩阵 A，手算验证白化后协方差为单位阵，并说明白化之后为什么还需要一步旋转、以及 ICA 的三种不唯一性；</li>
+      <li>说出慢特征分析与稀疏编码各自的目标函数直觉，以及它们如何为第14章自编码器埋伏笔。</li>
+    </ol>
+  </div>
+
+  <div class="lecture">
+
+    <!-- ===== 章首四件套之 3：推导主线图 ===== -->
+    <div class="figure">
+      <div class="mermaid">
+flowchart TB
+  A["高维数据只有少量自由度"] --> B["假设 x = Wh 加噪声 潜变量模型"]
+  B --> C["h 高斯 噪声各向同性 概率PCA"]
+  B --> D["噪声协方差为对角阵 因子分析"]
+  B --> E["h 非高斯且相互独立 ICA"]
+  C --> F["线性混合已到极限"]
+  D --> F
+  E --> F
+  F --> G["代价 真实数据的因子是非线性的 第14章自编码器"]
+  classDef danger fill:#fae9e7,stroke:#b03a2e,stroke-width:2.5px,color:#b03a2e;
+  class G danger;
+      </div>
+      <div class="caption">本章推导主线：一个生成假设（x = Wh + 噪声），按"先验与噪声怎么设"分出三条支路（概率PCA / 因子分析 / ICA），最后共同撞上"线性"这堵墙——这是留给第14章的功课。</div>
+    </div>
+
+    <!-- ================= 13.1 ================= -->
+    <h2><span class="sec-no">13.1</span>潜变量模型总框架：为什么引入看不见的量</h2>
+
+    <p>第 6–11 章的网络都是"输入 → 输出"的判别式思路，第 12 章把它们用到了各个领域。但有一类问题它们答不了：<strong>没有任何标签，只说"这里有一堆高维数据"，你能说出它是怎么生成的吗？</strong>本章回到无监督的起点，引入一个朴素却威力巨大的想法——<span class="term">潜变量模型</span>（Latent Variable Model）：<strong>观测到的高维数据 x，其实是由少量看不见的隐因子 h 生成的</strong>。</p>
+
+    <p>为什么相信这个想法？看人脸照片：一张 1000 维的像素向量，看似有 1000 个自由度，但真正决定这张照片的不过是<strong>几十个因素</strong>——光照方向与强度、头部的姿态角、表情、身份特征（脸型、五官）。两张"同一人在同一姿态下、只差光照"的照片，在像素空间里相距很远，在"因子空间"里却只差一点。观测维度高，不等于有效维度高。</p>
+
+    <p>把这个直觉写成数学，就是本章所有模型的共同骨架：</p>
+    <div class="formula"><span class="var">x</span> = <span class="var">W</span><span class="var">h</span> + <span class="var">μ</span> + <span class="var">ε</span>，其中 <span class="var">h</span> ~ <span class="var">p</span>(<span class="var">h</span>)，<span class="var">ε</span> 是噪声</div>
+    <p>逐项解读：</p>
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>符号</th><th>名称</th><th>含义</th></tr>
+        <tr><td>x ∈ Rⁿ</td><td>观测变量</td><td>看得见的 n 维数据（如 1000 维像素）</td></tr>
+        <tr><td>h ∈ Rᵏ，k ≪ n</td><td>潜变量 / 因子</td><td>看不见的 k 个生成因素（光照、姿态……）</td></tr>
+        <tr><td>W ∈ Rⁿˣᵏ</td><td>载荷矩阵（Loading Matrix）</td><td>每个因子如何线性影响每个观测维度</td></tr>
+        <tr><td>μ</td><td>均值偏移</td><td>数据的整体中心</td></tr>
+        <tr><td>ε</td><td>噪声</td><td>因子解释不了的剩余部分，其协方差结构决定模型分支</td></tr>
+        <tr><td>p(h)</td><td>先验</td><td>对因子"长什么样"的事先假设（高斯？稀疏？独立？）</td></tr>
+      </table>
+    </div>
+    <p>边际分布由积分给出：p(x) = ∫ p(x|h) p(h) dh。"看见 x 之后反推 h"则是后验 p(h|x) ∝ p(x|h)p(h)——<strong>生成是顺流而下，推断是逆流而上</strong>。本章三个模型的唯一差别就在于：<em>p(h) 怎么设、ε 的协方差怎么设</em>。概率PCA 与因子分析设 h 为高斯，ICA 设 h 为非高斯且相互独立。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>潜变量模型就像调音台：听众只听到混好的音乐（x），但录音师面前是几路独立的旋钮（h）。本章的任务就是只凭混好的成品，反推出旋钮的位置与线路的连接方式（W）。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>"潜变量是真实存在的物理量，我们要发现它"——不对。h 是<strong>建模假设</strong>，是我们为解释数据的相关结构而发明的工具。不同假设（高斯/稀疏/独立）会给出不同的 h，哪个"对"取决于它能否简洁地解释数据并服务于下游任务，而不是它是否对应某个物理实体。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 13.1-1</div>
+              <div class="q-text">写出线性潜变量模型的生成式，并说出每一项的角色。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              x = Wh + μ + ε：h 是少量隐因子（带先验 p(h)），W 是载荷矩阵（因子→观测的线性映射），μ 是数据中心，ε 是因子解释不了的噪声，其协方差结构决定模型属哪一支。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 13.1-2</div>
+              <div class="q-text">为什么说"观测维度高 ≠ 有效维度高"？用人脸照片举例。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              1000 维像素照片实际由光照、姿态、身份等几十个因素生成；同一人只差光照的两张照片在像素空间相距远、在因子空间相差小——数据的自由度远小于观测维度，这正是潜变量模型成立的前提。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ================= 13.2 ================= -->
+    <h2><span class="sec-no">13.2</span>概率 PCA 与它的 EM：给定 x，怎么反推 h</h2>
+
+    <p>上一节给了骨架，这节填上第一组具体假设。<span class="term">概率 PCA</span>（Probabilistic PCA，PPCA）假设：</p>
+    <div class="formula">p(h) = 𝒩(0, I)，p(x|h) = 𝒩(Wh + μ, σ²I)</div>
+    <p>即因子是标准高斯，噪声<strong>各向同性</strong>（每个观测维度共享同一个噪声方差 σ²）。给定 h 后 x 的分布是球形高斯，中心在 Wh + μ。</p>
+
+    <p>训练目标是最大化观测数据的似然 p(x)。麻烦在于：h 看不见，似然里含积分，无法直接对 W 求导置零求解——这正是 <span class="term">EM 算法</span>（Expectation-Maximization）的标准用武之地：<strong>E 步</strong>用当前 W 算出每个样本的后验 p(h|x)，<strong>M 步</strong>假装 h 已知、用这些"软估计"重新拟合 W，两步交替上升似然。</p>
+
+    <h3>E 步公式：后验也是高斯</h3>
+    <div class="formula">h | x = 𝒩( M⁻¹Wᵀ(x − μ), σ²M⁻¹ )，其中 M = WᵀW + σ²I</div>
+    <p>记住两件事就够：<strong>后验均值</strong> = M⁻¹Wᵀ(x − μ)，<strong>后验协方差</strong> = σ²M⁻¹。下面用一组具体数字把每一步算完。</p>
+
+    <h3>手算例 1：PPCA 的一步 EM（E 步完整推导）</h3>
+    <p>设定：观测维度 n = 2，因子维度 k = 1。载荷矩阵 W = (1, 1)ᵀ（2×1 列向量），噪声 σ² = 0.5，均值 μ = (0, 0)ᵀ。观测到一个样本 x = (3, 1)ᵀ。求后验 p(h|x)。</p>
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>步骤</th><th>算式</th><th>结果</th></tr>
+        <tr><td>1. 算 WᵀW（1×1 标量）</td><td>WᵀW = 1×1 + 1×1</td><td>2</td></tr>
+        <tr><td>2. 算 M = WᵀW + σ²I</td><td>M = 2 + 0.5</td><td>M = 2.5</td></tr>
+        <tr><td>3. 算 M⁻¹（标量求逆）</td><td>M⁻¹ = 1 / 2.5</td><td>M⁻¹ = 0.4</td></tr>
+        <tr><td>4. 算 x − μ</td><td>(3, 1)ᵀ − (0, 0)ᵀ</td><td>(3, 1)ᵀ</td></tr>
+        <tr><td>5. 算 Wᵀ(x − μ)（标量）</td><td>1×3 + 1×1</td><td>4</td></tr>
+        <tr><td>6. 后验均值 = M⁻¹Wᵀ(x−μ)</td><td>0.4 × 4</td><td><strong>E[h|x] = 1.6</strong></td></tr>
+        <tr><td>7. 后验方差 = σ²M⁻¹</td><td>0.5 × 0.4</td><td>Var[h|x] = 0.2</td></tr>
+      </table>
+    </div>
+    <p>结论：p(h|x) = 𝒩(1.6, 0.2)。直觉检验：x = (3,1) 在方向 (1,1) 上的投影长度约为 (3+1)/√2 ≈ 2.83，除掉噪声与先验的"回缩"，后验均值 1.6 比朴素投影小——这正是先验 p(h)=𝒩(0,I) 把估计往 0 拉的结果（收缩效应）。</p>
+
+    <h3>M 步：用后验重新拟合 W</h3>
+    <p>M 步对每个样本计算两个充分统计量：E[h⁽ⁱ⁾|x⁽ⁱ⁾]（后验均值）与 E[h⁽ⁱ⁾h⁽ⁱ⁾ᵀ] = σ²M⁻¹ + E[h]E[h]ᵀ（后验二阶矩），然后更新：</p>
+    <div class="formula">W ← [ ∑<sub>i</sub> (x⁽ⁱ⁾ − μ) E[h⁽ⁱ⁾]ᵀ ] [ ∑<sub>i</sub> E[h⁽ⁱ⁾h⁽ⁱ⁾ᵀ] ]⁻¹</div>
+    <p>逐项解释：左边的分子是"观测与因子软估计的互相关"——x 的哪几维跟着哪个因子动；右边的分母是"因子的自相关（含不确定性 σ²M⁻¹）"——除掉因子自身的尺度。整个式子就是<strong>用软估计的 h 对 x 做最小二乘回归</strong>。</p>
+
+    <h3>手算例 2：接上例，算出 M 步的新 W</h3>
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>步骤</th><th>算式</th><th>结果</th></tr>
+        <tr><td>1. 二阶矩 E[hhᵀ]</td><td>σ²M⁻¹ + E[h]² = 0.2 + 1.6²</td><td>0.2 + 2.56 = 2.76</td></tr>
+        <tr><td>2. 分子 (x−μ)E[h]ᵀ</td><td>(3, 1)ᵀ × 1.6</td><td>(4.8, 1.6)ᵀ</td></tr>
+        <tr><td>3. 除以分母</td><td>(4.8, 1.6)ᵀ / 2.76</td><td>W_new ≈ (1.74, 0.58)ᵀ</td></tr>
+        <tr><td>4. 直觉检验</td><td>x = (3,1) 的第一维更强</td><td>W_new 第一分量变大、第二分量变小 ✓</td></tr>
+      </table>
+    </div>
+    <p>注意第 1 步为什么不能省掉 σ²M⁻¹：那是后验的<strong>不确定性</strong>。把它丢掉相当于假装 h 被精确观测到，会系统性高估 E[hhᵀ]、让 W 的更新缩水。EM 交替这两个步骤，似然单调不降，直到收敛。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>EM 的本质是"鸡生蛋"的迭代：知道 W 就能推 h（E 步），知道 h 就能拟合 W（M 步）。两个都不知道时，就交替地"假装知道另一个"，每轮都让似然变好。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>"E 步后验均值就是 h 的真值"——不是。E[h|x] 只是最优猜测，后验仍有方差 σ²M⁻¹。M 步里 E[hhᵀ] = σ²M⁻¹ + E[h]E[h]ᵀ 的第一项正是这份不确定性的账本，丢掉它就不是 EM 而是"硬指派"，似然不再保证单调上升。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 13.2-1</div>
+              <div class="q-text">写出 PPCA 的两个分布假设与 E 步后验公式（含 M 的定义）。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              p(h)=𝒩(0,I)，p(x|h)=𝒩(Wh+μ, σ²I)。后验 h|x = 𝒩(M⁻¹Wᵀ(x−μ), σ²M⁻¹)，M = WᵀW + σ²I。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 13.2-2</div>
+              <div class="q-text">M 步更新 W 的公式中，分子、分母各是什么？为什么不能丢掉 σ²M⁻¹ 项？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              分子是观测与因子软估计的互相关，分母是因子的自相关。σ²M⁻¹ 是后验不确定性，丢掉它等于假装 h 被精确观测，系统高估 E[hhᵀ]，不再是真正的 EM。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ================= 13.3 ================= -->
+    <h2><span class="sec-no">13.3</span>PCA 与因子分析的关系：只差一个噪声假设</h2>
+
+    <p>上一节的 PPCA 里藏着一个经典算法：当噪声 σ²→0 时，PPCA 的后验退化为"把 x 正交投影到 W 的子空间"，似然最大的 W 恰好张成<strong>经典 PCA 的主子空间</strong>。所以经典 PCA = 概率 PCA 在 σ²→0 时的极限——PCA 不再是一个孤立的降维技巧，而是潜变量模型家族的一员。</p>
+
+    <p><span class="term">因子分析</span>（Factor Analysis，FA）走的是另一条岔路：噪声协方差不是球形的 σ²I，而是<strong>对角阵 Ψ = diag(ψ₁, …, ψₙ)</strong>——每个观测维度有<em>自己独立</em>的噪声水平：</p>
+    <div class="formula">p(h) = 𝒩(0, I)，p(x|h) = 𝒩(Wh + μ, Ψ)，Ψ 为对角阵</div>
+    <p>含义上的差别：PPCA 说"所有维度一样脏，剩下的都是因子"；FA 说"维度各有各的脏法，只有跨维度的<em>共变</em>才归因于因子"。</p>
+
+    <h3>旋转不变性的关键差别</h3>
+    <p>两个模型对"W 右乘一个正交旋转 R"的反应不同：</p>
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>模型</th><th>对旋转 W → WR 的反应</th><th>结论</th></tr>
+        <tr><td>PCA（σ²→0）</td><td>旋转会破坏"按方差大小排序"的结构</td><td><strong>主子方向唯一</strong>（可辨识，只差符号）</td></tr>
+        <tr><td>因子分析</td><td>WWᵀ 不变，似然不变</td><td><strong>因子方向允许任意旋转</strong>，需额外准则才能定方向</td></tr>
+      </table>
+    </div>
+
+    <h3>手算例 3：同一个协方差矩阵，PCA 与 FA 给出不同方向</h3>
+    <p>设 2 维观测数据的协方差矩阵为 Σ = [[4, 2], [2, 2]]（即第一行 (4,2)，第二行 (2,2)）。</p>
+    <p><strong>PCA 方向（最大特征值对应的特征向量）：</strong></p>
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>步骤</th><th>算式</th><th>结果</th></tr>
+        <tr><td>1. 特征方程 det(Σ − λI) = 0</td><td>(4−λ)(2−λ) − 4 = λ² − 6λ + 4 = 0</td><td>λ = 3 ± √5</td></tr>
+        <tr><td>2. 取大根</td><td>λ₁ = 3 + √5</td><td>λ₁ ≈ 5.236（λ₂ ≈ 0.764）</td></tr>
+        <tr><td>3. 代回求方向</td><td>(4 − λ₁)v₁ + 2v₂ = 0 ⟹ v₂ = (λ₁−4)/2 · v₁</td><td>v₂ = (√5−1)/2 ≈ 0.618 v₁</td></tr>
+        <tr><td>4. 主方向</td><td>v ∝ (1, 0.618)</td><td>与 x₁ 轴夹角 ≈ 31.7°</td></tr>
+      </table>
+    </div>
+    <p><strong>因子分析方向（单因子，Σ = wwᵀ + Ψ）：</strong>写出约束：w₁w₂ = 2（非对角元），w₁² + ψ₁ = 4，w₂² + ψ₂ = 2。未知数 4 个、方程 3 个，<strong>有无穷多解</strong>——这正是旋转不唯一的代数证据。取一组合法解 ψ₁ = 2：</p>
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>步骤</th><th>算式</th><th>结果</th></tr>
+        <tr><td>1. 由 w₁² + ψ₁ = 4，取 ψ₁ = 2</td><td>w₁² = 2</td><td>w₁ = √2 ≈ 1.414</td></tr>
+        <tr><td>2. 由 w₁w₂ = 2</td><td>w₂ = 2 / √2</td><td>w₂ = √2 ≈ 1.414</td></tr>
+        <tr><td>3. 由 w₂² + ψ₂ = 2</td><td>ψ₂ = 2 − 2</td><td>ψ₂ = 0</td></tr>
+        <tr><td>4. 因子方向</td><td>w ∝ (1, 1)</td><td>与 x₁ 轴夹角 = 45°</td></tr>
+        <tr><td>5. 验证重构</td><td>wwᵀ + Ψ = [[2,2],[2,2]] + [[2,0],[0,0]]</td><td>= [[4,2],[2,2]] = Σ ✓</td></tr>
+      </table>
+    </div>
+    <p>同一个 Σ：<strong>PCA 给出 31.7°，FA 给出 45°</strong>，二者方向不同且都"对"——它们回答的问题不同：PCA 找方差最大的方向，FA 找能解释<em>协方差</em>的公共因子。而且 FA 若换一个 ψ₁ 取值，方向还会变；PCA 的方向则唯一确定。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>PCA、PPCA、FA 是同一家族按噪声假设排成的光谱：PCA（无噪声）⊂ PPCA（球形噪声）⊂ FA（对角噪声）。噪声假设越自由，能吸收进"维度私有噪声"的成分越多，留给因子的就只剩跨维度的共变。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>"因子分析就是旋转后的 PCA"——不对。FA 的旋转自由度来自它的<em>对角噪声模型</em>，是似然层面上的不可辨识；PCA 没有对角噪声，主方向由方差排序唯一锁定。把 FA 的因子直接当 PCA 主成分解读方向，是最常见的误用。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 13.3-1</div>
+              <div class="q-text">经典 PCA 与概率 PCA 的关系是什么？因子分析又在哪个假设上改了什么？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              经典 PCA = PPCA 在 σ²→0 时的极限（投影到主子空间）。因子分析把噪声协方差从 σ²I 放宽为对角阵 Ψ——每个观测维度有独立噪声。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 13.3-2</div>
+              <div class="q-text">PCA 与因子分析在"旋转不变性"上的差别是什么？手算例中两者方向各是多少度？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              PCA 主方向唯一（旋转破坏方差排序）；FA 允许任意正交旋转（WWᵀ 不变）。例中 Σ=[[4,2],[2,2]]：PCA 方向 (1, 0.618) ≈ 31.7°，FA 一解为 (1,1) = 45°。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ================= 13.4 ================= -->
+    <h2><span class="sec-no">13.4</span>ICA：要的不是"不相关"，而是"独立"</h2>
+
+    <p>前面两个模型里 h 都是高斯。高斯有个"致命弱点"：高斯分布旋转之后仍是高斯，<strong>方向信息被彻底抹平</strong>——这就是 FA 旋转不唯一的根源。要恢复真正的因子方向，必须假设 h 是<strong>非高斯且相互独立</strong>的，这就是<span class="term">独立成分分析</span>（Independent Component Analysis，ICA）。</p>
+
+    <p>经典场景是<span class="term">鸡尾酒会问题</span>（Cocktail Party Problem）：房间里 2 个说话人同时讲话，2 个麦克风各自录到两路声音的混合 x₁ = 2s₁ + s₂、x₂ = s₁ + s₂。能不能只凭录到的混合信号 (x₁, x₂)，把原始说话声 (s₁, s₂) 分离出来？直觉依据：两个说话人<strong>统计独立</strong>——一个人说什么不影响另一个说什么。ICA 的目标就是找解混矩阵 W 使 h = Wx 的各分量统计独立。</p>
+
+    <h3>独立性判据：最大化非高斯性</h3>
+    <p>中心极限定理说：多个独立信号的混合，会比任何单一信号更接近高斯。反过来，<strong>越不"高斯"的方向，越接近独立成分</strong>。常用度量是<span class="term">峭度</span>（Kurtosis）：</p>
+    <div class="formula">kurt(h) = E[h⁴] − 3(E[h²])²</div>
+    <p>高斯变量的峭度恰为 0；均匀分布等"平坦"分布峭度为负（亚高斯）；稀疏、重尾分布峭度为正（超高斯）。ICA 即寻找使 |kurt| 最大化的投影方向（或用更稳健的负熵近似）。注意分界线：<strong>不相关（协方差为 0）只是二阶约束，独立要求所有阶统计都解耦</strong>——两个变量可以协方差为 0 却强依赖（如 h 均匀、x = h²）。</p>
+
+    <h3>手算例 4：混合 → 白化 → 验证单位协方差</h3>
+    <p>设两个独立源 s₁、s₂ 零均值、方差为 1，混合矩阵 A = [[2, 1], [1, 1]]，即 x = As。我们只拿到 x，分两步找回源。</p>
+    <p><strong>第 1 步：算出观测的协方差。</strong>由 Cov(s) = I，得 Cov(x) = AAᵀ：</p>
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>步骤</th><th>算式</th><th>结果</th></tr>
+        <tr><td>1. AAᵀ 的 (1,1) 元</td><td>2×2 + 1×1</td><td>5</td></tr>
+        <tr><td>2. AAᵀ 的 (1,2) 与 (2,1) 元</td><td>2×1 + 1×1</td><td>3</td></tr>
+        <tr><td>3. AAᵀ 的 (2,2) 元</td><td>1×1 + 1×1</td><td>2</td></tr>
+        <tr><td>4. 观测协方差</td><td>Cov(x) = AAᵀ</td><td>Σₓ = [[5, 3], [3, 2]]</td></tr>
+      </table>
+    </div>
+    <p><strong>第 2 步：白化。</strong>取白化矩阵 P = [[1/√5, 0], [−3/√5, √5]]（由 Σₓ 的 Cholesky 分解求逆得到），令 z = Px。<strong>逐格验证 Cov(z) = PΣₓPᵀ = I：</strong></p>
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>步骤</th><th>算式</th><th>结果</th></tr>
+        <tr><td>1. 先算 PΣₓ 第 1 行</td><td>(1/√5)×(5, 3) + 0</td><td>(√5, 3/√5)</td></tr>
+        <tr><td>2. PΣₓ 第 2 行</td><td>(−3/√5)×(5,3) + √5×(3,2)</td><td>(−3√5+3√5, −9/√5+2√5) = (0, 1/√5)</td></tr>
+        <tr><td>3. (PΣₓPᵀ)₁₁</td><td>√5×(1/√5) + (3/√5)×0</td><td>1 ✓</td></tr>
+        <tr><td>4. (PΣₓPᵀ)₁₂</td><td>√5×(−3/√5) + (3/√5)×√5</td><td>−3 + 3 = 0 ✓</td></tr>
+        <tr><td>5. (PΣₓPᵀ)₂₁</td><td>0×(1/√5) + (1/√5)×0</td><td>0 ✓</td></tr>
+        <tr><td>6. (PΣₓPᵀ)₂₂</td><td>0×(−3/√5) + (1/√5)×√5</td><td>1 ✓</td></tr>
+      </table>
+    </div>
+    <p>Cov(z) = I 验证完毕。<strong>但故事没完</strong>：算一下 z 与 s 的关系——z = PAs，而</p>
+    <div class="formula">PA = [[2/√5, 1/√5], [−1/√5, 2/√5]] —— 每行模长为 1，两行正交，恰是一个旋转矩阵</div>
+    <p>也就是说，白化之后 z 是源 s 的一个<strong>纯旋转</strong>：相关被消除了，但两个分量仍是两个源的混合，并不独立。任何旋转 R 都有 Cov(Rz) = RIRᵀ = I——<strong>白化（PCA 能做的全部）永远差一个旋转</strong>，而这最后一个旋转只有靠非高斯性判据（最大化 |kurt|）才能找到，这就是 ICA 比 PCA 多走的那一步。</p>
+
+    <h3>ICA 的三种不唯一性</h3>
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>不唯一性</th><th>含义</th><th>为什么无妨</th></tr>
+        <tr><td>符号</td><td>h 与 −h 同样独立</td><td>说话声反相，内容不变</td></tr>
+        <tr><td>顺序</td><td>h₁、h₂ 可对调</td><td>谁先谁后只是命名</td></tr>
+        <tr><td>幅度</td><td>h 与 c·h 无法区分（被 W 吸收）</td><td>音量大小归一化即可</td></tr>
+      </table>
+    </div>
+    <p>另外一条硬限制：<strong>最多只能有一个高斯源</strong>——两个高斯源的混合在任何旋转下都一样，ICA 对它们无能为力。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>PCA 与 ICA 的分工：PCA 消除二阶相关（白化），ICA 消除高阶依赖（旋转到独立）。前者只能走到"协方差为单位阵"，后者靠"非高斯性"走完最后一程——高斯分布没有方向偏好，非高斯分布有。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>"不相关就是独立"——错。不相关只约束二阶矩（E[h₁h₂]=E[h₁]E[h₂]），独立要求联合分布完全分解 p(h₁,h₂)=p(h₁)p(h₂)。反例：h 均匀分布于 [−1,1]，y = h²，则 Cov(h, y) = E[h³] − E[h]E[h²] = 0，但 y 完全被 h 决定——极端不独立。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 13.4-1</div>
+              <div class="q-text">写出 ICA 的目标与独立性判据（峭度公式），并说明高斯的峭度是多少、为什么这构成判据。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              目标：找 W 使 h = Wx 各分量统计独立。判据：最大化非高斯性，如 |kurt(h)|，kurt(h)=E[h⁴]−3(E[h²])²，高斯峭度为 0；混合比单源更接近高斯，故偏离高斯的方向即独立成分方向。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 13.4-2</div>
+              <div class="q-text">为什么 PCA 白化之后仍需要 ICA？ICA 的三种不唯一性是什么？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              白化只保证协方差为单位阵，任何旋转都保持这一性质，源仍是混合的；需靠非高斯性找到那个旋转。不唯一性：符号、顺序、幅度；另有限制：最多容忍一个高斯源。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ================= 13.5 ================= -->
+    <h2><span class="sec-no">13.5</span>慢特征分析与稀疏编码：给第 14 章埋下的两条伏笔</h2>
+
+    <p>线性因子模型的三条支路到此讲完，但它们共享一个沉默的假设：<em>因子之间没有结构、没有偏好</em>。本节介绍两个补充性的"偏好原则"，它们将在第 14 章以非线性的形式复活。</p>
+
+    <h3>慢特征分析：时间上相邻的帧，因子应该相近</h3>
+    <p><span class="term">慢特征分析</span>（Slow Feature Analysis，SFA）的出发点：真实世界的原因（物体身份、位置、光照）随时间变化得<strong>慢</strong>，而像素级的观测变化得<strong>快</strong>。于是给因子加一条约束——让学到的 h(t) 在时间维度上尽量平滑：</p>
+    <div class="formula">minimize &nbsp; E[ ( h(t+1) − h(t) )² ]</div>
+    <p>配合"因子要有足够方差、彼此不相关"的约束（否则全学成常数就是平凡的"最慢"），SFA 能从视频序列里提取出"物体是什么"这类慢变量，而把快速抖动的像素细节滤掉。直觉：<strong>变得慢的，才配叫"原因"</strong>。</p>
+
+    <h3>稀疏编码：每次只动用少数几个因子</h3>
+    <p><span class="term">稀疏编码</span>（Sparse Coding）换了另一种偏好：<em>不</em>要求因子独立或慢，而要求对每一个样本，h 中<strong>只有少数分量非零</strong>：</p>
+    <div class="formula">minimize &nbsp; ‖x − Wh‖² + λ ∑<sub>j</sub> |h<sub>j</sub>|</div>
+    <p>第一项是重构误差（x 要被 W h 解释好），第二项是稀疏惩罚（L1 范数逼大多数 hⱼ 为 0），λ 权衡两者。典型结果是 W 的列学成类似"视觉皮层简单细胞"的局部边缘检测器——每个输入只用少数几根"基"拼出来。稀疏编码的框架已经隐隐是"编码器 + 重构"的结构：把 x 编码成 h，再从 h 重构 x——这正是下一章<span class="term">自编码器</span>（Autoencoder）的直系祖先，只差把"线性"换成"神经网络"。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>本章所有模型都在回答同一个问题的不同侧面：什么是"好"的因子？PPCA/FA 说"能解释协方差的"，ICA 说"统计独立的"，SFA 说"随时间慢的"，稀疏编码说"用得省的"。第 14 章会问：如果因子与观测之间根本不是线性关系呢？——答案是把 W 换成神经网络，这就是自编码器。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>"稀疏编码的稀疏性是为了省存储"——不是主要目的。稀疏性是一种<em>归纳偏好</em>：它逼模型把信息分摊到过完备的基上，学出局部化、可解释的特征；省存储只是副产品，表征质量才是动机。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 13.5-1</div>
+              <div class="q-text">慢特征分析的目标函数是什么？为什么必须加"方差足够大、彼此不相关"的约束？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              minimize E[(h(t+1)−h(t))²]。不加约束时把所有因子学成常数即得"最慢"的平凡解；约束迫使慢因子仍携带信息、互不重复。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 13.5-2</div>
+              <div class="q-text">写出稀疏编码的目标函数，并说出它与第 14 章自编码器的传承关系。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              min ‖x − Wh‖² + λΣ|hⱼ|：重构误差 + L1 稀疏惩罚。它已是"编码 h + 重构 x"结构；自编码器把线性映射 W 换成神经网络，即得其非线性推广。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ================= 概念卡 ================= -->
+    <h2><span class="sec-no">🃏</span>概念卡：本章概念的一分钟画像</h2>
+    <p>翻面前先自问：这个概念我能用一句话讲清楚吗？</p>
+    <div class="flip-grid">
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 1</div>
+            <div class="q-text">潜变量模型（Latent Variable Model）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">假设观测 x 由看不见的潜变量 h 生成：x = Wh + μ + ε，p(x)=∫p(x|h)p(h)dh。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">高维数据有效维度低，用少量因子解释观测间的相关结构。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">调音台：听众只听到混音，录音师面前是几路独立旋钮。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">把 h 当成真实物理量——它是建模假设，对错取决于解释力。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">本章总框架；Ch14 自编码器、Ch20 深度生成模型的根。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 2</div>
+            <div class="q-text">概率 PCA（Probabilistic PCA）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">p(h)=𝒩(0,I)、p(x|h)=𝒩(Wh+μ, σ²I) 的线性高斯潜变量模型，用 EM 训练。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">给经典 PCA 一个概率解释：可处理缺失数据、可做生成、σ²→0 退化为 PCA。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">主子空间上罩了一层厚度为 σ² 的"雾"。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为 E 步后验均值是 h 真值——后验仍有方差 σ²M⁻¹。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">本章 13.2；EM 算法与降维的基准模型。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 3</div>
+            <div class="q-text">因子分析（Factor Analysis）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">噪声协方差为对角阵 Ψ 的线性高斯潜变量模型：p(x|h)=𝒩(Wh+μ, Ψ)。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">把"跨维度共变"归因于公共因子，把维度私有噪声留给 Ψ 吸收。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">每门课成绩 = 公共智力因子 + 各科目独有的运气。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">把它当"旋转后的 PCA"——旋转不唯一来自对角噪声，方向本就不可辨识。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">本章 13.3；心理测量、问卷分析的经典工具。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 4</div>
+            <div class="q-text">独立成分分析（ICA）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">找解混矩阵 W 使 h = Wx 各分量统计独立的线性模型，假设源非高斯。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">盲源分离：如鸡尾酒会问题中从麦克风混合信号分离说话人。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">两个声部各自独立，混得越厉害越像高斯——往最"不高斯"的方向还原。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">把"不相关"当"独立"；忘记 ICA 有符号、顺序、幅度三种不唯一。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">本章 13.4；语音分离、脑电去伪迹。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 5</div>
+            <div class="q-text">峭度（Kurtosis）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">kurt(h) = E[h⁴] − 3(E[h²])²，度量分布与正态的偏离程度。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">给 ICA 提供"非高斯性"的可计算判据：高斯恰为 0，偏离即信息。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">分布的"个性指数"：正态最没个性，越极端越容易认亲。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为峭度只看"尖不尖"——它对尾部权重同样敏感；且对异常值不稳健。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">本章 13.4 的 ICA 判据；也可用负熵替代。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 6</div>
+            <div class="q-text">稀疏编码（Sparse Coding）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">min ‖x−Wh‖² + λΣ|hⱼ|：用少数非零因子重构输入的表示方法。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">以稀疏性为归纳偏好，学出局部化、可解释的基（如边缘检测器）。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">每次讲话只从词汇表里抽少数几个词，拼凑出完整句子。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为稀疏是为了省存储——它是为表征质量服务的偏好。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">本章 13.5；Ch14 稀疏自编码器的直系祖先。</span></div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- ================= 分层习题 ================= -->
+    <h2><span class="sec-no">📝</span>分层习题</h2>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>
+        <p>判断对错："两个随机变量协方差为 0（不相关），它们就一定相互独立。"如果对，给出证明思路；如果错，给出一个具体反例并验证它"不相关但不独立"。</p>
+      </div>
+      <details>
+        <summary>提示</summary>
+        <p>想想 13.4  warning 框里的例子：让一个变量完全决定另一个变量，但把依赖关系藏在对称性里，使二阶矩恰好为 0。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p><strong>错。</strong>反例：设 h 在 [−1, 1] 上均匀分布，令 y = h²。</p>
+          <p>验证不相关：E[h] = 0（对称区间），E[h³] = 0（奇函数在对称区间积分为 0），所以 Cov(h, y) = E[h·h²] − E[h]·E[h²] = E[h³] − 0 = 0，二者不相关。</p>
+          <p>验证不独立：y 由 h 完全决定——知道 h 就唯一确定 y，没有任何随机性可言，p(y|h) 是退化分布，显然 p(h,y) ≠ p(h)p(y)。</p>
+          <p>为什么易错：高斯分布下"不相关 ⟹ 独立"成立，很多人把它当成了普遍规律。它只对联合高斯成立；一般分布里独立是远比不相关强的条件（所有阶统计都解耦），这正是 ICA 不能只靠 PCA 白化的原因。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>
+        <p>填空并说明理由：PCA / 概率 PCA / 因子分析三者中，假设噪声协方差为 σ²I 的是____；假设噪声协方差为对角阵 Ψ 的是____；可视为 σ²→0 极限的是____。哪一个模型允许因子方向任意旋转？为什么？</p>
+      </div>
+      <details>
+        <summary>提示</summary>
+        <p>回忆 13.3 的"噪声假设光谱"：无噪声 → 球形噪声 → 对角噪声。旋转自由度看"WWᵀ 在似然里出现时右乘正交阵是否改变似然"。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p>σ²I：<strong>概率 PCA</strong>；Ψ：<strong>因子分析</strong>；σ²→0 的极限：<strong>经典 PCA（是概率 PCA 的极限）</strong>。</p>
+          <p>允许任意旋转的是<strong>因子分析</strong>：它的似然只通过 WWᵀ + Ψ 依赖 W，对 W 右乘任何正交阵 R，(WR)(WR)ᵀ = WRRᵀWᵀ = WWᵀ，似然完全不变，故因子方向不可辨识，需要额外的旋转准则（如心理学中的 varimax）。PCA 则不同：主方向按特征值大小排序，旋转会破坏这个排序，方向唯一（只差符号）。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>
+        <p>概率 PCA，n = 2 维观测、k = 1 维因子。当前 W = (1, 0)ᵀ，σ² = 1，μ = (0, 0)ᵀ，观测到 x = (2, 2)ᵀ。① 按 E 步公式手算后验 p(h|x) 的均值与方差（M 的构造、求逆、各步乘法写全）；② 解释为什么后验方差小于先验方差 1。</p>
+      </div>
+      <details>
+        <summary>提示</summary>
+        <p>照搬 13.2 手算例 1 的七步表：M = WᵀW + σ²I 是 1×1 标量；注意 W 的第二个分量是 0，x 的第二维还起不起作用？</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p>① 逐步计算：</p>
+          <p>1. WᵀW = 1×1 + 0×0 = 1<br>
+          2. M = WᵀW + σ²I = 1 + 1 = 2<br>
+          3. M⁻¹ = 1/2 = 0.5<br>
+          4. x − μ = (2, 2)ᵀ<br>
+          5. Wᵀ(x − μ) = 1×2 + 0×2 = 2<br>
+          6. 后验均值 = M⁻¹Wᵀ(x−μ) = 0.5 × 2 = <strong>1</strong><br>
+          7. 后验方差 = σ²M⁻¹ = 1 × 0.5 = <strong>0.5</strong></p>
+          <p>所以 p(h|x) = 𝒩(1, 0.5)。</p>
+          <p>② 后验方差 0.5 &lt; 先验方差 1：观测 x 带来了关于 h 的信息，不确定性被压缩；这正是贝叶斯推断"数据收紧信念"的体现。注意 x 的第二维（值为 2）没有进入计算——因为 W 的第二分量为 0，说明当前模型认为因子 h 不影响观测的第二维，该维的信息对推断 h 无用。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>
+        <p>对某个候选源信号，观测到 3 个样本值：h = −2, 1, 1（已零均值）。① 用样本均值代替期望，手算峭度 kurt(h) = E[h⁴] − 3(E[h²])²，每一步写全；② 根据符号判断它是亚高斯还是超高斯；③ 说明为什么"峭度非零"使它适合被 ICA 分离。</p>
+      </div>
+      <details>
+        <summary>提示</summary>
+        <p>先算 E[h²]，再算 E[h⁴]，最后代入公式。对照组：高斯的峭度恰为 0。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p>① 逐步计算：</p>
+          <p>1. E[h²] = ( (−2)² + 1² + 1² ) / 3 = (4 + 1 + 1)/3 = 6/3 = 2<br>
+          2. E[h⁴] = ( (−2)⁴ + 1⁴ + 1⁴ ) / 3 = (16 + 1 + 1)/3 = 18/3 = 6<br>
+          3. 3(E[h²])² = 3 × 2² = 12<br>
+          4. kurt(h) = 6 − 12 = <strong>−6</strong></p>
+          <p>② kurt = −6 &lt; 0，是<strong>亚高斯</strong>（比高斯更平坦，如均匀分布一族）。</p>
+          <p>③ ICA 的判据是最大化非高斯性：高斯峭度恰为 0，混合信号比任何单源更接近高斯（中心极限定理），因此 |kurt| 越大、离 0 越远，说明该方向越可能是独立成分。kurt = −6 显著偏离 0，该源非高斯性强，适合被 ICA 分离；若算出来接近 0，则 ICA 对该源无能为力（高斯源在任何旋转下都一样）。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l3">L3 建模应用</span>
+        <p>场景：一间会议室里 3 个人同时讲话，房间四周布了 6 个麦克风，录到 6 路混合波形。① 选模型：为什么选 ICA 而不是 PCA 或因子分析？② 写出生成假设（各符号的维度标清楚）；③ 用 mermaid 画出"3 个源 → 混合 → 6 路观测 → 白化降维 → 旋转解混 → 3 路独立信号"的结构；④ 说出用 ICA 的两条理由与两条局限。</p>
+      </details>
+      <details>
+        <summary>提示</summary>
+        <p>三个说话人说话内容互相影响吗？这对应哪个假设？6 路观测、3 个源，ICA 通常需要方阵混合——先用哪一步把 6 降到 3？想想混响和"源最多一个高斯"的限制。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p><strong>① 选 ICA：</strong>三个说话人说话的内容统计上相互独立，这是本场景最强的先验。PCA 只能去相关（二阶），分不开混合；因子分析假设高斯因子，而高斯在任何旋转下不可辨识，同样分不开。只有 ICA 以"统计独立"为目标，匹配场景。</p>
+          <p><strong>② 生成假设：</strong>x = As + ε，其中 s ∈ R³（3 个源，独立、非高斯），A ∈ R⁶ˣ³（6×3 混合矩阵，由麦克风位置与声学路径决定），x ∈ R⁶（6 路观测），ε 为小噪声（常忽略）。</p>
+          <p><strong>③ 结构图：</strong></p>
+          <div class="figure">
+            <div class="mermaid">
+flowchart TB
+  S["3个说话人 独立非高斯源 s"] --> M["线性混合 x = As"]
+  M --> X["6路麦克风观测 x"]
+  X --> W1["PCA白化并降维 6到3"]
+  W1 --> R["ICA找旋转 最大化非高斯性"]
+  R --> O["3路分离信号 h"]
+            </div>
+            <div class="caption">盲源分离流水线：白化把问题化为旋转，ICA 靠非高斯性找到最后的旋转。</div>
+          </div>
+          <p><strong>④ 理由与局限：</strong>理由（a）独立性假设与"各说各话"精确匹配；（b）白化降维（6→3）后只需估计一个 3×3 旋转，参数少、可求解。局限（a）模型是<em>瞬时线性混合</em>，真实会议室有混响与传播延迟，卷积混合下 ICA 失效或需卷积扩展；（b）分离结果有符号、顺序、幅度三种不唯一，若某个说话人信号接近高斯（如稳态嗡鸣）则无法分离（最多容忍一个高斯源）。</p>
+        </div>
+      </details>
+    </div>
+
+    <!-- ================= 自测 ================= -->
+    <h2><span class="sec-no">✍️</span>本章自测</h2>
+    <p class="quiz-hint">点击选项判分，答错会给出原因。</p>
+
+    <div class="quiz-block" data-answer="c">
+      <div class="q-no">自测 1</div>
+      <div class="q-stem">为什么要引入潜变量模型？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 因为标签太贵，潜变量模型不需要数据</li>
+        <li data-opt="b">B. 因为潜变量是物理上真实存在、等待被发现的实体</li>
+        <li data-opt="c">C. 因为高维观测数据往往只有少量自由度，用少量隐因子（带先验）可以简洁地解释观测间的相关结构，并支持生成与推断</li>
+        <li data-opt="d">D. 因为线性模型算得比神经网络快</li>
+      </ul>
+      <div class="quiz-explain">解析：<strong>C 对</strong>——核心动机是"有效维度 ≪ 观测维度"（如人脸照片由光照、姿态、身份几十个因素生成），潜变量模型用 x = Wh + μ + ε 把相关结构归因于少量因子。A 错：无监督不等于不需要数据，EM/ICA 都靠数据驱动。B 错：h 是建模假设而非物理实体，其"对错"看解释力。D 错：计算效率不是动机，且本章关注的是表示能力而非速度。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 2</div>
+      <div class="q-stem">概率 PCA 中，E 步后验 p(h|x) 的协方差是 σ²M⁻¹（M = WᵀW + σ²I）。在 M 步更新 W 时，E[hhᵀ] 应该怎么算？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 直接等于 E[h]E[h]ᵀ，后验均值乘自己的转置就行</li>
+        <li data-opt="b">B. 等于 σ²M⁻¹ + E[h]E[h]ᵀ，必须把后验不确定性加回来</li>
+        <li data-opt="c">C. 等于 σ²I，与 W 无关</li>
+        <li data-opt="d">D. 等于单位阵 I，因为先验是 𝒩(0, I)</li>
+      </ul>
+      <div class="quiz-explain">解析：<strong>B 对</strong>——二阶矩 = 协方差 + 均值外积：E[hhᵀ] = Var[h|x] + E[h]E[h]ᵀ = σ²M⁻¹ + E[h]E[h]ᵀ。A 错：丢掉 σ²M⁻¹ 等于假装 h 被精确观测，系统性高估二阶矩，EM 的似然单调性保证随之失效。C 错：后验协方差依赖 W（通过 M），并非常数 σ²I。D 错：那是<em>先验</em>协方差，观测 x 之后不确定性已被压缩为 σ²M⁻¹。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="d">
+      <div class="q-no">自测 3</div>
+      <div class="q-stem">关于 PCA 与因子分析，下列说法正确的是？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 因子分析就是旋转后的 PCA，两者数学上完全等价</li>
+        <li data-opt="b">B. PCA 允许因子方向任意旋转，因子分析的方向唯一</li>
+        <li data-opt="c">C. 因子分析的噪声协方差是 σ²I，比 PCA 的 Ψ 更一般</li>
+        <li data-opt="d">D. 经典 PCA 是概率 PCA 在 σ²→0 时的极限；因子分析改用对角噪声 Ψ，其似然只依赖 WWᵀ，故因子方向允许任意旋转，而 PCA 的主方向由方差排序唯一确定</li>
+      </ul>
+      <div class="quiz-explain">解析：<strong>D 对</strong>——三个要点都在：极限关系、对角噪声、旋转自由度的不对称（13.3 手算例中同一 Σ 下 PCA 给 31.7°、FA 给 45°）。A 错：噪声模型不同，似然不同，二者不等价。B 错：恰好说反——旋转自由度属于 FA（WWᵀ 不变），PCA 方向唯一。C 错：也说反——FA 用 Ψ（对角阵），PPCA 才用 σ²I；Ψ 比 σ²I 更自由。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="a">
+      <div class="q-no">自测 4</div>
+      <div class="q-stem">ICA 凭什么做到 PCA 做不到的"分离"？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. ICA 要求分量统计独立而非仅不相关，靠最大化非高斯性（如 |峭度|）找到白化之后剩下的那个旋转；PCA 消除二阶相关后，任何旋转都保持单位协方差，无法定方向</li>
+        <li data-opt="b">B. ICA 用的数据比 PCA 多</li>
+        <li data-opt="c">C. ICA 是非线性模型，PCA 是线性模型</li>
+        <li data-opt="d">D. ICA 假设源是高斯的，比 PCA 的假设更强</li>
+      </ul>
+      <div class="quiz-explain">解析：<strong>A 对</strong>——白化后 z 与源只差一个旋转（13.4 中 PA 恰为旋转矩阵），二阶方法到此为止；非高斯性给分布带来"方向偏好"，才能锁定旋转。B 错：差别在判据而非数据量。C 错：ICA 同样是线性混合模型 x = As。D 错：恰恰相反，ICA 要求源<em>非</em>高斯——若源全是高斯，任何旋转都不可区分，ICA 失效（最多容忍一个高斯源）。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 5</div>
+      <div class="q-stem">下列关于 ICA 不唯一性与稀疏编码的说法，正确的是？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. ICA 能唯一确定每个源的符号、顺序与幅度，只是计算较慢</li>
+        <li data-opt="b">B. ICA 无法确定源的符号、顺序、幅度（分别对应反相、换序、缩放后仍独立）；稀疏编码的目标函数是重构误差加 L1 稀疏惩罚，其"编码+重构"结构是自编码器的线性祖先</li>
+        <li data-opt="c">C. ICA 的不唯一性说明它没有实用价值</li>
+        <li data-opt="d">D. 稀疏编码的稀疏惩罚是为了压缩存储空间</li>
+      </ul>
+      <div class="quiz-explain">解析：<strong>B 对</strong>——h 与 −h、换序、c·h 同样满足独立性（幅度被 W 吸收），这三种不唯一无妨应用；稀疏编码 min ‖x−Wh‖² + λΣ|hⱼ| 正是 Ch14 稀疏自编码器的前身。A 错：这三项恰是原理上无法确定的。C 错：分离语音时反相、换序、缩放都不影响内容与后续处理。D 错：稀疏性是为表征质量服务的归纳偏好（学出局部的、可解释的基），省存储只是副产品。</div>
+    </div>
+
+    <!-- ================= 三句话复述 ================= -->
+    <div class="retell">
+      <h3>🗣️ 用自己的话，三句话讲完本章</h3>
+      <p>对着空气（或室友）说出这三句。说卡壳的那句，回去重读对应小节。</p>
+      <details>
+        <summary>句1：这章解决什么问题？——</summary>
+        <div class="retell-answer">参考答案：高维观测数据其实只有少量自由度（人脸照片由光照、姿态、身份几十个因素生成），本章回答"如何用少量隐因子解释高维观测数据"——用潜变量模型 x = Wh + μ + ε 把观测间的相关结构归因于看不见、带先验的因子 h。</div>
+      </details>
+      <details>
+        <summary>句2：核心机制是什么？——</summary>
+        <div class="retell-answer">参考答案：同一个生成骨架，按先验与噪声假设分三支——p(h) 高斯 + 球形噪声得概率 PCA（用 EM 训练，E 步后验 𝒩(M⁻¹Wᵀ(x−μ), σ²M⁻¹)，σ²→0 退化为经典 PCA）；噪声改对角阵 Ψ 得因子分析（方向允许旋转）；h 改非高斯独立得 ICA（白化后靠最大化峭度等非高斯性判据找到最后的旋转）。</div>
+      </details>
+      <details>
+        <summary>句3：它和前后章怎么分工？——</summary>
+        <div class="retell-answer">参考答案：第12章展示了深度学习的应用，本章开启"表示与推断"阶段，给出线性表示的极限与全部家底；线性混合解释不了真实数据的非线性因子，慢特征与稀疏编码已露出"编码+重构"的雏形——第14章把线性映射换成神经网络，就是自编码器。</div>
+      </details>
+    </div>
+
+    <!-- ================= 复习计划 ================= -->
+    <div class="review-plan">
+      <h3>🔁 间隔复习计划</h3>
+      <p>回忆本身比重读有效 10 倍。到点只做一件事：翻卡 + 重做标记题。</p>
+      <table>
+        <tr><th>时间点</th><th>复习内容</th><th>预计用时</th></tr>
+        <tr><td>第 1 天</td><td>概念卡 1–6 + 回忆 13.1-1/2、13.2-1/2、13.3-1/2、13.4-1/2、13.5-1/2</td><td>12 分钟</td></tr>
+        <tr><td>第 3 天</td><td>概念卡 2、4、5（PPCA/ICA/峭度）+ 重做 L2 两题（E 步手算、峭度手算）+ 自测错题</td><td>12 分钟</td></tr>
+        <tr><td>第 7 天</td><td>三句话复述 + 回忆 13.3-2、13.4-2 + 重做 L3 习题（6 麦克风 3 说话人建模）</td><td>12 分钟</td></tr>
+        <tr><td>第 15 天</td><td>只做合上书挑战；六条全过则本章毕业，卡哪条回去重读对应节</td><td>15 分钟</td></tr>
+      </table>
+    </div>
+
+    <!-- ================= 合上书挑战 ================= -->
+    <div class="final-challenge">
+      <h3>📕 合上书挑战</h3>
+      <p class="fc-sub">现在关掉这个页面，拿一张纸，凭记忆完成以下任务。全部做完再回来核对——这是本章真正的毕业考试。</p>
+      <ol id="challenge-list">
+        <li><span class="fc-check"></span>写出线性潜变量模型的生成式 x = Wh + μ + ε，标出每一项的角色，并说明三个分支模型各自改了哪个假设。</li>
+        <li><span class="fc-check"></span>默写 PPCA 的 E 步公式（含 M 的定义），并用 W = (1,1)ᵀ、σ²=0.5、x=(3,1)ᵀ 完整手算后验均值与方差（七步写全）。</li>
+        <li><span class="fc-check"></span>写出 M 步更新 W 的公式，解释分子分母各是什么，并说明 E[hhᵀ] 里为什么必须保留 σ²M⁻¹。</li>
+        <li><span class="fc-check"></span>对 Σ = [[4,2],[2,2]]，分别手算 PCA 主方向（特征方程写全）与因子分析的一组合法解（w、Ψ），并说出两者旋转不变性的差别。</li>
+        <li><span class="fc-check"></span>写出峭度公式 kurt(h) = E[h⁴] − 3(E[h²])²，说明高斯峭度为 0，并用 h = −2, 1, 1 手算验证；解释"不相关 ≠ 独立"并给出 h 与 h² 的反例。</li>
+        <li><span class="fc-check"></span>说出 ICA 的三种不唯一性与"最多一个高斯源"的限制，以及白化之后为什么还要靠非高斯性找一个旋转。</li>
+        <li><span class="fc-check"></span>一句话回答本章的主线问题：如何用少量隐因子解释高维观测数据？</li>
+      </ol>
+    </div>
+
+    <div class="complete-zone">
+      <button class="btn-complete" id="btn-complete" onclick="markDone()">✓ 我已完成本章（含合上书挑战）</button>
+    </div>
+
+    <div class="chapter-nav">
+      <a href="chapter-12.html"><span class="nav-dir">← 上一章</span>第12章 应用</a>
+      <a href="chapter-14.html" class="next"><span class="nav-dir">下一章 →</span>第14章 自编码器</a>
+    </div>
+
+  </div>
+</div>
+
+<footer class="footer">
+  <div class="wrap">第13章 线性因子模型 · 深度学习互动讲义 · 基于 Goodfellow, Bengio &amp; Courville (2016)</div>
+</footer>
+
+<script src="/lectures-assets/mermaid.min.js"></script>
+<script>
+mermaid.initialize({
+  startOnLoad: true,
+  theme: "base",
+  themeVariables: {
+    primaryColor: "#e3edf7",
+    primaryBorderColor: "#1d5f9e",
+    primaryTextColor: "#1d5f9e",
+    lineColor: "#5c554b",
+    secondaryColor: "#fbeedd",
+    tertiaryColor: "#f5f1e8",
+    fontFamily: "-apple-system, PingFang SC, sans-serif",
+    fontSize: "14px"
+  },
+  flowchart: { curve: "linear", htmlLabels: false }
+});
+</script>
+<script>
+// 自测题判分（原样复用，勿改）
+document.querySelectorAll(".quiz-block").forEach(block => {
+  const answer = block.dataset.answer;
+  const explain = block.querySelector(".quiz-explain");
+  block.querySelectorAll(".quiz-opts li").forEach(li => {
+    li.addEventListener("click", () => {
+      const opts = block.querySelectorAll(".quiz-opts li");
+      opts.forEach(o => o.classList.add("disabled"));
+      if (li.dataset.opt === answer) {
+        li.classList.add("correct");
+      } else {
+        li.classList.add("wrong");
+        block.querySelector(`[data-opt="${answer}"]`).classList.add("correct");
+      }
+      explain.classList.add("show");
+    });
+  });
+});
+
+// 合上书清单打勾（原样复用，勿改）
+document.querySelectorAll("#challenge-list li").forEach(li => {
+  li.addEventListener("click", () => li.classList.toggle("checked"));
+});
+
+// 完成标记 → localStorage（深度学习讲义：key = dl_progress_v1，本章章号 13）
+const KEY = "dl_progress_v1";
+function loadProgress() {
+  try { return JSON.parse(localStorage.getItem(KEY)) || {}; } catch (e) { return {}; }
+}
+const progress = loadProgress();
+const btn = document.getElementById("btn-complete");
+if (progress[13] && progress[13].done) {
+  btn.textContent = "✓ 已完成 · 再次点击重置";
+  btn.classList.add("done");
+}
+function markDone() {
+  const p = loadProgress();
+  if (p[13] && p[13].done) {
+    delete p[13];
+    btn.textContent = "✓ 我已完成本章（含合上书挑战）";
+    btn.classList.remove("done");
+  } else {
+    p[13] = { done: true, completedAt: Date.now(), reviewsDone: 0 };
+    btn.textContent = "✓ 已完成 · 复习提醒已开启";
+    btn.classList.add("done");
+  }
+  localStorage.setItem(KEY, JSON.stringify(p));
+}
+</script>
+
+</body>
+</html>

@@ -1,0 +1,847 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第10章 序列建模 · 深度学习互动讲义</title>
+<link rel="stylesheet" href="/lectures-assets/style.css">
+</head>
+<body>
+
+<nav class="topbar">
+  <div class="topbar-inner">
+    <span class="brand"><a href="index.html" style="color:inherit">← 学习地图</a></span>
+    <span class="crumb">阶段② · 现代深度网络 / 第10章</span>
+  </div>
+</nav>
+
+<div class="wrap">
+
+  <div class="lecture-head">
+    <span class="ch-label">CHAPTER 10 · 现代深度网络</span>
+    <h1>序列建模：循环网络</h1>
+    <p class="lead">一句话副标题：第9章让卷积在"空间"上共享权重，但语言、语音、股价这类序列既变长又讲究先后顺序——本章回答：如何让网络记住任意长的过去？</p>
+  </div>
+
+  <!-- ===== 章首四件套之 1：全书定位 ===== -->
+  <div class="position-bar">
+    <strong>本章在主线上的位置：</strong>第9章用卷积把"平移不变性"搬进了网络，但图像的空间规律换到序列上失效了——句子变长、顺序敏感；本章回答"<u>如何让网络记住任意长的过去</u>"——权重跨时间共享给出循环结构，LSTM 的门控加法通道治好梯度消失；遗留下来的超长距离依赖问题，正是后续注意力机制的入口。<br>
+    第10章回答主线上的第10个问题：<strong>如何让网络记住任意长的过去：权重跨时间共享 + 一条梯度不衰减的通道？</strong>
+    <div class="map-inline">
+      <span class="node">① 数学与机器学习基础<br>Ch1–5 数学工具与机器学习基础</span><span class="arrow">→</span>
+      <span class="node here">② 现代深度网络<br>Ch6 深度前馈网络 · Ch7 正则化 · Ch8 优化 · Ch9 卷积 · <strong>Ch10 序列建模</strong> · Ch11 实践方法论</span><span class="arrow">→</span>
+      <span class="node">③ 表示与推断<br>Ch12–16 表示学习与结构化模型</span><span class="arrow">→</span>
+      <span class="node">④ 生成模型与前沿<br>Ch17–20 自编码器与生成模型</span>
+    </div>
+  </div>
+
+  <!-- ===== 章首四件套之 2：学习目标 ===== -->
+  <div class="objectives">
+    <h4>🎯 学完本章，合上书你应该能：</h4>
+    <ol>
+      <li>说出全连接网络处理变长序列的两条死路，写出循环定义 h<sub>t</sub> = f(h<sub>t−1</sub>, x<sub>t</sub>; θ) 并解释参数共享</li>
+      <li>对给定的标量 RNN（U、W、b、h₀、x 序列已知），手算前两步的 h₁、h₂（含 tanh 查值）</li>
+      <li>写出 BPTT 中 ∂L/∂h<sub>t</sub> 的连乘结构，用 0.9¹⁰⁰ 与 1.1¹⁰⁰ 解释梯度消失与爆炸</li>
+      <li>对 g = [6, 8]、阈值 5 手算梯度截断结果 [3, 4]，并说清截断治爆炸不治消失</li>
+      <li>写出 LSTM 三门与细胞更新公式，手算 c<sub>t</sub> = f⊙c<sub>t−1</sub> + i⊙g̃，解释"加法通道"为什么让梯度不衰减</li>
+      <li>一句话说清双向 RNN、编码器–解码器与 teacher forcing 各解决什么，指出长序列信息瓶颈指向什么后续机制</li>
+    </ol>
+  </div>
+
+  <div class="lecture">
+
+    <!-- ===== 章首四件套之 3：推导主线图 ===== -->
+    <div class="figure">
+      <div class="mermaid">
+flowchart TB
+  A["第9章：卷积在空间上共享权重"] -->|"但序列变长 顺序有意义 空间套路失效"| B["核心矛盾：如何让网络记住任意长的过去"]
+  B -->|"同一组参数每个时间步复用"| C["循环结构：当前状态依赖上一步状态与当前输入"]
+  C -->|"训练要沿时间回传梯度"| D["BPTT：梯度里是连乘"]
+  D -->|"连乘小于1就消失 大于1就爆炸"| E["梯度截断：只治爆炸 治不了消失"]
+  E -->|"给梯度修一条不衰减的高速公路"| F["LSTM：门控加细胞状态的加法通道"]
+  F --> G["遗留问题：超长距离依赖仍吃力 信息全挤在一个向量里"]
+  G -.->|"指向后续章节"| H["注意力机制与表示学习"]
+  classDef hot fill:#fbeedd,stroke:#c4651f,stroke-width:2.5px,color:#c4651f;
+  classDef danger fill:#fae9e7,stroke:#b03a2e,stroke-width:2.5px,color:#b03a2e;
+  class F hot;
+  class G danger;
+      </div>
+      <div class="caption">本章推导主线：参数共享解决"变长"，BPTT 暴露"梯度消失/爆炸"，LSTM 用加法通道治消失——但把所有历史压进一个向量的瓶颈仍在，留给注意力。注意末端红框。</div>
+    </div>
+
+    <!-- ================= 10.1 ================= -->
+    <h2><span class="sec-no">10.1</span>为什么需要新结构：变长序列与跨位置共享</h2>
+
+    <p>第9章的卷积网络教会我们一件事：<strong>把规律在空间上共享</strong>——同一个边缘检测器扫完整张图。本章把视角从空间换到时间（或顺序）：文本、语音、股价、DNA 都是<span class="term">序列</span>（Sequence）数据，它们有两个图像没有的特点：<strong>长度不固定</strong>（一句话 5 个字，另一句 50 个字），且<strong>顺序承载意义</strong>（"猫追老鼠"和"老鼠追猫"用了同样的词，意思相反）。</p>
+
+    <p>先用旧工具硬上，看看会撞什么墙。<strong>方案一：全连接网络。</strong>把整句话的词向量拼成一个大向量喂进去。问题立刻暴露：全连接的输入维度必须固定，句子一长一短怎么办？补齐到最大长度可以凑合，但更致命的是——位置 1 的"猫"和位置 7 的"猫"连到完全不同的权重上，网络在位置 1 学会"'猫'是动物"，到位置 7 还得从头再学一遍。句子最长 100 词，参数量就是 100 份。<strong>方案二：固定窗口。</strong>只看最近 k 个词（类似卷积），窗口之外的上下文彻底丢失——"那个在法国首都生活了十年的女人，她说一口流利的____"，填"法语"需要看到几十词之前的"法国"。窗口每加宽 1，参数就增一份，长依赖依然无解。</p>
+
+    <p>出路与卷积同出一辙：<strong>共享</strong>。只是这次共享的轴不是空间，而是时间。给网络一个"状态"，让它边读边更新：</p>
+
+    <div class="formula">h<sub>t</sub> = f(h<sub>t−1</sub>, x<sub>t</sub>; θ)</div>
+
+    <p>这就是<span class="term">循环网络</span>（Recurrent Neural Network，RNN）的定义：x<sub>t</sub> 是第 t 步的输入，h<sub>t</sub> 是第 t 步的<span class="term">隐藏状态</span>（Hidden State，它扮演"记忆"的角色），f 是同一个函数、θ 是<strong>同一组参数</strong>——第 1 步用它，第 100 步还是用它。这个设计叫<span class="term">跨时间参数共享</span>（Parameter Sharing across Time），它一举解决两件事：参数量与序列长度彻底脱钩；"如何根据上下文更新记忆"这套规律在所有位置上是同一套，在位置 1 学到的知识自动适用于位置 7。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>循环网络的本质是<strong>把"处理序列"改写成一个反复执行的小程序</strong>：每一步做同一件小事——"结合刚看到的 x<sub>t</sub> 和脑子里的旧记忆 h<sub>t−1</sub>，更新记忆"。序列有多长，这个小程序就执行多少遍，代码（参数 θ）一行都不用加。记忆不是被"存下来"的，是被一步步"维护"出来的。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>两个误区最常见：(1) 以为 RNN 每个时间步有不同的参数——恰恰相反，所有时间步共享同一组 θ，这正是它能处理任意长度的原因；若每步参数不同，就变回了"参数量随长度爆炸"的全连接。(2) 以为 h<sub>t</sub> 能无限装信息——h<sub>t</sub> 是固定维度的向量，整段历史都被压缩在里面，这个"压缩瓶颈"会在 10.5、10.6 反复回来找麻烦。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 10.1-1</div>
+              <div class="q-text">全连接网络直接处理变长序列，撞上的两堵墙是什么？固定窗口方案的根本局限一句话说清。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              输入维度必须固定（长度不齐难处理）；不同位置各学一套参数，参数量随长度爆炸且知识不能跨位置复用。固定窗口：窗口之外的上下文永远看不到，且窗口每加宽 1 参数就增一份。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 10.1-2</div>
+              <div class="q-text">写出循环网络的定义式，并指出"跨时间参数共享"解决了哪两件事。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              h<sub>t</sub> = f(h<sub>t−1</sub>, x<sub>t</sub>; θ)，所有时间步共用同一组 θ。解决：参数量与序列长度无关；"更新记忆"的规律在所有位置上共享，一处学到处处适用。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ================= 10.2 ================= -->
+    <h2><span class="sec-no">10.2</span>RNN 前向：一步完整手算</h2>
+
+    <p>上一节给出了抽象的 h<sub>t</sub> = f(h<sub>t−1</sub>, x<sub>t</sub>; θ)，这一节把 f 落实，并把每个数字算给你看。最经典的<span class="term">朴素循环网络</span>（Vanilla RNN）长这样：</p>
+
+    <div class="formula">h<sub>t</sub> = tanh(U·x<sub>t</sub> + W·h<sub>t−1</sub> + b)</div>
+
+    <p>三个参数各管一件事：U 把当前输入 x<sub>t</sub> 投到状态空间，W 把上一步记忆 h<sub>t−1</sub> 投进来，b 是偏置；tanh 把加权和压进 (−1, 1)，既引入非线性又防止状态数值无界膨胀。<strong>注意：整章里 U、W、b 只有这一份</strong>，不管序列走多少步。</p>
+
+    <p><strong>完整例子（手算全程）。</strong>取标量版本（所有量都是一个数）：U = 0.5，W = 0.8，b = 0，初始状态 h₀ = 0，输入序列 x₁ = 2，x₂ = 1。</p>
+
+    <p><strong>第 1 步：</strong></p>
+    <ol>
+      <li>输入贡献：U·x₁ = 0.5 × 2 = 1</li>
+      <li>记忆贡献：W·h₀ = 0.8 × 0 = 0</li>
+      <li>加偏置求和：1 + 0 + 0 = 1</li>
+      <li>过 tanh：h₁ = tanh(1) ≈ <strong>0.7616</strong></li>
+    </ol>
+
+    <p><strong>第 2 步：</strong></p>
+    <ol>
+      <li>输入贡献：U·x₂ = 0.5 × 1 = 0.5</li>
+      <li>记忆贡献：W·h₁ = 0.8 × 0.7616 = 0.6093</li>
+      <li>加偏置求和：0.5 + 0.6093 + 0 = 1.1093</li>
+      <li>过 tanh：h₂ = tanh(1.1093) ≈ <strong>0.8038</strong></li>
+    </ol>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>时间步</th><th>U·x<sub>t</sub></th><th>W·h<sub>t−1</sub></th><th>求和</th><th>h<sub>t</sub> = tanh(·)</th></tr>
+        <tr><td>t = 1</td><td>1</td><td>0</td><td>1</td><td>0.7616</td></tr>
+        <tr><td>t = 2</td><td>0.5</td><td>0.6093</td><td>1.1093</td><td>0.8038</td></tr>
+      </table>
+    </div>
+
+    <p>如果序列继续走到 x₁₀₀，过程没有任何不同：第 100 步依然是 h₁₀₀ = tanh(0.5·x₁₀₀ + 0.8·h₉₉)。<strong>参数量恒为 3（U、W、b），与序列长度无关</strong>——这就是 10.1 承诺的兑现。若要输出（如每步预测下一个词），再挂一个共享的输出头 ŷ<sub>t</sub> = softmax(V·h<sub>t</sub> + c) 即可，V、c 同样只有一份。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>把 h 想成一支"接力棒"：每一棒（时间步）干两件小事——接住上一棒传来的 W·h<sub>t−1</sub>，掺进自己看到的 U·x<sub>t</sub>，再用 tanh 拧一下传下去。整场比赛的规则（U、W、b）从头到尾不变，变的只有接力棒里装的内容。所以 RNN 学的是"转移规则"，不是"每个位置的答案"。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>手算时最常犯的两个错：(1) 第 t 步忘了用的是<strong>上一步算出的 h<sub>t−1</sub></strong>（如第 2 步的 0.7616），而不是初始 h₀ 或当前输入的某个变换——记忆的链条全靠这一环扣一环；(2) 求和后忘过 tanh。没有非线性激活，多步复合就退化为线性迭代，表达力与数值稳定性双双坍塌。另外别以为 tanh 是随便选的：它的输出有界，状态不会随步数发散，但它在饱和区导数趋 0——这是 10.3 梯度消失的同谋之一。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 10.2-1</div>
+              <div class="q-text">U = 0.5，W = 0.8，b = 0，h₀ = 0，x₁ = 2，x₂ = 1。写出 h₁、h₂ 的完整计算与结果。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              h₁ = tanh(0.5×2 + 0.8×0) = tanh(1) ≈ 0.7616；h₂ = tanh(0.5×1 + 0.8×0.7616) = tanh(1.1093) ≈ 0.8038。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 10.2-2</div>
+              <div class="q-text">这个 RNN 走到第 1000 步时需要多少组参数？为什么 tanh 不可省？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              始终只有一组（U、W、b），参数量与序列长度无关。没有 tanh，多步复合退化为线性迭代，表达力坍塌且状态数值可能发散。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ================= 10.3 ================= -->
+    <h2><span class="sec-no">10.3</span>BPTT 与梯度消失/爆炸：连乘的威力</h2>
+
+    <p>上一节会算前向了。但 RNN 的参数怎么训？答案是第6章的反向传播沿时间展开——<span class="term">随时间反向传播</span>（Backpropagation Through Time，BPTT）：把循环按时间步展开成一个很深的计算图（T 步就是 T 层），然后照例用链式法则回传梯度。麻烦恰恰出在这个"深"字上。</p>
+
+    <p>看损失对第 t 步状态的梯度。最终损失 L 在很靠后的时间步 T 处计算，梯度要从 h<sub>T</sub> 一路传回 h<sub>t</sub>，每跨一步就乘一次"一步转移的雅可比"：</p>
+
+    <div class="formula"><span class="frac"><span class="num-part">∂L</span><span class="den-part">∂h<sub>t</sub></span></span> = <span class="frac"><span class="num-part">∂L</span><span class="den-part">∂h<sub>T</sub></span></span> · ∏<sub>k=t+1</sub><sup>T</sup> <span class="frac"><span class="num-part">∂h<sub>k</sub></span><span class="den-part">∂h<sub>k−1</sub></span></span>，其中 <span class="frac"><span class="num-part">∂h<sub>k</sub></span><span class="den-part">∂h<sub>k−1</sub></span></span> = W·diag(φ′(a<sub>k</sub>))</div>
+
+    <p>φ′ 是激活函数的导数，a<sub>k</sub> 是第 k 步的加权和。标量情形下这就是 <strong>W 的 (T−t) 次幂</strong>再乘以一串 tanh 导数（tanh′ ≤ 1）。问题一目了然：<strong>梯度里有一个随距离指数变化的连乘因子</strong>。</p>
+
+    <p><strong>完整例子（数值感受）。</strong>先只算 W 的幂（tanh′ 只会让它衰减得更快）：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>|W|</th><th>10 步后</th><th>100 步后</th><th>现象</th></tr>
+        <tr><td>0.9</td><td>0.9¹⁰ ≈ 0.349</td><td>0.9¹⁰⁰ ≈ 2.66×10⁻⁵</td><td><span class="term">梯度消失</span>（Vanishing Gradient）</td></tr>
+        <tr><td>1.1</td><td>1.1¹⁰ ≈ 2.594</td><td>1.1¹⁰⁰ ≈ 13781</td><td><span class="term">梯度爆炸</span>（Exploding Gradient）</td></tr>
+      </table>
+    </div>
+
+    <p>核对一下数量级（用 lg 换底）：lg 0.9 ≈ −0.0458，×100 = −4.58，故 0.9¹⁰⁰ ≈ 10<sup>−4.58</sup> ≈ 2.66×10⁻⁵ ✓；lg 1.1 ≈ 0.0414，×100 = 4.14，故 1.1¹⁰⁰ ≈ 10<sup>4.14</sup> ≈ 13781 ✓。后果：|W| &lt; 1 时，100 步前的输入对当前梯度的贡献被缩到三万分之一——<strong>网络事实上"记不住"100 步前的事</strong>，长期依赖学不到；|W| &gt; 1 时梯度呈万倍膨胀，参数更新一步飞天，训练直接发散（出现 NaN）。</p>
+
+    <p>爆炸有一味便宜的急救药：<span class="term">梯度截断</span>（Gradient Clipping）——更新前检查梯度的范数，超过阈值 τ 就整体等比缩回 τ：</p>
+
+    <div class="formula">若 ‖g‖ &gt; τ，则 g ← g · <span class="frac"><span class="num-part">τ</span><span class="den-part">‖g‖</span></span></div>
+
+    <p><strong>完整例子（手算全程）。</strong>g = [6, 8]，阈值 τ = 5：</p>
+    <ol>
+      <li>算范数：‖g‖ = √(6² + 8²) = √(36 + 64) = √100 = 10</li>
+      <li>比较：10 &gt; 5，需要截断；缩放因子 = 5/10 = 0.5</li>
+      <li>缩放：g ← [6 × 0.5, 8 × 0.5] = <strong>[3, 4]</strong>（验证新范数：√(9+16) = 5 ✓，方向不变）</li>
+    </ol>
+
+    <p>注意截断是<strong>等比缩放</strong>而非逐元素砍断——方向保住了，只是步子变小。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>把跨时间的梯度传播想成"传话游戏"：每传一棒，话音乘以 0.9。传 10 棒还剩三成半，传 100 棒只剩十万分之二点七——队尾的声音根本到不了队首。要是每棒乘以 1.1，传到第 100 棒已经吼成一万多倍的噪音。<strong>连乘结构对"每步略小于 1"和"每步略大于 1"都极度敏感</strong>，这不是调参能绕开的小毛病，而是 RNN 的结构性宿命。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>最大的误区：以为梯度截断是"梯度问题的通用解法"。<strong>截断只治爆炸，不治消失</strong>——把 [3, 4] 这样超限的梯度拉回阈值内，只是防止更新步子过大；对已经衰减到 10⁻⁵ 量级的梯度，截断无事可做（它远小于阈值），消失的病根在连乘结构本身。治消失要改结构，那是 10.4 的事。另一个误区：以为把 W 精确调成 1 就万事大吉——tanh′ ≤ 1 且多数时候远小于 1，连乘照样衰减。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 10.3-1</div>
+              <div class="q-text">|W| = 0.9 时，10 步与 100 步后梯度分别衰减到多少？|W| = 1.1 时 100 步后呢？这说明什么？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              0.9¹⁰ ≈ 0.349，0.9¹⁰⁰ ≈ 2.66×10⁻⁵（消失，长距离依赖学不到）；1.1¹⁰⁰ ≈ 13781（爆炸，训练发散）。连乘因子随距离指数变化，对 |W| 极敏感。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 10.3-2</div>
+              <div class="q-text">g = [6, 8]，阈值 5，写出梯度截断全过程。截断为什么治不了梯度消失？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              ‖g‖ = √(36+64) = 10 &gt; 5，缩放因子 0.5，g ← [3, 4]（范数 5，方向不变）。截断只把过大的梯度拉回阈值，对远小于阈值的衰减梯度不起作用——消失要改结构。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ================= 10.4 ================= -->
+    <h2><span class="sec-no">10.4</span>LSTM：给梯度修一条高速公路</h2>
+
+    <p>上一节把病根找到了：跨时间传梯度靠连乘，必衰必爆。1997 年提出的<span class="term">长短期记忆网络</span>（Long Short-Term Memory，LSTM）换了个思路——<strong>让细胞状态的更新从"乘法"变成"受控加法"</strong>。LSTM 在隐藏状态 h 之外增设一条独立的传送带：<span class="term">细胞状态</span>（Cell State）c<sub>t</sub>，并用三个<span class="term">门</span>（Gate，取值在 0 到 1 之间的 sigmoid 输出，做逐元素乘法开关）管理它：</p>
+
+    <div class="formula">f<sub>t</sub> = σ(W<sub>f</sub>·[h<sub>t−1</sub>, x<sub>t</sub>] + b<sub>f</sub>)　遗忘门：旧细胞留多少</div>
+    <div class="formula">i<sub>t</sub> = σ(W<sub>i</sub>·[h<sub>t−1</sub>, x<sub>t</sub>] + b<sub>i</sub>)　输入门：新内容写多少</div>
+    <div class="formula">g̃<sub>t</sub> = tanh(W<sub>c</sub>·[h<sub>t−1</sub>, x<sub>t</sub>] + b<sub>c</sub>)　候选内容</div>
+    <div class="formula">c<sub>t</sub> = f<sub>t</sub> ⊙ c<sub>t−1</sub> + i<sub>t</sub> ⊙ g̃<sub>t</sub>　<span class="term">细胞状态更新（加法通道）</span></div>
+    <div class="formula">o<sub>t</sub> = σ(W<sub>o</sub>·[h<sub>t−1</sub>, x<sub>t</sub>] + b<sub>o</sub>)　输出门：细胞暴露多少</div>
+    <div class="formula">h<sub>t</sub> = o<sub>t</sub> ⊙ tanh(c<sub>t</sub>)</div>
+
+    <p>⊙ 是逐元素乘积。读法：遗忘门 f 决定旧记忆 c<sub>t−1</sub> 保留几成，输入门 i 决定候选 g̃ 写入几成，两部分<strong>相加</strong>得到新细胞 c<sub>t</sub>；输出门 o 再从细胞里挤出对外可见的 h<sub>t</sub>。</p>
+
+    <p><strong>完整例子（手算全程）。</strong>某一步各门已算好：c<sub>t−1</sub> = 2，f = 0.9，i = 0.8，g̃ = 0.5，o = 1（全开放）：</p>
+    <ol>
+      <li>遗忘部分：f ⊙ c<sub>t−1</sub> = 0.9 × 2 = 1.8</li>
+      <li>写入部分：i ⊙ g̃ = 0.8 × 0.5 = 0.4</li>
+      <li>相加：c<sub>t</sub> = 1.8 + 0.4 = <strong>2.2</strong></li>
+      <li>输出：h<sub>t</sub> = o ⊙ tanh(c<sub>t</sub>) = 1 × tanh(2.2) ≈ <strong>0.9757</strong></li>
+    </ol>
+
+    <p>为什么说这是"梯度的高速公路"？看细胞状态跨一步的导数：∂c<sub>t</sub>/∂c<sub>t−1</sub> = f<sub>t</sub>（忽略 f 自身对 c 的微弱依赖）。当遗忘门学到 f ≈ 1 时，<strong>这个导数就是 1</strong>——c 上的梯度跨时间不衰减地流回去，想流多远流多远。10.3 里那个致命的连乘 ∏W·diag(φ′)，在细胞通道上被换成了连乘 f，而 f 是可学习的：需要长记忆时网络自己把 f 推向 1，需要忘记时推向 0。<strong>梯度衰减与否，从"结构的宿命"变成了"可学习的开关"。</strong>（花书称之为线性自环的扩展，self-loop 权重由门动态决定。）</p>
+
+    <p>同一家族的简化版是 <span class="term">GRU</span>（Gated Recurrent Unit）：只有两个门（更新门、重置门），把细胞状态与隐藏状态合并为一个 h，参数更少、训练更快，多数任务上与 LSTM 效果相当——记住"GRU = 两门、无独立 c"即可，细节按需查原书。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>普通 RNN 的记忆更新是"覆盖"：h<sub>t</sub> = tanh(…) 每一步把旧记忆整个重算一遍，乘法链不可避免。LSTM 的细胞更新是"记账"：c<sub>t</sub> = 旧账 × 保留比例 + 新账 × 写入比例，旧账原样躺在等式右边。加法通道的妙处在于——<strong>等式右边的 c<sub>t−1</sub> 对左边 c<sub>t</sub> 的偏导是 f，不是 W·φ′</strong>；f 学到 1，梯度就坐上了直达电梯。这就是为什么 LSTM 能记住几百步之前的信息。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>两个误区要破除：(1) 以为 LSTM "彻底解决"了梯度消失——它只是提供了一条<strong>可以</strong>不衰减的通道，f 要靠训练学到接近 1，超长期（上万步）依赖依然困难（见 10.6）；(2) 混淆 c 与 h 的分工——c<sub>t</sub> 是内部传送带（走加法，负责记忆），h<sub>t</sub> 是对外输出（经 tanh 压缩、被输出门过滤，负责参与预测与下一步计算），两者不是一回事，h 上照样有乘法链。另外门不是人为设定的常数，它们的输入是 [h<sub>t−1</sub>, x<sub>t</sub>]，每步动态变化。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 10.4-1</div>
+              <div class="q-text">c<sub>t−1</sub> = 2，f = 0.9，i = 0.8，g̃ = 0.5，o = 1。算出 c<sub>t</sub> 与 h<sub>t</sub>。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              c<sub>t</sub> = 0.9×2 + 0.8×0.5 = 1.8 + 0.4 = 2.2；h<sub>t</sub> = 1 × tanh(2.2) ≈ 0.9757。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 10.4-2</div>
+              <div class="q-text">LSTM 的"加法通道"指哪条公式？为什么它让梯度跨时间不衰减？GRU 与 LSTM 的两个差别？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              c<sub>t</sub> = f<sub>t</sub> ⊙ c<sub>t−1</sub> + i<sub>t</sub> ⊙ g̃<sub>t</sub>。∂c<sub>t</sub>/∂c<sub>t−1</sub> = f<sub>t</sub>，f 学到 ≈1 时梯度沿 c 不衰减——衰减与否变成可学习的开关。GRU：只两个门（更新/重置），无独立细胞状态，c 与 h 合一。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ================= 10.5 ================= -->
+    <h2><span class="sec-no">10.5</span>双向 RNN 与 seq2seq：看见未来，再翻译整句</h2>
+
+    <p>前面三节的循环都朝一个方向走：第 t 步只能看到 x₁…x<sub>t</sub>。但很多任务里当前位置的判断需要<strong>未来</strong>的信息——给"他一把抓住<b>把</b>柄"中的"把"标注词性，不看后面那个"柄"字很难定。在允许整句读完再输出（离线任务）的场景下，<span class="term">双向循环网络</span>（Bidirectional RNN，BiRNN）的做法简单粗暴：跑两个 RNN，一个从左往右读、一个从右往左读，每个位置把两个方向的 h 拼起来做决策。代价是不能用于必须即时输出的在线场景（语音识别流、实时预测）。</p>
+
+    <p>更大的野心是输入输出长度都不同——机器翻译：一句 10 个词的中文进去，一句 14 个词的英文出来。<span class="term">编码器–解码器</span>（Encoder–Decoder，即 seq2seq）架构：<strong>编码器</strong> RNN 读完整句中文，把最终状态 h<sub>T</sub> 当作整句的"语义浓缩"交给<strong>解码器</strong> RNN，解码器以此为初始状态逐词生成英文。训练解码器时用 <span class="term">teacher forcing</span>：第 t 步的输入不用模型上一步自己的预测，而用真实答案的前一个词——避免一步错步步错、加速收敛；测试时才让模型自食其力（上一步输出喂回下一步），这种训练/测试输入分布的不一致是它的已知代价。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>seq2seq 最要命的假设藏在最不起眼的地方：<strong>整句中文的全部语义，必须压缩进编码器最后一个固定长度的向量 h<sub>T</sub></strong>。10 个词还行，100 个词的长句也往这一个向量里塞——这就是"信息瓶颈"，句子越长翻译质量掉得越快。这个瓶颈正是后续"注意力机制"（让解码器每步回头检索编码器所有状态）登场的直接动机。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>(1) 以为双向 RNN 万能——它以"能看到完整序列"为前提，在线/流式任务里未来根本不存在，用不了；(2) 以为 teacher forcing 是测试时的做法——它只属于训练阶段，测试时解码器只能用自己的上一步输出作为输入，两者的分布差异需要额外技巧缓解。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 10.5-1</div>
+              <div class="q-text">双向 RNN 的做法与适用前提是什么？举一个必须用它的任务直觉。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              两个 RNN 分别从左往右、从右往左读，每个位置拼接双向 h 做决策。前提：允许整句读完再输出（离线任务），如词性标注——"把柄"的"把"要看后面的字才能定词性；在线流式任务不可用。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 10.5-2</div>
+              <div class="q-text">seq2seq 的信息瓶颈指什么？teacher forcing 是什么，代价是什么？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              整句语义全压进编码器末状态一个固定长度向量，长句信息丢失——指向注意力。teacher forcing：训练时解码器输入用真实前一词而非自身预测；代价是训练/测试输入分布不一致。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ================= 10.6 ================= -->
+    <h2><span class="sec-no">10.6</span>深度循环网络与长期依赖的挑战</h2>
+
+    <p>最后一节把"深"和"远"两个维度分清楚。RNN 展开后在<strong>时间</strong>上天然就是深网络（100 步 = 100 层），但每一步内部的计算（h<sub>t−1</sub>, x<sub>t</sub> → h<sub>t</sub>）只有一层——<strong>空间</strong>上是浅的。补救办法是堆叠多层循环（下层 RNN 的 h 序列当上层 RNN 的 x），或在状态转移里夹几个隐藏层，让"每步的思考"也变深。代价是计算更贵、优化更难，同样要靠残差式的思想缓解。</p>
+
+    <p>对抗长期依赖，除了 LSTM/GRU 还有两条轻量路线，都值得记住名字。<strong>跳跃连接</strong>（Skip Connection across Time）：给 h<sub>t</sub> 再连一条直接依赖 h<sub>t−d</sub>（如 d = 10）的边——相距 100 步的依赖沿跳跃边只需走 10 次乘法，连乘长度从 100 缩到 10，衰减从 0.9¹⁰⁰ 变 0.9¹⁰。<strong>渗漏单元</strong>（Leaky Unit）：让状态做线性自环 h<sub>t</sub> = α·h<sub>t−1</sub> + (1−α)·ν<sub>t</sub>，α 接近 1 时信息沿自环缓慢流失——LSTM 的遗忘门正是把固定的 α 升级成了可学习的 f<sub>t</sub>。</p>
+
+    <p>但诚实的结论是：即使用上 LSTM、跳跃连接、多层堆叠，<strong>把任意长的历史压进固定长度向量、再靠链式规则逐步维护</strong>这条范式，面对超长距离依赖仍然力不从心。要真正突破，得换掉"顺序逐步传递"本身——让任意两个位置直接对话。这正是本阶段之后（注意力与 Transformer 相关章节）的故事，本章到此把接力棒交出去。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>本章所有技术可以用一根轴串起来：<strong>都在缩短"依赖两端之间的乘法链"</strong>。LSTM 把链上的因子换成可学习的 f（能学到 1）；跳跃连接把链长从 100 截成 10；leaky unit 把链因子固定成 α ≈ 1。看清楚这根轴，你就看懂了循环网络二十年的演进逻辑，也预见了下一步：为什么不干脆把链长缩到 1？——任意位置直接相连，就是注意力。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>以为"把 RNN 堆深"就能解决长期依赖——堆深加的是<strong>空间</strong>深度（每步的思考深度），长期依赖的病在<strong>时间</strong>深度（跨步的连乘），两码事。另一个误区是把 leaky unit 的 α 与 LSTM 的 f 等同：α 是固定超参数，f<sub>t</sub> 是随输入每步动态计算的可学习门，后者灵活得多。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 10.6-1</div>
+              <div class="q-text">时间深度与空间深度分别指什么？堆叠多层 RNN 解决哪一个？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              时间深度：序列展开后的跨步层数（连乘链长度）；空间深度：每步内部 h<sub>t−1</sub>, x<sub>t</sub> → h<sub>t</sub> 的计算层数。堆叠多层 RNN 加深空间深度，治"每步想得太浅"，不直接治长期依赖。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 10.6-2</div>
+              <div class="q-text">跳跃连接与 leaky unit 各用什么思路缓解长期依赖？本章留给后续章节的遗留问题是什么？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              跳跃连接：加 h<sub>t−d</sub> 直达边，把连乘长度从 100 缩到 10；leaky unit：线性自环 α·h<sub>t−1</sub>，α≈1 缓慢遗忘（LSTM 把它升级为可学习的 f）。遗留问题：超长距离依赖与"历史全压一个向量"的瓶颈，需要注意力这类任意位置直接对话的机制。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===== 章末五件套之 1：概念卡 ===== -->
+    <h2><span class="sec-no">🃏</span>概念卡：本章概念的一分钟画像</h2>
+    <p>翻面前先自问：这个概念我能用一句话讲清楚吗？</p>
+    <div class="flip-grid">
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 1</div>
+            <div class="q-text">循环展开（Unfolding）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">把循环 h<sub>t</sub> = f(h<sub>t−1</sub>, x<sub>t</sub>; θ) 按时间步摊平成一个 T 层的前馈计算图，每层共享同一组 θ。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">让"循环"这个含回路的结构能用标准前向/反向传播计算与训练。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">把一卷循环播放的录像带拉直成胶片，逐帧看；帧与帧之间是同一个放映机。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为展开后每层有自己的参数——所有层共享 θ，这正是 RNN 的灵魂。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">BPTT 的直接基础（10.3）；分析梯度消失/爆炸时必须先展开。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 2</div>
+            <div class="q-text">跨时间参数共享（Parameter Sharing across Time）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">同一组参数（U、W、b）在每个时间步重复使用，参数量与序列长度无关。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">变长序列无法进固定维度全连接；不同位置的知识不能复用、参数随长度爆炸。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">学会一套"接球—掺新信息—传球"的动作，整场比赛反复用，不用每个位置配一个球员。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为共享只是省参数的正则化——它本质是"序列上处处适用同一转移规则"的归纳偏置，类似卷积的平移共享。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">一切序列模型的地基；第 9 章卷积是它在空间上的姊妹。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 3</div>
+            <div class="q-text">随时间反向传播（BPTT）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">在展开后的计算图上做反向传播，梯度沿时间从末端逐步传回每个时间步。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">让共享参数 θ 收到所有时间步损失的总梯度，RNN 才能被梯度下降训练。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">复盘一场比赛：从终场哨开始倒放，每一棒问"当时怎么做会更好"，经验汇总给那套共用动作。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为它只是反向传播的改名字——时间维让它暴露连乘结构 ∏W·diag(φ′)，梯度消失/爆炸由此而来。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">所有序列模型的训练算法；实践中常截断成固定窗口（截断 BPTT）省显存。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 4</div>
+            <div class="q-text">梯度消失与爆炸（Vanishing / Exploding Gradient）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">跨时间梯度含连乘因子：|W|&lt;1 时按幂指数衰减（0.9¹⁰⁰ ≈ 2.66×10⁻⁵），|W|&gt;1 时指数膨胀（1.1¹⁰⁰ ≈ 13781）。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">它本身是要被解决的问题：消失使长期依赖学不到，爆炸使训练发散。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">传话游戏：每棒音量 ×0.9，百棒后只剩耳语；每棒 ×1.1，百棒后变成嘶吼。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为调小学习率或初始化就能根治——病根在连乘结构；tanh′ ≤ 1 让 |W|=1 也照样衰减。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">诊断 RNN 训练失败的第一假设；爆炸用截断急救，消失靠 LSTM 改结构。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 5</div>
+            <div class="q-text">梯度截断（Gradient Clipping）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">更新前若 ‖g‖ &gt; τ，则 g ← g·τ/‖g‖——等比缩回阈值，方向不变。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">梯度爆炸引发的发散：g = [6, 8]、τ = 5 时缩为 [3, 4]，更新不再飞天。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">悬崖边的护栏：步子再大也最多迈 5 米，防止一脚踩空；但不解决看不清远处的问题。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为它也能治梯度消失——对远小于阈值的衰减梯度它无事可做；也不是逐元素砍断，而是整体等比缩放。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">RNN/LSTM 训练的标配急救；任何梯度范数偶发暴增的深度训练都可用。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 6</div>
+            <div class="q-text">LSTM 三门结构（Long Short-Term Memory）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">遗忘门 f、输入门 i、输出门 o（sigmoid 开关）管理细胞状态：c<sub>t</sub> = f⊙c<sub>t−1</sub> + i⊙g̃，h<sub>t</sub> = o⊙tanh(c<sub>t</sub>)。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">朴素 RNN 的梯度消失：∂c<sub>t</sub>/∂c<sub>t−1</sub> = f，f 学到 ≈1 时梯度沿 c 不衰减，长记忆成为可能。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">给梯度修高速公路：细胞状态是直达车道（加法），三个门是收费站，收多少由网络自己学。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为它彻底消灭梯度消失——只是提供了可学习的不衰减通道；c 与 h 分工不同，h 上仍有乘法链。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">中长序列任务的默认 RNN 单元；GRU 是其两门简化版（无独立 c）。</span></div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- ===== 章末五件套之 2：分层习题 ===== -->
+    <h2><span class="sec-no">📝</span>分层习题</h2>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>
+        <p>有人说："RNN 能处理任意长度的序列，是因为它给每个时间步准备了一套独立的参数，长度不够就再加。"这句话对吗？请判断并说清 RNN 处理任意长度的真正机制。</p>
+      </div>
+      <details>
+        <summary>提示</summary>
+        <p>回想 10.2 的例子：走到第 1000 步时 U、W、b 有几组？如果每步独立参数，最长训练句是 50 词，来一句 80 词的会怎样？</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p><strong>错，恰好说反了。</strong>RNN 的全部时间步共享同一组参数 θ = (U, W, b)。正因为在第 1 步和第 1000 步用的是同一个转移函数 f，序列多长就迭代多少次，参数量恒定（10.2 的例子里永远是 3 个参数），训练时见过 50 词的句子，测试时 80 词照样能跑——模型学到的是"如何根据旧记忆和新输入更新记忆"的通用规则，与绝对位置无关。若每步独立参数：参数量随最大长度线性膨胀，超长序列无参数可用，且位置 1 学到的知识无法用于位置 80——那退化成了 10.1 批判过的全连接方案。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>
+        <p>判断并说明："梯度截断是处理循环网络梯度问题的通用工具，梯度爆炸用它，梯度消失也可以用它。"</p>
+      </div>
+      <details>
+        <summary>提示</summary>
+        <p>写出截断公式 g ← g·τ/‖g‖，想想它什么条件下才"触发"。一个范数为 10⁻⁵ 的梯度会触发它吗？</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p><strong>错。截断只治爆炸，不治消失。</strong>截断的触发条件是 ‖g‖ &gt; τ——只有梯度范数超限时才等比缩小（如 [6, 8]、τ = 5 → [3, 4]）。梯度消失时梯度范数远小于阈值（0.9¹⁰⁰ ≈ 2.66×10⁻⁵ 量级），截断根本不触发，无事可做。消失的病根在跨时间连乘因子 |W|&lt;1 的指数衰减，属于结构问题，只能靠 LSTM 的加法通道（f ≈ 1 使 ∂c<sub>t</sub>/∂c<sub>t−1</sub> ≈ 1）、跳跃连接、leaky unit 这类改结构的手段缓解。"治爆炸靠截断、治消失靠改结构"——这句话要背下来。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>
+        <p>换一组数重算 10.2 的 RNN 前向：U = 0.3，W = 0.9，b = 0，h₀ = 0，输入序列 x₁ = 3，x₂ = 1。求 h₁ 与 h₂（tanh 保留 4 位小数）。</p>
+      </div>
+      <details>
+        <summary>提示</summary>
+        <p>每步三件事：算 U·x<sub>t</sub>，算 W·h<sub>t−1</sub>（注意第二步用的是第 1 步的 h₁），求和后过 tanh。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p><strong>第 1 步：</strong>U·x₁ = 0.3 × 3 = 0.9；W·h₀ = 0.9 × 0 = 0；求和 0.9 + 0 + 0 = 0.9；h₁ = tanh(0.9) ≈ <strong>0.7163</strong>。</p>
+          <p><strong>第 2 步：</strong>U·x₂ = 0.3 × 1 = 0.3；W·h₁ = 0.9 × 0.7163 = 0.6447；求和 0.3 + 0.6447 + 0 = 0.9447；h₂ = tanh(0.9447) ≈ <strong>0.7374</strong>。</p>
+          <p>对照 10.2 正文（U=0.5, W=0.8 → h₁=0.7616, h₂=0.8038）：本题 W 更大（0.9），记忆权重更高，但 x₁ 贡献更小，两步结果都略低——参数变化只改变数值，计算流程与"参数只有一组"的事实不变。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>
+        <p>只考虑连乘因子 W（忽略激活导数）：(1) |W| = 0.8 时，100 步前的梯度衰减为原来的多少？（用 lg 换底估算）(2) |W| = 1.05 时，100 步后梯度放大为多少倍？(3) 由这两组数说明为什么"略小于 1 和略大于 1"在长时间跨度上都是灾难。</p>
+      </div>
+      <details>
+        <summary>提示</summary>
+        <p>lg 0.8 ≈ −0.0969，lg 1.05 ≈ 0.0212。先乘 100，再取 10 的幂。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p>(1) 100 × lg 0.8 = 100 × (−0.0969) = −9.69，故 0.8¹⁰⁰ ≈ 10<sup>−9.69</sup> ≈ 10<sup>0.31</sup>×10<sup>−10</sup> ≈ <strong>2.04×10⁻¹⁰</strong>。100 步前的梯度只剩约五十亿分之一——彻底消失。</p>
+          <p>(2) 100 × lg 1.05 = 100 × 0.0212 = 2.12，故 1.05¹⁰⁰ ≈ 10<sup>2.12</sup> ≈ <strong>131.5</strong> 倍。梯度放大两个数量级，再叠加各步 tanh 之外的路径，更新极易发散。（对照正文：1.1¹⁰⁰ ≈ 13781——|W| 从 1.05 增到 1.1，放大从百倍跳到万倍，可见对底数多敏感。）</p>
+          <p>(3) 短期看 0.8 和 1.05 都"接近 1"，但指数把时间跨度变成杀伤力的放大器：0.8¹⁰⁰ ≈ 2×10⁻¹⁰（信号湮灭，长期依赖学不到），1.05¹⁰⁰ ≈ 131.5（更新失控）。幂运算下没有"温和的中间地带"，这正是 RNN 训练对 |W| 极度敏感、以及 LSTM 要让 f 可学习的根本原因。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l3">L3 建模应用</span>
+        <p>用 RNN 做中文分词：句子按字切分，每个字一个时间步，网络输出该字的标签 B（词首）/ M（词中）/ E（词尾）/ S（单字词），如"南京市长江大桥" → 南(B) 京(E) 市(S) 长(B) 江(M) 大(M) 桥(E)。要求：(1) 画出三步的循环展开示意（说明每步的输入输出与参数）；(2) 写出每步的前向公式；(3) 说明损失如何定义、梯度如何流动；(4) 指出长句会遇到什么问题，LSTM 如何缓解。</p>
+      </details>
+      <details>
+        <summary>提示</summary>
+        <p>每步：输入字向量 x<sub>t</sub>，状态更新 h<sub>t</sub> = tanh(Ux<sub>t</sub> + Wh<sub>t−1</sub> + b)，输出 ŷ<sub>t</sub> = softmax(Vh<sub>t</sub> + c)。损失怎么从最后一个字传回第一个字的参数？</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p><strong>(1) 展开示意（前三步）：</strong>h₀ → [步1：x₁=南 → tanh(Ux₁+Wh₀+b) → h₁ → softmax(Vh₁+c) → ŷ₁=B] → h₁ → [步2：x₂=京 → … → h₂ → ŷ₂=E] → h₂ → [步3：x₃=市 → … → h₃ → ŷ₃=S]。关键标注：每一步的 U、W、b、V、c 全部是同一组参数；h 是步间唯一传递的"记忆"。</p>
+          <p><strong>(2) 前向公式（每步 t）：</strong>h<sub>t</sub> = tanh(U·x<sub>t</sub> + W·h<sub>t−1</sub> + b)；ŷ<sub>t</sub> = softmax(V·h<sub>t</sub> + c)，ŷ<sub>t</sub> 是 B/M/E/S 四维概率向量。</p>
+          <p><strong>(3) 损失与梯度：</strong>每个位置用交叉熵损失 L<sub>t</sub> = −log ŷ<sub>t</sub>[真实标签]，整句 L = ∑<sub>t</sub> L<sub>t</sub>。梯度用 BPTT：从各 L<sub>t</sub> 出发，一路经 V 直接回传（短路径），一路经 h<sub>t</sub> → h<sub>t−1</sub> → … → h₁ 沿时间回传（长路径，含连乘 ∏W·diag(tanh′)）；所有时间步对 U、W、b、V、c 的梯度<strong>累加</strong>（因为参数共享），一次更新全部生效。</p>
+          <p><strong>(4) 长句问题与 LSTM 缓解：</strong>长句中早期字的标签往往依赖很远的上下文（如"南京市长江大桥"读成"南京/市长/江大桥"还是"南京市/长江大桥"，要靠远处信息消歧）；BPTT 长路径上连乘 |W|&lt;1 使梯度指数衰减（0.9¹⁰⁰ ≈ 2.66×10⁻⁵），句首的梯度信号传不到参数更新里——模型学不会长距离消歧。LSTM 的加法通道 c<sub>t</sub> = f⊙c<sub>t−1</sub> + i⊙g̃ 使 ∂c<sub>t</sub>/∂c<sub>t−1</sub> = f，网络学到 f ≈ 1 时，句尾的损失可以不衰减地流回句首，长距离依赖因此可学；梯度爆炸则用梯度截断兜底。若任务允许离线整句处理，还可升级为 BiLSTM，让每个字同时看到左右两边——这正是本任务的标配答案。</p>
+        </div>
+      </details>
+    </div>
+
+    <!-- ===== 章末五件套之 3：自测 ===== -->
+    <h2><span class="sec-no">✍️</span>本章自测</h2>
+    <p class="quiz-hint">点击选项判分，答错会给出原因。</p>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 1</div>
+      <div class="q-stem">参数跨时间共享对 RNN 最关键的意义是：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 减少参数量从而加快训练速度</li>
+        <li data-opt="b">B. 参数量与序列长度无关，且"更新记忆的规则"在所有时间步上是同一套，因此能处理任意长度并泛化到没见过的长度</li>
+        <li data-opt="c">C. 等价于一种正则化，主要作用是防止过拟合</li>
+        <li data-opt="d">D. 让每个时间步学到不同的特征，增强表达力</li>
+      </ul>
+      <div class="quiz-explain">解析：B 对——这是共享的本质：同一转移函数 f 迭代任意多次，长度自由、规则跨位置复用（10.2 里参数恒为 3 个）。A 错：参数少是附带结果，训练速度不是共享要解决的核心矛盾（BPTT 反而更贵）。C 错：共享确有降过拟合的副作用，但它是"序列处处同规则"的归纳偏置，不是作为正则化手段引入的。D 错：方向反了——共享恰恰让各步用<strong>相同</strong>规则；每步不同参数正是被否决的全连接方案。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="c">
+      <div class="q-no">自测 2</div>
+      <div class="q-stem">U = 0.5，W = 0.8，b = 0，h₀ = 0，x₁ = 2。h₁ 等于多少？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. tanh(1.8) ≈ 0.9468</li>
+        <li data-opt="b">B. tanh(0.8) ≈ 0.6640</li>
+        <li data-opt="c">C. tanh(1) ≈ 0.7616</li>
+        <li data-opt="d">D. tanh(2) ≈ 0.9640</li>
+      </ul>
+      <div class="quiz-explain">解析：C 对——h₁ = tanh(U·x₁ + W·h₀ + b) = tanh(0.5×2 + 0.8×0 + 0) = tanh(1) ≈ 0.7616。A 错：1.8 = 1 + 0.8，错把 W 整个加进来，忘了 W 乘的是 h₀ 而 h₀ = 0。B 错：0.8 是 W 的值，等于只算了记忆项、丢了输入项 0.5×2。D 错：2 是 x₁ 本身，忘了它要乘 U = 0.5。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 3</div>
+      <div class="q-stem">朴素 RNN 中 |W| = 0.9（忽略激活导数），100 步前的输入对当前梯度的贡献大约衰减为：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 0.9 × 100 = 90，被线性放大</li>
+        <li data-opt="b">B. 0.9¹⁰⁰ ≈ 2.66×10⁻⁵，几乎消失</li>
+        <li data-opt="c">C. 0.9¹⁰ ≈ 0.349，还剩三分之一</li>
+        <li data-opt="d">D. 不衰减，因为梯度走的是加法</li>
+      </ul>
+      <div class="quiz-explain">解析：B 对——BPTT 的梯度含连乘 ∏W，100 步即 0.9¹⁰⁰；lg 换底：100 × (−0.0458) = −4.58，≈ 2.66×10⁻⁵。A 错：连乘是幂运算不是乘法累积，0.9 乘 100 次不是 ×100。C 错：0.349 是 10 步的值，题目问 100 步。D 错：朴素 RNN 的跨步梯度走乘法链；"加法通道"是 LSTM 的细胞状态，不是这里。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="c">
+      <div class="q-no">自测 4</div>
+      <div class="q-stem">LSTM 缓解梯度消失的关键机制是：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 用 sigmoid 代替了 tanh，导数更大</li>
+        <li data-opt="b">B. 遗忘门可以选择性删除无用信息，记忆更省空间</li>
+        <li data-opt="c">C. 细胞状态按加法更新 c<sub>t</sub> = f⊙c<sub>t−1</sub> + i⊙g̃，∂c<sub>t</sub>/∂c<sub>t−1</sub> = f，f 学到 ≈1 时梯度跨时间不衰减</li>
+        <li data-opt="d">D. 输出门控制 h 的暴露程度，使输出更稳定</li>
+      </ul>
+      <div class="quiz-explain">解析：C 对——加法通道把跨步导数从 W·diag(φ′)（必衰减）换成可学习的 f（可趋 1），梯度衰减与否从结构宿命变成学习开关。A 错：sigmoid 导数最大值 0.25，比 tanh′ 更易饱和，且门的作用是做开关不是换激活。B 错：选择性遗忘是 f 的功能描述，但"省空间"与梯度传播无关，答非所问。D 错：输出门调节的是 h 对外的暴露，h 上仍有乘法链，与跨时间的 c 通道无关。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 5</div>
+      <div class="q-stem">梯度 g = [6, 8]，范数阈值 τ = 5，梯度截断后的结果是：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. [5, 5]——逐元素砍到阈值</li>
+        <li data-opt="b">B. [3, 4]——整体等比缩放 0.5</li>
+        <li data-opt="c">C. [0.6, 0.8]——归一化到单位范数</li>
+        <li data-opt="d">D. [6, 8]——方向正确就不用改</li>
+      </ul>
+      <div class="quiz-explain">解析：B 对——‖g‖ = √(36+64) = 10 &gt; 5，缩放因子 τ/‖g‖ = 0.5，g ← [6×0.5, 8×0.5] = [3, 4]，新范数 5，方向不变。A 错：逐元素截断改变了梯度方向（[6,8] 与 [5,5] 方向不同），破坏了各维度的相对比例。C 错：归一化到范数 1 缩得太狠（应为范数 τ=5），不是截断公式。D 错：范数 10 超阈值必须缩，这正是爆炸时刻，不缩这一步更新就发散。</div>
+    </div>
+
+    <!-- ===== 章末五件套之 4：三句话复述 ===== -->
+    <div class="retell">
+      <h3>🗣️ 用自己的话，三句话讲完本章</h3>
+      <p>对着空气（或室友）说出这三句。说卡壳的那句，回去重读对应小节。</p>
+      <details>
+        <summary>句1：这章解决什么问题？——</summary>
+        <div class="retell-answer">参考答案：全连接和固定窗口都处理不了变长且顺序敏感的序列（参数随长度爆炸、窗口外信息全丢）；本章解决"如何让网络记住任意长的过去"——即用一个可维护的记忆状态处理任意长序列。</div>
+      </details>
+      <details>
+        <summary>句2：核心机制是什么？——</summary>
+        <div class="retell-answer">参考答案：两条腿。其一，循环 + 跨时间参数共享：h<sub>t</sub> = tanh(Ux<sub>t</sub> + Wh<sub>t−1</sub> + b)，同一组参数每步复用，参数量与长度无关；其二，针对 BPTT 暴露的梯度消失/爆炸（连乘 ∏W·diag(φ′)，0.9¹⁰⁰ ≈ 2.66×10⁻⁵），LSTM 用三门管理细胞状态的加法通道 c<sub>t</sub> = f⊙c<sub>t−1</sub> + i⊙g̃，f ≈ 1 时梯度跨时间不衰减，爆炸则由梯度截断（[6,8]→[3,4]）兜底。</div>
+      </details>
+      <details>
+        <summary>句3：它和前后章怎么分工？——</summary>
+        <div class="retell-answer">参考答案：第 9 章把参数共享用在空间（卷积），本章用在时间（循环），并配上双向、seq2seq、深层堆叠等结构变体；但"把任意长历史压进一个固定向量"的瓶颈未除，超长距离依赖仍需让任意位置直接对话的注意力机制——那是后续章节的事；第 11 章先把包括本章在内的所有网络组装成可落地的实践流程。</div>
+      </details>
+    </div>
+
+    <!-- ===== 章末五件套之 5：间隔复习计划 ===== -->
+    <div class="review-plan">
+      <h3>🔁 间隔复习计划</h3>
+      <p>回忆本身比重读有效 10 倍。到点只做一件事：翻卡 + 重做标记题。</p>
+      <table>
+        <tr><th>时间点</th><th>复习内容</th><th>预计用时</th></tr>
+        <tr><td>第 1 天</td><td>概念卡 1–6 + 全部回忆卡（10.1 至 10.6 共 12 张）；重算 10.2 手算例（h₁=0.7616, h₂=0.8038）</td><td>12 分钟</td></tr>
+        <tr><td>第 3 天</td><td>概念卡 3、4、6（BPTT / 梯度消失爆炸 / LSTM）+ 自测错题；重做 L2 两题（换数前向 + 连乘估算）</td><td>10 分钟</td></tr>
+        <tr><td>第 7 天</td><td>三句话复述 + 默写 c<sub>t</sub> = f⊙c<sub>t−1</sub> + i⊙g̃ 与截断公式；重做 L3 分词题的 (3)(4) 两问</td><td>10 分钟</td></tr>
+        <tr><td>第 15 天</td><td>只做合上书挑战；三个手算（前向、连乘、LSTM 细胞更新）能全对本章即毕业，进入第 11 章实践方法论</td><td>15 分钟</td></tr>
+      </table>
+    </div>
+
+    <!-- 合上书挑战 -->
+    <div class="final-challenge">
+      <h3>📕 合上书挑战</h3>
+      <p class="fc-sub">现在关掉这个页面，拿一张纸，凭记忆完成以下任务。全部做完再回来核对——这是本章真正的毕业考试。</p>
+      <ol id="challenge-list">
+        <li><span class="fc-check"></span>说出全连接处理变长序列的两条死路，写出循环定义 h<sub>t</sub> = f(h<sub>t−1</sub>, x<sub>t</sub>; θ) 并解释参数共享的两项收益</li>
+        <li><span class="fc-check"></span>手算 RNN 前向两步：U = 0.5，W = 0.8，b = 0，h₀ = 0，x = [2, 1]，得 h₁ ≈ 0.7616、h₂ ≈ 0.8038</li>
+        <li><span class="fc-check"></span>写出 BPTT 跨时间梯度的连乘结构，用 lg 换底估算 0.9¹⁰⁰ ≈ 2.66×10⁻⁵ 与 1.1¹⁰⁰ ≈ 13781 并说明后果</li>
+        <li><span class="fc-check"></span>对 g = [6, 8]、τ = 5 手算梯度截断（→ [3, 4]），并解释为什么它治不了梯度消失</li>
+        <li><span class="fc-check"></span>写出 LSTM 三门与细胞更新公式，手算 c<sub>t−1</sub>=2, f=0.9, i=0.8, g̃=0.5, o=1 时的 c<sub>t</sub> = 2.2 与 h<sub>t</sub> ≈ 0.9757，并解释"加法通道"</li>
+        <li><span class="fc-check"></span>一句话各说清双向 RNN、seq2seq+teacher forcing、跳跃连接、leaky unit 解决什么</li>
+        <li><span class="fc-check"></span>回答本章的主线问题：如何让网络记住任意长的过去？（一句话）</li>
+      </ol>
+    </div>
+
+    <div class="complete-zone">
+      <button class="btn-complete" id="btn-complete" onclick="markDone()">✓ 我已完成本章（含合上书挑战）</button>
+    </div>
+
+    <div class="chapter-nav">
+      <a href="chapter-09.html"><span class="nav-dir">← 上一章</span>第9章 卷积网络</a>
+      <a href="chapter-11.html" class="next"><span class="nav-dir">下一章 →</span>第11章 实践方法论</a>
+    </div>
+
+  </div>
+</div>
+
+<footer class="footer">
+  <div class="wrap">第10章 序列建模 · 深度学习互动讲义 · 基于 Goodfellow et al.《深度学习》(2016)</div>
+</footer>
+
+<script src="/lectures-assets/mermaid.min.js"></script>
+<script>
+mermaid.initialize({
+  startOnLoad: true,
+  theme: "base",
+  themeVariables: {
+    primaryColor: "#e3edf7",
+    primaryBorderColor: "#1d5f9e",
+    primaryTextColor: "#1d5f9e",
+    lineColor: "#5c554b",
+    secondaryColor: "#fbeedd",
+    tertiaryColor: "#f5f1e8",
+    fontFamily: "-apple-system, PingFang SC, sans-serif",
+    fontSize: "14px"
+  },
+  flowchart: { curve: "linear", htmlLabels: false }
+});
+</script>
+<script>
+// 自测题判分
+document.querySelectorAll(".quiz-block").forEach(block => {
+  const answer = block.dataset.answer;
+  const explain = block.querySelector(".quiz-explain");
+  block.querySelectorAll(".quiz-opts li").forEach(li => {
+    li.addEventListener("click", () => {
+      const opts = block.querySelectorAll(".quiz-opts li");
+      opts.forEach(o => o.classList.add("disabled"));
+      if (li.dataset.opt === answer) {
+        li.classList.add("correct");
+      } else {
+        li.classList.add("wrong");
+        block.querySelector(`[data-opt="${answer}"]`).classList.add("correct");
+      }
+      explain.classList.add("show");
+    });
+  });
+});
+
+// 合上书清单打勾
+document.querySelectorAll("#challenge-list li").forEach(li => {
+  li.addEventListener("click", () => li.classList.toggle("checked"));
+});
+
+// 完成标记 → localStorage（本系列键 dl_progress_v1，章号为字符串 "10"）
+const KEY = "dl_progress_v1";
+function loadProgress() {
+  try { return JSON.parse(localStorage.getItem(KEY)) || {}; } catch (e) { return {}; }
+}
+const progress = loadProgress();
+const btn = document.getElementById("btn-complete");
+if (progress["10"] && progress["10"].done) {
+  btn.textContent = "✓ 已完成 · 再次点击重置";
+  btn.classList.add("done");
+}
+function markDone() {
+  const p = loadProgress();
+  if (p["10"] && p["10"].done) {
+    delete p["10"];
+    btn.textContent = "✓ 我已完成本章（含合上书挑战）";
+    btn.classList.remove("done");
+  } else {
+    p["10"] = { done: true, completedAt: Date.now(), reviewsDone: 0 };
+    btn.textContent = "✓ 已完成 · 复习提醒已开启";
+    btn.classList.add("done");
+  }
+  localStorage.setItem(KEY, JSON.stringify(p));
+}
+</script>
+
+</body>
+</html>

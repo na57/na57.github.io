@@ -1,0 +1,871 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第8章 优化 · 深度学习互动讲义</title>
+<link rel="stylesheet" href="/lectures-assets/style.css">
+</head>
+<body>
+
+<nav class="topbar">
+  <div class="topbar-inner">
+    <span class="brand"><a href="index.html" style="color:inherit">← 学习地图</a></span>
+    <span class="crumb">阶段② · 现代深度网络 / 第8章</span>
+  </div>
+</nav>
+
+<div class="wrap">
+
+  <div class="lecture-head">
+    <span class="ch-label">CHAPTER 08 · 现代深度网络</span>
+    <h1>优化：深度学习的训练算法</h1>
+    <p class="lead">一句话副标题：第6章用反向传播把梯度算出来了，第7章把目标函数改得更合理——本章回答：梯度都知道了，为什么训练还是走不动、走不稳？</p>
+  </div>
+
+  <!-- ===== 章首四件套之 1：全书定位 ===== -->
+  <div class="position-bar">
+    <strong>本章在主线上的位置：</strong>第6章给了可训练的万能逼近器与反向传播，第7章用正则化改造了目标函数；本章回答"<u>有了梯度之后，怎么在病态、有噪声的损失曲面上又快又稳地走到好解</u>"——minibatch、动量、自适应学习率是主力工具；训练好的网络交给第9章卷积网络在图像上发挥作用。<br>
+    第8章回答主线上的第8个问题：<strong>梯度都知道了，为什么训练还是走不动、走不稳？</strong>
+    <div class="map-inline">
+      <span class="node">① 数学与机器学习基础<br>Ch1–5 数学工具与机器学习基础</span><span class="arrow">→</span>
+      <span class="node here">② 现代深度网络<br>Ch6 深度前馈网络 · Ch7 正则化 · <strong>Ch8 优化</strong> · Ch9 卷积 · Ch10 序列 · Ch11 实践方法论</span><span class="arrow">→</span>
+      <span class="node">③ 表示与推断<br>Ch12–16 表示学习与结构化模型</span><span class="arrow">→</span>
+      <span class="node">④ 生成模型与前沿<br>Ch17–20 自编码器与生成模型</span>
+    </div>
+  </div>
+
+  <!-- ===== 章首四件套之 2：学习目标 ===== -->
+  <div class="objectives">
+    <h4>🎯 学完本章，合上书你应该能：</h4>
+    <ol>
+      <li>说出为什么深度学习优化的目标不是精确最小化训练误差，写出经验风险与代理损失的关系</li>
+      <li>用 SE = σ/√m 手算 m = 1、100、10000 时的梯度估计标准误（1、0.1、0.01），解释"batch 翻百倍、精度仅十倍"的收益递减</li>
+      <li>对条件数 100 的二次问题（λ_max = 100、λ_min = 1）写出稳定步长界 η &lt; 0.02，手算 η = 0.025 的发散过程与 η = 0.01 的 230 步慢速收敛</li>
+      <li>写出 SGD 收敛的两个步长条件（∑η<sub>t</sub> = ∞、∑η<sub>t</sub>² &lt; ∞），验证 η<sub>t</sub> = 0.1/t 满足、常数步长不满足</li>
+      <li>对 α = 0.9、ε = 0.01、∇ = 2 手算动量前三步（v₁ = −0.02、v₂ = −0.038、v₃ = −0.0542）与稳态 v<sub>∞</sub> = −0.2，解释 1/(1−α) 倍放大</li>
+      <li>对 g = 2 手算 Adam 的第一步（m̂₁ = 2、v̂₁ = 4、Δθ ≈ −0.001），说清偏差修正为什么不可省</li>
+    </ol>
+  </div>
+
+  <div class="lecture">
+
+    <!-- ===== 章首四件套之 3：推导主线图 ===== -->
+    <div class="figure">
+      <div class="mermaid">
+flowchart TB
+  A["第6章：反向传播给出梯度 第7章：目标函数已改好"] -->|"但梯度下降仍走不动 走不稳"| B["疑问一：目标本身对吗 训练误差只是代理"]
+  B -->|"全量梯度太贵 只能抽样估计"| C["minibatch：梯度估计精度按根号m增长"]
+  C -->|"估计准了仍可能发散"| D["疑问二：曲面病态 快方向震荡 慢方向爬行"]
+  D -->|"步长要衰减才能收敛"| E["SGD 收敛条件：和发散 平方和收敛"]
+  E -->|"震荡与爬行怎么一起治"| F["动量：惯性放大一致方向 抵消来回震荡"]
+  F -->|"每个参数要自己的步长"| G["RMSProp 与 Adam：按二阶矩逐坐标缩放"]
+  G --> H["遗留问题：曲面性质与结构耦合 交给 BN 与网络设计"]
+  classDef hot fill:#fbeedd,stroke:#c4651f,stroke-width:2.5px,color:#c4651f;
+  classDef danger fill:#fae9e7,stroke:#b03a2e,stroke-width:2.5px,color:#b03a2e;
+  class G hot;
+  class H danger;
+      </div>
+      <div class="caption">本章推导主线：梯度已知，训练仍难——先是"目标只是代理"（8.1），再是"曲面病态"（8.2），于是步长要衰减（8.3）、方向要惯性（8.4）、坐标要各自缩放（8.5）；末端红框：有些病根在模型结构本身，引出 8.6 的批量归一化与后续章节。</div>
+    </div>
+
+    <!-- ================= 8.1 ================= -->
+    <h2><span class="sec-no">8.1</span>为什么不用训练误差当目标：经验风险与 minibatch</h2>
+
+    <p>第6、7章之后，我们手里有模型、有反向传播、有正则化好的目标函数——看起来"沿负梯度走"就完事了。本章的第一个冷水是：<strong>我们真正想优化的东西，根本没法直接优化。</strong>机器学习的终极目标是<span class="term">期望泛化误差</span>（Expected Generalization Error）：在真实数据生成分布 p<sub>data</sub> 上，损失 L 的期望。问题是我们手里没有 p<sub>data</sub>，只有从它采样出的训练集。</p>
+
+    <p>能做的只有退而求其次：用训练集上的平均损失代替期望损失——这叫<span class="term">经验风险</span>（Empirical Risk），最小化它就是<span class="term">经验风险最小化</span>（Empirical Risk Minimization，ERM）：</p>
+
+    <div class="formula">J(θ) = E<sub>(x,y)~p̂<sub>data</sub></sub> L(f(x; θ), y) = <span class="frac"><span class="num-part">1</span><span class="den-part">m</span></span> ∑<sub>i=1</sub><sup>m</sup> L(f(x⁽ⁱ⁾; θ), y⁽ⁱ⁾)</div>
+
+    <p>这仍然有两个妥协。第一，经验风险最小化本身往往不可行——0-1 损失处处梯度为 0，所以实际优化的是<span class="term">代理损失</span>（Surrogate Loss），如负对数似然；而且它容易过拟合（第7章整章在补这个洞），实践中甚至不把它降到最小，早停就退场了。第二，就算只算经验风险的梯度，<strong>每步也要遍历全部 m 个样本</strong>：训练集有上千万样本时，一步更新就要前向、反向各跑一遍全库，慢到不可用。</p>
+
+    <p>出路是抽样：每次只取一个小批量（minibatch，记 m′ 个样本）估计梯度。估计有多准？把每个样本的梯度看成均值为真梯度的随机变量，样本梯度的标准差为 σ，则 m′ 个样本平均梯度的<span class="term">标准误</span>（Standard Error）为：</p>
+
+    <div class="formula">SE = <span class="frac"><span class="num-part">σ</span><span class="den-part">√m′</span></span></div>
+
+    <p><strong>完整例子（手算全程）。</strong>设样本梯度标准差 σ = 1，分别取 m′ = 1、100、10000：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>批量大小 m′</th><th>标准误 σ/√m′</th><th>相对上一档</th></tr>
+        <tr><td>1</td><td>1/√1 = <strong>1</strong></td><td>—</td></tr>
+        <tr><td>100</td><td>1/√100 = 1/10 = <strong>0.1</strong></td><td>样本 ×100，误差 ÷10</td></tr>
+        <tr><td>10000</td><td>1/√10000 = 1/100 = <strong>0.01</strong></td><td>样本 ×100，误差 ÷10</td></tr>
+      </table>
+    </div>
+
+    <p>规律一目了然：<strong>样本量增大 100 倍，梯度估计精度只提高 10 倍</strong>——√m′ 律决定了收益递减。从 100 涨到 10000，算力翻百倍，只换来一位小数的精度；而小 batch 虽然噪声大，却有两个意外之喜：每步便宜可以走更多步，噪声本身还有点正则化效果。这就是为什么深度学习几乎全用几十到几百的小批量，而不是全量梯度。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>这一节把"优化"的底牌换了：我们优化的不是真正的目标（泛化误差），甚至不是经验风险本身，而是<strong>一个抽样估计出来的、有噪声的梯度方向</strong>。本章后面所有算法——动量、Adam——都可以看成在这个"带噪声的指南针"下如何走得更稳。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>两个误区：(1) 以为 batch 越大梯度越准、训练就一定越好——√m′ 律让精度收益递减，而大 batch 泛化往往更差，需配合调高学习率等技巧；(2) 以为优化目标就是"把训练误差降到 0"——那是过拟合的同义词，第7章的正则化与早停恰恰在阻止这件事。另外样本必须随机抽取：按类别排序的 batch 会让估计严重有偏。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 8.1-1</div>
+              <div class="q-text">为什么不能直接优化期望泛化误差？经验风险最小化的定义是什么？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              真实分布 p<sub>data</sub> 未知，期望无法计算；只能用训练集的平均损失代替：J(θ) = (1/m)∑ᵢ L(f(x⁽ⁱ⁾;θ), y⁽ⁱ⁾)。实际还改用可微的代理损失（如 NLL）且不过度优化（早停）。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 8.1-2</div>
+              <div class="q-text">σ = 1 时 m′ = 100 与 10000 的梯度标准误各是多少？这说明了 minibatch 的什么规律？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              0.1 与 0.01。SE = σ/√m′：样本量 ×100 只换来精度 ×10——收益递减，所以小批量在"每步便宜 × 步数多"的权衡下更划算。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ================= 8.2 ================= -->
+    <h2><span class="sec-no">8.2</span>为什么梯度下降会原地爆炸：病态条件</h2>
+
+    <p>上一节解决了"梯度从哪来"。现在假设梯度精确已知（先不管噪声），训练是不是就稳了？远不是。梯度下降最大的敌人叫<span class="term">病态条件</span>（Ill Conditioning）：损失曲面在不同方向上的<span class="term">曲率</span>（Curvature，二阶导数）相差悬殊——有的方向陡峭如悬崖，有的方向平缓如平原。曲面局部由<span class="term">海森矩阵</span>（Hessian Matrix）H 刻画，曲率悬殊的程度用<span class="term">条件数</span>（Condition Number）度量：</p>
+
+    <div class="formula">κ(H) = <span class="frac"><span class="num-part">λ<sub>max</sub></span><span class="den-part">λ<sub>min</sub></span></span>（H 的最大与最小特征值之比）</div>
+
+    <p>为什么悬殊的曲率让梯度下降两难？沿特征值 λ<sub>i</sub> 的特征方向看，梯度下降每步把该方向的误差乘以因子 (1 − ηλ<sub>i</sub>)（对二次问题可精确推得）。要收敛，所有方向都必须满足 |1 − ηλ<sub>i</sub>| &lt; 1，解出 <strong>η &lt; 2/λ<sub>max</sub></strong>——稳定步长由最陡方向封顶；而慢方向的速度又被同一个 η 卡住：|1 − ηλ<sub>min</sub>| 越接近 1，走得越慢。</p>
+
+    <p><strong>完整例子（手算全程）。</strong>二次问题，Hessian 特征值 λ<sub>max</sub> = 100（快方向）、λ<sub>min</sub> = 1（慢方向），条件数 κ = 100。稳定要求 η &lt; 2/100 = 0.02。</p>
+
+    <p><strong>情形一：η = 0.025（越界，发散）。</strong>快方向每步误差乘 |1 − ηλ<sub>max</sub>| = |1 − 0.025×100| = |1 − 2.5| = 1.5。逐步推演：1 步后 ×1.5，2 步后 ×2.25，3 步后 ×3.375……10 步后放大 1.5¹⁰：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>步数</th><td>1</td><td>2</td><td>3</td><td>5</td><td>10</td></tr>
+        <tr><th>快方向误差倍数（1.5ⁿ）</th><td>1.5</td><td>2.25</td><td>3.375</td><td>7.59</td><td><strong>≈ 57.7</strong></td></tr>
+      </table>
+    </div>
+
+    <p>验证最后一步：1.5⁵ = 7.59375，1.5¹⁰ = 7.59375² ≈ 57.67——误差放大约 58 倍，越走越远离最优，这就是发散。表现为训练 loss 突然暴涨甚至 NaN。</p>
+
+    <p><strong>情形二：η = 0.01（守界，慢得煎熬）。</strong>快方向：|1 − 0.01×100| = |1 − 1| = 0——一步就把快方向误差清零，完美。慢方向：|1 − 0.01×1| = 0.99，每步只削减 1%。想把慢方向误差降到 1/10，要解 0.99ⁿ = 0.1：</p>
+
+    <div class="formula">n = <span class="frac"><span class="num-part">lg 0.1</span><span class="den-part">lg 0.99</span></span> ≈ <span class="frac"><span class="num-part">−1</span><span class="den-part">−0.004365</span></span> ≈ 229.1，即约 <strong>230 步</strong></div>
+
+    <p>验证：0.99²³⁰ ≈ e<sup>230×ln 0.99</sup> ≈ e<sup>−2.312</sup> ≈ 0.099 ✓。看这笔账：快方向一步收敛，慢方向要 230 步——<strong>同一个学习率，不可能同时讨好两个方向</strong>。这就是病态条件的诅咒：η 稍大就发散，η 守规矩就爬行。条件数 100 还算温和，深度网络的 Hessian 条件数动辄成千上万。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>病态条件下梯度下降像一个只有一档速度的车：在峡谷状的损失曲面上，沿峡谷壁（快方向）来回弹跳、随时翻车，沿峡谷底（慢方向）却慢如蜗牛。后面 8.4 的动量、8.5 的自适应学习率，本质都是给不同方向配不同速度——治病态条件的根。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>把发散归咎于"梯度算错了"——多数时候反向传播没错，是 η 相对 λ<sub>max</sub> 太大（8.2 的例子只差 0.005 就越界）。反向也成立：以为"学习率小就一定收敛"——小学习率只保证不发散，不保证来得及收敛，慢方向 230 步才降 90%，实践中等于没收敛。还有：梯度方向≠最优方向，病态时负梯度几乎垂直指向峡谷壁，而不是指向谷底终点。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 8.2-1</div>
+              <div class="q-text">条件数怎么定义？λ_max = 100、λ_min = 1 时梯度下降的稳定步长界是多少？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              κ = λ_max/λ_min = 100。每方向误差乘 |1 − ηλᵢ|，收敛要求 η &lt; 2/λ_max = 0.02。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 8.2-2</div>
+              <div class="q-text">上例中 η = 0.025 时 10 步发生什么？η = 0.01 时慢方向降到 1/10 要多少步？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              快方向每步 ×1.5，10 步 ≈ ×57.7，发散。η = 0.01 时慢方向每步 ×0.99，n = lg0.1/lg0.99 ≈ 230 步。同一 η 无法兼顾快慢两方向。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ================= 8.3 ================= -->
+    <h2><span class="sec-no">8.3</span>为什么学习率必须衰减：随机梯度下降的收敛条件</h2>
+
+    <p>8.1 说梯度是抽样估计的、带噪声；8.2 说曲面病态、步长两难。把两个麻烦叠加，就是深度学习的日常：<span class="term">随机梯度下降</span>（Stochastic Gradient Descent，SGD）——每个 minibatch 上沿估计梯度的反方向走一步。SGD 要想（在凸情形下渐近）收敛，学习率不能一成不变，必须满足一对经典条件：</p>
+
+    <div class="formula">∑<sub>t=1</sub><sup>∞</sup> η<sub>t</sub> = ∞ 且 ∑<sub>t=1</sub><sup>∞</sup> η<sub>t</sub>² &lt; ∞</div>
+
+    <p>第一条说：步长之和必须发散——否则总位移有上限，万一最优点在远处就永远走不到。第二条说：步长平方和必须收敛——步长衰减要足够快，才能压住噪声的累积扰动。</p>
+
+    <p><strong>完整例子（验证一个合法、一个非法）。</strong>取 η<sub>t</sub> = 0.1/t：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>条件</th><th>级数</th><th>结论</th></tr>
+        <tr><th>∑ η<sub>t</sub></th><td>0.1 × (1 + 1/2 + 1/3 + …) = 0.1 × 调和级数</td><td>发散 → ∞ ✓</td></tr>
+        <tr><th>∑ η<sub>t</sub>²</th><td>0.01 × (1 + 1/4 + 1/9 + …) = 0.01 × π²/6 ≈ 0.0164</td><td>收敛 ✓（p = 2 的 p 级数）</td></tr>
+      </table>
+    </div>
+
+    <p>所以 η<sub>t</sub> = 0.1/t 满足收敛条件。反过来，<strong>常数学习率 η<sub>t</sub> = η 不满足</strong>：∑η² = ∞，第二条直接失败。</p>
+
+    <p>常数学习率失败在哪？直觉很具体：假设参数已经站在最优点的碗里，此时真实梯度为 0，但 minibatch 估计的梯度不为 0——它在 0 附近随机波动，方差不为零。每步更新 −η·ĝ 就是一个以 0 为均值、幅度正比于 η 的随机跳动。η 不衰减，跳动幅度不衰减，参数永远在最优点附近做半径 ≈ η ×（噪声水平）的随机游走——能靠近，却永远停不下。这就是实践中训练后期 loss 曲线"抖动着不下去"的原因之一。要让跳动消失，只能让 η<sub>t</sub> → 0。工程上常用线性衰减：第 t 轮取 η<sub>t</sub> = (1 − t/T)η₀ + (t/T)η<sub>T</sub>，到第 T 轮降到 η₀ 的 1% 左右。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>两个条件一句话：步子总量要够走任意远（∑η<sub>t</sub> 发散），但后期步子要小到能被噪声原谅（∑η<sub>t</sub>² 收敛）。常数步长满足了前者、死在后者的本质上——<strong>随机性不随训练消失，只能靠步长消失来对冲</strong>。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>以为"loss 后期抖动 = 模型坏了"，急着换模型——多数时候只是常数学习率撞上噪声地板，衰减 η 即解。另一个极端是衰减过快：η<sub>t</sub> = 0.1/t² 的 ∑η<sub>t</sub> 收敛，总位移有限，参数可能在半路"冻僵"，离最优点还差得远。实践折中：线性衰减到很小的末值，而不是理论上严格的 1/t。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 8.3-1</div>
+              <div class="q-text">写出 SGD 收敛的两个学习率条件，并各自用一句话解释为什么必要。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              ∑η<sub>t</sub> = ∞（总位移无上限，远处最优点可达）；∑η<sub>t</sub>² &lt; ∞（衰减够快，噪声扰动可累积收敛）。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 8.3-2</div>
+              <div class="q-text">为什么常数学习率不能收敛到精确最优点？η<sub>t</sub> = 0.1/t 为什么可以？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              最优点附近估计梯度方差不为零，常数 η 使参数永远做半径 ∝ η 的随机游走。η<sub>t</sub> = 0.1/t：∑ 为调和级数发散、平方和收敛于 π²/6，两条件齐备。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ================= 8.4 ================= -->
+    <h2><span class="sec-no">8.4</span>动量：为什么给梯度装上惯性就能又快又稳</h2>
+
+    <p>回到 8.2 的峡谷困境：负梯度在快方向（峡谷壁）上来回震荡，在慢方向（峡谷底）上爬行。8.3 的答案是衰减步长——治噪，但对病态无能为力。<span class="term">动量</span>（Momentum）换了个思路：不改步长本身，改"步长由什么决定"——维护一个速度变量 v，让历史梯度的加权平均来推动参数：</p>
+
+    <div class="formula">v ← αv − ε∇J，&nbsp;&nbsp;θ ← θ + v</div>
+
+    <p>α ∈ [0, 1) 是动量系数（常取 0.9），ε 是学习率。v 是过去梯度的<span class="term">指数加权移动平均</span>（Exponentially Weighted Moving Average）：方向一致的梯度会越积越大，方向来回翻转的梯度会相互抵消——这正是峡谷问题需要的对症药。</p>
+
+    <p><strong>完整例子（手算全程）。</strong>α = 0.9，ε = 0.01，梯度恒为 ∇ = 2（模拟峡谷底：方向永远一致的慢方向），初始 v₀ = 0，逐代 v<sub>t</sub> = 0.9v<sub>t−1</sub> − 0.01×2：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>步 t</th><th>计算</th><th>v<sub>t</sub></th></tr>
+        <tr><td>1</td><td>0.9×0 − 0.02</td><td><strong>−0.02</strong></td></tr>
+        <tr><td>2</td><td>0.9×(−0.02) − 0.02 = −0.018 − 0.02</td><td><strong>−0.038</strong></td></tr>
+        <tr><td>3</td><td>0.9×(−0.038) − 0.02 = −0.0342 − 0.02</td><td><strong>−0.0542</strong></td></tr>
+        <tr><td>∞</td><td>v<sub>∞</sub> = 0.9v<sub>∞</sub> − 0.02 ⟹ 0.1v<sub>∞</sub> = −0.02</td><td><strong>−0.2</strong></td></tr>
+      </table>
+    </div>
+
+    <p>核对稳态：设 v<sub>∞</sub> 满足 v<sub>∞</sub> = αv<sub>∞</sub> − ε∇，解出</p>
+
+    <div class="formula">v<sub>∞</sub> = − <span class="frac"><span class="num-part">ε∇</span><span class="den-part">1 − α</span></span> = − <span class="frac"><span class="num-part">0.02</span><span class="den-part">0.1</span></span> = −0.2，速度放大 <span class="frac"><span class="num-part">1</span><span class="den-part">1 − α</span></span> = 10 倍</div>
+
+    <p>对比：裸 SGD 在同样梯度下每步只走 −ε∇ = −0.02；动量的终端速度 −0.2 是它的 <strong>10 倍</strong>。再看峡谷壁方向：梯度正负交替，加进 v 里正负抵消，速度涨不起来——震荡被自动抑制。一个方向加速 10 倍、一个方向被按住，8.2 的"同一 η 无法兼顾两方向"就此化解。α 的作用期也直白：1/(1−α) = 10，即历史梯度的影响大约延续 10 步。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>动量的物理画面：参数是小球，梯度是坡度，α 是"无摩擦程度"。小球冲下峡谷底会越滚越快（一致方向积累），撞上峡谷壁会被弹回但来回撞平均为零（震荡抵消）。一句话：<strong>动量放大的是"共识"，抵消的是"分歧"</strong>。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>以为 α 越大约好——α = 0.99 放大 100 倍，但惯性太大，冲过谷底要等很久才回头，ε 必须同步调小；常见搭配是 α = 0.9 配原 ε 的 1/10 左右。另一个误区：把动量当"自适应学习率"——它对所有参数仍共享同一个 ε，逐坐标缩放是 8.5 的事。还有 Nesterov 动量（先走到 θ + αv 再算梯度）是它的一个常用变体，多花一次前向，理论上更稳。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 8.4-1</div>
+              <div class="q-text">α = 0.9、ε = 0.01、∇ = 2 时写出动量更新式与前 3 步的 v。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              v<sub>t</sub> = 0.9v<sub>t−1</sub> − 0.02；v₁ = −0.02，v₂ = −0.038，v₃ = −0.0542。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 8.4-2</div>
+              <div class="q-text">稳态速度公式是什么？为什么动量同时"加速慢方向、抑制快方向震荡"？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              v<sub>∞</sub> = −ε∇/(1−α)，放大 1/(1−α) 倍（α = 0.9 时 10 倍）。一致方向梯度在指数平均中累加（加速），方向交替的梯度相互抵消（抑制震荡）。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ================= 8.5 ================= -->
+    <h2><span class="sec-no">8.5</span>自适应学习率：RMSProp 与 Adam 凭什么给每个参数配步长</h2>
+
+    <p>动量解决了"时间维度"上的快慢，但还有一个更直接的对症思路没出场：8.2 的病根是不同方向曲率不同、共享一个学习率——那就<strong>给每个参数单独配学习率</strong>。这就是<span class="term">自适应学习率</span>（Adaptive Learning Rate）一族算法。</p>
+
+    <p>先看 <span class="term">RMSProp</span>（Root Mean Square Propagation）：维护梯度平方的指数加权平均 r，用它的平方根去除学习率——历史上该方向梯度越大，实际步长压得越小：</p>
+
+    <div class="formula">r ← β₂r + (1 − β₂)g²，&nbsp;&nbsp;Δθ = − <span class="frac"><span class="num-part">ε</span><span class="den-part">√r + δ</span></span> g</div>
+
+    <p>效果正是 8.2 想要的：快方向（g 持续很大）r 大、步长被压缩，不发散；慢方向（g 持续很小）r 小、步长相对放大，不爬行。RMSProp 没有动量、没有偏差修正，结构简单。</p>
+
+    <p><span class="term">Adam</span>（Adaptive Moment Estimation）= RMSProp 的逐坐标缩放 + 动量的一阶平均 + 一项常被忽视却关键的<span class="term">偏差修正</span>（Bias Correction）：</p>
+
+    <div class="formula">m ← β₁m + (1 − β₁)g&nbsp;&nbsp;（一阶矩，相当于动量）</div>
+    <div class="formula">v ← β₂v + (1 − β₂)g²&nbsp;&nbsp;（二阶矩，相当于 RMSProp 的 r）</div>
+    <div class="formula">m̂ = <span class="frac"><span class="num-part">m</span><span class="den-part">1 − β₁ᵗ</span></span>，&nbsp;v̂ = <span class="frac"><span class="num-part">v</span><span class="den-part">1 − β₂ᵗ</span></span>&nbsp;&nbsp;（偏差修正，t 是步数）</div>
+    <div class="formula">Δθ = − ε <span class="frac"><span class="num-part">m̂</span><span class="den-part">√v̂ + δ</span></span></div>
+
+    <p><strong>完整例子（手算全程）。</strong>g = 2，β₁ = 0.9，β₂ = 0.999，ε = 0.001，δ = 10⁻⁸，初始 m₀ = 0、v₀ = 0，算第一步：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>步骤</th><th>计算</th><th>结果</th></tr>
+        <tr><td>一阶矩 m₁</td><td>0.9×0 + (1 − 0.9)×2 = 0.1×2</td><td><strong>0.2</strong></td></tr>
+        <tr><td>二阶矩 v₁</td><td>0.999×0 + (1 − 0.999)×2² = 0.001×4</td><td><strong>0.004</strong></td></tr>
+        <tr><td>修正 m̂₁</td><td>0.2 / (1 − 0.9¹) = 0.2 / 0.1</td><td><strong>2</strong></td></tr>
+        <tr><td>修正 v̂₁</td><td>0.004 / (1 − 0.999¹) = 0.004 / 0.001</td><td><strong>4</strong></td></tr>
+        <tr><td>更新量 Δθ</td><td>−0.001 × 2 / (√4 + 10⁻⁸) ≈ −0.001 × 2/2</td><td><strong>≈ −0.001</strong></td></tr>
+      </table>
+    </div>
+
+    <p>对比同一个 g = 2 下裸 SGD（ε = 0.001）：Δθ = −0.001×2 = −0.002——<strong>Adam 首步的有效步长 ≈ ε，是裸 SGD 的一半且与 g 的大小几乎无关</strong>（g 翻倍时 m̂ 翻倍、√v̂ 也翻倍，两者抵消）。这正是 Adam 的设计意图：步长以 ε 为天然单位，超参数含义清晰。</p>
+
+    <p>再看偏差修正的必要性：如果跳过修正直接用 m₁ = 0.2、v₁ = 0.004，则 Δθ = −0.001 × 0.2/(√0.004) = −0.001 × 0.2/0.0632 ≈ −0.00316——比正常值大三倍还多。原因：m、v 从 0 启动，初期被"压向 0"（m₁ 只有真值 2 的 1/10，v₁ 只有真值 4 的 1/1000），且二阶矩的偏差（1/1000）比一阶矩（1/10）严重得多，开根号后比例失衡。修正项 1 − βᵗ 恰好把估计拉回无偏：t = 1 时 m̂ = 2、v̂ = 4 恰好就是观测本身；t 变大后 βᵗ → 0，修正自动退场。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>Adam 一句话：<strong>信噪比驱动</strong>。分子 m̂ 是"梯度的共识"（信号），分母 √v̂ 是"梯度的规模"，比值 m̂/√v̂ 像信噪比——方向稳定时比值接近 ±1（全速走 ε），方向混乱时比值趋 0（自动减速）。它把 8.4 的"惯性"和 RMSProp 的"逐坐标缩放"缝在了一起，再加偏差修正保证冷启动不偏。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>(1) 以为 Adam 不需要调学习率——ε 仍是第一超参数，只是容忍度比 SGD 高；(2) 漏掉偏差修正——冷启动时二阶矩偏差 1/1000 级，不修正会让首几步更新放大数倍且方向失真；(3) 以为 Adam 全面优于 SGD——不少视觉任务上，调好衰减的 SGD + 动量泛化更好，Adam 赢在收敛快、不挑食；(4) 以为分母 δ 是摆设——它防 v̂ 极小时除零爆炸，量级 10⁻⁸ 即可。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 8.5-1</div>
+              <div class="q-text">g = 2、β₁ = 0.9、β₂ = 0.999、ε = 0.001，写出 Adam 第一步的 m₁、v₁、m̂₁、v̂₁ 与 Δθ。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              m₁ = 0.2，v₁ = 0.004，m̂₁ = 2，v̂₁ = 4，Δθ = −0.001×2/2 ≈ −0.001（≈ 同 ε 裸 SGD 步长的一半）。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 8.5-2</div>
+              <div class="q-text">偏差修正为什么在 Adam 里不可省？RMSProp 与 Adam 差在哪两点？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              m、v 从 0 启动，初期偏 0（v₁ 仅真值 1/1000），不修正首步更新会失真放大（0.00316 vs 0.001）。Adam 比 RMSProp 多一阶动量 m 与偏差修正。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ================= 8.6 ================= -->
+    <h2><span class="sec-no">8.6</span>二阶方法为什么用不起：批量归一化的优化视角</h2>
+
+    <p>8.2 的病态条件，教科书里有现成答案：<span class="term">牛顿法</span>（Newton's Method）直接用 H⁻¹∇J 一步纠正所有方向的曲率差异。问题是深度网络有 n 个参数，H 有 n² 个元素——n = 10⁹ 的模型，存 H 就要 10¹⁸ 个数，更别提求逆的 n³ 量级计算。<strong>二阶方法在精确曲率上是赢家，在存储与算力上直接出局</strong>，只剩近似版本（如 K-FAC）在特定场景可用。</p>
+
+    <p>更工程化的出路是改造曲面本身。<span class="term">批量归一化</span>（Batch Normalization，BN）把每层的输入在 batch 内减均值、除标准差再仿射还原：从优化视角看，它做了一次<span class="term">重参数化</span>（Reparameterization）——层与层之间的尺度不再互相追逐放大，损失曲面被"捋平"，条件数显著改善，于是可以安全地用更大的学习率。这解释了 BN 实践中"让训练又快又稳"的现象：它表面是归一化技巧，实质是曲面的整脊手术。结构怎么配合优化，是第9章卷积网络、第10章序列建模继续展开的故事。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>优化算法与网络结构是一枚硬币的两面：算法迁就曲面（动量、Adam），结构改造曲面（BN、残差连接）。遇到训练困难，先问"该换算法还是该改结构"，往往比埋头调参有效。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>把 BN 的好处全归于"缓解内部协变量偏移"——这是原始论文的叙事，后来的研究更支持"平滑损失曲面、改善条件数"的优化解释。另外 BN 依赖 batch 统计，小 batch 下估计不准，这正是 8.1 抽样噪声在结构层面的回响。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 8.6-1</div>
+              <div class="q-text">牛顿法为什么在深度网络上不可行？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              n 个参数的 Hessian 有 n² 个元素，存储 O(n²)、求逆 O(n³)；n = 10⁹ 时存 10¹⁸ 个数，直接出局。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 8.6-2</div>
+              <div class="q-text">从优化视角，BN 为什么让训练又快又稳？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              BN 是对每层输入的重参数化，解耦层间尺度、平滑损失曲面、改善条件数，从而允许更大学习率。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===== 章末五件套之 1：概念卡 ===== -->
+    <h2><span class="sec-no">🃏</span>概念卡：本章概念的一分钟画像</h2>
+    <p>翻面前先自问：这个概念我能用一句话讲清楚吗？</p>
+    <div class="flip-grid">
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 1</div>
+            <div class="q-text">经验风险最小化（Empirical Risk Minimization）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">用训练集平均损失 (1/m)∑ᵢL 代替未知的期望风险，转而最小化它。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">真实分布 p<sub>data</sub> 未知，期望泛化误差无法直接优化——ERM 给出可计算的目标。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">没见过题库全集，只能把手头这沓真题当全集来刷。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为把经验风险降到 0 就是好——那正是过拟合；实际还换用代理损失并早停。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">一切监督学习的默认框架；第7章正则化就是在它身上打的补丁。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 2</div>
+            <div class="q-text">Minibatch 梯度估计（Minibatch Gradient Estimation）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">每次抽 m′ 个样本估计梯度，标准误 SE = σ/√m′。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">全量梯度每步遍历整个训练集，大到不可算；抽样用噪声换速度。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">抽样民调：样本翻 100 倍，误差只缩小 10 倍，收益递减。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为 batch 越大越好——精度按 √m′ 增长，大 batch 泛化常更差；且必须随机抽样。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">所有深度训练的默认；batch 大小是第11章方法论的核心超参之一。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 3</div>
+            <div class="q-text">条件数（Condition Number）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">κ = λ_max/λ_min：Hessian 最陡与最平方向的曲率之比。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">度量病态：κ 大则稳定步长 η &lt; 2/λ_max 与慢方向速度 ηλ_min 被两头卡死。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">峡谷状山谷：沿壁会弹跳翻车，沿底慢如蜗牛，同一车速两头难。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为发散是梯度算错——多数只是 η 越过了 2/λ_max（例中 0.025 对 0.02）。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">诊断训练震荡/发散的第一嫌疑；动量、Adam、BN 都在间接降 κ 的害。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 4</div>
+            <div class="q-text">动量（Momentum）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">v ← αv − ε∇J，θ ← θ + v：用梯度的指数加权平均推动参数。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">病态曲面上慢方向爬行、快方向震荡——一致方向加速 1/(1−α) 倍，震荡方向抵消。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">小球滚下山：共识越滚越快，分歧来回撞墙平均为零。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">α 越大越好——0.99 放大 100 倍但回头慢，ε 须同步缩小；它仍共享单一 ε。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">SGD 的默认搭档（α = 0.9）；视觉任务精调常胜 Adam。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 5</div>
+            <div class="q-text">RMSProp（Root Mean Square Propagation）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">r ← β₂r + (1−β₂)g²，Δθ = −εg/(√r + δ)：按历史梯度尺度逐坐标压步长。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">不同参数梯度尺度悬殊、共享一个学习率两头难（8.2 的逐坐标版答案）。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">给每个参数装独立的油门限位：历来冲得猛的坐标自动限小。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为它含动量——RMSProp 只有二阶矩缩放，无一阶平均、无偏差修正。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">循环网络等非平稳目标的老牌选择；今天多被 Adam 替代。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 6</div>
+            <div class="q-text">Adam（Adaptive Moment Estimation）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">一阶动量 m + 二阶缩放 v + 偏差修正 1−βᵗ，Δθ = −εm̂/(√v̂ + δ)。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">把动量的"方向共识"与 RMSProp 的"逐坐标缩放"合并，并用修正治好冷启动偏 0。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">信噪比驱动：方向稳则 m̂/√v̂ ≈ ±1 全速走 ε，方向乱则自动减速。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">免调学习率（ε 仍关键）；省略偏差修正（首步放大 3 倍多）；永远优于 SGD（泛化未必）。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">绝大多数深度学习任务的开箱默认；第9、10章训练卷积与序列模型时的起点。</span></div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- ===== 章末五件套之 2：分层习题 ===== -->
+    <h2><span class="sec-no">📝</span>分层习题</h2>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>
+        <p>某任务当前用 batch = 64 训练，梯度估计标准误为 0.05。若把 batch 翻 4 倍到 256，标准误变为多少？要再把标准误减半，batch 需要变成多少？用 √m′ 律说明这种"堆样本换精度"的策略什么时候不划算。</p>
+      </div>
+      <details>
+        <summary>提示</summary>
+        <p>SE = σ/√m′：m′ 翻 4 倍，√m′ 翻几倍？从 256 再让 SE 减半，√m′ 要翻几倍，对应 m′ 翻几倍？</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p>(1) m′ 从 64 到 256 是 ×4，√m′ 是 ×2，所以标准误减半：<strong>0.05 → 0.025</strong>。（验算：σ = 0.05×√64 = 0.05×8 = 0.4；0.4/√256 = 0.4/16 = 0.025 ✓）</p>
+          <p>(2) 再减半要求 √m′ 再 ×2，即 m′ ×4：<strong>256 × 4 = 1024</strong>。</p>
+          <p>(3) 规律：精度每提高一倍，样本量要翻 4 倍——成本平方增长、精度线性增长。当 batch 已经较大、梯度噪声已不是训练的主要瓶颈（比如病态条件、学习率设置才是瓶颈）时，继续堆样本就是拿 4 倍算力换微不足道的方向精度，远不如换用动量或自适应学习率划算。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>
+        <p>判断并说明理由："常数学习率的 SGD 之所以后期 loss 震荡，是因为 batch 太小；只要把 batch 调大，就能在常数学习率下收敛到精确最优点。"</p>
+      </div>
+      <details>
+        <summary>提示</summary>
+        <p>batch 调大让噪声变小，但能让噪声严格等于 0 吗？常数步长 × 非零噪声方差，在最优点处会发生什么？</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p><strong>错。</strong>大 batch 只能按 √m′ 律压低噪声（且收益递减），除全量梯度外方差永远严格大于 0。在最优点处真实梯度为 0，更新量 −ηĝ 是均值为 0、幅度 ∝ ησ/√m′ 的随机跳动——只要 η 不衰减、噪声不为 0，参数就永远在最优点附近随机游走，无法停在精确最优点。这正是收敛条件 ∑η<sub>t</sub>² &lt; ∞ 的意义：噪声消不掉，只能靠步长衰减到 0 来让跳动消失。全量梯度理论上可以，但 8.1 已说明它慢到不可用，且实践中没人这么做。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>
+        <p>换一组数重算 8.2 的病态分析：λ_max = 50、λ_min = 0.5。求：(1) 条件数与稳定步长界；(2) η = 0.05 时快方向每步误差因子与 5 步后的放大倍数；(3) η = 0.02 时快、慢方向的每步因子，以及慢方向误差降到 1/10 所需步数（精确到个位）。</p>
+      </div>
+      <details>
+        <summary>提示</summary>
+        <p>稳定界 η &lt; 2/λ_max；每方向误差因子 |1 − ηλ|；步数解 |1 − ηλ_min|ⁿ = 0.1，取对数。lg 0.99 ≈ −0.004365。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p>(1) κ = 50/0.5 = <strong>100</strong>；稳定要求 η &lt; 2/50 = <strong>0.04</strong>。</p>
+          <p>(2) η = 0.05：快方向因子 |1 − 0.05×50| = |1 − 2.5| = <strong>1.5</strong>；5 步放大 1.5⁵ = 1.5²×1.5²×1.5 = 2.25×2.25×1.5 = 5.0625×1.5 ≈ <strong>7.59 倍</strong>，发散。</p>
+          <p>(3) η = 0.02：快方向 |1 − 0.02×50| = |1 − 1| = <strong>0</strong>（一步清零）；慢方向 |1 − 0.02×0.5| = |1 − 0.01| = <strong>0.99</strong>。解 0.99ⁿ = 0.1：n = lg 0.1 / lg 0.99 = −1/(−0.004365) ≈ 229.1，取整 <strong>230 步</strong>（0.99²³⁰ ≈ 0.099 ✓）。</p>
+          <p>对照 8.2：条件数同为 100，稳定界、慢方向步数完全相同——决定命运的只有特征值的比值与位置，不是绝对大小。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>
+        <p>换一组数重算 8.4 的动量：α = 0.95、ε = 0.01、恒定梯度 ∇ = 1、v₀ = 0。求：(1) 前三步 v₁、v₂、v₃；(2) 稳态 v<sub>∞</sub> 与放大倍数；(3) 对比 8.4 正文（α = 0.9、∇ = 2 → v<sub>∞</sub> = −0.2），说明 α 与 ∇ 各自如何影响终端速度。</p>
+      </div>
+      <details>
+        <summary>提示</summary>
+        <p>逐代 v<sub>t</sub> = 0.95v<sub>t−1</sub> − 0.01×1；稳态解 v<sub>∞</sub> = −ε∇/(1−α)。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p>(1) v₁ = 0.95×0 − 0.01 = <strong>−0.01</strong>；v₂ = 0.95×(−0.01) − 0.01 = −0.0095 − 0.01 = <strong>−0.0195</strong>；v₃ = 0.95×(−0.0195) − 0.01 = −0.018525 − 0.01 = <strong>−0.028525</strong>。</p>
+          <p>(2) 稳态：v<sub>∞</sub> = 0.95v<sub>∞</sub> − 0.01 ⟹ 0.05v<sub>∞</sub> = −0.01 ⟹ v<sub>∞</sub> = <strong>−0.2</strong>。放大倍数 1/(1−α) = 1/0.05 = <strong>20 倍</strong>（裸 SGD 每步 −0.01，稳态 −0.2）。</p>
+          <p>(3) 正文 v<sub>∞</sub> = −0.01×2/(1−0.9) = −0.02/0.1 = −0.2；本题 v<sub>∞</sub> = −0.01×1/(1−0.95) = −0.01/0.05 = −0.2——殊途同归。规律：v<sub>∞</sub> 与 ∇ 成正比、与 (1−α) 成反比。α 从 0.9 到 0.95，放大从 10 倍变 20 倍（代价是惯性影响从约 10 步拉长到约 20 步，调头更迟钝）；∇ 减半则终端速度等比减半。调 α 是调"放大与惯性"的权衡，改不了"速度与梯度成正比"这一基本面。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l3">L3 建模应用</span>
+        <p>你接手一个训练现场：训练 loss 在 2.0 附近剧烈上下震荡、长期不下降，验证 loss 同步抖动。画出"现象 → 诊断 → 改法"的完整决策树，覆盖至少三条不同根因，并说明每条分支的验证方法（怎么确认诊断对了）。</p>
+      </div>
+      <details>
+        <summary>提示</summary>
+        <p>先区分震荡的形态：发散型（越震越大甚至 NaN）、平台抖动型（均值不降、幅度稳定）、噪声地板型（缓慢下降但锯齿密）。分别对应本章哪三节？</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p><strong>决策树（参考答案）：</strong></p>
+          <p>① <strong>loss 越震越大、出现 NaN → 病态条件 + 学习率越界（8.2）</strong>：η 超过 2/λ_max，快方向误差每步放大（如 ×1.5）。改法：学习率砍半重试；加梯度裁剪。验证：η 减半后若立刻不再发散，确诊。</p>
+          <p>② <strong>均值不降、在固定区间来回弹 → 峡谷震荡（8.2 + 8.4）</strong>：曲率悬殊，负梯度在两壁间弹跳。改法：加动量 α = 0.9（震荡方向梯度正负交替，在指数平均中抵消），或换 Adam（快方向步长被 √v̂ 自动压缩）。验证：加动量后 loss 曲线振幅显著收窄且均值恢复下降，确诊。</p>
+          <p>③ <strong>整体下降但锯齿密集、后期原地抖动 → 噪声地板（8.1 + 8.3）</strong>：常数学习率 × 非零梯度噪声方差，参数在最优点附近随机游走。改法：启用学习率衰减（线性降到 η₀ 的 1%），或适度调大 batch（按 √m′ 律压噪声）。验证：衰减开启后抖动幅度随 η 同步缩小、loss 再下台阶，确诊。</p>
+          <p><strong>排查顺序理由：</strong>先看是否发散（会毁掉一切，最先排除），再看是否结构性震荡（动量/Adam 对症），最后处理噪声地板（衰减是收尾手段）。三条分支共享一个方法论：每次只改一个变量，用"改动后现象是否如预测变化"来闭环验证诊断。</p>
+        </div>
+      </details>
+    </div>
+
+    <!-- ===== 章末五件套之 3：自测 ===== -->
+    <h2><span class="sec-no">✍️</span>本章自测</h2>
+    <p class="quiz-hint">点击选项判分，答错会给出原因。</p>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 1</div>
+      <div class="q-stem">minibatch 大小从 100 增加到 10000，梯度估计的标准误大约如何变化？这说明了什么？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 缩小 100 倍——标准误与 m′ 成反比</li>
+        <li data-opt="b">B. 缩小 10 倍——标准误按 1/√m′ 下降，样本 ×100 只换精度 ×10，收益递减</li>
+        <li data-opt="c">C. 不变——标准误只取决于模型本身</li>
+        <li data-opt="d">D. 缩小 2 倍——样本量翻一倍标准误减半</li>
+      </ul>
+      <div class="quiz-explain">解析：B 对——SE = σ/√m′，√10000/√100 = 100/10 = 10，只缩小 10 倍；这是小批量划算的统计学根据。A 错：1/m′ 是方差的缩小比例，开根号后才是标准误。C 错：SE 明确依赖 m′。D 错：把"翻 100 倍"错当成"翻一倍"，比例完全不对。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="c">
+      <div class="q-no">自测 2</div>
+      <div class="q-stem">二次问题的 Hessian 特征值为 λ_max = 100、λ_min = 1，取 η = 0.025。10 步之后快方向的误差会变成原来的约多少倍？为什么？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 约 0.35 倍——η 偏小，误差正常收缩</li>
+        <li data-opt="b">B. 恰好 1 倍——误差原地踏步</li>
+        <li data-opt="c">C. 约 57.7 倍——η = 0.025 越过稳定界 2/λ_max = 0.02，每步误差乘 |1−2.5| = 1.5，1.5¹⁰ ≈ 57.7，发散</li>
+        <li data-opt="d">D. 约 0.001 倍——学习率越大收敛越快</li>
+      </ul>
+      <div class="quiz-explain">解析：C 对——稳定要求 η &lt; 0.02，0.025 越界；快方向因子 |1 − 0.025×100| = 1.5，10 步放大 1.5¹⁰ ≈ 57.67。A 错：0.35 是合法小步长下的收缩，不是这里的剧情。B 错：|1−ηλ| = 1 需要 ηλ = 0 或 2，0.025×100 = 2.5 两头都不沾。D 错：方向完全反了——越过稳定界后学习率越大发散越快。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="d">
+      <div class="q-no">自测 3</div>
+      <div class="q-stem">关于 SGD 的收敛条件与常数学习率，下列哪项正确？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 只要梯度估计无偏，常数学习率就能收敛到精确最优点</li>
+        <li data-opt="b">B. 收敛条件是 ∑η<sub>t</sub> &lt; ∞ 且 ∑η<sub>t</sub>² = ∞</li>
+        <li data-opt="c">C. 常数学习率后期震荡是因为 batch 太小，调大 batch 即可停下</li>
+        <li data-opt="d">D. 条件是 ∑η<sub>t</sub> = ∞ 且 ∑η<sub>t</sub>² &lt; ∞；常数 η 违反后者，因为最优点附近噪声方差不为零，参数永远做幅度 ∝ η 的随机游走</li>
+      </ul>
+      <div class="quiz-explain">解析：D 对——两个条件分别保证"走得远"与"停得下"；噪声消不掉只能靠 η<sub>t</sub> → 0 对冲。A 错：无偏只保证方向平均正确，方差仍在，常数步长把方差转成永久震荡。B 错：两个条件恰好写反了。C 错：大 batch 按 √m′ 律只能压低噪声、不能清零；要让跳动消失必须衰减 η。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="a">
+      <div class="q-no">自测 4</div>
+      <div class="q-stem">动量系数 α = 0.9、学习率 ε = 0.01、梯度恒为 2，稳态速度与"动量如何起作用"的正确说法是：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. v<sub>∞</sub> = −0.2，是裸 SGD 步长的 1/(1−α) = 10 倍；一致方向梯度在指数平均中累加，震荡方向梯度相互抵消</li>
+        <li data-opt="b">B. v<sub>∞</sub> = −0.02，与裸 SGD 相同——动量只平滑不改变速度</li>
+        <li data-opt="c">C. v<sub>∞</sub> = −0.2，放大 α = 0.9 倍；动量给每个参数配了独立学习率</li>
+        <li data-opt="d">D. v<sub>∞</sub> 不存在——有动量就不收敛</li>
+      </ul>
+      <div class="quiz-explain">解析：A 对——v<sub>∞</sub> = −ε∇/(1−α) = −0.02/0.1 = −0.2，是裸 SGD（−0.02）的 10 倍；峡谷底加速、峡谷壁抵消正是 8.4 的手算结论。B 错：平滑的代价与收益都是放大终端速度。C 错：放大倍数是 1/(1−α) = 10 而非 α = 0.9，且逐坐标学习率是 Adam 的事，动量仍共享单一 ε。D 错：恒定梯度下递推有封闭稳态，v<sub>t</sub> → −0.2。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 5</div>
+      <div class="q-stem">Adam 第一步（g = 2，β₁ = 0.9，β₂ = 0.999，ε = 0.001）算出 m₁ = 0.2、v₁ = 0.004。若省略偏差修正，直接更新 Δθ = −ε·m₁/√v₁，结果是约 −0.00316，比修正后的 −0.001 大三倍多。偏差修正为什么不可省？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 不修正会导致数值溢出，纯属浮点精度问题</li>
+        <li data-opt="b">B. m、v 从 0 启动、初期被压向 0，且二阶矩偏差（×1/1000）比一阶矩（×1/10）严重，开根号后比例失衡；除以 1−βᵗ 把估计拉回无偏</li>
+        <li data-opt="c">C. 偏差修正是为了省内存，与更新量大小无关</li>
+        <li data-opt="d">D. 修正只在第一步重要，第二步起就可以省掉</li>
+      </ul>
+      <div class="quiz-explain">解析：B 对——m̂₁ = 0.2/0.1 = 2、v̂₁ = 0.004/0.001 = 4 恰好还原真值；二阶矩冷启动偏差大两个数量级，√v 失真更严重，不修准则步长与方向都偏。A 错：这不是溢出，是系统性偏差。C 错：修正项是两个除法，与内存无关。D 错：1−β₂ᵗ 在 t = 10 时仍约 0.01、影响仍在，修正须随 t 衰减到可忽略才可省——而公式自动处理，无需手动省略。</div>
+    </div>
+
+    <!-- ===== 章末五件套之 4：三句话复述 ===== -->
+    <div class="retell">
+      <h3>🗣️ 用自己的话，三句话讲完本章</h3>
+      <p>对着空气（或室友）说出这三句。说卡壳的那句，回去重读对应小节。</p>
+      <details>
+        <summary>句1：这章解决什么问题？——</summary>
+        <div class="retell-answer">参考答案：第6、7章之后梯度已知、目标已定，但训练仍走不动、走不稳——本章回答"为什么"：目标只是抽样的经验风险（梯度有噪声），损失曲面病态（曲率悬殊），二者叠加让朴素梯度下降要么发散（η = 0.025 对界 0.02，10 步放大 57.7 倍）、要么爬行（慢方向 230 步才降 90%）。</div>
+      </details>
+      <details>
+        <summary>句2：核心机制是什么？——</summary>
+        <div class="retell-answer">参考答案：三层对症药——minibatch 用 √m′ 律在噪声与成本间取平衡；学习率衰减（∑η<sub>t</sub> = ∞、∑η<sub>t</sub>² &lt; ∞）让随机游走停得下；动量（一致方向放大 1/(1−α) 倍、震荡方向抵消）与 Adam（m̂/√v̂ 信噪比 + 偏差修正）给不同方向配不同速度。</div>
+      </details>
+      <details>
+        <summary>句3：它和前后章怎么分工？——</summary>
+        <div class="retell-answer">参考答案：第6章给反向传播算梯度、第7章把目标函数改合理，本章负责"用带噪声的梯度在病态曲面上走到好解"；8.6 指出有些病根在结构（BN 平滑曲面），把接力棒交给第9章卷积网络的结构设计与第11章的调参方法论。</div>
+      </details>
+    </div>
+
+    <!-- ===== 章末五件套之 5：间隔复习计划 ===== -->
+    <div class="review-plan">
+      <h3>🔁 间隔复习计划</h3>
+      <p>回忆本身比重读有效 10 倍。到点只做一件事：翻卡 + 重做标记题。</p>
+      <table>
+        <tr><th>时间点</th><th>复习内容</th><th>预计用时</th></tr>
+        <tr><td>第 1 天</td><td>概念卡 1–6 + 全部回忆卡（8.1 至 8.6 共 12 张）；重做 L2 第一题（λ_max = 50 的病态重算）</td><td>12 分钟</td></tr>
+        <tr><td>第 3 天</td><td>概念卡 3、4、6（条件数 / 动量 / Adam）+ 自测错题；重算动量前三步与 Adam 首步（m̂ = 2、v̂ = 4、Δθ ≈ −0.001）</td><td>8 分钟</td></tr>
+        <tr><td>第 7 天</td><td>三句话复述 + 重做 L2 第二题（α = 0.95 动量）；默写 SE = σ/√m′、稳定界 η &lt; 2/λ_max、收敛两条件</td><td>10 分钟</td></tr>
+        <tr><td>第 15 天</td><td>只做合上书挑战；能全过（尤其三个手算与 L3 诊断树）本章即毕业，进入第 9 章卷积网络</td><td>15 分钟</td></tr>
+      </table>
+    </div>
+
+    <!-- 合上书挑战 -->
+    <div class="final-challenge">
+      <h3>📕 合上书挑战</h3>
+      <p class="fc-sub">现在关掉这个页面，拿一张纸，凭记忆完成以下任务。全部做完再回来核对——这是本章真正的毕业考试。</p>
+      <ol id="challenge-list">
+        <li><span class="fc-check"></span>写出经验风险的定义与 SE = σ/√m′，算出 σ = 1 时 m′ = 1/100/10000 的标准误 1/0.1/0.01，并解释收益递减</li>
+        <li><span class="fc-check"></span>对 λ_max = 100、λ_min = 1 写出稳定界 η &lt; 0.02，手算 η = 0.025 时 10 步放大 1.5¹⁰ ≈ 57.7 倍、η = 0.01 时慢方向 230 步降 90%</li>
+        <li><span class="fc-check"></span>默写 SGD 收敛两条件（∑η<sub>t</sub> = ∞、∑η<sub>t</sub>² &lt; ∞），验证 η<sub>t</sub> = 0.1/t 满足、常数 η 违反哪一条、为什么</li>
+        <li><span class="fc-check"></span>对 α = 0.9、ε = 0.01、∇ = 2 手算动量 v₁ = −0.02、v₂ = −0.038、v₃ = −0.0542 与 v<sub>∞</sub> = −0.2，解释 10 倍放大从哪来</li>
+        <li><span class="fc-check"></span>对 g = 2、β₁ = 0.9、β₂ = 0.999、ε = 0.001 手算 Adam 首步（m₁ = 0.2、v₁ = 0.004、m̂ = 2、v̂ = 4、Δθ ≈ −0.001），并算出不修正时的 −0.00316</li>
+        <li><span class="fc-check"></span>画出"loss 震荡不下降"的诊断决策树：发散型 / 峡谷震荡型 / 噪声地板型各自的根因、改法与验证方法</li>
+        <li><span class="fc-check"></span>回答本章的主线问题：梯度都知道了，为什么训练还是走不动、走不稳？（一句话）</li>
+      </ol>
+    </div>
+
+    <div class="complete-zone">
+      <button class="btn-complete" id="btn-complete" onclick="markDone()">✓ 我已完成本章（含合上书挑战）</button>
+    </div>
+
+    <div class="chapter-nav">
+      <a href="chapter-07.html"><span class="nav-dir">← 上一章</span>第7章 正则化</a>
+      <a href="chapter-09.html" class="next"><span class="nav-dir">下一章 →</span>第9章 卷积网络</a>
+    </div>
+
+  </div>
+</div>
+
+<footer class="footer">
+  <div class="wrap">第8章 优化 · 深度学习互动讲义 · 基于 Goodfellow et al.《深度学习》(2016)</div>
+</footer>
+
+<script src="/lectures-assets/mermaid.min.js"></script>
+<script>
+mermaid.initialize({
+  startOnLoad: true,
+  theme: "base",
+  themeVariables: {
+    primaryColor: "#e3edf7",
+    primaryBorderColor: "#1d5f9e",
+    primaryTextColor: "#1d5f9e",
+    lineColor: "#5c554b",
+    secondaryColor: "#fbeedd",
+    tertiaryColor: "#f5f1e8",
+    fontFamily: "-apple-system, PingFang SC, sans-serif",
+    fontSize: "14px"
+  },
+  flowchart: { curve: "linear", htmlLabels: false }
+});
+</script>
+<script>
+// 自测题判分
+document.querySelectorAll(".quiz-block").forEach(block => {
+  const answer = block.dataset.answer;
+  const explain = block.querySelector(".quiz-explain");
+  block.querySelectorAll(".quiz-opts li").forEach(li => {
+    li.addEventListener("click", () => {
+      const opts = block.querySelectorAll(".quiz-opts li");
+      opts.forEach(o => o.classList.add("disabled"));
+      if (li.dataset.opt === answer) {
+        li.classList.add("correct");
+      } else {
+        li.classList.add("wrong");
+        block.querySelector(`[data-opt="${answer}"]`).classList.add("correct");
+      }
+      explain.classList.add("show");
+    });
+  });
+});
+
+// 合上书清单打勾
+document.querySelectorAll("#challenge-list li").forEach(li => {
+  li.addEventListener("click", () => li.classList.toggle("checked"));
+});
+
+// 完成标记 → localStorage（本系列键 dl_progress_v1，章号为字符串 "8"）
+const KEY = "dl_progress_v1";
+function loadProgress() {
+  try { return JSON.parse(localStorage.getItem(KEY)) || {}; } catch (e) { return {}; }
+}
+const progress = loadProgress();
+const btn = document.getElementById("btn-complete");
+if (progress["8"] && progress["8"].done) {
+  btn.textContent = "✓ 已完成 · 再次点击重置";
+  btn.classList.add("done");
+}
+function markDone() {
+  const p = loadProgress();
+  if (p["8"] && p["8"].done) {
+    delete p["8"];
+    btn.textContent = "✓ 我已完成本章（含合上书挑战）";
+    btn.classList.remove("done");
+  } else {
+    p["8"] = { done: true, completedAt: Date.now(), reviewsDone: 0 };
+    btn.textContent = "✓ 已完成 · 复习提醒已开启";
+    btn.classList.add("done");
+  }
+  localStorage.setItem(KEY, JSON.stringify(p));
+}
+</script>
+
+</body>
+</html>

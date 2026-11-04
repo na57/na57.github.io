@@ -1,0 +1,825 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第10章 指令级并行 · 编译原理互动讲义</title>
+<link rel="stylesheet" href="/lectures-assets/style.css">
+</head>
+<body>
+
+<nav class="topbar">
+  <div class="topbar-inner">
+    <span class="brand"><a href="index.html" style="color:inherit">← 学习地图</a></span>
+    <span class="crumb">阶段③ · 后端与优化 / 第10章</span>
+  </div>
+</nav>
+
+<div class="wrap">
+
+  <div class="lecture-head">
+    <span class="ch-label">CHAPTER 10 · 后端与优化</span>
+    <h1>指令级并行</h1>
+    <p class="lead">第9章把中间代码收拾干净了，但生成的指令若还按源程序顺序一条条发，流水线里全是气泡。本章回答：硬件每个周期能发多条指令，编译器怎么重排代码，把流水线填满？</p>
+  </div>
+
+  <!-- ===== 章首四件套之 1：全书定位 ===== -->
+  <div class="position-bar">
+    <strong>本章在主线上的位置：</strong>第9章给了干净的中间代码与数据流事实 → <u>本章把这些事实变成指令发射顺序，喂饱超标量流水线</u> → 第11章因此能把并行从指令级抬到线程级与数据级。<br>
+    第10章回答主线上的第3个问题（后半）：<strong>硬件每个周期能发多条指令，编译器怎么重排代码把流水线填满？</strong>
+    <div class="map-inline">
+      <span class="node">① 前端：词法与语法 Ch1–4</span><span class="arrow">→</span>
+      <span class="node">② 语义与中间代码 Ch5–7</span><span class="arrow">→</span>
+      <span class="node here">③ 后端与优化 Ch8–11 ← 本章</span><span class="arrow">→</span>
+      <span class="node">④ 全书收束 Ch12</span>
+    </div>
+  </div>
+
+  <!-- ===== 章首四件套之 2：学习目标 ===== -->
+  <div class="objectives">
+    <h4>🎯 学完本章，合上书你应该能：</h4>
+    <ol>
+      <li>说出流水线、超标量、VLIW 三者的区别，以及谁负责找并行（硬件还是编译器）。</li>
+      <li>对给定指令序列判定并分类 RAW / WAR / WAW 三种依赖，指出哪些可重命名消除。</li>
+      <li>对一个 5–6 条指令的基本块画出依赖 DAG，并算出关键路径长度。</li>
+      <li>给定延迟表执行列表调度，逐周期写出发射集合，并与原顺序的周期数对比。</li>
+      <li>对一个简单循环分别算资源约束下界与依赖约束下界，取 max 得启动间距，写出软件流水稳态。</li>
+      <li>解释为什么单核指令级并行会见顶，以及它把接力棒交给了谁。</li>
+    </ol>
+  </div>
+
+  <div class="lecture">
+
+    <!-- ===== 章首四件套之 3：推导主线图 ===== -->
+    <div class="figure">
+      <div class="mermaid">
+flowchart TB
+  A["硬件每周期能发多条指令"] --> B["问题：按源顺序发射，常因等待而空转"]
+  B --> C["先找出谁先谁后：三类依赖分析"]
+  C --> D["画依赖 DAG，算出关键路径"]
+  D --> E["块内重排：列表调度逐周期填槽"]
+  E --> F["块内不够：跨迭代借指令，软件流水"]
+  F --> G["跨基本块：踪迹调度全局重排"]
+  G --> H["代价：单核 ILP 见顶，功耗墙逼向线程级并行"]
+  classDef hot fill:#fbeedd,stroke:#c4651f,stroke-width:2.5px,color:#c4651f;
+  classDef danger fill:#fae9e7,stroke:#b03a2e,stroke-width:2.5px,color:#b03a2e;
+  class E hot;
+  class F hot;
+  class H danger;
+      </div>
+      <div class="caption">本章推导主线：依赖圈出自由度，DAG 给出地图，列表调度填满基本块，软件流水跨迭代借兵，踪迹调度跨块借兵，最后撞上功耗墙——通向第11章。</div>
+    </div>
+
+    <!-- ============================================================
+      10.1 处理器背景
+    ============================================================ -->
+    <h2><span class="sec-no">10.1</span>编译器为什么要懂流水线：停顿的代价</h2>
+
+    <p>第9章的优化省的是「指令条数」，本章省的是「周期」。现代处理器把一条指令拆成取指、译码、执行、访存、写回五级<span class="term">流水线</span>（Pipeline）：像装配线一样，每条指令走一格，理想情况下每个周期完工一条。但「理想」常被打破——下一条指令需要的结果还没算出来，流水线只能空转，这叫<span class="term">停顿</span>（Stall），空转的周期叫气泡。</p>
+
+    <p>停顿有多贵？给一组具体数字感受量级：加法结果下一周期可用（等 0–1 周期）；乘法约 2–3 周期；一次 L1 缓存命中的 load 约 2–4 周期；<strong>一次 load 未命中、要到主存取数，停顿可达 50 周期以上</strong>。也就是说，一条没安排好的 load，能吃掉 50 条指令的发射机会。编译器排指令的首要目标就是把「等」的时间填上别的活。</p>
+
+    <p>谁来填，分出三种机器：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>架构</th><th>每周期发射</th><th>谁找并行</th><th>编译器的角色</th></tr>
+        <tr><td>单发射流水线</td><td>至多 1 条</td><td>无需找</td><td>排好顺序减少停顿即可</td></tr>
+        <tr><td><span class="term">超标量</span>（Superscalar）</td><td>多条（如 4 条）</td><td><strong>硬件</strong>运行时动态检查依赖、乱序发射</td><td>把互相独立的指令放近一点，硬件才好找</td></tr>
+        <tr><td><span class="term">超长指令字</span>（VLIW）</td><td>多条，打包成一条长指令</td><td><strong>编译器</strong>静态打包，硬件照单执行</td><td>全部责任：排错一拍就是错程序</td></tr>
+      </table>
+    </div>
+
+    <p>无论哪种，编译器能贡献的都是同一件事：<strong>在依赖允许的范围内，把「等结果」的指令和「不相关」的指令交换位置</strong>。这就是指令调度，也是本章的主战场。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>把处理器想成一间每周期能开 n 个窗口的售票厅，编译器是排队引导员：它不能改变谁必须排在谁后面（依赖），但可以让互不相干的顾客并排办——窗口利用率就是指令级并行度。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>以为「超标量有乱序硬件，编译器调度就不重要了」。错：硬件的观察窗口只有几十条指令，跨基本块、跨迭代的并行它看不见；而且访存延迟（50 周期级）远超硬件能掩盖的范围。越是 VLIW 越依赖编译器，越是长延迟操作越依赖编译器。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 10.1-1</div>
+              <div class="q-text">超标量与 VLIW 的本质区别是什么？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              都是每周期发多条，区别在于谁来挑：超标量由硬件运行时动态挑（可乱序），VLIW 由编译器静态打包成长指令、硬件顺序照做。后者把全部正确性责任压给编译器。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 10.1-2</div>
+              <div class="q-text">什么叫停顿？为什么 load 未命中格外可怕？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              停顿：后继指令所需结果尚未产生，流水线被迫插入气泡空转。load 未命中要去主存取数，延迟约 50 周期起步，相当于白白烧掉几十条指令的发射机会。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============================================================
+      10.2 三类依赖
+    ============================================================ -->
+    <h2><span class="sec-no">10.2</span>三条锁链：写后读、读后写、写后写</h2>
+
+    <p>要重排，先得知道哪些顺序动不得。两条指令之间的顺序约束统称依赖，按读写先后分三类。每条都给一个最小例子（同一行注释里 → 表示「必须先于」）：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>依赖</th><th>别名</th><th>最小例子</th><th>违反后果</th></tr>
+        <tr><td><span class="term">数据依赖</span> RAW（写后读）</td><td>真依赖</td><td>I1: R1 = R2 + R3 → I2: R4 = R1 × 2</td><td>I2 先跑会读到 R1 的旧值，结果直接错</td></tr>
+        <tr><td><span class="term">反依赖</span> WAR（读后写）</td><td>名依赖</td><td>I1: R4 = R2 + R3 → I2: R2 = R5 × 2</td><td>I2 先跑会覆盖 R2，I1 再读就错了</td></tr>
+        <tr><td><span class="term">输出依赖</span> WAW（写后写）</td><td>名依赖</td><td>I1: R1 = R2 + R3 → I2: R1 = R4 × R5</td><td>顺序反过来，R1 最终留下错误的值</td></tr>
+      </table>
+    </div>
+
+    <p>三类里只有 RAW 是<strong>数据真的要从一条指令流向另一条</strong>；WAR 与 WAW 只是「撞了同一个寄存器名」，把其中一条改写到别的寄存器（<span class="term">寄存器重命名</span>）就能解开——所以它们叫「名依赖」。编译器和乱序硬件都在拼命消除名依赖，真依赖则无法消除，只能等。</p>
+
+    <p>完整例子（本章调度贯穿例）：一个基本块 6 条指令，源程序顺序如下，延迟写在右侧：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>指令</th><th>操作</th><th>延迟（周期）</th><th>它身上的依赖</th></tr>
+        <tr><td>I1</td><td>LD R1, a</td><td>2</td><td>—</td></tr>
+        <tr><td>I2</td><td>LD R2, b</td><td>2</td><td>—（与 I1 无依赖）</td></tr>
+        <tr><td>I3</td><td>ADD R4, R1, 1</td><td>1</td><td>RAW：等 I1 的 R1</td></tr>
+        <tr><td>I4</td><td>ADD R5, R2, R4</td><td>1</td><td>RAW：等 I2 的 R2、I3 的 R4</td></tr>
+        <tr><td>I5</td><td>MUL R3, R1, R2</td><td>2</td><td>RAW：等 I1 的 R1、I2 的 R2</td></tr>
+        <tr><td>I6</td><td>ST c, R3</td><td>1</td><td>RAW：等 I5 的 R3</td></tr>
+      </table>
+    </div>
+
+    <p>把每条指令画成节点、每条依赖画成「先 → 后」的边，得到<span class="term">依赖 DAG</span>（Data Dependence Graph）：</p>
+
+    <div class="figure">
+      <div class="mermaid">
+flowchart TB
+  I1["I1 LD R1 a 延迟2"] --> I3["I3 ADD R4 R1 1 延迟1"]
+  I1 --> I5["I5 MUL R3 R1 R2 延迟2"]
+  I2["I2 LD R2 b 延迟2"] --> I4["I4 ADD R5 R2 R4 延迟1"]
+  I2 --> I5
+  I3 --> I4
+  I5 --> I6["I6 ST c R3 延迟1"]
+  classDef danger fill:#fae9e7,stroke:#b03a2e,stroke-width:2.5px,color:#b03a2e;
+  class I1,I5,I6 danger;
+      </div>
+      <div class="caption">图 10.1　六条指令的依赖 DAG。红色是关键路径 I1 → I5 → I6：2 + 2 + 1 = 5 周期，无论怎么调度都不可能比这更快。</div>
+    </div>
+
+    <p><span class="term">关键路径</span>（Critical Path）是 DAG 中「延迟之和最长」的路径——它给出这个基本块执行时间的<strong>下界</strong>。这里 I1→I5→I6 = 5 周期，I2→I4 = 3 周期，所以任何调度的最好成绩是 5 周期。接下来 10.3 就看能不能达到它。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>依赖 DAG 是调度的「地图」：边是禁令，没边的两条指令就是可以并行的自由。调度问题从此变成一道图论题——在资源有限（每周期发射槽有限）的前提下，给每个节点分配最早的合法周期。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>把三种依赖一视同仁、全部死守。错：WAR、WAW 是名依赖，寄存器重命名后顺序即可交换；只有 RAW 是真依赖。死守名依赖会白白放弃大量并行机会——乱序硬件里的重命名寄存器堆，干的就是这件事。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 10.2-1</div>
+              <div class="q-text">RAW、WAR、WAW 三种依赖各因何产生？哪些可以消除、怎么消？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              RAW：前者写、后者读同一位置（真数据流）；WAR：前者读、后者写；WAW：两者都写。WAR/WAW 只是撞名，寄存器重命名即可消除；RAW 是真依赖，只能等待，无法消除。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 10.2-2</div>
+              <div class="q-text">什么是关键路径？它对调度意味着什么？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              依赖 DAG 中延迟之和最长的路径。它是该基本块执行周期的下界：任何调度都不可能比它快；调度若达到它，就是最优。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============================================================
+      10.3 列表调度
+    ============================================================ -->
+    <h2><span class="sec-no">10.3</span>列表调度：逐周期把发射槽填满</h2>
+
+    <p>有了地图，开始排班。<span class="term">列表调度</span>（List Scheduling）是最常用的基本块调度算法，思路一句话：<strong>逐周期走，每周期从「就绪」的指令里按优先级挑，直到填满发射槽</strong>。指令就绪 = 它的所有前驱都已发射且延迟已满足。常用优先级：节点到 DAG 出口的最长路径（越在关键路径上越先排）。</p>
+
+    <p>沿用图 10.1 的例子，机器为<strong>双发射</strong>（每周期至多 2 条）。约定：指令在周期 t 发射、延迟 L，结果在周期 t + L 可供使用。各节点优先级（到出口最长路）：I1 = 2+2+1 = 5，I2 = max(2+1, 2+2+1) = 5，I5 = 2+1 = 3，I3 = 1+1 = 2，I4 = 1，I6 = 1。</p>
+
+    <p><strong>完整演示（一步不跳）：</strong></p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>周期</th><th>就绪集合（为什么就绪）</th><th>发射</th><th>说明</th></tr>
+        <tr><td>1</td><td>I1、I2（无前驱）</td><td>I1、I2</td><td>两个槽都填满</td></tr>
+        <tr><td>2</td><td>空（I3、I5 要等 R1/R2，I1、I2 的结果周期 3 才可用）</td><td>—（气泡）</td><td>load 延迟 2，没办法，等</td></tr>
+        <tr><td>3</td><td>I3（R1 可用）、I5（R1、R2 可用）</td><td><strong>I5、I3</strong></td><td>I5 优先级 3 &gt; I3 的 2，先挑 I5；两槽都填</td></tr>
+        <tr><td>4</td><td>I4（R4：I3 于周期 3 发射、延迟 1 → 周期 4 可用；R2 早已可用）</td><td>I4</td><td>I6 要等 R3（周期 5 才可用），本周期只有一个能发</td></tr>
+        <tr><td>5</td><td>I6（R3：I5 于周期 3 发射、延迟 2 → 周期 5 可用）</td><td>I6</td><td>收尾</td></tr>
+      </table>
+    </div>
+
+    <p><strong>与原始顺序对比。</strong>若编译器不调度、硬件按源序 I1…I6 顺序发射（同样双发射、不许越过未就绪者）：周期 1 发 I1、I2；周期 2 等 load，气泡；周期 3 发 I3（I4 要等 R4，堵在后面）；周期 4 发 I4、I5（I5 的 R1、R2 周期 3 已可用）；周期 5 等 I6（R3 要周期 6 可用），气泡；周期 6 发 I6。<strong>共 6 周期。列表调度 5 周期，省下 1 周期（17%），且恰好达到关键路径下界 5——已达最优。</strong>差别只在周期 3 那次选择：原序先发了不重要的 I3，把关键的 I5 推到周期 4，一路连累 I6。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>列表调度的全部智慧在优先级：让「再等就来不及」的指令（关键路径上的）先走，让「反正不急」的指令去填缝。它不一定最优（调度本身是 NP 难的），但贪心 + 好优先级在实践中几乎总能逼近关键路径下界。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>以为「发射槽填得越满越好」。错：还要盯寄存器压力——把更多 load 提前意味着更多值同时活着，寄存器不够就要溢出到内存，反而引入新的长延迟操作。调度与寄存器分配互相牵扯，这是第8章与本章的接缝。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 10.3-1</div>
+              <div class="q-text">列表调度每周期的三个动作是什么？指令何时算「就绪」？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              ① 更新就绪集合；② 按优先级挑选直到填满发射槽；③ 发射并推进时钟。就绪 = 所有前驱都已发射且其延迟已满足（结果可用）。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 10.3-2</div>
+              <div class="q-text">为什么常用「到出口的最长路径」当优先级？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              最长路径大的节点在（或靠近）关键路径上，它晚一拍整个块就晚一拍；让它先走，等于优先保住下界。非关键节点有松弛时间，晚发无妨，正好用来填槽。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============================================================
+      10.4 软件流水
+    ============================================================ -->
+    <h2><span class="sec-no">10.4</span>块内榨干了怎么办：软件流水与启动间距</h2>
+
+    <p>基本块通常只有几条到几十条指令，并行空间很小。真正的肥羊还是循环：迭代之间往往互不依赖，可以把第 k+1 次迭代的指令提前、和第 k 次迭代的尾巴<strong>叠在一起执行</strong>。这就是<span class="term">软件流水</span>（Software Pipelining）：像硬件流水线那样，把循环体分成几级，稳态时每级同时在跑不同迭代。</p>
+
+    <p>示例循环：for (i = 0; i &lt; n; i++) a[i] = a[i] * 2 + b[i];　展开成每次迭代的五条指令（地址递增并入）：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>指令</th><th>操作</th><th>延迟</th><th>用到的部件</th></tr>
+        <tr><td>M1</td><td>LD R1, a[i]</td><td>1</td><td>访存</td></tr>
+        <tr><td>M2</td><td>LD R2, b[i]</td><td>1</td><td>访存</td></tr>
+        <tr><td>M3</td><td>MUL R1, R1, 2</td><td>1</td><td>ALU</td></tr>
+        <tr><td>M4</td><td>ADD R1, R1, R2</td><td>1</td><td>ALU</td></tr>
+        <tr><td>M5</td><td>ST a[i], R1</td><td>1</td><td>访存</td></tr>
+      </table>
+    </div>
+
+    <p>每隔多少周期能启动一次新迭代？这个数叫<span class="term">启动间距</span>（Initiation Interval, II）。它有两个下界，各算一遍取 max：</p>
+
+    <div class="formula">II ≥ max（ 资源约束下界 , 依赖约束下界 ）</div>
+
+    <p><strong>资源约束下界：</strong>设机器有 1 个访存端口、2 个 ALU。每次迭代要 3 次访存（M1、M2、M5），端口每周期只能服务 1 次 → 每迭代至少 3 周期；ALU 每迭代 2 次、有 2 个 → 至少 1 周期。资源下界 = max(3, 1) = <strong>3</strong>。</p>
+
+    <p><strong>依赖约束下界：</strong>看跨迭代的依赖回路。本例 a[i] 各写各的，迭代间无真依赖；唯一回路是 i 自身的递增（延迟 1）→ 依赖下界 = 1。于是 II = max(3, 1) = <strong>3</strong>。</p>
+
+    <p><strong>流水化后的稳态循环体</strong>（3 个周期为一个节拍，第 k 次迭代在节拍内走完全程；上标表示属于哪次迭代）：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>周期</th><th>发射的指令</th><th>解读</th></tr>
+        <tr><td>3k</td><td>M1<sup>(k)</sup>：LD a[i]（第 k 次迭代开工）</td><td>访存端口被占</td></tr>
+        <tr><td>3k+1</td><td>M2<sup>(k)</sup>：LD b[i]　＋　M3<sup>(k)</sup>：MUL（R1 已就绪）</td><td>1 访存 + 1 ALU，第 k 次迭代推进两级</td></tr>
+        <tr><td>3k+2</td><td>M4<sup>(k)</sup>：ADD　＋　M5<sup>(k−1)</sup>：ST（<strong>上一次</strong>迭代的结尾）</td><td>第 k−1 次迭代在此收工</td></tr>
+      </table>
+    </div>
+
+    <p>稳态时每 3 周期完工一次迭代，访存端口每个周期都在干活——资源被填满，达到了资源下界，这就是最优。循环开始前要有一段「预热」（prologue）把流水线灌满，结束后有一段「排空」（epilogue）收尾。对比一下：不做软件流水、只做迭代内调度，五条指令链式依赖（M1→M3→M4→M5 加 M2→M4）每次迭代也要约 3 周期，看似相同——但迭代一多，软件流水让后续迭代提前开工，延迟被彻底藏起来，而朴素的逐迭代执行永远有装不满的槽。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>软件流水把「迭代」当成流水线上的工件：II 是节拍，资源下界来自「机器每个周期能干多少活」，依赖下界来自「一个迭代最快多久能交货」。取 max 是因为两个约束谁也绕不开——这与关键路径的思想一脉相承，只是战场从一个基本块放大到整个循环。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>以为「迭代展开 = 软件流水」。错：展开只是把多次迭代复制进同一个大块，块内再调度，仍受限于块内并行；软件流水是<strong>错相位重叠</strong>——同一时刻不同迭代各跑一级。展开常作为软件流水的前置手段，但两者不是一回事。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 10.4-1</div>
+              <div class="q-text">启动间距 II 的两个下界各怎么算？最后取什么？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              资源下界：每迭代对各部件的需求量 ÷ 部件个数，取最大；依赖下界：跨迭代依赖回路的延迟和 ÷ 回路跨越的迭代距离，取最大。II 取两者之 max。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 10.4-2</div>
+              <div class="q-text">软件流水的稳态循环体里，同一周期的指令有什么特点？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              同一周期发射的指令来自<strong>不同迭代</strong>的不同级（如第 k 次的 LD 与第 k−1 次的 ST），互不依赖、正好填满资源。循环前后各有一段预热与排空代码。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============================================================
+      10.5 全局调度与代价
+    ============================================================ -->
+    <h2><span class="sec-no">10.5</span>跨基本块借兵：踪迹调度与单核的天花板</h2>
+
+    <p>基本块内调度受块长所限，软件流水只管循环内层。分支之间呢？<span class="term">踪迹调度</span>（Trace Scheduling）的思路：用剖面信息找出最常走的执行路径（<span class="term">踪迹</span>，Trace，可横跨多个基本块），把整条踪迹当成一个超大块来调度，被挪进/挪出踪迹的指令在非踪迹路径上补补偿代码。热点路径因此大幅缩短，代价是冷路径变长、代码膨胀，且调度器要为每条越界的指令记账。</p>
+
+    <p>然而把所有招式都用上，单核指令级并行仍在世纪之交撞了墙：发射宽度做到 4–6 就到顶（依赖检查电路复杂度随宽度平方增长），主频再往上推功耗爆炸——「功耗墙」。典型程序的持续 IPC 也就 2 左右。要继续快，只能换维度：多个核跑多线程（线程级并行）、一条指令处理一批数据（数据级并行，SIMD/向量）——这正是第11章的战场，而本章学到的依赖分析与调度思想会原样搬过去。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>本章所有技术是一条链：依赖分析给自由，DAG 给地图，列表调度填块内，软件流水跨迭代，踪迹调度跨分支——每一步都在回答「还能从哪里再借一条独立的指令」。借不到的那天，就是换维度的那天。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>以为「发射宽度越宽机器越快」。错：宽度只是上限，实际 IPC 被依赖、分支误预测、访存延迟三重压制；宽度翻倍而程序没有足够并行性，只是多了一片空转的发射槽和翻倍的功耗。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 10.5-1</div>
+              <div class="q-text">踪迹调度相对基本块调度多了什么、付出什么代价？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              多了：沿热点路径跨基本块重排的自由，热点大幅缩短。代价：冷路径插入补偿代码、代码膨胀，且依赖剖面信息准确。</div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 10.5-2</div>
+              <div class="q-text">单核 ILP 为什么会见顶？之后性能从哪来？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              依赖检查复杂度随发射宽度平方增长，主频提升撞功耗墙，程序本身并行度有限（IPC 约 2）。之后靠线程级并行（多核）与数据级并行（SIMD/向量）——第11章的主题。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============================================================
+      概念卡
+    ============================================================ -->
+    <h2><span class="sec-no">🃏</span>概念卡：本章概念的一分钟画像</h2>
+    <p>翻面前先自问：这个概念我能用一句话讲清楚吗？</p>
+    <div class="flip-grid">
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 1</div>
+            <div class="q-text">数据依赖 RAW（写后读）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">前者写某位置、后者读同一位置的真数据流约束。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">划出调度绝不可逾越的顺序红线。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">接力赛：棒没交到，下一棒不能跑。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为也能像名依赖一样重命名消掉——真依赖只能等。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">依赖 DAG 的边、关键路径、就绪判定全靠它。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 2</div>
+            <div class="q-text">反依赖与输出依赖 WAR / WAW</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">读后写 / 写后写：两条指令撞了同一个名字（寄存器）。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">识别出「假红线」，重命名后即可并行。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">两个人抢同一块白板；再发一块白板就不用排队。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">与 RAW 一视同仁死守顺序，白白放弃并行。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">寄存器重命名、乱序硬件、VLIW 静态打包。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 3</div>
+            <div class="q-text">依赖 DAG（Dependence DAG）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">以指令为节点、依赖为有向边的无环图。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">把「谁先谁后」从文字变成可计算的图结构。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">施工的工序图：没连线的工序可以并行开工。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为有环——基本块内无控制流回边，依赖图必无环。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">一切指令调度算法的输入。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 4</div>
+            <div class="q-text">关键路径（Critical Path）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">依赖 DAG 上延迟之和最长的路径。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">给出基本块执行周期的硬下界。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">工程的最长工序链：它不完工，工程完不了。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为只是估算——它是任何调度都突破不了的下界。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">列表调度的优先级依据、调度质量的验收标准。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 5</div>
+            <div class="q-text">列表调度（List Scheduling）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">逐周期从就绪指令中按优先级挑选、填满发射槽的贪心调度。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">把依赖 DAG 变成具体的发射时刻表。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">急诊分诊台：每周期先看谁能治，再挑最急的治。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为贪心必最优——调度是 NP 难，它靠的是好优先级逼近。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">几乎所有编译器基本块调度的默认算法。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 6</div>
+            <div class="q-text">软件流水（Software Pipelining）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">让不同迭代错相位重叠执行，稳态每 II 周期完工一次迭代。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">基本块太短，并行度不够，向循环的迭代之间借。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">食堂流水线：第一个人取菜时，第二个人已经在选餐。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">与循环展开混为一谈——展开是复制，流水是重叠。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">数值计算内层循环、VLIW 与 DSP 编译器的看家本领。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 7</div>
+            <div class="q-text">启动间距 II（Initiation Interval）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">软件流水稳态下，相邻两次迭代启动之间的周期数。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">一个数概括循环能做到多快：II 越小节拍越快。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">流水线的节拍器。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">只看资源下界忘了依赖回路，或反之——必须取两者 max。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">评估循环优化上限、指导展开倍数的选取。</span></div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- ============================================================
+      分层习题
+    ============================================================ -->
+    <h2><span class="sec-no">📝</span>分层习题</h2>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>判断并说明理由：「WAR 与 WAW 依赖和 RAW 一样，都是调度中不可违反的硬约束。」</div>
+      <details>
+        <summary>提示</summary>
+        <p>想想三类依赖的起因：是「数据真的流动」，还是「只是名字撞车」？</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">错误。RAW 是真依赖：数据从一条指令流向另一条，顺序不可改。WAR 与 WAW 是名依赖：冲突只因两条指令恰好用同一个寄存器名，寄存器重命名（把其中一条改写到一个空闲寄存器）之后顺序即可交换。乱序硬件内部的重命名寄存器堆、编译器的寄存器分配都在消名依赖。把三者一视同仁会白白牺牲并行度。</div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>下列说法哪个正确？A. VLIW 靠硬件运行时找并行；B. 超标量靠编译器静态打包指令；C. VLIW 把调度与正确性责任全部交给编译器；D. 单发射流水线不存在停顿。</div>
+      <details>
+        <summary>提示</summary>
+        <p>对照 10.1 的三行对比表，逐项检查「谁找并行」。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">C 对：VLIW 由编译器静态把多条独立指令打包成长指令字，硬件照单发射，排错了程序就错。A 错：靠硬件找并行的是超标量；B 错：静态打包的是 VLIW；D 错：单发射同样有数据冒险与 load 停顿，只是没有发射宽度问题。</div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>基本块五条指令：J1: LD R1, x（延迟2）；J2: LD R2, y（延迟2）；J3: ADD R3, R1, R2（延迟1）；J4: MUL R4, R3, R2（延迟2）；J5: ST z, R4（延迟1）。画出依赖 DAG，求关键路径，并给出双发射机器上的最优调度与总周期数。</div>
+      <details>
+        <summary>提示</summary>
+        <p>先列每条指令的 RAW 前驱；再从出口往回算最长路；最后用列表调度逐周期填。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">依赖边：J1→J3（R1），J2→J3（R2），J2→J4（R2），J3→J4（R3），J4→J5（R4）。DAG：顶层 J1、J2；中层 J3；再 J4；底 J5。<br>关键路径：候选 J1→J3→J4→J5 = 2+1+2+1 = 6；J2→J3→J4→J5 = 6；J2→J4→J5 = 2+2+1 = 5。关键路径长 <strong>6</strong>。<br>列表调度（约定周期 t 发射、延迟 L 则结果周期 t+L 可用）：周期1 就绪 {J1,J2} → 发 J1、J2；周期2 无就绪（结果周期3 可用）→ 气泡；周期3 就绪 {J3} → 发 J3；周期4 就绪 {J4}（R3 周期4 可用、R2 周期3 已可用）→ 发 J4；周期5 无就绪（R4 周期6 可用）→ 气泡；周期6 就绪 {J5} → 发 J5。总 6 周期 = 关键路径下界，已达最优。</div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>循环 for (i=0;i&lt;n;i++) s = s + a[i]; 每迭代三条指令：LD t, a[i]（访存，延迟2）；ADD s, s, t（ALU，延迟1）；i 递增并入地址计算（ALU，延迟1）。机器有 1 个访存端口、2 个 ALU。求 II 的资源下界、依赖下界与最终值。</div>
+      <details>
+        <summary>提示</summary>
+        <p>资源：数每迭代对每个部件的需求。依赖：找跨迭代回路——注意 s 是累加器，本次迭代的 ADD 要等上一次的 ADD。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">资源下界：每迭代访存 1 次 ÷ 1 端口 = 1；ALU 2 次 ÷ 2 = 1 → 资源下界 = 1。<br>依赖下界：回路在 s 上——第 k 次迭代的 ADD s 依赖第 k−1 次的 ADD s（RAW），回路延迟 1、跨距 1 次迭代 → 依赖下界 = 1 ÷ 1 = 1。（load 的延迟 2 不在回路上，只影响每级长度，不影响节拍。）<br>II = max(1, 1) = <strong>1</strong>：理想情况下每个周期就能启动一次新迭代——这就是累加循环能被高度流水的原因。若加法延迟改为 2，则依赖下界变为 2，II = 2，s 回路立刻成为瓶颈。</div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l3">L3 建模应用</span>某 VLIW 机器每周期可发 1 条访存 + 1 条 ALU。循环体四条指令：K1: LD R1, p（访存，延迟2）；K2: ADD R2, R1, R5（ALU，延迟1，R5 循环不变）；K3: ST q, R2（访存，延迟1）；K4: ADD p, p, 4（ALU，延迟1，指针自增）。要求：列出依赖（含跨迭代），算 II 的两个下界，写出 II=2 的软件流水稳态（每条指令标注属于哪次迭代），并说明预热/排空各做什么。</div>
+      <details>
+        <summary>提示</summary>
+        <p>K4 是跨迭代回路的载体（p 自增，下次迭代的 K1 用 p）；资源上每迭代 2 访存 vs 1 端口是硬约束。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">依赖：迭代内 K1→K2→K3（RAW 链）；跨迭代 K4→(下次)K1（p 的 RAW 回路，延迟 1）。资源下界：访存 2 次/迭代 ÷ 1 端口 = <strong>2</strong>；ALU 2 次 ÷ 1 槽（每周期 1 ALU）= 2 → 资源下界 2。依赖下界：p 回路延迟 1 ÷ 跨距 1 = 1。II = max(2,1) = <strong>2</strong>。<br>稳态（第 k 次迭代在偶数节拍开工）：周期 2k：访存槽 K1<sup>(k)</sup>（LD，用 p 的当前值）；ALU 槽 K4<sup>(k−1)</sup>（上一次迭代的指针自增，为下一次备好 p）。周期 2k+1：访存槽 K3<sup>(k−1)</sup>（ST，R2 来自上一次的 K2）；ALU 槽 K2<sup>(k)</sup>（R1 需等 LD 延迟 2：K1 于 2k 发射、2k+2 才可用？——注意：LD 延迟 2 意味着 K2 须等到 2k+2，故实际把 K2 排到下一节拍的 ALU 槽：周期 2k+1 的 ALU 改放 K2<sup>(k−1)</sup>，K3<sup>(k−1)</sup> 相应顺延到 2k+2 的访存槽。修正后稳态：每节拍访存槽与 ALU 槽各被一次迭代的相邻两级占满，II 仍为 2，每 2 周期完工一次迭代）。<br>预热：前 2 个节拍让第 0 次迭代单独走 K1→K2→K3，把流水线灌满；排空：最后一次迭代之后补跑残留的 K2、K3、K4 尾巴。</div>
+      </details>
+    </div>
+
+    <!-- ============================================================
+      自测
+    ============================================================ -->
+    <h2><span class="sec-no">✍️</span>本章自测</h2>
+    <p class="quiz-hint">点击选项判分，答错会给出原因。</p>
+
+    <div class="quiz-block" data-answer="c">
+      <div class="q-no">自测 1</div>
+      <div class="q-stem">I1: R5 = R1 + R2；I2: R1 = R3 × R4。两条指令之间是什么依赖？能否消除？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. RAW，不可消除</li>
+        <li data-opt="b">B. WAW，可重命名消除</li>
+        <li data-opt="c">C. WAR，可重命名消除</li>
+        <li data-opt="d">D. 没有依赖，可任意交换</li>
+      </ul>
+      <div class="quiz-explain">C 对：I1 读 R1、I2 写 R1，是读后写（WAR）名依赖；把 I2 的目的寄存器改名后两指令即可并行。A 错：R1 的值没有从 I1 流向 I2；B 错：两指令不是都写同一位置；D 错：直接交换会让 I1 读到新 R1，结果改变。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 2</div>
+      <div class="q-stem">依赖 DAG 的关键路径长度为 7，双发射机器上某调度跑出 8 周期。可以断定？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 关键路径算错了</li>
+        <li data-opt="b">B. 该调度不是最优，或发射槽/资源限制使下界不可达</li>
+        <li data-opt="c">C. 8 周期已经是理论最快</li>
+        <li data-opt="d">D. 一定存在某条被漏掉的依赖</li>
+      </ul>
+      <div class="quiz-explain">B 对：关键路径 7 是下界，8 &gt; 7 说明调度没达到下界——要么排得不好，要么资源（发射槽、部件）约束使下界本来就不可达。A 错：8 大于 7 并不与下界矛盾；C 错：下界是 7，不能断言 8 最快；D 错：漏依赖会使关键路径变长，而实测周期反而更短，逻辑相反。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="a">
+      <div class="q-no">自测 3</div>
+      <div class="q-stem">列表调度在周期 t 的就绪集合里挑选指令时，「就绪」的准确含义是？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 所有前驱都已发射，且其延迟均已满足（结果可用）</li>
+        <li data-opt="b">B. 所有前驱都已发射即可，延迟不用管</li>
+        <li data-opt="c">C. 它在源程序中排在本周期该发的位置</li>
+        <li data-opt="d">D. 它的优先级是全图最高</li>
+      </ul>
+      <div class="quiz-explain">A 对：发射只是开始，结果要等延迟满才可用，二者缺一不可。B 错：忽略延迟会让后继读到未完成的值；C 错：调度正是要打破源序；D 错：优先级只在就绪集合内部排序用，不是就绪的定义。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="d">
+      <div class="q-no">自测 4</div>
+      <div class="q-stem">某循环每迭代需访存 4 次（1 个端口）、ALU 2 次（2 个 ALU），跨迭代依赖回路延迟 3、跨距 1 次迭代。II 是多少？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 1</li>
+        <li data-opt="b">B. 2</li>
+        <li data-opt="c">C. 3</li>
+        <li data-opt="d">D. 4</li>
+      </ul>
+      <div class="quiz-explain">D 对：资源下界 = max(4÷1, 2÷2) = 4；依赖下界 = 3÷1 = 3；II = max(4, 3) = 4，瓶颈在访存端口。A、B 错：低于资源下界，端口每周期服务不了 4 次访存；C 错：只看了依赖回路，漏了资源约束。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 5</div>
+      <div class="q-stem">软件流水与循环展开的关系，正确的是？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 二者是同一种技术的两个名字</li>
+        <li data-opt="b">B. 展开是把多次迭代复制进一个大块，流水是让不同迭代错相位重叠；展开常作为流水的前置手段</li>
+        <li data-opt="c">C. 展开能消除跨迭代依赖，流水不能</li>
+        <li data-opt="d">D. 软件流水不需要预热与排空代码</li>
+      </ul>
+      <div class="quiz-explain">B 对：展开扩大块内并行空间，流水在迭代间错相位重叠，二者互补。A 错：机制不同；C 错：跨迭代依赖（如累加器）是数据本身的性质，谁都消不掉，只能在其约束下排布；D 错：灌满与放空流水线的预热/排空代码必不可少。</div>
+    </div>
+
+    <!-- ============================================================
+      三句话复述
+    ============================================================ -->
+    <div class="retell">
+      <h3>🗣️ 用自己的话，三句话讲完本章</h3>
+      <p>对着空气（或室友）说出这三句。说卡壳的那句，回去重读对应小节。</p>
+      <details>
+        <summary>句1：这章解决什么问题？——</summary>
+        <div class="retell-answer">参考答案：硬件每周期能发多条指令，但源顺序的指令常因等待操作数而空转；编译器要在不违反依赖的前提下重排指令，把流水线与发射槽填满。</div>
+      </details>
+      <details>
+        <summary>句2：核心机制是什么？——</summary>
+        <div class="retell-answer">参考答案：先做依赖分析（RAW/WAR/WAW），画依赖 DAG 求关键路径；基本块内用列表调度逐周期填槽，循环用软件流水按启动间距 II 错相位重叠迭代，跨块用踪迹调度沿热点重排。</div>
+      </details>
+      <details>
+        <summary>句3：它和前后章怎么分工？——</summary>
+        <div class="retell-answer">参考答案：第9章优化「算什么」（减少指令），本章优化「何时发」（榨干单核并行）；单核 ILP 撞功耗墙之后，线程级与数据级并行交给第11章。</div>
+      </details>
+    </div>
+
+    <!-- ============================================================
+      间隔复习计划
+    ============================================================ -->
+    <div class="review-plan">
+      <h3>🔁 间隔复习计划</h3>
+      <p>回忆本身比重读有效 10 倍。到点只做一件事：翻卡 + 重做标记题。</p>
+      <table>
+        <tr><th>时间点</th><th>复习内容</th><th>预计用时</th></tr>
+        <tr><td>第 1 天</td><td>概念卡 1–7 全部 + 回忆 10.2-1、10.3-1、10.4-1</td><td>10 分钟</td></tr>
+        <tr><td>第 3 天</td><td>概念卡 1、4、6、7（依赖与 II 是易混点）+ 回忆 10.3-2、10.5-2 + 自测错题</td><td>8 分钟</td></tr>
+        <tr><td>第 7 天</td><td>重做习题 L2-1（DAG 与调度）与 L2-2（II 计算）+ 三句话复述</td><td>12 分钟</td></tr>
+        <tr><td>第 15 天</td><td>只做合上书挑战；6 条全过即本章毕业，卡在哪条回翻哪节</td><td>15 分钟</td></tr>
+      </table>
+    </div>
+
+    <!-- ============================================================
+      合上书挑战
+    ============================================================ -->
+    <div class="final-challenge">
+      <h3>📕 合上书挑战</h3>
+      <p class="fc-sub">现在关掉这个页面，拿一张纸，凭记忆完成以下任务。全部做完再回来核对——这是本章真正的毕业考试。</p>
+      <ol id="challenge-list">
+        <li><span class="fc-check"></span>画出流水线、超标量、VLIW 的三行对比表（每周期发射、谁找并行、编译器角色）。</li>
+        <li><span class="fc-check"></span>各写一个最小例子说明 RAW、WAR、WAW，并指出哪两种可重命名消除。</li>
+        <li><span class="fc-check"></span>默画本章图 10.1 的依赖 DAG，标出关键路径并算出长度 5。</li>
+        <li><span class="fc-check"></span>对图 10.1 逐周期重演列表调度（双发射、给定延迟表），并与原顺序的 6 周期对比。</li>
+        <li><span class="fc-check"></span>默写 II 的计算公式，对 a[i]=a[i]*2+b[i] 算出资源下界 3、依赖下界 1、II=3，并写出稳态三个节拍。</li>
+        <li><span class="fc-check"></span>一句话回答本章主线问题：硬件每周期能发多条指令，编译器怎么重排代码把流水线填满？</li>
+      </ol>
+    </div>
+
+    <div class="complete-zone">
+      <button class="btn-complete" id="btn-complete" onclick="markDone()">✓ 我已完成本章（含合上书挑战）</button>
+    </div>
+
+    <div class="chapter-nav">
+      <a href="chapter-09.html"><span class="nav-dir">← 上一章</span>第9章 机器无关优化</a>
+      <a href="chapter-11.html" class="next"><span class="nav-dir">下一章 →</span>第11章 并行性与局部性优化</a>
+    </div>
+
+  </div>
+</div>
+
+<footer class="footer">
+  <div class="wrap">第10章 指令级并行 · 编译原理互动讲义 · 基于 Aho, Lam, Sethi &amp; Ullman《编译原理》(第2版)</div>
+</footer>
+
+<script src="/lectures-assets/mermaid.min.js"></script>
+<script>
+mermaid.initialize({
+  startOnLoad: true,
+  theme: "base",
+  themeVariables: {
+    primaryColor: "#e3edf7",
+    primaryBorderColor: "#1d5f9e",
+    primaryTextColor: "#1d5f9e",
+    lineColor: "#5c554b",
+    secondaryColor: "#fbeedd",
+    tertiaryColor: "#f5f1e8",
+    fontFamily: "-apple-system, PingFang SC, sans-serif",
+    fontSize: "14px"
+  },
+  flowchart: { curve: "linear", htmlLabels: false }
+});
+</script>
+<script>
+// 自测题判分（原样复用，勿改）
+document.querySelectorAll(".quiz-block").forEach(block => {
+  const answer = block.dataset.answer;
+  const explain = block.querySelector(".quiz-explain");
+  block.querySelectorAll(".quiz-opts li").forEach(li => {
+    li.addEventListener("click", () => {
+      const opts = block.querySelectorAll(".quiz-opts li");
+      opts.forEach(o => o.classList.add("disabled"));
+      if (li.dataset.opt === answer) {
+        li.classList.add("correct");
+      } else {
+        li.classList.add("wrong");
+        block.querySelector(`[data-opt="${answer}"]`).classList.add("correct");
+      }
+      explain.classList.add("show");
+    });
+  });
+});
+
+// 合上书清单打勾（原样复用，勿改）
+document.querySelectorAll("#challenge-list li").forEach(li => {
+  li.addEventListener("click", () => li.classList.toggle("checked"));
+});
+
+// 完成标记 → localStorage（章号：10）
+const KEY = "comp_progress_v1";
+function loadProgress() {
+  try { return JSON.parse(localStorage.getItem(KEY)) || {}; } catch (e) { return {}; }
+}
+const progress = loadProgress();
+const btn = document.getElementById("btn-complete");
+if (progress[10] && progress[10].done) {
+  btn.textContent = "✓ 已完成 · 再次点击重置";
+  btn.classList.add("done");
+}
+function markDone() {
+  const p = loadProgress();
+  if (p[10] && p[10].done) {
+    delete p[10];
+    btn.textContent = "✓ 我已完成本章（含合上书挑战）";
+    btn.classList.remove("done");
+  } else {
+    p[10] = { done: true, completedAt: Date.now(), reviewsDone: 0 };
+    btn.textContent = "✓ 已完成 · 复习提醒已开启";
+    btn.classList.add("done");
+  }
+  localStorage.setItem(KEY, JSON.stringify(p));
+}
+</script>
+
+</body>
+</html>

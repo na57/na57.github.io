@@ -1,0 +1,824 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第16章 强化学习 · 机器学习互动讲义</title>
+<link rel="stylesheet" href="/lectures-assets/style.css">
+</head>
+<body>
+
+<nav class="topbar">
+  <div class="topbar-inner">
+    <span class="brand"><a href="index.html" style="color:inherit">← 学习地图</a></span>
+    <span class="crumb">阶段④ · 进阶专题 / 第16章</span>
+  </div>
+</nav>
+
+<div class="wrap">
+
+  <div class="lecture-head">
+    <span class="ch-label">CHAPTER 16 · 进阶专题</span>
+    <h1>强化学习</h1>
+    <p class="lead">前十五章都离不开「标准答案」——有标注可监督、有结构可挖掘；本章回答全书最后一个问题：没有标注、只有延迟到来的奖赏时，机器如何学会长期最优的行为序列。</p>
+  </div>
+
+  <!-- ===== 章首四件套之 1：全书定位 ===== -->
+  <div class="position-bar">
+    <strong>本章在主线上的位置：</strong>第15章把知识学成可读的规则，但规则依然要从「有标注的数据」里长出来——分类要标签、聚类要结构、规则要正反例 → <u>本章处理最弱监督信号：环境不告诉机器「哪一步对」，只在若干步后给一个奖赏数字；机器必须在探索与利用之间权衡，用 Bellman 方程把「长远利益」折算成每一步的价值</u> → 全书至此收官：从「有标注就能学」走到「只有奖赏也能学」。<br>
+    第16章回答主线上的最后一个问题：<strong>没有标准答案、只有延迟奖赏时，机器如何学会长期最优的行为序列？</strong>
+    <div class="map-inline">
+      <span class="node">Ch15 规则学习（有标注的符号学习）</span><span class="arrow">→</span>
+      <span class="node here">Ch16 强化学习</span><span class="arrow">→</span>
+      <span class="node">全书完（回到学习地图）</span>
+    </div>
+  </div>
+
+  <!-- ===== 章首四件套之 2：学习目标 ===== -->
+  <div class="objectives">
+    <h4>🎯 学完本章，合上书你应该能：</h4>
+    <ol>
+      <li>说出强化学习三要素（状态、动作、奖赏）与马尔可夫性的含义，写出折扣累积奖赏目标 Σₜ γᵗ rₜ₊₁，并解释它与监督学习信号的本质差别；</li>
+      <li>写出 ε-贪心与 Softmax（Boltzmann 分布）的动作选择规则，手算给定 Q 值与 τ 下各摇臂被选中的概率；</li>
+      <li>写出 Bellman 最优方程 V*(s) = maxₐ Σₛ′ P(s′|s,a)[R(s,a,s′) + γV*(s′)]，并在微型 MDP 上跑通值迭代直到收敛验证；</li>
+      <li>说清蒙特卡罗与时序差分（TD）在更新时机、偏差与方差上的差别，手算一步 Q-learning 更新并与 Sarsa 对照；</li>
+      <li>解释为什么状态空间爆炸要引入值函数近似，说出模仿学习与逆强化学习各自解决什么、区别在哪。</li>
+    </ol>
+  </div>
+
+  <div class="lecture">
+
+    <!-- ===== 章首四件套之 3：推导主线图 ===== -->
+    <div class="figure">
+      <div class="mermaid">
+flowchart LR
+  A["无监督信号 只有延迟奖赏"] --> B["探索与利用的两难"]
+  B --> B1["K 摇臂赌博机 ε-贪心 与 Softmax"]
+  B1 --> C["有模型时 Bellman 方程可直接解"]
+  C --> C1["策略迭代 与 值迭代"]
+  B1 --> D["无模型时 用采样逼近期望"]
+  D --> D1["蒙特卡罗 到 时序差分"]
+  C1 --> E["Q-learning 免模型学最优值函数"]
+  D1 --> E
+  E --> F["状态太多 用值函数近似"]
+  F --> G["代价：样本效率低 奖赏设计难"]
+  G --> G1["模仿学习 与 逆强化学习"]
+  classDef hot fill:#fbeedd,stroke:#c4651f,stroke-width:2.5px,color:#c4651f;
+  classDef danger fill:#fae9e7,stroke:#b03a2e,stroke-width:2.5px,color:#b03a2e;
+  class E hot;
+  class G danger;
+      </div>
+      <div class="caption">本章推导主线：延迟奖赏逼出「探索-利用」两难；赌博机把它缩到最小模型；有模型时 Bellman 方程直接解（策略/值迭代），无模型时用采样逼近（蒙特卡罗→时序差分）；Q-learning 免模型收敛到最优值函数；状态爆炸逼出值函数近似；样本效率与奖赏设计之难，最终引出模仿学习——每一步都回答「为什么需要下一步」。</div>
+    </div>
+
+    <!-- ===== 16.1 ===== -->
+    <h2><span class="sec-no">16.1</span>没有标准答案怎么学：任务与奖赏</h2>
+
+    <p>前十五章的学习都有一个共同的「老师」：监督学习里每个样本带着标注（第1–7章），无监督学习里数据本身带着结构（第9、13章），连半监督学习也有少量标签指路（第13章）。本章把这位老师撤走：想象学下围棋——落子的瞬间没有人告诉你「这步棋打 60 分」，评价要等几十手之后、终局那一刻才以胜负的形式到来；再看机器人学倒水——「水洒了」这个结果要等症状发生才知道，而且它无法指明刚才一连串关节动作里<strong>哪一步</strong>错了。这就是<span class="term">强化学习</span>（Reinforcement Learning, RL）面对的世界：<strong>没有即时监督信号，只有延迟到来的奖赏</strong>。</p>
+
+    <p>形式化地，强化学习任务由三个要素刻画：</p>
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>要素</th><th>记号</th><th>含义</th><th>围棋例</th><th>倒水例</th></tr>
+        <tr><td><span class="term">状态</span>（state）</td><td><span class="var">s</span> ∈ S</td><td>环境当前局面的描述</td><td>棋盘上的棋子分布</td><td>机械臂各关节角度 + 水面高度</td></tr>
+        <tr><td><span class="term">动作</span>（action）</td><td><span class="var">a</span> ∈ A</td><td>机器可执行的操作</td><td>在某个交叉点落子</td><td>各关节的目标角速度</td></tr>
+        <tr><td><span class="term">奖赏</span>（reward）</td><td><span class="var">r</span></td><td>环境反馈的标量评价，可正可负</td><td>终局胜 +1 / 负 −1，中途 0</td><td>洒出水 −1，倒满杯子 +10</td></tr>
+      </table>
+    </div>
+
+    <p>机器与环境反复交互：在状态 sₜ 选动作 aₜ，环境转移到新状态 sₜ₊₁ 并给出奖赏 rₜ₊₁，如此循环。要让这套交互可被数学分析，需要一个关键假设——<span class="term">马尔可夫性</span>（Markov property）：<strong>下一状态只依赖当前状态与当前动作，与更早的历史无关</strong>，即 P(sₜ₊₁ | sₜ, aₜ, sₜ₋₁, aₜ₋₁, …) = P(sₜ₊₁ | sₜ, aₜ)。围棋天然满足它（棋盘已包含全部对局信息）；若状态描述不全（例如扑克牌看不到对手手牌），马尔可夫性就破缺，需要把历史压进状态里才行。</p>
+
+    <p>学习目标也随之改变：不再是「每个样本都答对」，而是最大化长期的<span class="term">折扣累积奖赏</span>（discounted cumulative reward）：</p>
+
+    <div class="formula">G = ∑<sub>t=0</sub><sup>∞</sup> γ<sup>t</sup> r<sub>t+1</sub> = r₁ + γr₂ + γ²r₃ + …</div>
+
+    <p>其中折扣因子 γ ∈ [0, 1) 起两个作用：① 数学上保证无穷步的累积和收敛（|r| 有界时级数收敛）；② 直觉上表达「未来的奖赏要打折扣」——γ 越接近 0 越短视（只顾眼前一步），γ 越接近 1 越有耐心（愿意为大目标忍受眼前的负奖赏）。与监督学习的对照如下：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th></th><th>监督学习</th><th>强化学习</th></tr>
+        <tr><td>反馈形式</td><td>每个样本的标注（「正确答案」）</td><td>延迟、稀疏的奖赏标量（「做得好不好」）</td></tr>
+        <tr><td>反馈时机</td><td>即时：每预测一次立即对一次答案</td><td>延迟：走完一串动作才知结果</td></tr>
+        <tr><td>指明错误</td><td>指明——标注就是正确答案</td><td>不指明——奖赏不说哪个动作该背锅</td></tr>
+        <tr><td>数据来源</td><td>独立同分布的样本集</td><td>机器自己选动作产生的轨迹（数据分布被策略改变）</td></tr>
+      </table>
+    </div>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>强化学习是「只给期末成绩、不给平时作业批改」的学习：奖赏是终点处的一声哨响，机器要自己倒推出整场比赛里每一步的功过。γ 就是「耐心系数」——它决定机器愿意为多远之后的哨声负责。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>把奖赏当标签，以为「给正奖赏的那步就是正确动作」。错。奖赏<strong>延迟且稀疏</strong>：终局 +1 是几十手棋共同造成的，它不指明哪一手立了功、哪一手埋了雷——把延迟奖赏正确地分摊到每一步（功劳分配），正是本章后续所有算法要解决的核心难题。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 16.1-1</div>
+              <div class="q-text">强化学习的三要素是什么？马尔可夫性对「状态转移」做了什么假设？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              状态 s、动作 a、奖赏 r。马尔可夫性：下一状态只依赖当前状态与当前动作，与更早历史无关，即 P(sₜ₊₁|sₜ,aₜ,历史) = P(sₜ₊₁|sₜ,aₜ)。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 16.1-2</div>
+              <div class="q-text">写出折扣累积奖赏的表达式；γ 接近 0 与接近 1 各意味着什么行为风格？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              G = Σₜ γᵗ rₜ₊₁。γ→0 短视，只顾眼前一步的奖赏；γ→1 有耐心，愿为远期大目标忍受眼前损失；γ &lt; 1 同时保证无穷级数收敛。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===== 16.2 ===== -->
+    <h2><span class="sec-no">16.2</span>探索-利用两难的最小模型：K 摇臂赌博机</h2>
+
+    <p>16.1 埋下的第一个难题是：动作的好坏不能马上知道，那早期该「试新动作」还是「用已知好动作」？这就是<span class="term">探索与利用</span>（exploration &amp; exploitation）的两难。把它单独剥出来研究的最小模型是 <span class="term">K 摇臂赌博机</span>（K-armed Bandit）：<strong>只有一个状态</strong>（没有状态转移，也就没有长期后果），每步从 K 个摇臂中选一个拉，获得该臂随机分布给出的奖赏；目标是在有限步内让总奖赏尽量大。每个臂 k 的真实期望奖赏 μ(k) 未知，机器靠已观察的样本均值 Q(k) 去估计它。</p>
+
+    <p>两难在于：<strong>利用</strong>——选当前 Q 最大的臂，稳拿眼下最好收益，但可能早早把某个「开局走运」的次优臂误当成最好，从此困在局部；<strong>探索</strong>——试别的臂，能纠正错误估计，但每次试错都付出机会成本。两种经典平衡策略：</p>
+
+    <p><strong>① ε-贪心</strong>（ε-greedy）：以概率 1−ε 选当前 Q 最大的臂（利用），以概率 ε 在全部 K 个臂中均匀随机选一个（探索）。ε 是唯一的旋钮：ε = 0 退化为纯贪心（永不探索），ε = 1 退化为纯随机（永不利用）。</p>
+
+    <p><strong>② Softmax</strong>：按 <span class="term">Boltzmann 分布</span>把「估计值的大小」直接转成「被选中的概率」，Q 越大的臂概率越高，但差距被温度参数 τ 调制：</p>
+
+    <div class="formula">P(k) = <span class="frac"><span class="num-part">e<sup>Q(k)/τ</sup></span><span class="den-part">∑<sub>j=1</sub><sup>K</sup> e<sup>Q(j)/τ</sup></span></span></div>
+
+    <p>温度 τ 的作用：τ → 0 时，指数把 Q 的微小差距急剧放大，分布退化为一山独大的<strong>贪心</strong>；τ → ∞ 时，所有 Q(j)/τ → 0，各项都趋于 1，分布退化为<strong>均匀随机</strong>。τ 居中时，「好臂多选、差臂少选但不封死」，比 ε-贪心的「一视同仁地随机」更精细。</p>
+
+    <p><strong>【手算例 1】2 摇臂赌博机的 Softmax 选择概率。</strong>设已估计 Q(1) = 0.6，Q(2) = 0.5，分别算 τ = 0.1 与 τ = 1 时选中臂 1 的概率。</p>
+    <p><strong>情形一：τ = 0.1（低温，接近贪心）。</strong></p>
+    <p>① 算指数项：Q(1)/τ = 0.6/0.1 = 6 → e⁶ ≈ 403.43；Q(2)/τ = 0.5/0.1 = 5 → e⁵ ≈ 148.41。<br>
+    ② 求归一化分母：403.43 + 148.41 = 551.84。<br>
+    ③ 归一化：P(1) = 403.43 / 551.84 ≈ <strong>0.731</strong>，P(2) = 148.41 / 551.84 ≈ 0.269。<br>
+    Q 只差 0.1，概率差距却拉到 0.731 vs 0.269——低温把微小优势放大了。</p>
+    <p><strong>情形二：τ = 1（高温，接近随机）。</strong></p>
+    <p>① 算指数项：Q(1)/τ = 0.6 → e⁰·⁶ ≈ 1.822；Q(2)/τ = 0.5 → e⁰·⁵ ≈ 1.649。<br>
+    ② 分母：1.822 + 1.649 = 3.471。<br>
+    ③ 归一化：P(1) = 1.822 / 3.471 ≈ <strong>0.525</strong>，P(2) = 1.649 / 3.471 ≈ 0.475。<br>
+    同样的 Q 差距，概率几乎五五开——高温下 Softmax 接近均匀随机。</p>
+    <p><strong>结论：τ 越小越贪心，τ 越大越随机</strong>；实践中常让 τ 随时间衰减（先大胆探索，后安心利用），或让 ε 随时间衰减，同理。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>探索-利用是「试新餐厅还是去常去那家」的日常抉择：估计越不可靠（刚来这座城市），越该多试几家；估计越可靠（住了三年），越该直奔心头好。ε 与 τ 都是同一个旋钮的两个形状——<strong>控制「信任当前估计」的程度</strong>。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>以为「ε 越小越好、尽快收敛到最优臂」。错。纯利用（ε = 0）会被早期运气锁死：若最优臂前两把恰好走背字，它的 Q 就永远翻不了身——探索一旦停止，错误估计再没有被纠正的机会。ε/τ 应随时间衰减，而不是一开始就给个小值。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 16.2-1</div>
+              <div class="q-text">K 摇臂赌博机相对完整强化学习任务做了哪两个简化？ε-贪心的规则是什么？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              简化：只有一个状态（无状态转移）、奖赏即时（无延迟），于是只剩探索-利用两难。ε-贪心：以 1−ε 选当前 Q 最大的臂，以 ε 在全部 K 臂中均匀随机选。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 16.2-2</div>
+              <div class="q-text">写出 Softmax 的选择概率公式；τ→0 与 τ→∞ 各退化为什么策略？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              P(k) = e^(Q(k)/τ) / Σⱼ e^(Q(j)/τ)（Boltzmann 分布）。τ→0 退化为贪心（最大 Q 者概率→1），τ→∞ 退化为均匀随机（各臂概率→1/K）。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===== 16.3 ===== -->
+    <h2><span class="sec-no">16.3</span>有模型学习：MDP 与 Bellman 方程</h2>
+
+    <p>16.2 的赌博机只有一个状态，而真实任务有状态转移——这一步的选择会影响下一步站在哪里。把它补回来，就得到完整的形式化框架：<span class="term">马尔可夫决策过程</span>（Markov Decision Process, MDP），四元组 ⟨S, A, P, R⟩ 外加折扣 γ：</p>
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>成分</th><th>含义</th></tr>
+        <tr><td>S</td><td>状态空间</td></tr>
+        <tr><td>A</td><td>动作空间</td></tr>
+        <tr><td>P(s′|s,a)</td><td>转移概率：在 s 执行 a 后到达 s′ 的概率（马尔可夫性已内置）</td></tr>
+        <tr><td>R(s,a,s′)</td><td>奖赏函数：该次转移带来的期望奖赏</td></tr>
+        <tr><td>γ ∈ [0,1)</td><td>折扣因子</td></tr>
+      </table>
+    </div>
+
+    <p>所谓<span class="term">有模型学习</span>（model-based learning），就是 P 与 R <strong>已知</strong>的情形——环境 dynamics 完全写在纸面上，剩下的是纯计算问题。要算的对象是<span class="term">策略</span>（policy）π(a|s)：在状态 s 下选各动作的概率分布；以及衡量策略好坏的两类<span class="term">值函数</span>（value function）：</p>
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>值函数</th><th>定义</th><th>回答的问题</th></tr>
+        <tr><td>状态值函数 V<sup>π</sup>(s)</td><td>从 s 出发、按 π 行动，折扣累积奖赏的期望</td><td>「这个状态本身有多好？」</td></tr>
+        <tr><td>状态-动作值函数 Q<sup>π</sup>(s,a)</td><td>从 s 出发、<strong>先执行 a</strong> 再按 π 行动，折扣累积奖赏的期望</td><td>「在此状态下做这个动作有多好？」</td></tr>
+      </table>
+    </div>
+
+    <p>值函数的美妙之处在于它可以「自己用自己」递归定义——今天的价值 = 眼前一步的奖赏 + 明天的价值 × γ。展开即得 <span class="term">Bellman 期望方程</span>（Bellman expectation equation）：</p>
+    <div class="formula">V<sup>π</sup>(s) = ∑<sub>a</sub> π(a|s) ∑<sub>s′</sub> P(s′|s,a) [ R(s,a,s′) + γ V<sup>π</sup>(s′) ]</div>
+
+    <p>我们真正想要的是最优策略 π* 的值函数。把期望方程里的「按 π 选动作」换成「挑最好的动作」，就得到 <span class="term">Bellman 最优方程</span>（Bellman optimality equation）：</p>
+    <div class="formula">V*(s) = max<sub>a</sub> ∑<sub>s′</sub> P(s′|s,a) [ R(s,a,s′) + γ V*(s′) ]</div>
+
+    <p>有模型时，这个非线性方程组可以「直接解」，两种经典算法：</p>
+    <p><strong>① 策略迭代</strong>（policy iteration）：<em>策略评估 → 策略改进</em>交替进行。评估：对当前策略 π 解 Bellman 期望方程组（线性方程组，可迭代求解），得到 V<sup>π</sup>；改进：对每个状态贪心改选动作，π′(s) = argmaxₐ Σₛ′ P[R + γV<sup>π</sup>(s′)]。不断交替，直到策略不再变化——此时即最优。</p>
+    <p><strong>② 值迭代</strong>（value iteration）：干脆把 Bellman 最优方程<strong>本身当作更新式</strong>，反复应用直到收敛：</p>
+    <div class="formula">V<sub>k+1</sub>(s) ← max<sub>a</sub> ∑<sub>s′</sub> P(s′|s,a) [ R(s,a,s′) + γ V<sub>k</sub>(s′) ]</div>
+    <p>因为 γ &lt; 1，这个更新是一个<strong>压缩映射</strong>（每次迭代都把误差乘以 γ），必然收敛到唯一不动点 V*。收敛后提最优策略只需一次贪心：π*(s) = argmaxₐ Σₛ′ P[R + γV*(s′)]。</p>
+
+    <p><strong>【手算例 2】单状态两动作微型 MDP 上的值迭代。</strong>只有一个状态 s；动作 a₁：确定性地回到 s，期望奖赏 1.8；动作 a₂：确定性地回到 s，期望奖赏 1。γ = 0.9。转移确定（P = 1），Bellman 更新简化为 V ← max( 1.8 + 0.9V, 1 + 0.9V )。</p>
+    <p>① 初始化 V₀ = 0。<br>
+    ② 第 1 次迭代：V₁ = max(1.8 + 0.9×0, 1 + 0.9×0) = max(1.8, 1) = <strong>1.8</strong>。<br>
+    ③ 第 2 次迭代：两个动作各自的候选值——a₁：1.8 + 0.9×1.8 = 1.8 + 1.62 = 3.42；a₂：1 + 0.9×1.8 = 1 + 1.62 = 2.62。V₂ = max(3.42, 2.62) = <strong>3.42</strong>。<br>
+    ④ 第 3 次迭代：a₁：1.8 + 0.9×3.42 = 1.8 + 3.078 = 4.878；a₂：1 + 0.9×3.42 = 4.078。V₃ = max(4.878, 4.078) = <strong>4.878</strong>。<br>
+    ⑤ 收敛验证：由于 a₁ 每步都占优（1.8 &gt; 1 且 γV 项两边相同），不动点满足 V* = 1.8 + 0.9V*。解方程：V* − 0.9V* = 1.8 → 0.1V* = 1.8 → <strong>V* = 1.8/(1−0.9) = 18</strong>。代回验证：1.8 + 0.9×18 = 1.8 + 16.2 = 18 ✓。迭代序列 0 → 1.8 → 3.42 → 4.878 → … 正稳步逼近 18（每步把与 18 的差距乘以 0.9）。最优策略 π*(s) = a₁，每次都拿 1.8 而非 1。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>Bellman 方程是「把长远利益分期摊还」：一个状态的价值 = 这一步落袋的奖赏 + 下一步价值打 γ 折。它把「无穷步的全局优化」拆成「一步一价的局部方程」——能拆的前提正是马尔可夫性：明天只由今天决定。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>以为「有模型」=「有人类专家手工设计的规则」。错。「有模型」特指 <strong>P 与 R 已知</strong>（哪怕来自系统辨识、来自模拟器），此时不需要真实交互，靠规划（策略迭代/值迭代）就能算出最优策略；与之相对的「免模型」才是下一节的主角——P、R 未知，只能与环境交互采样。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 16.3-1</div>
+              <div class="q-text">MDP 的四元组是什么？V^π(s) 与 Q^π(s,a) 的定义差在哪一步？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              ⟨S, A, P, R⟩（+γ）。V^π(s) 从 s 起完全按 π 行动；Q^π(s,a) 强制第一步执行 a、之后才按 π——「先钉死第一步」就是两者的差别。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 16.3-2</div>
+              <div class="q-text">写出 Bellman 最优方程；策略迭代与值迭代各是怎么用它求最优策略的？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              V*(s) = maxₐ Σₛ′ P(s′|s,a)[R(s,a,s′) + γV*(s′)]。策略迭代：评估当前策略（解期望方程）→ 贪心改进策略，交替至策略不变。值迭代：把最优方程本身当更新式反复迭代，靠 γ &lt; 1 的压缩性收敛到 V*，再一次性贪心提策略。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===== 16.4 ===== -->
+    <h2><span class="sec-no">16.4</span>免模型学习：蒙特卡罗与时序差分</h2>
+
+    <p>16.3 的值迭代很优雅，但前提苛刻：P 与 R 必须已知。现实里——机器人接触新地面、玩家面对没读过的规则书——转移概率与奖赏函数都<strong>未知</strong>，机器只能亲自与环境交互、收集 (s, a, r, s′) 这样的样本，用采样去逼近那些算不出来的期望。这就是<span class="term">免模型学习</span>（model-free learning）。核心问题变成：<strong>怎么用样本估计 V^π 或 Q^π？</strong></p>
+
+    <p><strong>路线一：蒙特卡罗</strong>（Monte Carlo, MC）。最朴素的想法：值函数定义为「折扣累积奖赏的期望」，期望算不出，那就<strong>整幕走完、用真实回报代替期望</strong>。一幕（episode）从 s 出发走到底，得到实际回报 G，然后向它更新：V(s) ← V(s) + α(G − V(s))。MC 的目标 G 是<strong>真实采样到的累积奖赏</strong>，因此估计<span class="term">无偏</span>（unbiased）；但一幕里所有随机性（环境的、策略的）全部压进这一个数字，<strong>方差大</strong>，而且必须等一幕结束才能更新——下围棋输了才知道学，中途每一步都得憋着。</p>
+
+    <p><strong>路线二：时序差分</strong>（Temporal Difference, TD）。不必等剧终：在状态 s 执行一步、看到 r 与 s′ 后，就用<strong>「r + γV(s′)」作为 V(s) 的目标</strong>立即更新：</p>
+    <div class="formula">V(s) ← V(s) + α [ r + γV(s′) − V(s) ]</div>
+    <p>括号里的量叫 <span class="term">TD 误差</span>（TD error）δ = r + γV(s′) − V(s)，它是「这一步实际看到的」与「原来估计的」之差。TD 的目标 r + γV(s′) 里用到了当前的估计值 V(s′)，属于「用估计更新估计」（bootstrapping，自举），因此<strong>有偏</strong>；但它只依赖一步的随机性，<strong>方差小</strong>，且每步都能学。MC 与 TD 的对照：</p>
+    <div class="tbl-wrap">
+      <table>
+        <tr><th></th><th>蒙特卡罗</th><th>时序差分（TD）</th></tr>
+        <tr><td>更新目标</td><td>真实回报 G（整幕走完才知道）</td><td>r + γV(s′)（一步即可构造）</td></tr>
+        <tr><td>更新时机</td><td>一幕结束后</td><td>每一步之后</td></tr>
+        <tr><td>偏差</td><td>无偏（目标是真期望的样本）</td><td>有偏（目标里含当前估计，自举）</td></tr>
+        <tr><td>方差</td><td>大（累积了整幕的随机性）</td><td>小（只含一步的随机性）</td></tr>
+      </table>
+    </div>
+
+    <p>把 TD 的思想用到「状态-动作值函数」Q(s,a) 上，就得到两个最著名的免模型算法，差别只在<strong>更新目标里 s′ 处的动作怎么选</strong>：</p>
+    <p><strong>① Sarsa</strong>（<span class="term">同轨策略</span>，on-policy）：目标用<strong>实际将要执行</strong>的下一个动作 a′（由当前行为策略，如 ε-贪心，真实选出）——Q(s,a) ← Q(s,a) + α[ r + γQ(s′,a′) − Q(s,a) ]。算法名来自更新所用的五元组 (s, a, r, s′, a′)。它评估的是「<strong>行为策略自己</strong>」的价值：行为策略在探索，学到的价值就包含探索的代价。</p>
+    <p><strong>② Q-learning</strong>（<span class="term">离轨策略</span>，off-policy）：目标不管下一步实际会做什么，直接用 s′ 处的<strong>最大</strong> Q 值——</p>
+    <div class="formula">Q(s,a) ← Q(s,a) + α [ r + γ max<sub>a′</sub> Q(s′,a′) − Q(s,a) ]</div>
+    <p>它评估的是「<strong>贪心目标策略</strong>」的价值：哪怕行为上还在用 ε-贪心探索，目标一律按「下一步选最优动作」来算。行为策略负责探索收集数据，目标策略负责定义最优——两者分离，正是「离轨」的含义；这也是 Q-learning 能直接逼近最优值函数 Q* 的原因。</p>
+
+    <p><strong>【手算例 3】Q-learning 的一步更新（并与 Sarsa 对照）。</strong>设 Q(s,a₁) = 2.0，执行 a₁ 后得奖赏 r = 1，到达 s′；s′ 处有两个动作，Q(s′,a₁) = 1.0，Q(s′,a₂) = 3.0。学习率 α = 0.5，折扣 γ = 0.9。</p>
+    <p><strong>Q-learning 更新：</strong><br>
+    ① 在 s′ 处取 max：max(1.0, 3.0) = 3.0（对应动作 a₂）。<br>
+    ② 构造目标：r + γ·max<sub>a′</sub> Q(s′,a′) = 1 + 0.9×3.0 = 1 + 2.7 = <strong>3.7</strong>。<br>
+    ③ TD 误差：δ = 3.7 − 2.0 = 1.7。<br>
+    ④ 更新：Q(s,a₁) ← 2.0 + 0.5×(3.7 − 2.0) = 2.0 + 0.5×1.7 = 2.0 + 0.85 = <strong>2.85</strong>。</p>
+    <p><strong>Sarsa 对照：假设行为策略实际选出的下一动作是 a₁</strong>（即 a′ = a₁）。<br>
+    ① 目标：r + γ·Q(s′,a′) = 1 + 0.9×1.0 = <strong>1.9</strong>。<br>
+    ② TD 误差：δ = 1.9 − 2.0 = −0.1。<br>
+    ③ 更新：Q(s,a₁) ← 2.0 + 0.5×(1.9 − 2.0) = 2.0 − 0.05 = <strong>1.95</strong>。</p>
+    <p><strong>差异解释：</strong>同一笔经验 (s, a₁, 1, s′)，Q-learning 把 Q(s,a₁) 从 2.0 抬到 2.85，Sarsa 却压到 1.95。原因：Q-learning 的目标假设「到了 s′ 一定会选最好的 a₂（价值 3.0）」，学的是<strong>最优目标策略</strong>的价值；Sarsa 的目标用的是行为策略实际要走的 a₁（价值 1.0），学的是<strong>含探索的行为策略</strong>的价值。行为策略可以尽情探索，Q-learning 照样向「按贪心走」的价值收敛——这是离轨学习的精髓。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>TD 是「边下棋边复盘」：不用等终局哨响，每走一步就用「眼前奖赏 + 对下一站的当前估计」校正本站的估值。Q-learning 与 Sarsa 的差别只有一句话——更新目标里，s′ 处按「理想的我」（max，离轨）还是「实际的我」（a′，同轨）计价。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>以为「Q-learning 用了 max，所以训练时必须按贪心策略行动」。错。max 只出现在<strong>更新目标</strong>里；行为上仍用 ε-贪心等策略去探索，否则没走过的动作永远没有数据。离轨的「轨」指的是目标策略与行为策略分离——探索照旧，估值向最优看齐，二者互不耽误。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 16.4-1</div>
+              <div class="q-text">蒙特卡罗与时序差分在更新目标、更新时机、偏差、方差上的差别各是什么？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              MC：目标为整幕真实回报 G，幕末更新，无偏、方差大。TD：目标为 r + γV(s′)（自举），每步更新，有偏、方差小。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 16.4-2</div>
+              <div class="q-text">写出 Q-learning 与 Sarsa 的更新式；「同轨 / 离轨」的「轨」指什么？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              Sarsa：目标 r + γQ(s′,a′)，a′ 是行为策略实际选出的下一动作（同轨 on-policy）。Q-learning：目标 r + γ maxₐ′ Q(s′,a′)（离轨 off-policy）。「轨」= 目标策略与行为策略是否同一：Sarsa 评估行为中的策略本身，Q-learning 行为策略只管探索、目标策略是贪心。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===== 16.5 ===== -->
+    <h2><span class="sec-no">16.5</span>值函数近似与模仿学习：本章收束，全书收束</h2>
+
+    <p>16.4 的 Q-learning 把「学动作」变成了「填一张 Q 表」——每个 (s,a) 一格。但表格有个致命前提：状态数得有限且不太大。围棋的状态约 10¹⁷⁰ 种，机械臂的关节角是连续值，Q 表根本开不出这么多格子。出路是把「查表」换成「函数」：<span class="term">值函数近似</span>（value function approximation），用参数化函数代替表格，最简形式是线性模型：</p>
+    <div class="formula">V(s) = θ<sup>T</sup> <span class="var">x</span>(s)</div>
+    <p>其中 x(s) 是状态的特征向量，θ 是待学参数。更新沿 TD 误差的方向调参：θ ← θ + α·δ·x(s)（δ 为 TD 误差，x(s) 是误差对 θ 的梯度方向）——一句话：<strong>TD 误差为正就把特征方向的参数抬高，为负就压低</strong>。把线性函数换成神经网络，便是深度强化学习的入口；表格版的收敛保证随之消失，这是近似要付的代价。</p>
+
+    <p>第二个遗留难题更根本：<strong>奖赏从哪来？</strong>采样交互又慢又贵（样本效率低：AlphaGo 级的训练量人类几辈子下不完），更麻烦的是很多任务里奖赏函数本身设计不出来——「倒水的奖赏」好写，「开车开得稳」的奖赏怎么写？写歪了，机器会照着字面钻空子。当奖赏稀疏或难设计时，与其让机器从零试错，不如直接利用人类示范——<span class="term">模仿学习</span>（imitation learning），两条路线：</p>
+    <div class="tbl-wrap">
+      <table>
+        <tr><th></th><th>直接模仿（行为克隆）</th><th><span class="term">逆强化学习</span>（Inverse RL）</th></tr>
+        <tr><td>学什么</td><td>把示范轨迹 (s,a) 当监督数据，直接学「状态 → 动作」的映射</td><td>从示范<strong>反推出奖赏函数</strong>，再用强化学习在该奖赏下求最优策略</td></tr>
+        <tr><td>假设</td><td>示范即正确答案</td><td>示范者在某个未知奖赏函数下（近似）最优</td></tr>
+        <tr><td>优点</td><td>简单，退化为普通监督学习</td><td>学到的是「意图」，可泛化到与示范不同的局面</td></tr>
+        <tr><td>软肋</td><td>分布偏移：机器偏离示范轨迹后进入没见过的状态，错误会累积</td><td>奖赏函数不唯一（同一批示范可由多个奖赏解释），问题欠定</td></tr>
+      </table>
+    </div>
+
+    <p>本章的遗留问题也就摆在台面上了：<strong>样本效率</strong>（免模型方法动辄需要百万次交互）与<strong>安全性</strong>（探索阶段的试错在真实系统里可能闯祸）至今仍是强化学习落地的两大闸门。</p>
+
+    <p><strong>全书收束。</strong>回头看这套讲义的主线：第 1 章从「有标注就能学」出发——监督学习有全量的标准答案；第 9、13 章撤走标注，靠结构与非监督/半监督信号；第 15 章把答案换成人类可读的规则；本章把答案撤到最薄——<strong>只剩延迟、稀疏的奖赏标量</strong>，机器仍能通过 Bellman 方程把终点哨声折算成每一步的指南针。机器学习研究的主线由此显形：<strong>监督信号越弱，机器越要会自己找结构</strong>。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>值函数近似 = 把「百科全书式的大表格」压缩成「一个会举一反三的函数」；模仿学习 = 「老师做一遍，你照着学」，逆强化学习再多走一步——「从老师的做法里猜出老师在乎什么」。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>以为「奖赏函数随便写写，差不多就行」。错。机器是按字面优化的：给「船跑得越快奖赏越高」，它可能学会原地转圈刷分而不进港——这叫<span class="term">奖赏黑客</span>（reward hacking）：策略钻奖赏函数的空子拿高分，却不完成真实目标。奖赏设计本身就是强化学习最难的工程环节之一，本章习题 L3 会正面碰到它。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 16.5-1</div>
+              <div class="q-text">为什么表格型 Q-learning 处理不了围棋？线性值函数近似的形式与参数更新方向是什么？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              状态数爆炸（约 10¹⁷⁰，且连续状态无限），Q 表开不出格子。近似形式 V(s) = θᵀx(s)；参数沿 TD 误差方向更新：θ ← θ + α·δ·x(s)。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 16.5-2</div>
+              <div class="q-text">直接模仿与逆强化学习各自学什么？各自的软肋是什么？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              直接模仿：把示范 (s,a) 当监督数据学状态→动作映射，软肋是分布偏移、错误累积。逆强化学习：从示范反推奖赏函数再求最优策略，软肋是奖赏函数不唯一、问题欠定。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===== 章末五件套之 1：概念卡 ===== -->
+    <h2><span class="sec-no">🃏</span>概念卡：本章概念的一分钟画像</h2>
+    <p>翻面前先自问：这个概念我能用一句话讲清楚吗？</p>
+    <div class="flip-grid">
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 1</div>
+            <div class="q-text">马尔可夫决策过程（MDP）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">⟨S, A, P, R⟩ + γ：状态、动作、转移概率、奖赏函数与折扣因子构成的序贯决策框架，下一状态只依赖当前状态与动作。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">把「在环境中连续做动作、拿延迟奖赏」的问题变成可分析、可求解的数学对象。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">一盘棋：棋盘是状态、落子是动作、规则是 P、终局胜负是 R。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为马尔可夫性天然成立；状态描述不全（如看不到对手手牌）时它破缺，需把历史压进状态。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">本章全部算法的地基；机器人、游戏 AI、资源调度的通用建模语言。</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 2</div>
+            <div class="q-text">值函数与 Bellman 方程（Value Function &amp; Bellman Equation）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">V^π(s)：从 s 按 π 行动的折扣累积奖赏期望；Bellman 最优方程 V*(s) = maxₐ Σₛ′ P[R + γV*(s′)] 把它递归定义。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">把「无穷步全局优化」折成「一步一价的局部方程」，使长远利益可被逐步计算。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">分期摊还：今天的价值 = 眼前落袋 + 明天价值打 γ 折。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为 Bellman 方程是数值算法；它是值函数必须满足的「自洽条件」，策略迭代/值迭代才是求解算法。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">16.3 有模型求最优策略；16.4 的 TD、Q-learning 都是它的免模型近似版。</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 3</div>
+            <div class="q-text">K 摇臂赌博机（K-armed Bandit）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">单状态、即时奖赏的简化任务：每步从 K 个期望未知的摇臂选一个拉，目标是总奖赏最大。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">把探索-利用两难从状态转移中剥离出来，单独研究「试新 vs 用旧」的权衡。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">试新餐厅还是去常去那家——估计越不可靠越该多试。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为 ε 越小越好；纯利用会被早期运气锁死在次优臂上，ε/τ 应随时间衰减而非一开始就给小值。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">16.2 的 ε-贪心与 Softmax；也是所有 RL 算法探索机制的母体。</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 4</div>
+            <div class="q-text">时序差分（Temporal Difference, TD）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">免模型更新法：每步以 r + γV(s′) 为目标更新 V(s)，更新量 α 倍的 TD 误差 δ = r + γV(s′) − V(s)。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">P、R 未知且等不起整幕结束：用一步样本立即校正估值。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">边下棋边复盘，不等终局哨响就改棋谱。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为 TD 与 MC 一样无偏；TD 用估计更新估计（自举），有偏但方差小。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">16.4 的 Sarsa、Q-learning；对 V 的近似版即 TD 学习。</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 5</div>
+            <div class="q-text">Q-learning（离轨 TD 控制）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">Q(s,a) ← Q(s,a) + α[r + γ maxₐ′ Q(s′,a′) − Q(s,a)]，目标策略取贪心 max，与行为策略分离。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">免模型直接逼近最优值函数 Q*：行为策略尽管探索，估值照样向「按贪心走」收敛。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">记账按「理想的我」计价，干活允许「实际的我」试错。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为用了 max 就必须按贪心行动；max 只在更新目标里，行为仍需 ε-贪心探索，否则没走过的动作永远没数据。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">16.4 手算例 3 的主角；与同轨的 Sarsa 对照记忆；深度版即 DQN。</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 6</div>
+            <div class="q-text">模仿学习（Imitation Learning）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">利用人类示范替代/补充奖赏信号：直接模仿把示范当监督数据学策略；逆强化学习从示范反推奖赏函数再求最优。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">奖赏稀疏、难设计或交互昂贵时，让机器站在示范者的肩膀上起步。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">学徒制：师傅做一遍徒弟照着做（直接模仿）；更高段位是猜出师傅在乎什么（逆强化学习）。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为模仿到示范就万事大吉；直接模仿遇分布偏移会错误累积，逆强化学习的奖赏解不唯一。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">16.5 收束节；自动驾驶、机器人操作等「奖赏写不出但示范拿得到」的任务。</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===== 章末五件套之 2：分层习题 ===== -->
+    <h2><span class="sec-no">📝</span>分层习题</h2>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>判断正误并说明理由：「强化学习里的奖赏就是监督学习里标签的另一种叫法——拿到正奖赏的那个动作就是标准答案。」</div>
+      <details>
+        <summary>提示</summary>
+        <p>从三个角度对照：反馈的时机（即时还是延迟）、反馈的密度（每步都有还是稀疏）、反馈是否指明「哪个动作对」。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer"><strong>错。</strong>① 标签是即时的：每个样本预测完立刻对答案；奖赏是延迟的，一串动作走完后才到。② 标签是稠密的：每个样本都有；奖赏是稀疏的，大量步骤奖赏为 0。③ 最关键：标签<strong>指明正确答案</strong>，奖赏<strong>不指明</strong>——终局 +1 是几十步共同造成的，它不说哪一步立功、哪一步埋雷。把延迟奖赏分摊到各步（功劳分配）正是值函数与 TD 要解决的问题；把奖赏当标签，等于绕开了本章的核心难题。</div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>「ε-贪心里的 ε 越小越好——反正目标是尽快找到并锁定最优臂，ε 调小收敛更快。」这个说法错在哪？</div>
+      <details>
+        <summary>提示</summary>
+        <p>想想：若最优臂前两把恰好走了背字，它的样本均值 Q 会怎样？此后纯利用策略还会再拉它吗？</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer"><strong>错。</strong>纯利用（ε→0）会被早期运气锁死：最优臂若开局几把奖赏偏低，其 Q 估计被压低，纯贪心从此不再选它，错误估计<strong>永远没有被纠正的机会</strong>——这就是困在局部最优。探索的作用是持续修正估计，因此正确做法是 ε（或 Softmax 的 τ）<strong>随时间衰减</strong>：早期估计不可靠时多探索，后期估计稳定后多利用；而不是一开始就把 ε 压到小值。</div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>3 摇臂赌博机，Softmax 选择：Q(1) = 1.0，Q(2) = 0.8，Q(3) = 0.2，温度 τ = 0.5。求三个臂各自被选中的概率，步骤写全。（已知 e² ≈ 7.389，e^1.6 ≈ 4.953，e^0.4 ≈ 1.492）</div>
+      <details>
+        <summary>提示</summary>
+        <p>先算每个臂的 Q(k)/τ，再取指数，最后归一化：P(k) = e^(Q(k)/τ) / Σⱼ e^(Q(j)/τ)。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+        ① 各臂 Q(k)/τ：臂1：1.0/0.5 = 2.0；臂2：0.8/0.5 = 1.6；臂3：0.2/0.5 = 0.4。<br>
+        ② 取指数：e²·⁰ ≈ 7.389；e¹·⁶ ≈ 4.953；e⁰·⁴ ≈ 1.492。<br>
+        ③ 归一化分母：7.389 + 4.953 + 1.492 = <strong>13.834</strong>。<br>
+        ④ 归一化：P(1) = 7.389/13.834 ≈ <strong>0.534</strong>；P(2) = 4.953/13.834 ≈ <strong>0.358</strong>；P(3) = 1.492/13.834 ≈ <strong>0.108</strong>。<br>
+        ⑤ 验证：0.534 + 0.358 + 0.108 = 1.000 ✓。最好的臂概率过半，最差的臂仍有约 11% 的探索机会——这正是 Softmax「好臂多选、差臂不封死」的样子。
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>Q-learning 一步更新：Q(s,a) = 0.5，执行 a 后得奖赏 r = 0，到达 s′，且 max<sub>a′</sub> Q(s′,a′) = 4.0。学习率 α = 0.1，折扣 γ = 1。求更新后的 Q(s,a)，步骤写全。</div>
+      <details>
+        <summary>提示</summary>
+        <p>三步走：构造目标 r + γ·max Q(s′,a′) → 算 TD 误差（目标 − 旧值）→ 按 α 步长更新。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+        ① 目标：r + γ·max<sub>a′</sub> Q(s′,a′) = 0 + 1×4.0 = <strong>4.0</strong>。<br>
+        ② TD 误差：δ = 4.0 − 0.5 = <strong>3.5</strong>。<br>
+        ③ 更新：Q(s,a) ← 0.5 + 0.1×(4.0 − 0.5) = 0.5 + 0.1×3.5 = 0.5 + 0.35 = <strong>0.85</strong>。<br>
+        说明：这一步本身没拿到奖赏（r = 0），但 s′ 处的前景（4.0）透过 γ = 1 全额传导回来，Q(s,a) 被抬高——TD 类方法「用未来估计反哺当前估计」的机制在这一个数字里看得清清楚楚。
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l3">L3 建模应用</span>场景：<strong>仓储机器人拣货路径优化</strong>——仓库内一台机器人从货架取货送到打包台，要规划每条拣货路径使单位时间完成的订单最多。请为它定义 MDP 的 S / A / R / γ；说明「若能拿到精确的仓库物理仿真器」该选哪类算法、「只能在真实仓库里边干边学」该选哪类算法；写出你的奖赏设计，并指出一个可能的「奖赏黑客」风险。</div>
+      <details>
+        <summary>提示</summary>
+        <p>状态要满足马尔可夫性：把「决定下一步所需的一切」装进去。算法选择的分界线只有一条：P 与 R 是否已知（仿真器能否充当模型）。奖赏黑客：想一个「字面得分高、实际活没干好」的漏洞。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+        <p><strong>① MDP 定义。</strong>S：机器人当前位置与朝向、已拣/待拣商品清单、各待拣货位坐标（必须含全，否则马尔可夫性破缺）；A：移动方向 / 加减速 / 抓取 / 放下等离散或连续控制量；R：每完成一张订单 +10，每步时间消耗 −0.1（惩罚磨蹭），碰撞 −50（安全硬约束）；γ：取 0.99 左右——订单序列长，需要耐心，但仍需折扣保证收敛。</p>
+        <p><strong>② 算法选择。</strong>若有精确物理仿真器：P、R 可在仿真中廉价获得，属<strong>有模型</strong>情形——用值迭代/策略迭代在仿真里把策略算好，再部署到真实仓库（样本免费、试错安全）。若只能真实环境边干边学：P、R 未知，属<strong>免模型</strong>情形——用 Q-learning（离轨，探索数据也能用于学最优值），以 ε-贪心作行为策略保证探索，状态连续时再配值函数近似。</p>
+        <p><strong>③ 奖赏黑客风险。</strong>若把奖赏写成「每拣起一件商品 +5」而不与「送达打包台」绑定，机器人可能学会<strong>反复拣起-放下同一商品刷分</strong>：字面上奖赏滚滚来，实际订单零完成。对策：奖赏只挂在「订单完成」这个真实目标上，时间惩罚与安全惩罚作为辅助项——设计奖赏时永远问一句：「有没有不看真目标也能刷高分的捷径？」</p>
+        </div>
+      </details>
+    </div>
+
+    <!-- ===== 章末五件套之 3：自测 ===== -->
+    <h2><span class="sec-no">✍️</span>本章自测</h2>
+    <p class="quiz-hint">点击选项判分，答错会给出原因。</p>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 1</div>
+      <div class="q-stem">强化学习与监督学习的反馈信号，本质差别是？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 强化学习的反馈是实数，监督学习的是类别</li>
+        <li data-opt="b">B. 奖赏延迟、稀疏且不指明哪个动作对；标签即时、稠密且就是正确答案</li>
+        <li data-opt="c">C. 监督学习的数据有噪声，强化学习的没有</li>
+        <li data-opt="d">D. 二者没有本质差别，只是叫法不同</li>
+      </ul>
+      <div class="quiz-explain">B 对：三个差别缺一不可——时机（延迟 vs 即时）、密度（稀疏 vs 每样本都有）、信息量（只说「好不好」，不说「哪个对」）。A 错：实数还是类别只是表面形式，回归的标签也是实数。C 错：奖赏同样带噪声（随机环境），噪声不是分水岭。D 错：正因其延迟稀疏、不指明对错，才需要值函数把终点奖赏分摊到每一步——整套 Bellman/TD 机制都为此存在。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="c">
+      <div class="q-no">自测 2</div>
+      <div class="q-stem">Softmax 动作选择中，温度参数 τ 的作用是？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. τ 越大越贪心，τ→∞ 时只选 Q 最大的臂</li>
+        <li data-opt="b">B. τ 只控制学习速度，与探索无关</li>
+        <li data-opt="c">C. τ 越小越贪心（τ→0 退化为纯贪心），τ 越大越随机（τ→∞ 均匀选择）</li>
+        <li data-opt="d">D. τ 必须固定为 1，不能调整</li>
+      </ul>
+      <div class="quiz-explain">C 对：τ→0 时指数把 Q 的微小差距急剧放大，最大 Q 者概率→1（贪心）；τ→∞ 时各 Q/τ→0、指数项都→1，概率→1/K（均匀）。A 错：方向说反了。B 错：τ 直接控制探索-利用的平衡，与学习率 α 是两回事。D 错：τ 是关键旋钮，实践中常随时间衰减——先探索后利用。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 3</div>
+      <div class="q-stem">值迭代收敛的理论依据是？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 学习率 α 取得足够小</li>
+        <li data-opt="b">B. γ &lt; 1 使 Bellman 更新成为压缩映射，必收敛到唯一不动点</li>
+        <li data-opt="c">C. 迭代次数足够多总会碰巧停在最优点</li>
+        <li data-opt="d">D. 初值 V₀ 必须取为零</li>
+      </ul>
+      <div class="quiz-explain">B 对：每次迭代把当前值与不动点的差距乘以 γ（&lt;1），压缩映射保证任意初值都收敛到同一个 V*。A 错：值迭代的更新式里没有学习率（α 是免模型采样式更新里的步长）。C 错：「碰巧」不是依据——收敛性来自压缩映射的数学保证。D 错：压缩映射从任意初值出发都收敛，取零只是方便。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="c">
+      <div class="q-no">自测 4</div>
+      <div class="q-stem">Q-learning 与 Sarsa 的一步更新，差别在哪？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. Q-learning 不用学习率 α，Sarsa 用</li>
+        <li data-opt="b">B. Q-learning 是有模型算法，Sarsa 是免模型算法</li>
+        <li data-opt="c">C. Q-learning 的目标用 maxₐ′ Q(s′,a′)（离轨，按贪心目标策略计价）；Sarsa 的目标用行为策略实际选出的 a′（同轨）</li>
+        <li data-opt="d">D. Sarsa 不能处理连续状态，Q-learning 可以</li>
+      </ul>
+      <div class="quiz-explain">C 对：两式只差目标里 s′ 处的动作——max（理想的我）还是实际 a′（实际的我），这就是离轨与同轨之分。A 错：两者都用 α 作步长。B 错：两者都是免模型 TD 控制，都不需要 P、R。D 错：能否处理连续状态取决于是否配值函数近似，与同轨/离轨无关。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 5</div>
+      <div class="q-stem">关于模仿学习，下列哪项正确？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 逆强化学习把示范当监督数据，直接学状态到动作的映射</li>
+        <li data-opt="b">B. 直接模仿学「怎么做」，逆强化学习从示范反推「在乎什么」（奖赏函数）再求最优策略</li>
+        <li data-opt="c">C. 模仿学习要求奖赏函数已知，否则无法使用</li>
+        <li data-opt="d">D. 直接模仿不会出错，因为老师总是对的</li>
+      </ul>
+      <div class="quiz-explain">B 对：两条路线的分水岭就是「学动作映射」还是「反推奖赏函数」。A 错：说反了，那是直接模仿（行为克隆）。C 错：恰恰相反，模仿学习正是为「奖赏稀疏/难设计」而生的——有现成奖赏就不必模仿了。D 错：直接模仿有分布偏移——机器偏离示范轨迹后进入没见过的状态，错误会累积；示范也不可能覆盖所有局面。</div>
+    </div>
+
+    <!-- ===== 章末五件套之 4：三句话复述 ===== -->
+    <div class="retell">
+      <h3>🗣️ 用自己的话，三句话讲完本章</h3>
+      <p>对着空气（或室友）说出这三句。说卡壳的那句，回去重读对应小节。</p>
+      <details>
+        <summary>句1：这章解决什么问题？——</summary>
+        <div class="retell-answer">参考答案：前十五章都有「标准答案」可学（标注或结构），本章解决「没有即时监督信号、只有延迟稀疏的奖赏」时，机器如何学会长期最优的行为序列——即最大化折扣累积奖赏 Σₜ γᵗ rₜ₊₁。</div>
+      </details>
+      <details>
+        <summary>句2：核心机制是什么？——</summary>
+        <div class="retell-answer">参考答案：用 MDP ⟨S,A,P,R,γ⟩ 建模序贯决策；用 Bellman 方程把「长远利益」递归折成「每步价值」——有模型时策略迭代/值迭代直接解，无模型时用采样逼近：蒙特卡罗用整幕真实回报（无偏方差大），时序差分用 r + γV(s′) 每步更新（有偏方差小）；Q-learning 以 max 目标离轨地逼近最优值函数，Sarsa 以实际 a′ 同轨地评估行为策略；探索-利用用 ε-贪心 / Softmax 平衡；状态爆炸用值函数近似 V(s) = θᵀx(s)，奖赏难设计用模仿学习（直接模仿 / 逆强化学习）。</div>
+      </details>
+      <details>
+        <summary>句3：它和前后章怎么分工？——</summary>
+        <div class="retell-answer">参考答案：第15章的规则学习仍从有标注数据学「预测与表示」，本章转向「学动作」——环境只给延迟奖赏，机器在探索与利用间权衡、用值函数做功劳分配。至此全书收官：从第1章「有标注就能学」到本章「只有奖赏也能学」，主线是监督信号越弱，机器越要会自己找结构。</div>
+      </details>
+    </div>
+
+    <!-- ===== 章末五件套之 5：间隔复习计划 ===== -->
+    <div class="review-plan">
+      <h3>🔁 间隔复习计划</h3>
+      <p>回忆本身比重读有效 10 倍。到点只做一件事：翻卡 + 重做标记题。</p>
+      <table>
+        <tr><th>时间点</th><th>复习内容</th><th>预计用时</th></tr>
+        <tr><td>第 1 天</td><td>概念卡 1–6 全翻 + 回忆卡 16.1-1 至 16.5-2（共 10 张）</td><td>12 分钟</td></tr>
+        <tr><td>第 3 天</td><td>概念卡 2、4、5（Bellman / TD / Q-learning）+ 重做 L2 两道手算（Softmax 三摇臂、Q-learning 一步更新）</td><td>10 分钟</td></tr>
+        <tr><td>第 7 天</td><td>三句话复述 + 自测错题重做 + 默写 Bellman 最优方程与 Q-learning 更新式</td><td>10 分钟</td></tr>
+        <tr><td>第 15 天</td><td>只做合上书挑战；能全过就毕业（也宣告全书通关）</td><td>15 分钟</td></tr>
+      </table>
+    </div>
+
+    <!-- 合上书挑战 -->
+    <div class="final-challenge">
+      <h3>📕 合上书挑战</h3>
+      <p class="fc-sub">现在关掉这个页面，拿一张纸，凭记忆完成以下任务。全部做完再回来核对——这是本章真正的毕业考试。</p>
+      <ol id="challenge-list">
+        <li><span class="fc-check"></span>写出强化学习三要素与折扣累积奖赏公式 G = Σₜ γᵗ rₜ₊₁，说明 γ 的两个作用</li>
+        <li><span class="fc-check"></span>默写 Softmax 公式 P(k) = e^(Q(k)/τ) / Σⱼ e^(Q(j)/τ)，并说出 τ→0 与 τ→∞ 各退化为什么</li>
+        <li><span class="fc-check"></span>默写 Bellman 最优方程 V*(s) = maxₐ Σₛ′ P(s′|s,a)[R(s,a,s′) + γV*(s′)]，手算手算例 2 的值迭代（V₀=0 → 1.8 → 3.42 → 4.878 → … → 18）</li>
+        <li><span class="fc-check"></span>手算 Q-learning 一步更新（Q=2.0, r=1, max Q(s′,·)=3.0, α=0.5, γ=0.9 → 2.85），并与 Sarsa（a′=a₁ → 1.95）对照解释差异</li>
+        <li><span class="fc-check"></span>说出直接模仿与逆强化学习的区别，各说一个软肋；举例说明什么是奖赏黑客</li>
+        <li><span class="fc-check"></span>画出本章推导主线图（延迟奖赏 → 探索-利用 → 有模型 Bellman / 无模型采样 → Q-learning → 值函数近似 → 模仿学习）</li>
+        <li><span class="fc-check"></span>一句话回答本章的主线问题：没有标准答案、只有延迟奖赏时，机器如何学会长期最优的行为序列？</li>
+      </ol>
+    </div>
+
+    <div class="complete-zone">
+      <button class="btn-complete" id="btn-complete" onclick="markDone()">✓ 我已完成本章（含合上书挑战）</button>
+    </div>
+
+    <div class="chapter-nav">
+      <a href="chapter-15.html"><span class="nav-dir">← 上一章</span>第15章 规则学习</a>
+      <a href="index.html" class="next"><span class="nav-dir">下一章 →</span>回到学习地图（全书完）</a>
+    </div>
+
+  </div>
+</div>
+
+<footer class="footer">
+  <div class="wrap">第16章 强化学习 · 机器学习互动讲义 · 基于周志华《机器学习》</div>
+</footer>
+
+<script src="/lectures-assets/mermaid.min.js"></script>
+<script>
+mermaid.initialize({
+  startOnLoad: true,
+  theme: "base",
+  themeVariables: {
+    primaryColor: "#e3edf7",
+    primaryBorderColor: "#1d5f9e",
+    primaryTextColor: "#1d5f9e",
+    lineColor: "#5c554b",
+    secondaryColor: "#fbeedd",
+    tertiaryColor: "#f5f1e8",
+    fontFamily: "-apple-system, PingFang SC, sans-serif",
+    fontSize: "14px"
+  },
+  flowchart: { curve: "linear", htmlLabels: false }
+});
+</script>
+<script>
+// 自测题判分（原样复用，勿改）
+document.querySelectorAll(".quiz-block").forEach(block => {
+  const answer = block.dataset.answer;
+  const explain = block.querySelector(".quiz-explain");
+  block.querySelectorAll(".quiz-opts li").forEach(li => {
+    li.addEventListener("click", () => {
+      const opts = block.querySelectorAll(".quiz-opts li");
+      opts.forEach(o => o.classList.add("disabled"));
+      if (li.dataset.opt === answer) {
+        li.classList.add("correct");
+      } else {
+        li.classList.add("wrong");
+        block.querySelector(`[data-opt="${answer}"]`).classList.add("correct");
+      }
+      explain.classList.add("show");
+    });
+  });
+});
+
+// 合上书清单打勾（原样复用，勿改）
+document.querySelectorAll("#challenge-list li").forEach(li => {
+  li.addEventListener("click", () => li.classList.toggle("checked"));
+});
+
+// 完成标记 → localStorage（章号 16）
+const KEY = "ml_progress_v1";
+function loadProgress() {
+  try { return JSON.parse(localStorage.getItem(KEY)) || {}; } catch (e) { return {}; }
+}
+const progress = loadProgress();
+const btn = document.getElementById("btn-complete");
+if (progress[16] && progress[16].done) {
+  btn.textContent = "✓ 已完成 · 再次点击重置";
+  btn.classList.add("done");
+}
+function markDone() {
+  const p = loadProgress();
+  if (p[16] && p[16].done) {
+    delete p[16];
+    btn.textContent = "✓ 我已完成本章（含合上书挑战）";
+    btn.classList.remove("done");
+  } else {
+    p[16] = { done: true, completedAt: Date.now(), reviewsDone: 0 };
+    btn.textContent = "✓ 已完成 · 复习提醒已开启";
+    btn.classList.add("done");
+  }
+  localStorage.setItem(KEY, JSON.stringify(p));
+}
+</script>
+
+</body>
+</html>

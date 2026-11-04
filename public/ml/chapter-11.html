@@ -1,0 +1,686 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第11章 特征选择与稀疏学习 · 机器学习互动讲义</title>
+<link rel="stylesheet" href="/lectures-assets/style.css">
+</head>
+<body>
+<nav class="topbar">
+  <div class="topbar-inner">
+    <span class="brand"><a href="index.html" style="color:inherit">← 学习地图</a></span>
+    <span class="crumb">阶段③ · 无监督与理论 / 第11章</span>
+  </div>
+</nav>
+<div class="wrap">
+  <div class="lecture-head">
+    <span class="ch-label">CHAPTER 11 · 无监督与理论</span>
+    <h1>特征选择与稀疏学习</h1>
+    <p class="lead">特征太多太杂时，怎样选出（或学出）"少而精"的特征表示：子集搜索是 NP 难的，工程上用三条近似路线替代，而它们的共同信仰是——真正重要的维度很少。</p>
+  </div>
+  <div class="position-bar">
+    <strong>本章在主线上的位置：</strong>第10章用"混合压缩"的方式降维，得到的新特征是原特征的加权组合，可解释性差；本章改走另一条路——直接从原始特征中<strong>挑出</strong>一个子集，或让模型在训练中<strong>自动学出</strong>稀疏权重 → 第12章计算学习理论将回答"什么样的假设类、多少样本才学得到"，为本章的"稀疏假设"提供理论背书。<br>
+    第11章回答主线上的第11个问题：<strong>特征太多太杂时，怎样选出（或学出）"少而精"的特征表示——子集搜索是 NP 难的，工程上用什么近似替代？</strong>
+    <div class="map-inline">
+      <span class="node">① 基础与评估<br>Ch1 绪论 · Ch2 模型评估与选择</span><span class="arrow">→</span>
+      <span class="node">② 经典模型<br>Ch3 线性模型 · Ch4 决策树 · Ch5 神经网络 · Ch6 支持向量机 · Ch7 贝叶斯分类 · Ch8 集成学习</span><span class="arrow">→</span>
+      <span class="node here">③ 无监督与理论<br>Ch9 聚类 · Ch10 降维与度量学习 · <strong>Ch11 特征选择与稀疏学习</strong> · Ch12 计算学习理论</span><span class="arrow">→</span>
+      <span class="node">④ 进阶专题<br>Ch13 半监督学习 · Ch14 概率图模型 · Ch15 规则学习 · Ch16 强化学习</span>
+    </div>
+  </div>
+  <div class="objectives">
+    <h4>🎯 学完本章，合上书你应该能：</h4>
+    <ol>
+      <li>说出无关特征与冗余特征的区别，并用 2<sup>d</sup>−1 解释为什么子集搜索不可行；</li>
+      <li>手算 Relief 的一次分量更新：找出猜中近邻与猜错近邻，逐特征算出 diff 项并说清分量为正的含义；</li>
+      <li>写出 LASSO 目标 min ‖y − Xw‖² + λ‖w‖₁，用"菱形约束顶点在坐标轴上"一句话解释 ℓ1 为何产生稀疏解；</li>
+      <li>对给定的小数据手算坐标下降的一步：算部分残差 ρ<sub>j</sub> 与 z<sub>j</sub>，套软阈值 S(z, λ) 得到新权重，展示某维被压成 0；</li>
+      <li>说出稀疏编码与字典学习的交替优化结构（固定 B 解 α 是 LASSO，固定 α 解 B 是最小二乘）；</li>
+      <li>说出压缩感知精确恢复的两个前提（信号稀疏、测量矩阵满足 RIP），以及它与奈奎斯特采样观念的冲突点。</li>
+    </ol>
+  </div>
+  <div class="lecture">
+    <div class="figure">
+      <div class="mermaid">
+flowchart TB
+  A["特征太多：冗余与无关特征"] --> B["枚举全部子集要 2^d 次评估：组合爆炸"]
+  B --> C["过滤式：先筛后学 Relief"]
+  B --> D["包裹式：学习器当裁判 LVW"]
+  B --> E["嵌入式：训练目标自带筛选 LASSO"]
+  E --> F["ℓ1 菱形约束顶点在坐标轴上 权重被压成 0"]
+  C --> G["共同信仰：真正重要的维度很少"]
+  D --> G
+  F --> G
+  G --> H["稀疏升级：字典学习与稀疏编码"]
+  H --> I["压缩感知：m 远小于 n 的测量也能还原"]
+  I --> J["代价：选择结果不稳定 λ 敏感 可解释性错觉"]
+  classDef hot fill:#fbeedd,stroke:#c4651f,stroke-width:2.5px,color:#c4651f;
+  classDef danger fill:#fae9e7,stroke:#b03a2e,stroke-width:2.5px,color:#b03a2e;
+  class G hot;
+  class J danger;
+      </div>
+      <div class="caption">本章推导主线：组合爆炸逼出三条近似路线（分叉），三路汇入同一个稀疏信仰（汇合），最终落到代价与遗留问题。</div>
+    </div>
+
+    <h2><span class="sec-no">11.1</span>为什么不能枚举所有特征子集：组合爆炸与三条出路</h2>
+    <p>第10章的降维（如 PCA）把 d 个原始特征"混合压缩"成 k 个新特征——新特征是全体旧特征的线性组合，物理含义被搅浑了：医生没法向病人解释"0.3×血糖 + 0.7×血压"是什么指标。另一条路是<strong>原样保留</strong>被选中的特征：<span class="term">特征选择</span>（Feature Selection）——从 d 个特征中挑出一个子集，扔掉其余。扔掉什么？两类特征：</p>
+    <ul>
+      <li><span class="term">无关特征</span>（Irrelevant Feature）：与学习任务毫不相干，例如用"患者编号"预测疾病；</li>
+      <li><span class="term">冗余特征</span>（Redundant Feature）：本身有用，但它携带的信息能被其他特征完全推出来，例如同时记录"身高（cm）"与"身高（inch）"。</li>
+    </ul>
+    <p>注意二者不重合：冗余特征可能每个都高度相关，只是"重复报到"。理想做法是枚举所有特征子集、用验证集性能打分、取最优——但 d 个特征的非空子集有 <strong>2<sup>d</sup> − 1</strong> 个，这就是灾难的源头：</p>
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>特征数 d</th><th>非空子集数 2<sup>d</sup> − 1</th><th>直观感受（每秒评估 10⁶ 个子集）</th></tr>
+        <tr><td>10</td><td>1024 − 1 = 1023</td><td>约 1 毫秒，瞬间完成</td></tr>
+        <tr><td>20</td><td>约 1.05 × 10⁶</td><td>约 1 秒</td></tr>
+        <tr><td>30</td><td>约 1.07 × 10⁹</td><td>约 18 分钟</td></tr>
+        <tr><td>50</td><td>1125899906842623 ≈ 1.126 × 10¹⁵</td><td>约 1.126 × 10⁹ 秒 ≈ <strong>35.7 年</strong></td></tr>
+      </table>
+    </div>
+    <div class="formula">子集数 = 2<sup><span class="var">d</span></sup> − 1：d=10 时是 1023，d=50 时约 1.126×10¹⁵</div>
+    <p>每加一个特征，搜索空间翻倍——这是教科书级的<span class="term">组合爆炸</span>（Combinatorial Explosion），最优子集选择已被证明是 NP 难问题。工程上只能放弃"最优"，改用三类近似策略：</p>
+    <div class="figure">
+      <div class="mermaid">
+flowchart TB
+  A["最优子集搜索不可行"] --> B["过滤式 Filter：不看学习器 先按统计量筛 再训练"]
+  A --> C["包裹式 Wrapper：用学习器性能当裁判 直接搜子集"]
+  A --> D["嵌入式 Embedding：把筛选融进训练目标 一次完成"]
+  B --> E["代表：Relief 11.2"]
+  C --> F["代表：LVW 11.2"]
+  D --> G["代表：LASSO 11.3"]
+      </div>
+      <div class="caption">图 11.1 特征选择的三条近似路线：谁先谁后、谁来当裁判，是三者的根本分野。</div>
+    </div>
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>三条路线的区别就在"<strong>选择</strong>与<strong>学习</strong>谁先谁后、是否互相可见"：过滤式先筛后学（选择不看学习器）；包裹式边搜边学（学习器给每个候选子集打分）；嵌入式不分先后（选择就是学习的副产品）。</p>
+    </div>
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>"冗余特征既然有用就都应该保留"——错。冗余特征徒增维度与过拟合风险，还可能让后续的 ℓ1 选择在高度相关的几个特征间"随机站队"（见 11.3 的稳定性讨论），该扔就扔。</p>
+    </div>
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 11.1-1</div><div class="q-text">无关特征与冗余特征的区别？各举一例。</div><span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back"><div class="a-tag">参考答案</div>无关特征与任务毫不相干（用患者编号预测疾病）；冗余特征本身有用但信息可被其他特征推出（身高同时用 cm 和 inch 记录）。二者不重合。</div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 11.1-2</div><div class="q-text">为什么不能枚举所有特征子集取最优？d=50 时子集有多少个？</div><span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back"><div class="a-tag">参考答案</div>子集数 2^d − 1 随 d 指数爆炸，d=50 时约 1.126×10¹⁵ 个，每秒评估 100 万个也要约 35.7 年；且该问题是 NP 难的。</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <h2><span class="sec-no">11.2</span>过滤式：先筛后学，Relief 用"近邻对比"给特征打分</h2>
+    <p>上一节说过滤式"不看学习器"，那它凭什么判断特征好坏？<span class="term">Relief</span> 的答案是：看特征能不能帮样本"<strong>区分同类与异类的近邻</strong>"。对每个采样到的样本 x，找两个邻居——<span class="term">猜中近邻</span>（Near-Hit）：与 x 同类且最近的样本；<span class="term">猜错近邻</span>（Near-Miss）：与 x 异类且最近的样本。然后对每个特征 j 累计：</p>
+    <div class="formula">δ<sup><span class="var">j</span></sup> = ∑<sub>i</sub>（ −diff(<span class="var">x</span><sub>i</sub><sup>j</sup>, <span class="var">x</span><sub>i,nh</sub><sup>j</sup>)² + diff(<span class="var">x</span><sub>i,nm</sub><sup>j</sup>)² ）</div>
+    <p>直觉：好特征应该"离猜错近邻远、离猜中近邻近"，即第二项大、第一项小，δ<sup>j</sup> 为正且越大越好。diff 对连续特征取差值的绝对值（通常先归一化），离散特征相等为 0、不等为 1。分量 δ<sup>j</sup> 大于 0 意味着：在该特征上，异类近邻比同类近邻离得更远——此特征有助于分类。</p>
+    <p>完整手算一例。6 个样本、2 个类、3 个特征（已归一化到 [0,1]）：</p>
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>样本</th><th>f₁</th><th>f₂</th><th>f₃</th><th>类别</th></tr>
+        <tr><td>x₁</td><td>0.0</td><td>0.5</td><td>0.9</td><td>A</td></tr>
+        <tr><td>x₂</td><td>0.1</td><td>0.4</td><td>0.8</td><td>A</td></tr>
+        <tr><td>x₃</td><td>0.2</td><td>0.6</td><td>0.85</td><td>A</td></tr>
+        <tr><td>x₄</td><td>0.9</td><td>0.45</td><td>0.1</td><td>B</td></tr>
+        <tr><td>x₅</td><td>0.8</td><td>0.55</td><td>0.2</td><td>B</td></tr>
+        <tr><td>x₆</td><td>1.0</td><td>0.5</td><td>0.15</td><td>B</td></tr>
+      </table>
+    </div>
+    <p>取 i = 1，即对 x₁ = (0.0, 0.5, 0.9) 更新一次。用全特征欧氏距离找两个近邻：</p>
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>候选</th><th>与 x₁ 的距离</th><th>结论</th></tr>
+        <tr><td>x₂（同类）</td><td>√(0.1²+0.1²+0.1²) = √0.03 ≈ 0.173</td><td><strong>猜中近邻 nh</strong>（同类最近）</td></tr>
+        <tr><td>x₃（同类）</td><td>√(0.2²+0.1²+0.05²) = √0.0525 ≈ 0.229</td><td>同类次近</td></tr>
+        <tr><td>x₄（异类）</td><td>√(0.9²+0.05²+0.8²) = √1.4525 ≈ 1.205</td><td>—</td></tr>
+        <tr><td>x₅（异类）</td><td>√(0.8²+0.05²+0.7²) = √1.1325 ≈ 1.064</td><td><strong>猜错近邻 nm</strong>（异类最近）</td></tr>
+        <tr><td>x₆（异类）</td><td>√(1.0²+0²+0.75²) = √1.5625 = 1.25</td><td>—</td></tr>
+      </table>
+    </div>
+    <p>逐特征算 diff 分量（diff 取绝对差，公式中带平方）：</p>
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>特征</th><th>−diff(x₁, nh)²</th><th>+diff(x₁, nm)²</th><th>本次分量</th></tr>
+        <tr><td>f₁</td><td>−|0.0−0.1|² = −0.01</td><td>+|0.0−0.8|² = +0.64</td><td><strong>+0.63</strong></td></tr>
+        <tr><td>f₂</td><td>−|0.5−0.4|² = −0.01</td><td>+|0.5−0.55|² = +0.0025</td><td><strong>−0.0075</strong></td></tr>
+        <tr><td>f₃</td><td>−|0.9−0.8|² = −0.01</td><td>+|0.9−0.2|² = +0.49</td><td><strong>+0.48</strong></td></tr>
+      </table>
+    </div>
+    <p>结论一目了然：f₁（+0.63）与 f₃（+0.48）分量为正——异类近邻在这两维上确实更远，它们是有用特征；f₂ 分量约为 0 甚至为负（−0.0075）——它几乎不帮忙区分。对所有样本重复此过程并累加，δ 大的特征入选。</p>
+    <p>对比<strong>包裹式</strong>的代表 <span class="term">LVW</span>（Las Vegas Wrapper）：它在特征子集空间里<strong>随机试</strong>，每试一个子集就真刀真枪训练一次学习器、用交叉验证打分，满意才停。裁判是真实学习器性能（比过滤式的统计量更准），代价是算力——每评估一个子集都要完整训练一遍。</p>
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>Relief 的评分标准本质是"<strong>留一法 1-近邻分类器在该特征上犯错的方向</strong>"：离猜错近邻越近越容易分错。它用几何距离代替了显式训练，这是"过滤"二字的全部含义。</p>
+    </div>
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>"Relief 打分时只看单个特征，所以能处理任意维度"——打分确实逐特征进行，但<strong>近邻是在全特征空间里找的</strong>；高维下距离集中（维度灾难），near-hit/near-miss 失去区分度，Relief 同样需要先用别的方法粗筛。</p>
+    </div>
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 11.2-1</div><div class="q-text">Relief 的猜中近邻与猜错近邻分别是什么？分量 δ^j 大于 0 说明什么？</div><span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back"><div class="a-tag">参考答案</div>猜中近邻=同类最近样本，猜错近邻=异类最近样本。δ^j 大于 0 说明在特征 j 上异类近邻比同类近邻更远——该特征有助于分类。</div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 11.2-2</div><div class="q-text">包裹式 LVW 与过滤式的根本区别？代价是什么？</div><span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back"><div class="a-tag">参考答案</div>LVW 直接用学习器性能当裁判、在子集空间随机搜索；过滤式只看统计量不训练。代价：每评估一个子集都要完整训练一次，算力开销巨大。</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <h2><span class="sec-no">11.3</span>嵌入式：ℓ1 正则为什么能"自动"选特征</h2>
+    <p>过滤式与学习器脱节，包裹式又太贵。第三条路让特征选择<strong>长在训练目标里</strong>：给线性回归的平方误差加一个 ℓ1 惩罚项，就是 <span class="term">LASSO</span>（Least Absolute Shrinkage and Selection Operator）：</p>
+    <div class="formula">min<sub><span class="var">w</span></sub> ‖y − Xw‖² + λ‖w‖₁</div>
+    <p>‖w‖₁ = |w₁| + |w₂| + … 是所有权重绝对值之和；λ 控制惩罚力度。几何直觉一句话：平方误差项的等高线是椭球，ℓ1 约束 |w₁|+|w₂| ≤ t 的区域是<strong>菱形</strong>，菱形顶点恰好落在坐标轴上——椭球与菱形首次相切的点大概率是顶点，而顶点处某些坐标恰为 0。ℓ2（ridge）的约束区域是圆，切点几乎不可能落在轴上，所以<strong>只收缩、不归零</strong>。</p>
+    <p>LASSO 怎么解？<span class="term">坐标下降</span>（Coordinate Descent）：每次只动一个维度 w<sub>j</sub>，其余冻结。对 w<sub>j</sub> 而言，目标化为关于它的二次函数加 λ|w<sub>j</sub>|，闭式解由<span class="term">软阈值</span>（Soft Thresholding）算子给出：</p>
+    <div class="formula">w<sub>j</sub> = S(ρ<sub>j</sub>, λ) / z<sub>j</sub>，其中 S(z, λ) = sign(z) · max(|z| − λ, 0)</div>
+    <div class="formula">ρ<sub>j</sub> = ∑<sub>i</sub> x<sub>ij</sub>(y<sub>i</sub> − ∑<sub>k≠j</sub> x<sub>ik</sub>w<sub>k</sub>)（部分残差），z<sub>j</sub> = ∑<sub>i</sub> x<sub>ij</sub>²</div>
+    <p><strong>完整手算坐标下降的一轮</strong>。微型回归：4 个样本、2 个特征（无截距），λ = 1：</p>
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>样本 i</th><th>x_i1</th><th>x_i2</th><th>y_i</th></tr>
+        <tr><td>1</td><td>1</td><td>0</td><td>3</td></tr>
+        <tr><td>2</td><td>1</td><td>0</td><td>3</td></tr>
+        <tr><td>3</td><td>0</td><td>1</td><td>0.4</td></tr>
+        <tr><td>4</td><td>0</td><td>1</td><td>0.4</td></tr>
+      </table>
+    </div>
+    <p>特征 1 强相关（对应 y=3），特征 2 弱相关（对应 y=0.4）。从 w = (0, 0) 出发：</p>
+    <p><strong>第 1 步，更新 w₁</strong>（冻结 w₂ = 0）：</p>
+    <ul>
+      <li>z₁ = 1² + 1² + 0² + 0² = 2；</li>
+      <li>ρ₁ = 1·(3 − 0·w₂) + 1·(3 − 0·w₂) + 0 + 0 = 6；</li>
+      <li>w₁ = S(6, 1)/2 = sign(6)·max(6−1, 0)/2 = 5/2 = <strong>2.5</strong>。</li>
+    </ul>
+    <p><strong>第 2 步，更新 w₂</strong>（冻结 w₁ = 2.5）：</p>
+    <ul>
+      <li>z₂ = 0² + 0² + 1² + 1² = 2；</li>
+      <li>样本 3、4 的 x_i1 = 0，故部分残差不受 w₁ 影响：ρ₂ = 1·(0.4 − 0) + 1·(0.4 − 0) = 0.8；</li>
+      <li>|ρ₂| = 0.8 &lt; λ = 1，软阈值直接归零：w₂ = S(0.8, 1)/2 = <strong>0</strong>。</li>
+    </ul>
+    <p>第二轮 ρ₁ 仍为 6、w₁ = 2.5 不变，收敛。最终解 w = (2.5, 0)：<strong>特征 2 被自动删除</strong>，特征选择完成。对照 ridge（同样 λ=1，惩罚 ‖w‖²）：w₁ = 6/(2+1) = 2.0，w₂ = 0.8/(2+1) ≈ 0.267——被收缩但<strong>不是 0</strong>，特征全部保留。</p>
+    <div class="box insight">
+      <span class="box-tag">✅ 判定规则</span>
+      <p>软阈值的生死线：<strong>|ρ<sub>j</sub>| ≤ λ ⟹ w<sub>j</sub> = 0</strong>。特征 j 想"活下来"，它解释部分残差的能力必须超过 λ。λ 就是入选门槛本身——调 λ 就是调入选难度。</p>
+    </div>
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>"LASSO 选出的特征就是真特征"——错。高度相关的一组特征里，LASSO 往往随机挑一个、把其余压成 0，换一批数据可能换另一个"代表"；这是 11.5 末尾"可解释性错觉"的伏笔。想要整组入选可加少量 ℓ2（弹性网）。</p>
+    </div>
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 11.3-1</div><div class="q-text">用几何语言解释：为什么 ℓ1 正则产生稀疏解而 ℓ2 不产生？</div><span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back"><div class="a-tag">参考答案</div>ℓ1 约束区域是菱形，顶点在坐标轴上；误差等高线与菱形首次相切常发生在顶点处，该处某些坐标恰为 0。ℓ2 约束是圆，切点几乎不落在轴上，只收缩不归零。</div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 11.3-2</div><div class="q-text">写出软阈值算子 S(z, λ)，并说出坐标下降中 w_j 的更新公式。</div><span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back"><div class="a-tag">参考答案</div>S(z, λ) = sign(z)·max(|z|−λ, 0)；w_j = S(ρ_j, λ)/z_j，其中 ρ_j 是冻结其他维度后的部分残差内积，z_j = Σx_ij²。|ρ_j| ≤ λ 时 w_j 归零。</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <h2><span class="sec-no">11.4</span>从选特征到造字典：稀疏编码与字典学习</h2>
+    <p>前三节都在"挑"已有特征。能不能更进一步：<strong>学一组新的"零件"</strong>，让每个样本都能用少数几个零件拼出来？这就是<span class="term">稀疏编码</span>（Sparse Coding）：给定字典 B（k 个原子），把每个样本 x 表示成 B 的稀疏线性组合，系数 α 要求稀疏：</p>
+    <div class="formula">min<sub>B, α</sub> ∑<sub>i</sub> ‖x<sub>i</sub> − Bα<sub>i</sub>‖² + λ∑<sub>i</sub> ‖α<sub>i</sub>‖₁</div>
+    <p>B 不预先给定、也从数据里学，就是<span class="term">字典学习</span>（Dictionary Learning）。整体难解，但<strong>交替优化</strong>拆开就简单：固定 B 解 α——逐样本就是一个 LASSO（坐标下降+软阈值伺候）；固定 α 解 B——惩罚项消失，退化为普通最小二乘。两个熟问题来回迭代即可。</p>
+    <p><strong>玩具例（1 维、3 样本、2 原子）</strong>：字典原子 b₁ = 1、b₂ = 2，样本 x ∈ {2, −1, 0.5}，λ = 1。用坐标下降给每个样本编码（单维特征时 α<sub>j</sub> 的更新就是 S(b<sub>j</sub>·部分残差, λ)/b<sub>j</sub>²）：</p>
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>样本 x</th><th>更新 α₁</th><th>更新 α₂</th><th>编码结果</th></tr>
+        <tr><td>2</td><td>ρ=1·2=2 → S(2,1)/1² = 1</td><td>部分残差 2−1·1=1，ρ=2·1=2 → S(2,1)/2² = 0.25</td><td>(1, 0.25)，重构 1·1+2·0.25 = 1.5</td></tr>
+        <tr><td>−1</td><td>ρ=−1 → |−1|≤λ，<strong>α₁ = 0</strong></td><td>部分残差 −1，ρ=2·(−1)=−2 → S(−2,1)/4 = −0.25</td><td>(0, −0.25)，重构 −0.5</td></tr>
+        <tr><td>0.5</td><td>ρ=0.5 ≤ λ，<strong>α₁ = 0</strong></td><td>ρ=2·0.5=1 ≤ λ，<strong>α₂ = 0</strong></td><td>(0, 0)，完全放弃重构</td></tr>
+      </table>
+    </div>
+    <p>注意 λ=1 的杀伤力：弱样本 x=0.5 的两个系数全被压成 0——它被认为"不值得用任何原子表示"。再固定这些编码，对字典做一步最小二乘更新。以 b₂ 为例：b₂ = Σ<sub>i</sub> α<sub>i2</sub>(x<sub>i</sub> − b₁α<sub>i1</sub>) / Σ<sub>i</sub> α<sub>i2</sub>²：</p>
+    <ul>
+      <li>分子 = 0.25·(2 − 1·1) + (−0.25)·(−1 − 0) + 0 = 0.25 + 0.25 = 0.5；</li>
+      <li>分母 = 0.25² + (−0.25)² + 0² = 0.125；</li>
+      <li>新 b₂ = 0.5 / 0.125 = <strong>4</strong>（由 2 更新到 4）。同理新 b₁ = 1·(2 − 2·0.25)/1² = <strong>1.5</strong>（由 1 更新到 1.5）。</li>
+    </ul>
+    <p>字典朝着"更能解释数据"的方向移动了一步；如此往复交替，直到收敛。</p>
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>上面 b₂ 从 2 一下跳到 4，暴露了字典学习的<span class="term">尺度模糊</span>（Scale Ambiguity）：B 放大 k 倍、α 缩小 k 倍，目标值不变。所以实践中每步更新后都要把原子归一化（如 ‖b<sub>j</sub>‖ = 1），否则原子会无限膨胀、系数无限缩小。</p>
+    </div>
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>普通字典（如傅里叶基、小波基）是人造的通用零件；字典学习是为手头数据<strong>定制</strong>零件。图像上它学出的原子天然是边缘、角点等局部结构——稀疏表示的"零件"第一次有了语义。</p>
+    </div>
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 11.4-1</div><div class="q-text">写出稀疏编码/字典学习的目标函数，并说出交替优化的两步各是什么熟问题。</div><span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back"><div class="a-tag">参考答案</div>min Σ‖x_i − Bα_i‖² + λΣ‖α_i‖₁。固定 B 解 α 是逐样本的 LASSO；固定 α 解 B 是最小二乘。两步交替直到收敛。</div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 11.4-2</div><div class="q-text">什么是字典学习的尺度模糊？实践中怎么处理？</div><span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back"><div class="a-tag">参考答案</div>B 放大 k 倍同时 α 缩小 k 倍，目标值不变，原子会无限膨胀。处理：每步字典更新后把每个原子归一化（如单位范数）。</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <h2><span class="sec-no">11.5</span>稀疏性的极限礼物：压缩感知</h2>
+    <p>前几节把"稀疏"当作整理数据的手段。本章最后一节展示稀疏假设能走多远：<strong>采样本身都可以被压缩</strong>。传统观念里，采样率必须不低于信号最高频率的两倍（奈奎斯特定理），否则信息必损。<span class="term">压缩感知</span>（Compressed Sensing）说：如果信号在某个基下是稀疏的，且测量方式足够"乱"，那么远少于信号维度的测量数也能<strong>精确还原</strong>原信号。</p>
+    <p>形式化：真实信号 x ∈ ℝⁿ，在某基下是 k-稀疏的（至多 k 个非零分量）；我们拿不到 x，只能拿 m 个线性测量 y = Ax（A 是 m×n 矩阵，m ≪ n）。欠定方程通常有无穷多解，但只要——</p>
+    <ul>
+      <li><strong>前提 1</strong>：x 在某基下稀疏（k ≪ n）；</li>
+      <li><strong>前提 2</strong>：A 满足<span class="term">限定等距性</span>（Restricted Isometry Property, RIP）——A 作用在任何 k-稀疏信号上都近似保距，不把它们"压扁"到无法区分。随机高斯/伯努利矩阵以很高概率满足它。</li>
+    </ul>
+    <p>——那么把 NP 难的 ℓ0 最小化放松成 ℓ1 最小化（min ‖x‖₁ s.t. y = Ax），就能以很高概率精确恢复 x。一个数值直觉：n = 10 维信号、只有 3 个非零分量，用约 m = 6 个随机测量即可精确还原——测量数取决于稀疏度 k（约 k·log(n/k) 量级），<strong>而不是信号维度 n</strong>。这正是"奈奎斯特观念被颠覆"之处：信息量的瓶颈不是信号有多长，而是信号有多"不简单"。</p>
+    <div class="box insight">
+      <span class="box-tag">✅ 判定规则</span>
+      <p>一句话收束本章：<strong>稀疏假设贯穿始终</strong>——特征选择假设"有用特征很少"，字典学习假设"用少数原子就能拼出样本"，压缩感知假设"非零分量很少所以少量测量够用"。选特征、写字典、压采样，本质都是同一句话：真正重要的维度很少。</p>
+    </div>
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区（本章的总代价）</span>
+      <p>稀疏不是免费的午餐：① <strong>稳定性差</strong>——数据抖一抖，LASSO 选出的特征集可能换一茬；② <strong>超参数敏感</strong>——λ 大一格稀疏到欠拟合，小一格稀疏性荡然无存，且没有原则性的选法；③ <strong>可解释性错觉</strong>——被算法选中 ≠ 因果上重要，相关特征组的"随机站队"会骗你讲故事。稀疏给的是可处理的近似，不是真理。</p>
+    </div>
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 11.5-1</div><div class="q-text">压缩感知精确恢复的两个前提是什么？测量数 m 主要取决于什么？</div><span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back"><div class="a-tag">参考答案</div>信号在某基下 k-稀疏；测量矩阵 A 满足限定等距性（RIP）。m 取决于稀疏度 k（约 k·log(n/k) 量级），而非信号维度 n。</div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 11.5-2</div><div class="q-text">压缩感知与奈奎斯特采样定理的冲突点在哪？</div><span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back"><div class="a-tag">参考答案</div>奈奎斯特要求采样率 ≥ 2 倍最高频率（由信号带宽决定）；压缩感知说只要信号稀疏且测量满足 RIP，远更少的测量即可精确恢复——瓶颈从"信号多长"变成"信号多复杂"。</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <h2><span class="sec-no">🃏</span>概念卡：本章概念的一分钟画像</h2>
+    <p>翻面前先自问：这个概念我能用一句话讲清楚吗？</p>
+    <div class="flip-grid">
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 1</div><div class="q-text">特征选择三分法（Filter / Wrapper / Embedded）</div><span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">按"选择与学习的关系"分的三类：先筛后学 / 学习器当裁判 / 融进训练目标。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">最优子集搜索是 2^d 级的 NP 难问题，必须用近似替代。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">招聘：看简历筛（过滤）/ 试用期考察（包裹）/ 工作中自然淘汰（嵌入）。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为三者效果相同——裁判不同，偏差与成本完全不同。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">高维数据入门第一步；本章 11.2–11.3 各对应一个代表。</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 2</div><div class="q-text">Relief</div><span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">过滤式算法：累计"离猜错近邻的差 − 离猜中近邻的差"给每个特征打分。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">不训练学习器也能评估特征对分类的贡献。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">好特征让"自己人"聚拢、"外人"远离。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为逐特征打分与维度无关——近邻在全特征空间找，高维下距离集中会失灵。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">中小维度二分类的快速预筛；多分类用其扩展 ReliefF。</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 3</div><div class="q-text">LASSO（ℓ1 正则）</div><span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">min ‖y − Xw‖² + λ‖w‖₁：平方误差加权重绝对值之和的惩罚。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">训练的同时自动把不重要特征的权重压成 0，选择即学习。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">菱形预算的顶点在轴上，等高线先碰到顶点 → 某些坐标恰好为 0。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为选出的就是真特征——相关特征组里会随机站队，换批数据换结果。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">特征数 ≫ 样本数的线性模型（文本、基因）；也是 11.4 编码步的子程序。</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 4</div><div class="q-text">软阈值与坐标下降（Soft Thresholding / Coordinate Descent）</div><span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">S(z,λ)=sign(z)·max(|z|−λ,0)；每次只更新一维 w_j = S(ρ_j,λ)/z_j，轮换收敛。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">ℓ1 不可导、整体难解，逐维有闭式解。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">把每个系数往 0 方向"拧"λ 格，拧过头的直接归零。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为硬阈值（只归零不收缩）等价——软阈值对幸存者还要再减 λ。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">一切 ℓ1 问题的默认求解器：LASSO、稀疏编码的 α 步。</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 5</div><div class="q-text">字典学习与稀疏编码（Dictionary Learning / Sparse Coding）</div><span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">学一本字典 B，使每个样本可表为 B 的稀疏线性组合：min Σ‖x−Bα‖² + λΣ‖α‖₁。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">从"挑现成特征"升级为"为数据定制表示零件"。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">为这门语言编一本最小词典，每句话只用少数几个词。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">忘记尺度模糊——不归一化原子，B 会无限膨胀、α 无限缩小。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">图像去噪/补全、特征学习；深度学习中"稀疏自编码"的思想源头。</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 6</div><div class="q-text">压缩感知（Compressed Sensing）</div><span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">k-稀疏信号 + 满足 RIP 的测量矩阵 ⟹ m≪n 个测量经 ℓ1 最小化精确恢复。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">采样成本极高的场合（医学成像、传感器），少采样也能还原。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">信息瓶颈是"复杂度"不是"长度"：稀疏信号没那么多自由度要测。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为推翻奈奎斯特——它换了前提（稀疏性），并非无条件少采样。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">MRI 加速、单像素相机；稀疏假设威力的理论天花板。</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <h2><span class="sec-no">📝</span>分层习题</h2>
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>判断对错并说理由：冗余特征一定是无关特征，所以可以直接删除。</div>
+      <details>
+        <summary>提示</summary>
+        <p>回想两个定义的关键词：无关 = 与任务不相干；冗余 = 信息可被其他特征推出。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p><strong>错</strong>，错在把两个不相交的概念混为一谈。冗余特征本身可能与任务高度相关（如"身高（cm）"对预测体重非常有用），只是它的信息被另一个特征（身高（inch））完全覆盖；无关特征则与任务毫不相干（患者编号）。结论"可以删除"碰巧对，但理由全错：删冗余是因为<strong>重复</strong>、不是因为它没用。易错点：误以为"有用"和"该留"等价——冗余特征有用仍该删。</p>
+        </div>
+      </details>
+    </div>
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>包裹式（如 LVW）比过滤式（如 Relief）贵在哪里？这笔钱买来的好处是什么？</div>
+      <details>
+        <summary>提示</summary>
+        <p>算一算：评估一个候选子集，两边各要做什么？</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p><strong>贵在裁判</strong>：过滤式评估特征只算统计量（如 Relief 找近邻算 diff），一次扫数据就够；包裹式每评估一个候选子集都要<strong>完整训练一次学习器并做交叉验证</strong>，子集搜索过程中这样的训练要重复成百上千次，算力开销高几个数量级。</p>
+          <p><strong>买来的好处</strong>：评价标准就是最终学习器的真实性能，选出的子集与后续模型"门当户对"，通常精度更高；而过滤式的统计量与学习器脱节，可能筛掉对模型其实有用的特征。</p>
+        </div>
+      </details>
+    </div>
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>① 软阈值：分别计算 S(−1.8, 0.5) 与 S(0.3, 0.5)，并解释后者为什么对特征选择至关重要。</div>
+      <details>
+        <summary>提示</summary>
+        <p>套 S(z,λ)=sign(z)·max(|z|−λ,0)，先看 |z| 与 λ 谁大。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p>S(−1.8, 0.5)：|−1.8| = 1.8 &gt; 0.5，故 = sign(−1.8)·(1.8−0.5) = <strong>−1.3</strong>。S(0.3, 0.5)：|0.3| = 0.3 ≤ 0.5，max(0.3−0.5, 0) = 0，故 = <strong>0</strong>。后者正是 ℓ1 产生稀疏解的机制：部分残差不够强（|z| ≤ λ）的维度被<strong>直接归零、彻底删除</strong>，而不是仅仅变小——特征选择就是成片的"0.3 → 0"。</p>
+        </div>
+      </details>
+    </div>
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>② Relief：5 个样本 s₁=(0, 0, A)、s₂=(0.2, 0.8, A)、s₃=(0.9, 0.3, B)、s₄=(1.0, 0.6, B)、s₅=(0.85, 0.1, B)，对 s₂ 用全特征欧氏距离找近邻，并计算特征 f₁、f₂ 的一次 diff 分量（带平方）。</div>
+      <details>
+        <summary>提示</summary>
+        <p>s₂ 的同类只有 s₁；异类里分别算到 s₃、s₄、s₅ 的距离再取最小。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p>距离：d(s₂,s₁) = √(0.2²+0.8²) = √0.68 ≈ 0.825 → 猜中近邻 = s₁。d(s₂,s₃) = √(0.7²+0.5²) = √0.74 ≈ 0.860；d(s₂,s₄) = √(0.8²+0.2²) = √0.68 ≈ 0.825；d(s₂,s₅) = √(0.65²+0.7²) = √0.9125 ≈ 0.955 → 猜错近邻 = s₄。</p>
+          <p>f₁ 分量 = −|0.2−0|² + |0.2−1.0|² = −0.04 + 0.64 = <strong>+0.60</strong>（正，f₁ 有用）；f₂ 分量 = −|0.8−0|² + |0.8−0.6|² = −0.64 + 0.04 = <strong>−0.60</strong>（负，f₂ 帮倒忙）。</p>
+        </div>
+      </details>
+    </div>
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l3">L3 建模应用</span>文本分类：词袋特征 d = 100000 维，样本仅 n = 5000，算力预算有限。你该怎么选特征选择方案？具体说明为什么排除包裹式，以及 λ 调大、调小各自的后果。</div>
+      <details>
+        <summary>提示</summary>
+        <p>先算包裹式在这个 d 下的成本；再想想线性模型 + 什么正则天然适合"特征数 ≫ 样本数"。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p><strong>选型：嵌入式 ℓ1（LASSO 逻辑回归/线性 SVM + ℓ1）</strong>。理由：</p>
+          <p>① <strong>排除包裹式</strong>：d = 10⁵ 时子集空间 2^(10⁵) 完全是天文数字，LVW 每试一个子集还要在 5000 样本上训练+交叉验证一次，随机搜索几千轮也未必碰到像样子集，算力预算直接爆掉。</p>
+          <p>② <strong>为何嵌入式合适</strong>：d ≫ n 恰是 ℓ1 的主场——训练一次模型即顺带完成选择，成本约等于一次普通线性模型训练；文本任务中大量词特征本就接近无关，稀疏解通常保留几百到几千词，还顺带缓解了 d≫n 的过拟合。可用过滤式（如 χ² 统计量）先做一轮粗筛再进 ℓ1，进一步提速。</p>
+          <p>③ <strong>λ 的后果</strong>：λ 调大 → 门槛抬高，更多词权重归零，模型更稀疏、更省内存，但可能误删判别性词导致欠拟合、精度下降；λ 调小 → 稀疏性消失，解趋近普通最小二乘/逻辑回归，在 d≫n 下立即过拟合，验证集性能崩。实践中用交叉验证沿 λ 的路径（从大到小）选验证性能拐点。</p>
+        </div>
+      </details>
+    </div>
+
+    <h2><span class="sec-no">✍️</span>本章自测</h2>
+    <p class="quiz-hint">点击选项判分，答错会给出原因。</p>
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 1</div>
+      <div class="q-stem">"枚举所有特征子集取验证集最优"不可行的根本原因是？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 验证集不够大，评分不可靠</li>
+        <li data-opt="b">B. 子集数 2^d − 1 随特征数指数爆炸，且最优子集选择是 NP 难的</li>
+        <li data-opt="c">C. 学习器训练速度太慢</li>
+        <li data-opt="d">D. 子集之间存在共线性</li>
+      </ul>
+      <div class="quiz-explain">解析：B 对——d=50 时子集约 1.126×10¹⁵ 个，每秒评 100 万个也要约 35.7 年，且问题本身 NP 难。A 错：即使评分完全可靠也枚举不完，瓶颈是数量不是质量。C 错：训练慢是包裹式的痛点，枚举法的死穴在组合数本身。D 错：共线性影响的是选择的稳定性，不是枚举的可行性。</div>
+    </div>
+    <div class="quiz-block" data-answer="c">
+      <div class="q-no">自测 2</div>
+      <div class="q-stem">Relief 中某特征 j 的累计分量 δ^j 显著大于 0，说明什么？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 特征 j 的取值方差很大</li>
+        <li data-opt="b">B. 特征 j 与类别标签线性相关</li>
+        <li data-opt="c">C. 在特征 j 上，异类最近邻平均比同类最近邻更远——该特征有助于分类</li>
+        <li data-opt="d">D. 特征 j 与其他特征不相关</li>
+      </ul>
+      <div class="quiz-explain">解析：C 对——δ^j = Σ(−diff(x,nh)² + diff(x,nm)²)，为正即"离猜错近邻远、离猜中近邻近"。A 错：方差大不代表能分同类异类（无关特征方差也可以很大）。B 错：Relief 基于距离而非线性相关，能捕捉非线性的"聚拢"结构。D 错：δ^j 不涉及特征间相关性，那是冗余性分析的事。</div>
+    </div>
+    <div class="quiz-block" data-answer="d">
+      <div class="q-no">自测 3</div>
+      <div class="q-stem">坐标下降中，某维的部分残差内积 ρ_j = 0.3，λ = 0.5，z_j = 2。更新后的 w_j 是？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 0.15（即 0.3/2，软阈值不改变符号）</li>
+        <li data-opt="b">B. −0.1（先减 λ 再除 z_j）</li>
+        <li data-opt="c">C. 0.3（λ 只用于正则比较，不进更新式）</li>
+        <li data-opt="d">D. 0（|ρ_j| ≤ λ，软阈值直接归零）</li>
+      </ul>
+      <div class="quiz-explain">解析：D 对——S(0.3, 0.5) = sign(0.3)·max(0.3−0.5, 0) = 0，特征被删除，这正是 ℓ1 选特征的机制。A 错：那是无惩罚的最小二乘更新 0.3/2，忘了软阈值。B 错：符号规则是"先取 max(|z|−λ, 0) 再乘 sign"，|ρ|&lt;λ 时结果恒为 0，不会变负。C 错：λ 直接进入 max(|z|−λ, 0)，是更新的核心。</div>
+    </div>
+    <div class="quiz-block" data-answer="a">
+      <div class="q-no">自测 4</div>
+      <div class="q-stem">为什么 ℓ1 正则（LASSO）产生稀疏解而 ℓ2 正则（ridge）不产生？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. ℓ1 约束区域是顶点在坐标轴上的菱形，误差等高线易在顶点（某坐标为 0 处）相切；ℓ2 约束是圆，切点几乎不在轴上</li>
+        <li data-opt="b">B. ℓ1 惩罚比 ℓ2 更强，把权重压得更狠</li>
+        <li data-opt="c">C. ℓ2 不可导所以无法归零，ℓ1 处处可导</li>
+        <li data-opt="d">D. ridge 的目标函数里没有 λ 参数</li>
+      </ul>
+      <div class="quiz-explain">解析：A 对——几何本质：菱形顶点恰在坐标轴上。B 错：同为 λ 加权时"强弱"没有绝对意义，差别在约束区域的<strong>形状</strong>而非力度；把 ridge 的 λ 调大权重也只会趋近 0 而不到 0。C 错：恰好说反——ℓ1 在 0 处不可导（次梯度），ridge 处处光滑。D 错：ridge 同样有 λ（min‖y−Xw‖²+λ‖w‖²），它在 11.3 的例子中把 w₂ 收到 0.267 但不归零。</div>
+    </div>
+    <div class="quiz-block" data-answer="c">
+      <div class="q-no">自测 5</div>
+      <div class="q-stem">压缩感知能用 m ≪ n 个测量精确恢复信号的两个前提是？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 信号是连续的；采样率是奈奎斯特率的两倍</li>
+        <li data-opt="b">B. 信号是高斯的；测量矩阵是单位阵</li>
+        <li data-opt="c">C. 信号在某基下稀疏；测量矩阵满足限定等距性（RIP）</li>
+        <li data-opt="d">D. 测量数 m 大于信号维度 n；使用 ℓ2 最小化恢复</li>
+      </ul>
+      <div class="quiz-explain">解析：C 对——稀疏性保证"自由度少"，RIP 保证测量不丢失区分这些自由度的信息，此时 ℓ1 最小化以高概率精确恢复。A 错：那是奈奎斯特框架的条件，与压缩感知无关，且"两倍奈奎斯特率"恰恰不是压缩感知需要的。B 错：信号不需要高斯分布，需要稀疏；单位阵只有 m 行时直接丢失未测分量。D 错：m&gt;n 就不是"压缩"了，且 ℓ2 恢复在欠定时不产生稀疏解。</div>
+    </div>
+
+    <div class="retell">
+      <h3>🗣️ 用自己的话，三句话讲完本章</h3>
+      <p>对着空气（或室友）说出这三句。说卡壳的那句，回去重读对应小节。</p>
+      <details>
+        <summary>句1：这章解决什么问题？——</summary>
+        <div class="retell-answer">参考答案：特征太多太杂时，怎样选出（或学出）"少而精"的特征表示。最优子集要枚举 2^d 个子集，是 NP 难的，必须有工程上可行的近似。</div>
+      </details>
+      <details>
+        <summary>句2：核心机制是什么？——</summary>
+        <div class="retell-answer">参考答案：三条近似路线共享一个稀疏信仰。过滤式 Relief 用近邻对比先筛后学；包裹式 LVW 用学习器性能当裁判随机搜子集；嵌入式 LASSO 把 ℓ1 惩罚写进目标，靠菱形约束+软阈值在训练中自动归零。同一个 ℓ1 机制再升级为字典学习与压缩感知。</div>
+      </details>
+      <details>
+        <summary>句3：它和前后章怎么分工？——</summary>
+        <div class="retell-answer">参考答案：第10章降维把特征"混合压缩"（新特征失去物理含义），本章改为原样挑选或稀疏重构，保住可解释性；第12章计算学习理论将回答"什么样的假设、多少样本才学得到"，为稀疏假设补上理论根据。</div>
+      </details>
+    </div>
+
+    <div class="review-plan">
+      <h3>🔁 间隔复习计划</h3>
+      <p>回忆本身比重读有效 10 倍。到点只做一件事：翻卡 + 重做标记题。</p>
+      <table>
+        <tr><th>时间点</th><th>复习内容</th><th>预计用时</th></tr>
+        <tr><td>第 1 天</td><td>概念卡 1–6 全翻一遍 + 回忆卡 11.1-1 至 11.5-2</td><td>10 分钟</td></tr>
+        <tr><td>第 3 天</td><td>概念卡 2、3、4（Relief / LASSO / 软阈值）+ 重做 L2 习题两问</td><td>10 分钟</td></tr>
+        <tr><td>第 7 天</td><td>三句话复述 + 自测错题 + 纸上重算 11.3 坐标下降一轮</td><td>10 分钟</td></tr>
+        <tr><td>第 15 天</td><td>只做合上书挑战；能全过就毕业</td><td>15 分钟</td></tr>
+      </table>
+    </div>
+
+    <div class="final-challenge">
+      <h3>📕 合上书挑战</h3>
+      <p class="fc-sub">现在关掉这个页面，拿一张纸，凭记忆完成以下任务。全部做完再回来核对——这是本章真正的毕业考试。</p>
+      <ol id="challenge-list">
+        <li><span class="fc-check"></span>写出 2^d − 1 并算出 d=10 与 d=50 的子集数，说明为什么必须放弃最优子集搜索</li>
+        <li><span class="fc-check"></span>画出过滤式 / 包裹式 / 嵌入式三分支图，各写出一个代表算法与一句话区别</li>
+        <li><span class="fc-check"></span>手算 Relief：对 11.2 的 6 样本表，给 x₁ 找猜中/猜错近邻并算出三个特征的 diff 分量</li>
+        <li><span class="fc-check"></span>默写 LASSO 目标与软阈值公式，手算 11.3 微型数据坐标下降的一轮（ρ₁=6→w₁=2.5，ρ₂=0.8→w₂=0）</li>
+        <li><span class="fc-check"></span>写出字典学习目标，说明交替优化两步各是什么问题，以及尺度模糊怎么处理</li>
+        <li><span class="fc-check"></span>说出压缩感知精确恢复的两个前提，以及它与奈奎斯特采样的冲突点</li>
+        <li><span class="fc-check"></span>一句话回答本章的主线问题：特征太多太杂时怎样选出"少而精"的表示——子集搜索 NP 难，工程上用什么替代？</li>
+      </ol>
+    </div>
+
+    <div class="complete-zone">
+      <button class="btn-complete" id="btn-complete" onclick="markDone()">✓ 我已完成本章（含合上书挑战）</button>
+    </div>
+
+    <div class="chapter-nav">
+      <a href="chapter-10.html"><span class="nav-dir">← 上一章</span>第10章 降维与度量学习</a>
+      <a href="chapter-12.html" class="next"><span class="nav-dir">下一章 →</span>第12章 计算学习理论</a>
+    </div>
+
+  </div>
+</div>
+<footer class="footer">
+  <div class="wrap">第11章 特征选择与稀疏学习 · 机器学习互动讲义 · 基于周志华《机器学习》</div>
+</footer>
+<script src="/lectures-assets/mermaid.min.js"></script>
+<script>
+mermaid.initialize({
+  startOnLoad: true,
+  theme: "base",
+  themeVariables: {
+    primaryColor: "#e3edf7",
+    primaryBorderColor: "#1d5f9e",
+    primaryTextColor: "#1d5f9e",
+    lineColor: "#5c554b",
+    secondaryColor: "#fbeedd",
+    tertiaryColor: "#f5f1e8",
+    fontFamily: "-apple-system, PingFang SC, sans-serif",
+    fontSize: "14px"
+  },
+  flowchart: { curve: "linear", htmlLabels: false }
+});
+</script>
+<script>
+// 自测题判分（原样复用，勿改）
+document.querySelectorAll(".quiz-block").forEach(block => {
+  const answer = block.dataset.answer;
+  const explain = block.querySelector(".quiz-explain");
+  block.querySelectorAll(".quiz-opts li").forEach(li => {
+    li.addEventListener("click", () => {
+      const opts = block.querySelectorAll(".quiz-opts li");
+      opts.forEach(o => o.classList.add("disabled"));
+      if (li.dataset.opt === answer) {
+        li.classList.add("correct");
+      } else {
+        li.classList.add("wrong");
+        block.querySelector(`[data-opt="${answer}"]`).classList.add("correct");
+      }
+      explain.classList.add("show");
+    });
+  });
+});
+// 合上书清单打勾（原样复用，勿改）
+document.querySelectorAll("#challenge-list li").forEach(li => {
+  li.addEventListener("click", () => li.classList.toggle("checked"));
+});
+// 完成标记 → localStorage（章号 "11"）
+const KEY = "ml_progress_v1";
+function loadProgress() {
+  try { return JSON.parse(localStorage.getItem(KEY)) || {}; } catch (e) { return {}; }
+}
+const progress = loadProgress();
+const btn = document.getElementById("btn-complete");
+if (progress["11"] && progress["11"].done) {
+  btn.textContent = "✓ 已完成 · 再次点击重置";
+  btn.classList.add("done");
+}
+function markDone() {
+  const p = loadProgress();
+  if (p["11"] && p["11"].done) {
+    delete p["11"];
+    btn.textContent = "✓ 我已完成本章（含合上书挑战）";
+    btn.classList.remove("done");
+  } else {
+    p["11"] = { done: true, completedAt: Date.now(), reviewsDone: 0 };
+    btn.textContent = "✓ 已完成 · 复习提醒已开启";
+    btn.classList.add("done");
+  }
+  localStorage.setItem(KEY, JSON.stringify(p));
+}
+</script>
+</body>
+</html>

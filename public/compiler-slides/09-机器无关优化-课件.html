@@ -1,0 +1,602 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第9章 机器无关优化 · 编译原理课件</title>
+<script>
+window.MathJax = {
+  tex: {
+    inlineMath: [['$', '$'], ['\\(', '\\)']],
+    displayMath: [['$$', '$$'], ['\\[', '\\]']],
+    processEscapes: true,
+    tags: 'none'
+  },
+  svg: { fontCache: 'global', scale: 1.05 },
+  options: { skipHtmlTags: ['script','noscript','style','textarea','pre','code'] }
+};
+</script>
+<!-- MathJax 本地引用（tex-svg 单文件全量组件，约2MB，自带字体数据），file:// 与断网均可用 -->
+<script src="/lectures-assets/tex-svg.js" async></script>
+<style>
+  :root{
+    --primary:#1a365d; --accent:#2b6cb0; --accent-light:#ebf8ff; --accent-border:#bee3f8;
+    --text:#2d3748; --muted:#718096; --border:#e2e8f0; --bg-light:#f7fafc;
+    --success:#38a169; --danger:#e53e3e; --warning:#dd6b20; --warn-bg:#fffaf0;
+  }
+  *{margin:0;padding:0;box-sizing:border-box;}
+  html,body{width:100%;height:100%;overflow:hidden;background:#0f172a;}
+  body{
+    font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Hiragino Sans GB","Microsoft YaHei","WenQuanYi Micro Hei",sans-serif;
+    color:var(--text);
+  }
+  #stage{
+    position:absolute; left:50%; top:50%;
+    width:1280px; height:720px;
+    transform:translate(-50%,-50%) scale(1);
+    transform-origin:center center;
+    background:#ffffff;
+    box-shadow:0 0 40px rgba(0,0,0,.4);
+    overflow:hidden;
+  }
+  .slide{
+    position:absolute; inset:0;
+    padding:36px 60px 52px;
+    display:none;
+    flex-direction:column;
+    background:#ffffff;
+    opacity:0;
+    transition:opacity .35s ease;
+  }
+  .slide.active{ display:flex; opacity:1; }
+
+  #progress{ position:absolute; top:0; left:0; height:6px; background:var(--accent); width:0; z-index:50; transition:width .35s; }
+
+  /* 封面 / 结束页 */
+  .slide-cover{ justify-content:center; align-items:center; text-align:center; }
+  .slide-cover{ background:linear-gradient(135deg,#1a365d 0%,#2b6cb0 100%); color:#fff; }
+  .slide-cover .kicker{ font-size:22px; letter-spacing:6px; opacity:.85; margin-bottom:18px;}
+  .slide-cover h1{ font-size:64px; font-weight:800; line-height:1.2; margin-bottom:22px; letter-spacing:2px;}
+  .slide-cover .sub{ font-size:26px; opacity:.92; margin-bottom:36px;}
+  .slide-cover .meta{ font-size:19px; opacity:.85; line-height:2;}
+  .slide-cover .divider{ width:160px;height:5px;background:#fff;opacity:.6;margin:0 auto 30px;border-radius:3px;}
+  .slide-cover .question{ font-size:24px; background:rgba(255,255,255,.12); border:1px solid rgba(255,255,255,.35); border-radius:12px; padding:12px 28px; margin-bottom:30px;}
+
+  /* 页头：结论式标题 */
+  .slide-head{ display:flex; align-items:baseline; gap:16px; border-bottom:3px solid var(--accent); padding-bottom:9px; margin-bottom:12px;}
+  .slide-head .sec{ font-size:17px; color:var(--accent); font-weight:700; background:var(--accent-light); padding:3px 11px; border-radius:6px; white-space:nowrap;}
+  .slide-head h3{ font-size:29px; color:var(--primary); font-weight:700;}
+  .slide-body{ flex:1; display:flex; flex-direction:column; justify-content:center; min-height:0; }
+
+  p{ font-size:21px; line-height:1.65; margin-bottom:8px;}
+  .lead{ font-size:23px; color:#374151; line-height:1.75;}
+  ul,ol{ margin:0 0 8px 26px; font-size:21px; line-height:1.7;}
+  li{ margin-bottom:5px;}
+  strong{ color:var(--primary); }
+
+  /* 公式块 */
+  .formula{ background:var(--accent-light); border-left:5px solid var(--accent); border-radius:0 10px 10px 0; padding:9px 22px; margin:9px 0; text-align:center; font-size:23px;}
+  .formula-concl{ background:#fffaf0; border-left:5px solid var(--warning);}
+  .MathJax{ font-size:1.05em !important; }
+  mjx-container[display="true"]{ margin:6px 0 !important; }
+
+  /* 表格 */
+  table{ width:100%; border-collapse:collapse; margin:10px 0; font-size:20px;}
+  th{ background:var(--accent); color:#fff; padding:8px 12px; text-align:center; font-weight:600;}
+  td{ padding:7px 12px; border:1px solid var(--border); text-align:center; vertical-align:middle;}
+  tr:nth-child(even) td{ background:var(--bg-light);}
+  td.l{ text-align:left; }
+  table.small{ font-size:18px; }
+  table.small td, table.small th{ padding:6px 10px; }
+
+  /* 组件 */
+  .card{ background:var(--accent-light); border:1px solid var(--accent-border); border-radius:12px; padding:12px 20px; margin:10px 0;}
+  .tip{ background:#ebf8ff; border-left:5px solid var(--accent); border-radius:0 10px 10px 0; padding:10px 20px; margin:10px 0; font-size:20px; color:#2c5282;}
+  .deep{ background:#f0fff4; border-left:5px solid var(--success); border-radius:0 10px 10px 0; padding:10px 20px; margin:10px 0; font-size:20px; color:#22543d;}
+  .warn{ background:var(--warn-bg); border-left:5px solid var(--warning); border-radius:0 10px 10px 0; padding:10px 20px; margin:10px 0; font-size:20px; color:#744210;}
+  .trap{ background:#fef2f2; border-left:5px solid var(--danger); border-radius:0 10px 10px 0; padding:10px 20px; margin:10px 0; font-size:20px; color:#7f1d1d;}
+
+  .pause{
+    background:var(--warn-bg); border:2px dashed var(--warning); border-radius:14px;
+    padding:10px 22px; margin:10px 0; display:flex; align-items:center; gap:16px;
+  }
+  .pause .icon{ font-size:36px; line-height:1; }
+  .pause .txt b{ color:var(--warning); font-size:21px; }
+  .pause .txt p{ font-size:18px; color:#744210; margin:3px 0 0; }
+
+  .cols{ display:flex; gap:28px; align-items:stretch; }
+  .col{ flex:1; min-width:0; }
+
+  /* 推导分步：仅互动模式隐藏，截图(autohide)模式全部可见——此规则不可删 */
+  .step{ opacity:0; transform:translateY(8px); transition:opacity .3s ease, transform .3s ease; }
+  .step.on{ opacity:1; transform:none; }
+  body.autohide .step{ opacity:1 !important; transform:none !important; }
+  .step-hint{ font-size:14px; color:var(--muted); margin-top:4px;}
+  body.autohide .step-hint{ display:none; }
+
+  /* 因果链 */
+  .chain{ margin:6px 0; }
+  .chain .link{ display:flex; align-items:center; gap:14px; margin:6px 0;}
+  .chain .no{ width:34px; height:34px; border-radius:50%; background:var(--accent); color:#fff; font-size:18px; font-weight:700; display:flex; align-items:center; justify-content:center; flex-shrink:0;}
+  .chain .txt{ font-size:21px; line-height:1.5;}
+  .chain .txt strong{ color:var(--primary); }
+
+  /* mermaid 容器：高度封顶，防止溢出 720px 舞台 */
+  .mmd{ background:var(--bg-light); border:1px solid var(--border); border-radius:12px; padding:10px 14px; display:flex; justify-content:center; align-items:center; margin:8px 0;}
+  .mmd .mermaid{ display:flex; justify-content:center; width:100%; visibility:hidden; }
+  .mmd .mermaid[data-done]{ visibility:visible; }
+  .mmd .mermaid svg{ max-width:100%; height:auto; max-height:230px; }
+  .mmd.mmd-tall .mermaid svg{ max-height:330px; }
+  .mmd.mmd-sm svg{ max-height:150px; }
+  .mmd-row{ display:flex; gap:18px; }
+  .mmd-row .mmd{ flex:1; flex-direction:column; }
+  .mmd .cap{ font-size:17px; color:var(--muted); margin-top:6px; text-align:center;}
+  .mmd .cap b{ color:var(--text); }
+
+  #footer{ position:absolute; bottom:0; left:0; right:0; height:40px; display:flex; align-items:center; justify-content:space-between; padding:0 30px; font-size:15px; color:#94a3b8; background:rgba(247,250,252,.85); border-top:1px solid var(--border); z-index:40;}
+  #footer .brand{ font-weight:600; color:var(--accent); }
+
+  .nav{ position:absolute; bottom:48px; right:40px; display:flex; gap:12px; z-index:45;}
+  .nav button{ width:54px; height:54px; border-radius:50%; border:none; background:var(--accent); color:#fff; font-size:24px; cursor:pointer; box-shadow:0 3px 10px rgba(43,108,176,.4); display:flex; align-items:center; justify-content:center;}
+  .nav button:hover{ background:var(--primary); }
+  .nav button:disabled{ background:#cbd5d0; cursor:default; box-shadow:none;}
+
+  #hint{ position:absolute; bottom:48px; left:40px; font-size:14px; color:#94a3b8; z-index:45;}
+
+  body.autohide #progress, body.autohide #footer, body.autohide .nav, body.autohide #hint{ display:none !important; }
+</style>
+</head>
+<body>
+<div id="stage">
+
+  <div id="progress"></div>
+
+  <!-- ★ 1 封面 -->
+  <section class="slide slide-cover active" data-narration="同学们好，我们继续编译原理的旅程。上一章我们把中间代码一句一句翻成了目标代码，但你有没有发现：翻译得再漂亮，原稿里的浪费也原封不动地留着——同一个乘法算三遍，每次循环都重算一个不变的值。本章就来回答一个问题：在翻译成机器码之前，怎样不动声色地把中间代码本身改得更省，而且一步都不许改变程序的语义。学完这一章，你要能亲手把一个十五条语句的循环从十二条压到七条，乘法从两次减到一次，并且说清每一步凭什么敢改。这就是机器无关优化，我们开始。">
+    <div class="kicker">编译原理 · 第 9 章 · 后端与优化</div>
+    <h1>机器无关优化</h1>
+    <div class="sub">Machine-Independent Optimization —— 翻译之前，先给中间代码瘦身</div>
+    <div class="question">本章要回答：不改变程序语义的前提下，如何让中间代码跑得更快？</div>
+    <div class="meta">
+      配套讲义：《编译原理互动讲义》第9章 · 基于 Aho, Lam, Sethi &amp; Ullman《编译原理》(第2版)<br>
+      ← → 或空格翻页 · 推导页逐步显示
+    </div>
+  </section>
+
+  <!-- ★ 2 全书位置 -->
+  <section class="slide" data-narration="先定位。全书分四段：前四章是前端，做词法分析和语法分析；五到七章管语义和中间代码生成；八到十一章是后端与优化，我们正站在这一段的正中间；最后一章做全书收束。上一章第八章刚讲完代码生成，也就是中间代码到目标代码的翻译；本章横插在它前面，先在中间代码这一层动手脚；等我们把代码瘦身干净，第十、十一章才好在这份干净代码上榨硬件的并行性。所以本章是承上启下的关键一站：它不上不动机器指令，只管让原稿本身更值得翻译。">
+    <div class="slide-head"><span class="sec">定位</span><h3>本章卡在后端正中间：翻译之前，先给中间代码瘦身</h3></div>
+    <div class="slide-body">
+      <div class="mmd">
+        <div class="mermaid">
+flowchart TB
+  A["① 前端：词法与语法 Ch1–4"] --> B["② 语义与中间代码 Ch5–7"]
+  B --> C["③ 后端与优化 Ch8–11 · 本章 Ch9"]:::here
+  C --> D["④ 全书收束 Ch12"]
+  classDef here fill:#2b6cb0,color:#ffffff,stroke:#1a365d,stroke-width:3px
+        </div>
+      </div>
+      <p style="text-align:center; margin-top:10px;">第8章负责<strong>翻成目标码</strong> → 本章负责<strong>翻译前先瘦身</strong> → 第10、11章在干净代码上<strong>榨硬件并行性</strong></p>
+    </div>
+  </section>
+
+  <!-- ★ 3 本章主线 -->
+  <section class="slide" data-narration="本章只有一条主线，五步走完。第一步，优化之前先划地盘：把三地址码切成基本块，连成流图，块内直线到底，块间才有岔路。第二步，在块内抡三板斧：公共子表达式消除、复写传播、死代码消除，把肉眼可见的浪费清掉。第三步，冲进循环这个主战场：不变式外提把每次迭代都付的钱改成只付一次。第四步，强度削弱，把乘法换成加法，顺手把归纳变量整个删掉。最后一步回答凭什么敢改：用数据流分析在流图上算出「必相等」的事实，拿不准就保守不动。从划地盘，到小改，到大改，再到给出理论依据，这就是本章的全部逻辑。">
+    <div class="slide-head"><span class="sec">主线</span><h3>划地盘 → 块内小改 → 循环大改 → 数据流给出「敢改」的凭据</h3></div>
+    <div class="slide-body">
+      <div class="chain">
+        <div class="link"><span class="no">1</span><span class="txt"><strong>划地盘</strong>：首领规则切基本块，连成流图，圈出循环</span></div>
+        <div class="link"><span class="no">2</span><span class="txt"><strong>块内小改</strong>：公共子表达式消除、复写传播、死代码消除三板斧</span></div>
+        <div class="link"><span class="no">3</span><span class="txt"><strong>循环大改</strong>：不变式外提＋全局公共子表达式消除</span></div>
+        <div class="link"><span class="no">4</span><span class="txt"><strong>收束</strong>：强度削弱把乘法变加法，归纳变量消除收尾</span></div>
+        <div class="link"><span class="no">5</span><span class="txt"><strong>凭什么敢改</strong>：数据流分析（到达定值、活跃变量）＋保守原则</span></div>
+      </div>
+      <div class="tip">一条贯穿示例打全场：15 条语句的 for 循环，从 12 条循环体一路压到 7 条。</div>
+    </div>
+  </section>
+
+  <!-- 4 动机页 -->
+  <section class="slide" data-narration="先看动机。一个再普通不过的循环：i 从零数到 n，循环体里算 a 下标 i 加 b 下标 i 乘 x 加一，循环结束后再算一次 v 等于 x 加一。注意 int 数组按四字节寻址，所以下标 i 要乘四。它翻出的中间代码，循环体有十二条语句，每次迭代两次乘法：一次四乘 i 是寻址开销，一次 t 四乘 t 五才是业务本身。也就是说一半的乘法纯属浪费。逐句盯着看？看不出「这句算了两遍」。整段囫囵看？跳转让顺序乱成一团。出路是本章的方案：先切块画图，再分块内、循环两层动刀。这个例子我们会从头用到尾，先记住它的长相。">
+    <div class="slide-head"><span class="sec">动机</span><h3>循环把浪费放大 n 倍：12 条语句里一半的乘法是白算</h3></div>
+    <div class="slide-body">
+      <p>贯穿示例：<code>for (i=0; i&lt;n; i++) a[i] = a[i] + b[i]*(x+1); v = x+1;</code>（int 数组 4 字节寻址，下标要乘 4）</p>
+      <div class="formula">$$\text{原始循环体：} 12 \text{ 条语句、每次迭代 } 2 \text{ 次乘法} \;\Rightarrow\; n=1000 \text{ 时白算上千次}$$</div>
+      <div class="cols">
+        <div class="col"><div class="card">😇 <strong>逐句盯着看</strong><br>看不到「(3)(5)(10) 三条都在算 4*i」这种跨行重复</div></div>
+        <div class="col"><div class="card">🙂 <strong>整段囫囵看</strong><br>goto 来回跳，控制流乱成一团，根本无从下刀</div></div>
+      </div>
+      <div class="tip">💡 本章方案：先切基本块、画流图，再分「块内」「循环」两层系统地动刀。</div>
+    </div>
+  </section>
+
+  <!-- ★ 5 核心定义页：基本块与首领规则 -->
+  <section class="slide" data-narration="先给核心定义。基本块，就是一段最长的不含跳转的直线代码：只能从第一句进入，从最后一句离开，中途不跳出也不跳入。为什么它是优化的天然单位？因为块内控制流是平凡的：只要进了第一句，后面每句都必然按书写顺序执行，于是块内可以放心做各种恒等变换，不怕跳走。怎么切？首领规则三条：一，整个序列的第一条语句是首领；二，任何跳转的目标语句是首领；三，紧跟在跳转语句之后的那条语句是首领。每个首领到下一个首领之前，就是一个基本块。记住一个口诀：首领管头不管尾——跳转语句自己不开新块，开新块的是它跳的目标和它后面那条。下一页我们就拿示例完整演练一遍。">
+    <div class="slide-head"><span class="sec">定义</span><h3>基本块 ＝ 最长直线段；首领三规则划定边界</h3></div>
+    <div class="slide-body">
+      <div class="cols">
+        <div class="col"><div class="card">🧱 <strong>基本块（Basic Block）</strong><br>只能从首句进入、末句离开的<strong>最长</strong>直线三地址码序列——块内控制流平凡，是优化的天然单位</div></div>
+        <div class="col"><div class="card">🚩 <strong>首领规则（找块头）</strong><br>① 第一条语句<br>② 任何跳转的目标语句<br>③ 紧跟跳转之后的那条语句</div></div>
+      </div>
+      <div class="formula formula-concl">$$\text{每个首领} \rightarrow \text{下一首领之前} \;=\; \boldsymbol{\text{一个基本块}}$$</div>
+      <div class="deep">读法：块内直线到底、块间才有岔路；优化因此分两层——块内靠恒等变换，块间靠流图上的数据流分析。</div>
+    </div>
+  </section>
+
+  <!-- 6 演练：首领规则切 15 条语句 -->
+  <section class="slide" data-narration="拿示例完整演练一遍首领规则，一步不跳。十五条语句，我们逐条过。第一条 i 等于零，规则一，是首领。第二条判断 i 大于等于 n 就跳到十五，它是第十四条跳转的目标，规则二，是首领。第三条 t 一等于四乘 i，紧跟在跳转语句二之后，规则三，是首领。第四到第十四都不是首领；特别留意第十四句跳回第二条，跳转语句本身不是首领。第十五条 v 等于 x 加一，它是第二条跳转的目标，规则二命中，也是首领。于是四个首领切出四个基本块：B 一只有第一条，B 二只有第二条，B 三从第三到第十四共十二条，B 四只有第十五条。逐条判定表就摆在左边，你可以对照着再核一遍。">
+    <div class="slide-head"><span class="sec">演练</span><h3>15 条语句逐条过首领规则：首领是 (1)(2)(3)(15)</h3></div>
+    <div class="slide-body">
+      <table class="small">
+        <thead><tr><th>编号</th><th>语句</th><th>首领？依据</th></tr></thead>
+        <tbody>
+          <tr><td>(1)</td><td class="l">i = 0</td><td>✅ 规则1：第一条</td></tr>
+          <tr><td>(2)</td><td class="l">if i ≥ n goto (15)</td><td>✅ 规则2：(14) 的跳转目标</td></tr>
+          <tr><td>(3)</td><td class="l">t1 = 4 * i</td><td>✅ 规则3：紧跟跳转 (2) 之后</td></tr>
+          <tr><td>(4)…(14)</td><td class="l">t2=a[t1] … goto (2)</td><td>否（(14) 是跳转语句本身，不算）</td></tr>
+          <tr><td>(15)</td><td class="l">v = x + 1</td><td>✅ 规则2：(2) 的跳转目标</td></tr>
+        </tbody>
+      </table>
+      <div class="formula">$$B_1=\{(1)\},\; B_2=\{(2)\},\; B_3=\{(3)\dots(14)\},\; B_4=\{(15)\}$$</div>
+    </div>
+  </section>
+
+  <!-- 7 流图 -->
+  <section class="slide" data-narration="四个块切出来了，现在把它们连成流图：块作节点，块间可能的控制流作边。B 一执行完顺序落入 B 二；B 二是循环判断，条件为假进 B 三执行循环体，条件为真跳去 B 四收尾；B 三跑完十二条，末尾跳回 B 二。请你盯住 B 三到 B 二这条回边——它圈出的 B 二加 B 三，就是这个程序的循环，也是本章优化的主战场。流图只画可能怎么走，不画实际走哪条；但有了它，循环、分支、汇合这些结构就变成了可以在图上计算的东西。后面所有跨块的优化和数据流分析，都建在这张图上。下一页我们先在最容易的 B 三内部动手。">
+    <div class="slide-head"><span class="sec">流图</span><h3>块连成流图：B3→B2 的回边圈出了循环主战场</h3></div>
+    <div class="slide-body">
+      <div class="mmd mmd-tall">
+        <div class="mermaid">
+flowchart TB
+  B1["B1：i = 0"] --> B2["B2：if i ≥ n goto B4"]
+  B2 -->|"条件为假"| B3["B3：循环体 12 条语句"]
+  B3 -->|"回到循环头"| B2
+  B2 -->|"条件为真"| B4["B4：v = x + 1"]
+  classDef hot fill:#fbeedd,stroke:#c4651f,stroke-width:2.5px,color:#c4651f;
+  class B3 hot;
+        </div>
+      </div>
+      <p style="text-align:center; font-size:18px; color:var(--muted);">图 9.1 示例程序的流图——回边 B3→B2 圈出的 {B2, B3} 就是循环</p>
+    </div>
+  </section>
+
+  <!-- 8 块内第一板斧：CSE -->
+  <section class="slide" data-narration="进 B 三抡第一板斧：公共子表达式消除。盯着原始代码三秒钟就能发现浪费：第三、第五、第十条语句都在算四乘 i。规则是这样：若一个表达式前面已经算过，而且从那次算完到现在，它的所有运算分量都没被重新定值，那再算一遍纯属浪费，直接用上次的结果。扫一遍 B 三：第五条 t 三等于四乘 i，和第三条相同，中间 i 没改过——删掉第五条，把第六条里的 t 三换成 t 一。第十条 t 八等于四乘 i 同理，删掉，第十一条里的 t 八换成 t 一。为什么语义不变？因为同一段区间里 i 是同一个 i，四乘 i 自然是同一个乘积，t 三、t 八和 t 一从此处处等价。注意这只是局部消除，眼睛只在一个块内扫。两刀下去，B 三已经瘦了两条。">
+    <div class="slide-head"><span class="sec">板斧一</span><h3>公共子表达式消除：算过且分量没变，就抄上次的答案</h3></div>
+    <div class="slide-body">
+      <table>
+        <thead><tr><th>步骤</th><th>发现</th><th>动作</th><th>为什么语义不变</th></tr></thead>
+        <tbody>
+          <tr><td>1</td><td class="l">(5) t3=4*i 与 (3) 相同，之间 i 未改</td><td class="l">删 (5)，(6) 中 t3→t1</td><td class="l">同一个 i，同一个乘积</td></tr>
+          <tr><td>2</td><td class="l">(10) t8=4*i 同理，(3) 到 (10) i 未改</td><td class="l">删 (10)，(11) 中 t8→t1</td><td class="l">t3、t8 与 t1 此后处处等价</td></tr>
+        </tbody>
+      </table>
+      <div class="tip">前提条件：从上次计算到这次使用之间，表达式的<strong>所有运算分量都没有被重新定值</strong>——只看字面相同是会出事的。</div>
+    </div>
+  </section>
+
+  <!-- 9 块内第二、三板斧 -->
+  <section class="slide" data-narration="接着抡第二、第三板斧，它俩总是结伴出现。第二板斧复写传播：看末尾两句，t 九等于 i 加一，i 等于 t 九。第二句是复写，它说 i 现在的值就是 t 九，而 t 九除了这一句再无别的用处——干脆把定值直接写给 i，变成 i 等于 i 加一，中间人 t 九被裁掉。为什么不变？原来 i 得到的值本来就是 i 加一。第三板斧死代码消除：定值之后再也没人读的语句就是死代码，删掉。t 九的定值随复写传播一起消失了；判定死活的标准是活跃性——离开这条语句之后变量还会不会被读。三板斧抡完，B 三从十二条瘦到十条，而且剩下的乘法、访存各归其位，脉络清清楚楚。套路总结一下：先找一个两处必相等的事实，换掉其中一处，再删掉变空的语句。">
+    <div class="slide-head"><span class="sec">板斧二三</span><h3>复写传播合并 t9/i，死代码收尾：B3 从 12 条瘦到 10 条</h3></div>
+    <div class="slide-body">
+      <div class="cols">
+        <div class="col"><div class="card">📋 <strong>复写传播（Copy Propagation）</strong><br>x = y 之后，能用 y 的地方就不用 x；t9=i+1；i=t9 合并为 <strong>i = i + 1</strong></div></div>
+        <div class="col"><div class="card">🗑️ <strong>死代码消除（Dead Code Elimination）</strong><br>定值后再无人读＝死代码；t9 随复写传播消失，判活靠<strong>活跃性</strong></div></div>
+      </div>
+      <div class="formula formula-concl">$$\text{B3：} 12 \text{ 条} \;\longrightarrow\; \boldsymbol{10} \text{ 条（已消两次重复的 } 4*i \text{）}$$</div>
+      <div class="deep">三板斧共同套路：找一个「两处必相等」的事实 → 换掉一处 → 删掉变空的语句。每个变换背后都站着一个「为什么相等」的理由。</div>
+    </div>
+  </section>
+
+  <!-- 10 循环不变式外提 -->
+  <section class="slide" data-narration="块内的便宜捡完了，真正的肥肉在循环里：一条语句被循环执行 n 次，把它拿出去只算一次，就省下 n 减一次。B 三里有一条可疑分子：t 五等于 x 加一——x 在循环里从不改变，一是常量，每次迭代却都重算。这种运算分量在循环内都不变的表达式叫循环不变式，把它搬到循环入口之前的前头块只算一次，叫循环不变式外提。但不是所有不变式都能提，三条前置条件逐条检验：一，所在块支配循环所有出口，或者变量离开循环后不再活跃——本例 t 五在 B 四无人使用，满足后者；二，循环中该变量只有这一条定值——t 五只在第七句定值，过；三，循环内对运算分量的使用不能来自其他循环内定值——x 在循环内根本没有定值，过。三条全过，外提安全：t 五挪进 B 一，循环体删掉第七句。">
+    <div class="slide-head"><span class="sec">循环优化</span><h3>t5=x+1 每次迭代都重算？三条前置条件全过，外提到前头块</h3></div>
+    <div class="slide-body">
+      <p>循环不变式（Loop-Invariant）：运算分量在循环内都不改变；外提落脚的块叫<strong>前头块</strong>（Preheader）</p>
+      <ol>
+        <li>所在块<strong>支配</strong>循环所有出口，或变量离开后不活跃 —— t5 在 B4 无人用 ✓</li>
+        <li>循环中该变量<strong>只有这一条定值</strong> —— t5 只在 (7) 定值 ✓</li>
+        <li>运算分量的使用不来自循环内其他定值 —— x 在循环内无定值 ✓</li>
+      </ol>
+      <div class="formula">$$\text{B1 变为：} i=0;\ \boldsymbol{t5 = x+1} \text{（只算一次）} \quad \text{B3 删 (7)}$$</div>
+    </div>
+  </section>
+
+  <!-- 11 全局 CSE -->
+  <section class="slide" data-narration="外提还带来一次意外收获：全局公共子表达式消除。看 B 四的第十五条，v 等于 x 加一，跟刚提到 B 一的 t 五等于 x 加一字面相同。但这次跨了基本块，条件更严：一要确认从 B 一到 B 四的任何路径上 x 都没被重定值，查流图，x 只在程序开头定值，过；二要 B 一支配 B 四，也就是所有到 B 四的路都经过 B 一，过。于是第十五条改成 v 等于 t 五，又省一遍。再看个反例绷紧神经：假如 B 四里有句 w 等于 a 下标 i，要算四乘 i，它和 B 三的 t 一字面相同，却不能消——因为 B 三里算 t 一时的 i 是循环内的值，到达 B 四的 i 已经是 n，两次运算分量来自不同定值。跨块消除必须查到达定值，这就是数据流分析存在的理由。">
+    <div class="slide-head"><span class="sec">跨块</span><h3>全局消除多查两件事：支配 ＋ 到达定值相同</h3></div>
+    <div class="slide-body">
+      <div class="cols">
+        <div class="col"><div class="card">✅ <strong>能消：(15) v = x+1 → v = t5</strong><br>B1 支配 B4，且任何路径上 x 未被重定值——两次计算的运算分量同一定值</div></div>
+        <div class="col"><div class="card">❌ <strong>不能消：B4 若算 4*i</strong><br>B3 里算 t1 时的 i 是循环内的值，到 B4 的 i 已是 n——分量来自不同定值</div></div>
+      </div>
+      <div class="warn">局部消除靠眼睛扫一个块；全局消除必须靠数据流分析查「到达定值」——9.5 节的主角提前登场。</div>
+    </div>
+  </section>
+
+  <!-- 12 对比账：12条2乘 → 7条1乘 -->
+  <section class="slide" data-narration="还差最后一刀，先看总账。强度削弱和归纳变量消除做完之后，整个程序脱胎换骨：前头块 B 一负责三件一次性的准备工作——外提的 t 五、预算的 n 四等于四乘 n、t 一初始化为零。B 二的循环判断改写到 t 一身上：t 一大于等于 n 四就跳 B 四。循环体 B 三只剩七条：两次访存、一次业务乘法、一次加法、存回结果、t 一自加四、跳回——零次寻址乘法，唯一剩下的乘法是业务本身的 t 四乘 t 五。B 四的 v 直接抄 t 五。对比一下：原来循环体十二条、每次迭代两次乘法；现在七条、一次。n 等于一千时，全省下约五千条中间指令和一千次乘法。这刀怎么削的？下一页逐步推给你看。">
+    <div class="slide-head"><span class="sec">总账</span><h3>优化终点：循环体 7 条、每次迭代只剩 1 次业务乘法</h3></div>
+    <div class="slide-body">
+      <table class="small">
+        <thead><tr><th>块</th><th>优化后代码</th><th>说明</th></tr></thead>
+        <tbody>
+          <tr><td>B1 前头块</td><td class="l">t5 = x+1; n4 = 4*n; t1 = 0</td><td class="l">外提＋削弱初始化，只算一次</td></tr>
+          <tr><td>B2</td><td class="l">if t1 ≥ n4 goto B4</td><td class="l">归纳变量消除后的循环判断</td></tr>
+          <tr><td>B3（7 条）</td><td class="l">t2=a[t1]; t4=b[t1]; t6=t4*t5; t7=t2+t6; a[t1]=t7; t1=t1+4; goto B2</td><td class="l">只剩 1 次乘法（业务本身）</td></tr>
+          <tr><td>B4</td><td class="l">v = t5</td><td class="l">全局公共子表达式的收获</td></tr>
+        </tbody>
+      </table>
+      <div class="formula formula-concl">$$\text{循环体 } 12 \text{ 条} \to \boldsymbol{7} \text{ 条，} 2 \text{ 次乘法} \to \boldsymbol{1} \text{ 次；} n{=}1000 \text{ 省约 } 5000 \text{ 条指令、} 1000 \text{ 次乘法}$$</div>
+    </div>
+  </section>
+
+  <!-- ★ 13 推导页：强度削弱 .step -->
+  <section class="slide" data-narration="最后这刀叫强度削弱，针对的是循环体里剩下的那条寻址乘法，t 一等于四乘 i。它和不变式不同：值确实每次都变，但变得极有规律——i 每次加一，四乘 i 就每次加四。这种每次迭代增减同一常量的变量叫归纳变量，四乘 i 属于 i 的线性函数族。强度削弱就三步。第一步，进循环前在前头块初始化：t 一等于四乘零等于零，维护不变式「t 一恒等于四乘 i」。第二步，循环体里删掉四乘 i，直接用 t 一的当前值。第三步，在 i 等于 i 加一之后补一句 t 一等于 t 一加四：i 增一，四乘 i 增四，加法跟上。为什么语义不变？对迭代次数做数学归纳：每轮开始时 t 一都等于四乘 i。乘法就这样换成了加法。">
+    <div class="slide-head"><span class="sec">推导</span><h3>强度削弱：i 每轮加 1，4·i 就每轮加 4——乘法换加法</h3></div>
+    <div class="slide-body">
+      <div class="step">
+        <p><strong>① 前头块初始化：进循环时 i = 0，故 t1 = 4·0 = 0</strong></p>
+        <div class="formula">$$\text{前头块：} t1 = 4 \times i_0 = 0 \quad \text{（维护不变式 } t1 \equiv 4 \cdot i \text{）}$$</div>
+      </div>
+      <div class="step">
+        <p><strong>② 循环体删乘法：t1 = 4*i 处直接使用 t1 当前值</strong></p>
+        <div class="formula">$$t2 = a[t1],\;\; t4 = b[t1],\;\; a[t1] = t7 \quad \text{（不再出现 } 4*i \text{）}$$</div>
+      </div>
+      <div class="step">
+        <p><strong>③ 循环尾补增量：i 增 1 ⟹ 4·i 增 4，加法跟上</strong></p>
+        <div class="formula formula-concl">$$i = i+1 \;\Rightarrow\; \boldsymbol{t1 = t1 + 4} \quad \text{（对迭代次数归纳可证 } t1 \equiv 4i \text{）}$$</div>
+      </div>
+      <p class="step-hint">按空格 / → 逐步展开推导</p>
+    </div>
+  </section>
+
+  <!-- 14 归纳变量消除 -->
+  <section class="slide" data-narration="削弱完还能再进一步：把 i 整个删掉。现在回头看，i 在循环体里只剩两个用处：一是循环判断 i 大于等于 n，二是自我递增 i 等于 i 加一。关键观察：判断可以改写到 t 一身上——i 大于等于 n，当且仅当四乘 i 大于等于四乘 n，也就是 t 一大于等于 n 四；n 四在前头块用一次乘法预计算好。改写之后，i 在循环里再无读者，它的两条定值 i 等于零和 i 等于 i 加一全部变成死代码，一并删除。这就是归纳变量消除。要提醒一句：这个等价改写有前提，步长为正、初值为零且不溢出才成立；符号或范围拿不准时，优化器宁可不削——保守原则我们马上还会再见。">
+    <div class="slide-head"><span class="sec">收尾</span><h3>判断改写到 t1 身上：i ≥ n ⟺ t1 ≥ n4，i 整个变死代码</h3></div>
+    <div class="slide-body">
+      <div class="formula">$$i \ge n \;\Longleftrightarrow\; 4i \ge 4n \;\Longleftrightarrow\; \boldsymbol{t1 \ge n4} \quad \text{（前头块预计算 } n4 = 4*n \text{）}$$</div>
+      <ul>
+        <li>改写后 i 在循环内<strong>再无读者</strong>：i=0 与 i=i+1 成死代码，一并删除</li>
+        <li>B2 变为 if t1 ≥ n4 goto B4；循环判断、寻址都只在 t1 一个变量上进行</li>
+      </ul>
+      <div class="warn">前提：步长为正、初值非负且不溢出时等价才成立；拿不准符号与范围，宁可不削。</div>
+    </div>
+  </section>
+
+  <!-- 15 数据流分析：gen/kill 定义 -->
+  <section class="slide" data-narration="前面每条优化后面都跟着一句为什么语义不变，理由全是某个值到这里一定还等于那个值。这种事实不能靠眼睛瞄，要靠数据流分析在流图上算出来。典型代表是到达定值：问变量 x 的哪些定值可能沿某条路径到达这个点。给每个基本块定义两个集合：gen，本块生成且活到块尾的定值；kill，本块对同一变量的重定值，把别处的定值杀掉。然后解前向方程组：一个块的入口，等于它所有前驱出口的并集；一个块的出口，等于自己的 gen，并上入口减去 kill。念一遍：入口是所有前驱出口的并，出口是 gen 并上入口减 kill。这个方程组就是本章的必背公式，先记住长相，下一页拿小流图实算。">
+    <div class="slide-head"><span class="sec">定义</span><h3>到达定值 ＝ gen/kill 局部事实 ＋ 一对前向方程</h3></div>
+    <div class="slide-body">
+      <div class="cols">
+        <div class="col"><div class="card">🌱 <strong>gen[B]</strong><br>B 内生成、且块尾仍有效的定值</div></div>
+        <div class="col"><div class="card">🔪 <strong>kill[B]</strong><br>B 内对同一变量的重定值，把别处的定值杀掉</div></div>
+      </div>
+      <div class="formula formula-concl">$$\boldsymbol{\mathrm{IN}[B] = \bigcup_{P\,\text{是}\,B\,\text{的前驱}} \mathrm{OUT}[P]} \qquad \boldsymbol{\mathrm{OUT}[B] = \mathrm{gen}[B] \cup (\mathrm{IN}[B] - \mathrm{kill}[B])}$$</div>
+      <div class="deep">读法：入口是所有前驱出口的并集；出口是自己新生的，并上「穿过来的」（入口里没被杀掉的那部分）。</div>
+    </div>
+  </section>
+
+  <!-- 16 图9.2 小流图 + gen/kill 表 -->
+  <section class="slide" data-narration="实算开始，先用一张简化小流图练手，变量只有 i 和 s 两个，全图一共四条定值。看图的构造：B 一里 d 一给 i 赋零、d 二给 s 赋零；B 二是循环头判断，自己不做任何定值；B 三里 d 三更新 s、d 四让 i 加一，跑完跳回 B 二；B 四是出口。特别留意 B 二有两个前驱，B 一和 B 三，取并集就发生在这里。接着填 gen 和 kill 表，规则一句话：同变量的定值互相杀。B 一的 gen 是 d 一 d 二，它把循环里对 s 和 i 的定值全杀了，所以 kill 是 d 三 d 四。B 二不定值，两个集合都空。B 三正好反过来，gen 是 d 三 d 四，kill 是 d 一 d 二。B 四也是空。表填好了，下一页我们从全空出发迭代，亲眼看回边把定值一圈圈带回循环头。">
+    <div class="slide-head"><span class="sec">实算</span><h3>先填 gen/kill 表：同变量的定值互相杀</h3></div>
+    <div class="slide-body">
+      <div class="mmd mmd-sm">
+        <div class="mermaid">
+flowchart TB
+  B1["B1：d1 i=0；d2 s=0"] --> B2["B2：循环头判断"]
+  B2 --> B3["B3：d3 s=s+t2；d4 i=i+1"]
+  B3 --> B2
+  B2 --> B4["B4：出口"]
+  classDef hot fill:#fbeedd,stroke:#c4651f,stroke-width:2.5px,color:#c4651f;
+  class B2 hot;
+        </div>
+      </div>
+      <table class="small">
+        <thead><tr><th>块</th><th>gen（生成且活到块尾）</th><th>kill（杀掉的别处定值）</th></tr></thead>
+        <tbody>
+          <tr><td>B1</td><td>{d1, d2}</td><td>{d3, d4}</td></tr>
+          <tr><td>B2</td><td>∅（判断不定值）</td><td>∅</td></tr>
+          <tr><td>B3</td><td>{d3, d4}</td><td>{d1, d2}</td></tr>
+          <tr><td>B4</td><td>∅</td><td>∅</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- ★ 17 演练页（.pause 唯一所在）：两轮迭代到不动点 -->
+  <section class="slide" data-narration="现在迭代，初始所有入口出口都是空集，按 B 一到 B 四的顺序来。第一轮：B 一没有前驱，入口空，出口就是自己的 gen，d 一 d 二。B 二的入口是 B 一与 B 三出口之并，此时 B 三还是空，所以是 d 一 d 二，出口不变。B 三入口拿到 d 一 d 二，出口是自己的 d 三 d 四。B 四抄 B 二的出口。好，到你了：第二轮会发生什么？特别是 B 二的入口——回边要把 B 三的定值带回循环头了。先暂停视频自己推一遍。推出来了吗？好，对答案：第二轮 B 二的入口变成 d 一 d 二并 d 三 d 四，四个定值全到齐，B 四跟着变；第三轮不再有任何变化，到达不动点。读法：循环头处的 i 可能来自 d 一，也可能来自 d 四——这正是九三节那个反例的凭据。">
+    <div class="slide-head"><span class="sec">演练</span><h3>两轮迭代到不动点：回边把 B3 的定值带回循环头</h3></div>
+    <div class="slide-body">
+      <div class="step"><p><strong>第一轮</strong>（初值全 ∅）：B1 出 {d1,d2} → B2 入 {d1,d2} → B3 出 {d3,d4} → B4 入 {d1,d2}</p></div>
+      <div class="step"><p><strong>第二轮</strong>：B2 的 IN = OUT[B1] ∪ OUT[B3] = {d1,d2} ∪ {d3,d4} = <strong>{d1,d2,d3,d4}</strong>（回边起效）；B4 的 IN 同步变大；B3 的 OUT 不变</p></div>
+      <div class="step"><p><strong>第三轮</strong>：所有集合不再变化 → 到达<strong>不动点</strong>，迭代结束</p></div>
+      <div class="pause"><div class="icon">✍️</div><div class="txt"><b>暂停推导</b><p>在纸上写出第二轮 B2、B3、B4 的 IN 与 OUT，并回答：循环头处的 i 可能来自哪几条定值？</p></div></div>
+      <p class="step-hint">按空格 / → 逐步揭示答案</p>
+    </div>
+  </section>
+
+  <!-- 18 活跃变量 + 保守原则 -->
+  <section class="slide" data-narration="到达定值是往前看的，还有一个往后看的兄弟：活跃变量分析。方向相反，是后向的：一个块的入口等于它的 use 并上出口减去 def，出口取所有后继入口的并；回答的问题是离开这个点之后变量还会不会被读。九二节删 t 九、九四节删 i，判活的都是它。把视野再拉高一层：所有数据流分析都是同一个模子——每块定局部事实，沿流图边反复做并或交加传递，直到不动点；方向、汇合运算、传递函数三样一组合，就得到不同的分析。最后记住全章的底线，保守原则：宁可不优化，不可改语义。分析只能回答必然成立的事实，凡是不能证明安全的变换一律不做。指针别名、下标越界都可能让分析说也许被改，优化器就收手——这不是无能，是底线。">
+    <div class="slide-head"><span class="sec">原则</span><h3>活跃变量向后看；全章底线是保守原则</h3></div>
+    <div class="slide-body">
+      <div class="formula">$$\text{活跃变量（后向）：} \mathrm{IN}[B] = \mathrm{use}[B] \cup (\mathrm{OUT}[B] - \mathrm{def}[B]),\quad \mathrm{OUT}[B] = \bigcup_{S\,\text{是后继}} \mathrm{IN}[S]$$</div>
+      <div class="cols">
+        <div class="col"><div class="card">🧭 <strong>同一模子</strong><br>局部事实（gen/kill 或 use/def）＋沿边「并/交＋传递」→ 迭代到不动点；方向与汇合运算一换就是新分析</div></div>
+        <div class="col"><div class="card">🛡️ <strong>保守原则</strong><br>宁可不优化，不可改语义；分析说「也许被改」时优化器必须收手——这不是无能，是底线</div></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ★ 19 误区页 -->
+  <section class="slide" data-narration="扫三个最容易踩的雷。雷一：以为字面相同的表达式就能消。错！还必须确认从上次计算到这次使用之间，所有运算分量都没被重新定值；要是中间插了一句 i 等于 i 加一，两个四乘 i 字面相同值却不同，消了就改语义。记法：先看分量变没变，再谈消不消。雷二：以为不变式无脑外提总是安全。反例：循环可能一次都不执行时，把可能出错或改变被读值的语句硬提出来，等于强制执行了本不执行的代码；前置条件里支配所有出口或不活跃，防的就是这个。雷三：以为跳转语句自动开新块。错！开新块的是跳转的目标和跳转之后那条；本章示例里第十四句跳回第二条，它就只是块尾，不是首领。三个雷都扫完了，记牢。">
+    <div class="slide-head"><span class="sec">避坑</span><h3>三个真实误解：字面相同、无脑外提、跳转开块</h3></div>
+    <div class="slide-body">
+      <div class="trap">❌ <strong>两个表达式字面相同就能消</strong><br>✅ 必须确认两次之间所有运算分量都未被重定值——先看分量变没变，再谈消不消。</div>
+      <div class="trap">❌ <strong>循环不变式无脑外提总安全</strong><br>✅ 循环可能一次不执行时，外提等于强制执行；「支配所有出口或不活跃」防的就是这类事故。</div>
+      <div class="trap">❌ <strong>跳转语句自动开新块</strong><br>✅ 开新块的是「跳转目标」和「跳转之后那条」；(14) goto (2) 只是 B3 块尾，不是首领。</div>
+    </div>
+  </section>
+
+  <!-- 20 接口页 -->
+  <section class="slide" data-narration="说说本章和前后章怎么分工。往前看，第八章管代码生成，把中间代码翻成目标码；本章管翻译之前的瘦身，两者在实际编译器里常常交替进行——生成一点、优化一点。往后看，本章的极限有两条：一是先做哪个优化收益不同，这是阶段排序问题；二是过程内分析看不到函数调用彼岸，到顶了。而第十章要解决的问题正好接上：代码已经干干净净了，但处理器每个时钟周期能同时发好几条指令，单条指令什么时候发、怎么排出不打架的指令序列？这就是指令级并行。本章把地扫干净，第十章在干净的地板上排兵布阵。">
+    <div class="slide-head"><span class="sec">接口</span><h3>第8章管翻译、本章管瘦身、第10章管指令什么时候发</h3></div>
+    <div class="slide-body">
+      <table>
+        <thead><tr><th></th><th>第8章 代码生成</th><th>本章 机器无关优化</th><th>第10章 指令级并行</th></tr></thead>
+        <tbody>
+          <tr><td class="l"><strong>问题</strong></td><td class="l">中间代码 → 目标码</td><td class="l">翻译前让中间代码更省</td><td class="l">单条指令何时发射</td></tr>
+          <tr><td class="l"><strong>对象</strong></td><td class="l">逐句翻译</td><td class="l">基本块与流图</td><td class="l">基本块内指令调度</td></tr>
+          <tr><td class="l"><strong>极限</strong></td><td class="l">原稿浪费照翻</td><td class="l">过程内、顺序语义到顶</td><td class="l">硬件并行性登场</td></tr>
+        </tbody>
+      </table>
+      <div class="tip">钩子：代码扫干净了，但处理器每拍能发好几条指令——怎么排出不打架的序列？第10章见。</div>
+    </div>
+  </section>
+
+  <!-- ★ 21 小结页 -->
+  <section class="slide" data-narration="三句话讲完第九章。第一句，解决什么：不改变程序语义的前提下让中间代码跑得更快——把翻译前就存在的重复计算、无效语句和循环内浪费系统地找出来消掉。第二句，核心机制：先切基本块连成流图，块内抡公共子表达式消除、复写传播、死代码消除三板斧，循环里做不变式外提与强度削弱；每一步敢改的凭据都来自数据流分析，拿不准就按保守原则不动。第三句，承上启下：第八章管翻成目标码，本章管翻译前瘦身，单条指令怎么排交给第十章。下面这条到达定值方程是本章必背：入口是所有前驱出口的并，出口是 gen 并上入口减 kill——合上书也要能默写。">
+    <div class="slide-head"><span class="sec">小结</span><h3>三句话讲完第9章</h3></div>
+    <div class="slide-body">
+      <div class="chain">
+        <div class="link"><span class="no">1</span><span class="txt"><strong>解决什么</strong>：不改语义让中间代码更快——重复计算、无效语句、循环浪费，系统找出并消掉</span></div>
+        <div class="link"><span class="no">2</span><span class="txt"><strong>核心机制</strong>：切基本块连成流图 → 块内三板斧 → 循环外提与强度削弱 → 数据流分析给凭据</span></div>
+        <div class="link"><span class="no">3</span><span class="txt"><strong>承上启下</strong>：第8章管翻译，本章管瘦身，指令怎么排交给第10章</span></div>
+      </div>
+      <div class="formula formula-concl">$$\boldsymbol{\mathrm{IN}[B] = \bigcup_{P\,\text{前驱}} \mathrm{OUT}[P], \quad \mathrm{OUT}[B] = \mathrm{gen}[B] \cup (\mathrm{IN}[B] - \mathrm{kill}[B])} \;\text{——合上书也要能默写}$$</div>
+    </div>
+  </section>
+
+  <!-- ★ 22 结束页 -->
+  <section class="slide slide-cover" data-narration="本章到此结束。毕业挑战，合上书拿一张纸，六道题：一，默写首领三规则，并给一段含两个跳转的八句三地址码划分基本块；二，默写示例优化前 B 三的十二条语句，依次演示三板斧；三，写出不变式外提的三条前置条件，各举一个违反就不能提的情形；四，对四乘 i 完整做强度削弱与归纳变量消除，写出最终循环体；五，默写到达定值方程，对图九点二手算到不动点；六，一句话回答本章主线问题。全过即毕业。下一章预告：第十章指令级并行——代码干净了，处理器每拍能发好几条指令，单条指令到底什么时候发？我们下章见。">
+    <div class="kicker">本 章 结 束</div>
+    <h1>宁可不优化，不可改语义</h1>
+    <div class="sub">毕业挑战：合上书，拿一张纸</div>
+    <div class="divider"></div>
+    <div class="meta">
+      ☑ 默写首领三规则并划分一段含两个 goto 的代码　　☑ 演示 B3 的三板斧（12→10 条）<br>
+      ☑ 外提三前置条件各举一反例　　☑ 4*i 强度削弱＋归纳变量消除写最终循环体<br>
+      ☑ 默写到达定值方程并对图 9.2 手算到不动点　　☑ 一句话回答本章主线问题<br><br>
+      下一章 · 第10章 指令级并行：单条指令什么时候发？
+    </div>
+  </section>
+
+  <!-- 页脚 -->
+  <div id="footer">
+    <span class="brand">第9章 机器无关优化 · 编译原理课件</span>
+    <span id="pagenum">1 / 22</span>
+  </div>
+
+  <!-- 导航 -->
+  <div class="nav">
+    <button id="prev" title="上一页 (←)">‹</button>
+    <button id="next" title="下一页 (→ / 空格)">›</button>
+  </div>
+  <div id="hint">← → 翻页 · 空格下一页 · 推导页逐步显示 · 点击左右半屏翻页</div>
+
+</div>
+
+<!-- mermaid 本地引用，保证离线可用；初始化参数全套课件统一，勿改 -->
+<script src="/lectures-assets/mermaid.min.js"></script>
+<script>
+mermaid.initialize({
+  startOnLoad: false,   // 必须为 false：display:none 的隐藏页渲染会得到 0 宽高的退化 SVG，
+                        // 改为页面激活时懒渲染（见 renderMermaid）
+  theme: "base",
+  themeVariables: {
+    primaryColor: "#ebf8ff",
+    primaryBorderColor: "#2b6cb0",
+    primaryTextColor: "#1a365d",
+    lineColor: "#718096",
+    fontFamily: "-apple-system, PingFang SC, sans-serif",
+    fontSize: "15px"
+  },
+  flowchart: { curve: "linear", htmlLabels: false }
+});
+</script>
+<script>
+(function(){
+  const slides = Array.from(document.querySelectorAll('.slide'));
+  const total = slides.length;
+  let idx = 0;
+
+  const params = new URLSearchParams(location.search);
+  const startSlide = parseInt(params.get('slide'), 10);
+  if (params.get('autohide') === '1') document.body.classList.add('autohide');
+  if (!isNaN(startSlide) && startSlide >= 1 && startSlide <= total) idx = startSlide - 1;
+
+  const progress = document.getElementById('progress');
+  const pagenum = document.getElementById('pagenum');
+  const prevBtn = document.getElementById('prev');
+  const nextBtn = document.getElementById('next');
+
+  // 推导分步：每页记住已展开的步数；autohide（截图）模式下 CSS 强制全显
+  const stepState = new Map();
+  function stepsOf(i){ return Array.from(slides[i].querySelectorAll('.step')); }
+  function applySteps(){
+    stepsOf(idx).forEach((el, k)=> el.classList.toggle('on', k < (stepState.get(idx) || 0)));
+  }
+  // 前进一步：先展开本页下一步，全部展开后才翻页
+  function forward(){
+    const steps = stepsOf(idx);
+    const shown = stepState.get(idx) || 0;
+    if (shown < steps.length){ stepState.set(idx, shown + 1); applySteps(); return; }
+    go(idx + 1);
+  }
+  // 后退一步：先收起本页最后一步，收完才回上一页
+  function backward(){
+    const steps = stepsOf(idx);
+    const shown = stepState.get(idx) || 0;
+    if (shown > 0){ stepState.set(idx, shown - 1); applySteps(); return; }
+    go(idx - 1);
+  }
+
+  // mermaid 懒渲染：只在页面激活（有真实宽高）时渲染该页的图，渲染后打 data-done 防重复
+  function renderMermaid(slide){
+    if (typeof mermaid === 'undefined') return;
+    const nodes = Array.from(slide.querySelectorAll('.mermaid:not([data-done])'));
+    if (!nodes.length) return;
+    nodes.forEach(n => n.setAttribute('data-done', ''));
+    mermaid.run({ nodes }).catch(err => {
+      nodes.forEach(n => n.removeAttribute('data-done'));
+      console.error('mermaid 渲染失败：', err);
+    });
+  }
+
+  function render(){
+    slides.forEach((s,i)=> s.classList.toggle('active', i===idx));
+    progress.style.width = ((idx+1)/total*100) + '%';
+    pagenum.textContent = (idx+1) + ' / ' + total;
+    prevBtn.disabled = (idx===0);
+    nextBtn.disabled = (idx===total-1);
+    applySteps();
+    renderMermaid(slides[idx]);
+  }
+  function go(n){ idx = Math.max(0, Math.min(total-1, n)); render(); }
+
+  prevBtn.addEventListener('click', e=>{ e.stopPropagation(); backward(); });
+  nextBtn.addEventListener('click', e=>{ e.stopPropagation(); forward(); });
+
+  document.addEventListener('keydown', e=>{
+    if(e.key==='ArrowRight'||e.key===' '||e.key==='PageDown'){ e.preventDefault(); forward(); }
+    else if(e.key==='ArrowLeft'||e.key==='PageUp'){ e.preventDefault(); backward(); }
+    else if(e.key==='Home'){ stepState.set(idx, 0); go(0); }
+    else if(e.key==='End'){ go(total-1); }
+  });
+
+  document.getElementById('stage').addEventListener('click', e=>{
+    if(e.target.closest('.nav')) return;
+    const x = e.clientX;
+    if(x < window.innerWidth*0.5) backward(); else forward();
+  });
+
+  function fit(){
+    const s = Math.min(window.innerWidth/1280, window.innerHeight/720);
+    document.getElementById('stage').style.transform = 'translate(-50%,-50%) scale(' + s + ')';
+  }
+  window.addEventListener('resize', fit);
+  fit();
+  render();
+})();
+</script>
+</body>
+</html>

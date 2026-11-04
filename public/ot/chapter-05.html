@@ -1,0 +1,748 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第5章 对偶、Wasserstein 距离与几何 · 最优传输互动讲义</title>
+<link rel="stylesheet" href="/lectures-assets/style.css">
+</head>
+<body>
+
+<nav class="topbar">
+  <div class="topbar-inner">
+    <span class="brand"><a href="index.html" style="color:inherit">← 学习地图</a></span>
+    <span class="crumb">③ 连续与扩展 / 第5章</span>
+  </div>
+</nav>
+
+<div class="wrap">
+
+  <div class="lecture-head">
+    <span class="ch-label">CHAPTER 05 · 连续与扩展</span>
+    <h1>对偶、Wasserstein 距离与几何</h1>
+    <p class="lead">本章回答的核心问题：前四章一直在算"最优运输方案"，可 OT 的最优值本身什么时候是一把真正的尺子（满足距离三公理）？这把尺子还长出了什么样的几何——插值与重心？</p>
+  </div>
+
+  <div class="position-bar">
+    <strong>本章在主线上的位置：</strong>第2–4章给出 OT 的定义与算法 → <u>本章回到对偶，证明最优值 W_p 是真正的距离（三公理），并在一维给出分位数闭式解，进而引出位移插值与 Wasserstein 重心</u> → 第6章用这把尺子刻画连续分布并给它配数值引擎。<br>
+    第5章回答主线上的第5个问题：<strong>OT 的最优值何时是一把真正的"距离"尺子，它长出的几何有什么用？</strong>
+    <div class="map-inline">
+      <span class="node">① Ch1 引言（为什么需要新距离）</span><span class="arrow">→</span>
+      <span class="node">① Ch2 Monge 与 Kantorovich（定义）</span><span class="arrow">→</span>
+      <span class="node">② Ch3–4 离散与算法（怎么算）</span><span class="arrow">→</span>
+      <span class="node here">③ Ch5 对偶、Wasserstein 距离与几何</span><span class="arrow">→</span>
+      <span class="node">③ Ch6 连续与半离散（连续域怎么算）</span><span class="arrow">→</span>
+      <span class="node">④ Ch7–8 应用与前沿</span>
+    </div>
+  </div>
+
+  <div class="objectives">
+    <h4>🎯 学完本章，合上书你应该能：</h4>
+    <ol>
+      <li>写出 Kantorovich 对偶问题 max ∫φ dμ + ∫ψ dν（约束 φ(x)+ψ(y) ≤ c(x,y)）并解释势函数的经济含义；</li>
+      <li>说出 c-变换 ψ = φ^c 为什么把对偶压缩成一个函数，以及它和离散对偶 (f,g) 的对应；</li>
+      <li>验证 W_p 满足距离三公理（同一性、对称性、三角不等式），说出三角不等式证明靠的是粘合引理；</li>
+      <li>写出一维闭式解 W_p^p(α,β) = ∫₀¹ |F_α⁻¹(t) − F_β⁻¹(t)|^p dt，并对两个具体离散分布手算 W₁；</li>
+      <li>解释位移插值 μ_t = ((1−t)id + tT)#μ 为什么是 Wasserstein 空间里的测地线，写出 Wasserstein 重心的定义。</li>
+    </ol>
+  </div>
+
+  <div class="lecture">
+
+    <div class="figure">
+      <div class="mermaid">
+flowchart TB
+  A["原问题只给运输方案 评价方案还差一把尺子"] --> B["回到对偶：势函数给成本定价"]
+  B --> C["c-变换：两个势压缩成一个 结构现身"]
+  C --> D["最优值 W_p 满足三公理 成为真距离"]
+  D --> E["一维特例：分位数闭式解 可手算"]
+  D --> F["距离之上的几何：位移插值与重心"]
+  F --> G["代价：高维无闭式解 只能数值逼近"]
+  classDef hot fill:#fbeedd,stroke:#c4651f,stroke-width:2.5px,color:#c4651f;
+  classDef danger fill:#fae9e7,stroke:#b03a2e,stroke-width:2.5px,color:#b03a2e;
+  class D hot;
+  class G danger;
+      </div>
+      <div class="caption">本章推导主线：方案需要评价 → 对偶给出价格 → 最优值成为距离 → 一维可闭式手算 → 距离上长出插值与重心，但高维无闭式解成为第6章的入口。</div>
+    </div>
+
+    <h2><span class="sec-no">5.1</span>为什么回到对偶：运输方案之外的"价格体系"</h2>
+
+    <p>第2章把 Kantorovich 松弛写成线性规划，第3章用单纯形解它，第4章加熵加速。三章下来我们手里有"方案" π，却一直没有认真看过对偶变量。现在把镜头转过去——因为"这把尺子是不是真尺子"的证据，恰恰藏在对偶里。</p>
+
+    <p>Kantorovich 问题的<span class="term">对偶问题</span>（Dual Problem）是：找两个<span class="term">势函数</span>（Kantorovich Potentials）φ 定义在源空间 𝒳、ψ 定义在目标空间 𝒴，最大化</p>
+
+    <div class="formula">max&nbsp; ∫<sub>𝒳</sub> φ(x) dμ(x) + ∫<sub>𝒴</sub> ψ(y) dν(y)，&nbsp;&nbsp;约束：φ(x) + ψ(y) ≤ c(x, y)&nbsp; ∀x, y</div>
+
+    <p>经济读法沿用第2章的物流公司故事：φ(x) 是公司"在 x 处收货"的报价，ψ(y) 是"在 y 处交货"的报价；约束 φ(x)+ψ(y) ≤ c(x,y) 保证自运不比外包贵，否则你自己干了。对偶就是：<strong>外包公司拼命抬价，但不敢越过任何一条真实运费</strong>。强对偶定理保证：最大报价总额 = 最小运输成本——两套账算的是同一件事。</p>
+
+    <p>离散情形就是第3章的老熟人：约束 fᵢ + gⱼ ≤ Cᵢⱼ，目标 max ∑ᵢ fᵢaᵢ + ∑ⱼ gⱼbⱼ。连续情形只是把下标换成积分。所以本章的"对偶"不是新东西，是把第2、3章的影子变量扶正为主角。</p>
+
+    <div class="box insight">
+      <span class="box-tag">✅ 手算示例：两点分布验证强对偶</span>
+      <p>取 𝒳 = 𝒴 = ℝ，μ = δ₀，ν = δ₁，成本 c(x,y) = |x − y|。原问题：唯一的耦合把 0 处的全部质量运到 1，成本 = 1。</p>
+      <p>对偶：约束 φ(0) + ψ(1) ≤ 1，目标 max φ(0) + ψ(1)。约束直接给出上界 1，取 φ(0) = 0、ψ(1) = 1 达到——<strong>对偶最优值 = 1 = 原问题最优值</strong>。强对偶在最小的例子里就已经可见。</p>
+      <p>再试一对势：φ(0) = −3、ψ(1) = 4 同样取到 1。这暴露一个事实：<strong>势函数不唯一</strong>——同时加任意常数再减回去，目标不变。真正唯一的是"价差"，不是绝对价格。</p>
+    </div>
+
+    <p>势不唯一这件事马上逼出一个化简：既然只有价差要紧，能不能只留一个函数？固定 φ，ψ 要最大化就只能顶到约束的上沿：</p>
+
+    <div class="formula">ψ(y) = φ<sup>c</sup>(y) ≝ inf<sub>x</sub> [ c(x, y) − φ(x) ]</div>
+
+    <p>这个 ψ 叫 φ 的 <span class="term">c-变换</span>（c-transform）。它把对偶问题从"两个函数"压缩成"一个函数"：max ∫φ dμ + ∫φ^c dν，无约束。c = |x−y|（距离成本）时还有个更漂亮的结论：最优 φ 恰好是 1-Lipschitz 函数，且 φ^c = −φ——这条直接长成第7章 WGAN 的地基。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>原问题问"货怎么走最省"，对偶问"怎么定价最能赚"。对偶势就是 OT 内置的价格体系：φ(x) − φ(x′) 度量 x 与 x′ 在运输市场上的"身价差"。后面的 W₁ 对偶（E f 之差取上确界）和 Wasserstein 重心的梯度，全都从这个价格体系里长出来。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>把势函数 φ 当成"位置 x 的固有属性"。错：φ 依赖整个问题（μ、ν、c 都换它就换），且整体平移不变——φ 和 φ + 常数是同一个解。能比较的是差值 φ(x) − φ(x′)，不是绝对值。这也是 c-变换合法的原因：它自动吸收了平移自由度。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 5.1-1</div>
+              <div class="q-text">写出 Kantorovich 对偶问题（目标 + 约束），并说出强对偶的结论。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              max ∫φ dμ + ∫ψ dν，约束 φ(x)+ψ(y) ≤ c(x,y)。强对偶：对偶最优值 = 原问题最小运输成本。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 5.1-2</div>
+              <div class="q-text">写出 c-变换的定义，并说出它把对偶化简成什么样。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              φ^c(y) = inf_x [c(x,y) − φ(x)]。对偶压缩为无约束单函数问题 max ∫φ dμ + ∫φ^c dν；距离成本下 φ 自动 1-Lipschitz。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <h2><span class="sec-no">5.2</span>W_p 是距离：三公理逐条过堂</h2>
+
+    <p>上一节确认了对偶最优值等于运输成本。现在定义本章主角：<span class="term">Wasserstein 距离</span>（Wasserstein Distance，也叫 Earth Mover's Distance）：底空间带度量 d 时，</p>
+
+    <div class="formula">W<sub>p</sub>(α, β) = ( min<sub>π ∈ U(α,β)</sub> ∫ d(x, y)<sup>p</sup> dπ(x, y) )<sup>1/p</sup>，&nbsp;&nbsp;p ≥ 1</div>
+
+    <p>注意两层结构：里层是 Kantorovich 问题（成本取 d<sup>p</sup>），外层开 p 次方。这个"开方"不是装饰——p ≥ 2 时不开方的量根本不满足三角不等式，开了方才成为距离。下面把三公理逐条过堂。</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>公理</th><th>内容</th><th>证明要点</th></tr>
+        <tr><td>同一性</td><td>W_p(α,β) = 0 ⟺ α = β</td><td>α=β 取对角耦合 (id,id)#α 代价 0；反之代价 0 迫使 π 集中在对角线上</td></tr>
+        <tr><td>对称性</td><td>W_p(α,β) = W_p(β,α)</td><td>耦合转置 π(x,y) → π(y,x)，成本 d 对称</td></tr>
+        <tr><td>三角不等式</td><td>W_p(α,γ) ≤ W_p(α,β) + W_p(β,γ)</td><td>粘合引理：把 α–β 与 β–γ 两个最优耦合沿中间分布 β 粘成一个三边际耦合，再用底空间的三角不等式 + Minkowski</td></tr>
+      </table>
+    </div>
+
+    <p>三角不等式的证明是本章技术上最值得记住的一步。<span class="term">粘合引理</span>（Gluing Lemma）：给定 π₁ ∈ U(α,β) 和 π₂ ∈ U(β,γ)，存在一个三边际耦合 σ(x,y,z)，它的 (x,y) 边际是 π₁、(y,z) 边际是 π₂。直观做法：以 y 为桥，按条件分布 π₁(x|y)·π₂(z|y) 独立拼接（离散情形就是 σᵢⱼₖ = π¹ᵢⱼ π²ⱼₖ / bⱼ）。于是</p>
+
+    <div class="formula">W<sub>p</sub>(α,γ) ≤ ( ∫ d(x,z)<sup>p</sup> dσ )<sup>1/p</sup> ≤ ( ∫ [d(x,y) + d(y,z)]<sup>p</sup> dσ )<sup>1/p</sup> ≤ W<sub>p</sub>(α,β) + W<sub>p</sub>(β,γ)</div>
+
+    <p>第一步：σ 的 (x,z) 边际是合法耦合，W_p 是最小值所以更小；第二步：底空间三角不等式；第三步：对 L<sup>p</sup> 范数用 Minkowski 不等式（这就是为什么必须开 1/p 次方——p=1 时 Minkowski 退化为加法，p &gt; 1 时不开方不等式不成立）。</p>
+
+    <p>W_p 之所以珍贵，要对比着看。下面这张表是第1章动机的兑现：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>散度/距离</th><th>μ=δ₀, ν=δ_θ（θ→0）</th><th>是距离？</th><th>支撑不重叠时</th></tr>
+        <tr><td>KL 散度</td><td>+∞（θ ≠ 0）</td><td>否（不对称）</td><td>无穷大，无梯度</td></tr>
+        <tr><td>总变差 TV</td><td>1（常数）</td><td>是</td><td>饱和为常数，无梯度</td></tr>
+        <tr><td>Wasserstein W₁</td><td>|θ| → 0</td><td>是</td><td>有限且随位置光滑变化，有梯度</td></tr>
+      </table>
+    </div>
+
+    <p>更系统的结论是：<strong>W_p 度量化了 p 阶矩有限的分布空间上的"弱收敛 + p 阶矩收敛"</strong>——即 W_p(μₙ, μ) → 0 恰好等价于 μₙ 弱收敛且 p 阶矩收敛。这把"分布序列逼近"这件模糊的事变成了有尺度的收敛，第7章 GAN 训练要的就是这个性质。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>KL/TV 只问"两个分布在同一点上质量差多少"，看不到点与点之间的远近；Wasserstein 把底空间的几何 d(x,y) 抬进分布层面——所以它能感知"分布整体平移了一点点"。一句话：KL 是账本审计，Wasserstein 是搬运计费。后者自带尺子。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>把"最小运输成本"直接当距离用，忘了开 1/p 次方。⟨C, π*⟩ 在 p ≥ 2 时不满足三角不等式——比如直线段上搬两段的成本平方和会小于合并搬，尺度乱了。只有 W_p = (·)^{1/p} 才是距离。另外第4章的熵正则代价 ⟨C,P_ε⟩ 连同一性都不满足（μ=ν 时值非零），更不能当距离；修法 Sinkhorn divergence 见第6章。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 5.2-1</div>
+              <div class="q-text">写出 W_p 的定义（含外层 1/p 次方），并说出这个次方为什么不能省。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              W_p = (min_π ∫ d(x,y)^p dπ)^{1/p}。1/p 次方让 Minkowski 不等式可用，p ≥ 2 时不开方不满足三角不等式。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 5.2-2</div>
+              <div class="q-text">三角不等式的证明靠什么引理？一句话说出这个引理的内容。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              粘合引理（Gluing Lemma）：α–β 耦合与 β–γ 耦合可沿公共边际 β 粘成一个三边际耦合 σ(x,y,z)，从而用底空间三角不等式 + Minkowski 完成证明。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <h2><span class="sec-no">5.3</span>一维闭式解：分位数函数把 OT 变成竖式减法</h2>
+
+    <p>一般维数下 W_p 没有闭式解，但一维是个幸福的例外，而且它是全讲义最常回用的手算工具（第6章切片法完全靠它）。原因直观：在直线上搬土，<strong>最优方案必然是单调的</strong>——左边的土给左边的坑。任何"交叉运输"（x₁ &lt; x₂ 却送到 y₂ &lt; y₁ 之后位置颠倒）都可以解开交叉、严格省成本（这是成本 |x−y|^p 的凸性，即 Monge 代价的次模性）。</p>
+
+    <p>"单调地把一个分布重排成另一个"用数学说就是分位数对分位数。记 F_α 为累积分布函数，<span class="term">分位数函数</span>（Quantile Function）F_α⁻¹(t) = inf{ x : F_α(x) ≥ t }，则最优映射 T = F_β⁻¹ ∘ F_α，且</p>
+
+    <div class="formula">W<sub>p</sub><sup>p</sup>(α, β) = ∫₀¹ | F_α⁻¹(t) − F_β⁻¹(t) |<sup>p</sup> dt</div>
+
+    <p>读法：把两个分布都按"累计质量 t ∈ [0,1]"重新编号，同一编号处的位置差取 p 次方再积分。W₁ 尤其简单：<strong>W₁ 就是两条累积分布函数之间的面积</strong>（∫|F_α − F_β| dx，由换元可得与上式一致）。</p>
+
+    <div class="box insight">
+      <span class="box-tag">✅ 手算示例 1：两个对称二点分布的 W₁</span>
+      <p>μ = 0.5δ₀ + 0.5δ₂，ν = 0.5δ₁ + 0.5δ₃。</p>
+      <p>分位数：F_μ⁻¹(t) = 0（t ≤ 0.5）、2（t &gt; 0.5）；F_ν⁻¹(t) = 1（t ≤ 0.5）、3（t &gt; 0.5）。</p>
+      <p>W₁ = ∫₀¹ |F_μ⁻¹ − F_ν⁻¹| dt = ∫₀^0.5 |0−1| dt + ∫_0.5¹ |2−3| dt = 0.5 × 1 + 0.5 × 1 = <strong>1</strong>。</p>
+      <p>验证：最优耦合 π(0,1) = 0.5、π(2,3) = 0.5，每对距离 1，总成本 0.5×1 + 0.5×1 = 1 ✓。</p>
+    </div>
+
+    <div class="box insight">
+      <span class="box-tag">✅ 手算示例 2：非对称权重，必须走分位数</span>
+      <p>μ = (1/3)δ₀ + (2/3)δ₁，ν = 0.5δ₀ + 0.5δ₂。求 W₁。</p>
+      <p><strong>第1步（分位数）</strong>：F_μ⁻¹(t) = 0（t ≤ 1/3）、1（t &gt; 1/3）；F_ν⁻¹(t) = 0（t ≤ 1/2）、2（t &gt; 1/2）。</p>
+      <p><strong>第2步（分段积分）</strong>：断点 1/3 与 1/2 把 [0,1] 切成三段——</p>
+      <div class="tbl-wrap">
+        <table>
+          <tr><th>区间</th><th>F_μ⁻¹</th><th>F_ν⁻¹</th><th>差</th><th>贡献</th></tr>
+          <tr><td>[0, 1/3]</td><td>0</td><td>0</td><td>0</td><td>0</td></tr>
+          <tr><td>[1/3, 1/2]</td><td>1</td><td>0</td><td>1</td><td>(1/2 − 1/3) × 1 = 1/6</td></tr>
+          <tr><td>[1/2, 1]</td><td>1</td><td>2</td><td>1</td><td>(1 − 1/2) × 1 = 1/2</td></tr>
+        </table>
+      </div>
+      <p><strong>第3步（求和）</strong>：W₁ = 0 + 1/6 + 1/2 = <strong>2/3 ≈ 0.667</strong>。</p>
+      <p>对账：μ 在 0 处有 1/3，ν 在 0 处要 0.5——μ 得从 x=1 调 1/6 到 0（走 1 个单位）；μ 在 1 处剩 2/3 − 1/6 = 1/2 全部运到 2（走 1 个单位）。成本 = 1/6 × 1 + 1/2 × 1 = 2/3 ✓。分位数积分与"逐个消缺口"的直觉完全吻合。</p>
+    </div>
+
+    <p>第二条结论常被忽略但极其有用：一维时 p 无论取几，<strong>最优耦合都是同一个</strong>（单调重排），p 只改变"距离差的计费方式"。这让一维 OT 成为所有高维近似方法（第6章切片）的免费午餐。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>分位数函数是把任意分布"拉直成均匀分布"的那把熨斗：F⁻¹(t) 告诉你第 t 份质量坐在哪里。一维 OT 就是在熨平后的坐标系里做竖式减法——这解释了为什么直线上 OT 便宜（排序 O(n log n) 即解），也埋下了第6章 Sliced Wasserstein 的全部思想：把高维投影成一堆一维，逐维熨平再平均。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>以为"一维最优 = 按位置顺序一一配对"在非对称权重下仍成立。例2里 μ 的 x=1 处有 2/3 质量，要被劈成两股（1/6 回头到 0，1/2 前送去 2）——一对一映射根本不存在，必须允许质量分裂（Monge 失败、Kantorovich 兜底，第2章的松弛在这里现身）。闭式解用分位数而非"配对"，正是为了天然容纳分裂。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 5.3-1</div>
+              <div class="q-text">写出一维 W_p 的闭式解公式，并说明为什么一维最优方案必为单调重排。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              W_p^p = ∫₀¹ |F_α⁻¹(t) − F_β⁻¹(t)|^p dt。成本 |x−y|^p 下任何交叉运输都能解开交叉严格省钱，故最优单调——即分位数对分位数。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 5.3-2</div>
+              <div class="q-text">例2 中 W₁ = 2/3 是怎么由分位数分段积分得到的？说出三个区间与各自贡献。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              断点 1/3、1/2：[0,1/3] 差 0 贡献 0；[1/3,1/2] 差 1 贡献 1/6；[1/2,1] 差 1 贡献 1/2；合计 2/3。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <h2><span class="sec-no">5.4</span>距离之上的几何：位移插值与 Wasserstein 重心</h2>
+
+    <p>有了距离，下一个本能问题是：这个距离空间里有没有"直线"？答案是肯定的，而且比欧氏空间的直线更有内容。</p>
+
+    <p>设 T 是从 μ 到 ν 的最优映射（一维或平方成本下它存在，第6章 Brenier 定理给保证），<span class="term">位移插值</span>（Displacement Interpolation，McCann 1997）定义为</p>
+
+    <div class="formula">μ<sub>t</sub> = ( (1−t)·id + t·T )<sub>#</sub> μ，&nbsp;&nbsp;t ∈ [0,1]</div>
+
+    <p>读法：每个粒子 x 沿直线匀速滑向自己的目的地 T(x)，t 时刻的全体快照构成 μ_t。可以证明 μ_t 是 Wasserstein 空间里的<span class="term">测地线</span>（Geodesic）：W₂(μ_s, μ_t) = |t − s|·W₂(μ₀, μ₁)。对比朴素线性插值 (1−t)μ + tν——那只是两个分布"叠化"，中间时刻出现重影；位移插值是"形状真的在搬家"，中间时刻是一个个像样的中间形状。这就是为什么图形学里形变动画（morphing）用 OT 而不是淡入淡出。</p>
+
+    <div class="box insight">
+      <span class="box-tag">✅ 手算示例 3：两个单点分布的插值，测地线逐点验证</span>
+      <p>μ = δ₀，ν = δ₂（ℝ 上），T(x) = x + 2。</p>
+      <p>μ_t = δ_{(1−t)·0 + t·2} = δ_{2t}：t=0 时在 0，t=0.5 时在 1，t=1 时在 2。</p>
+      <p>验证测地线性质：W₂(μ_s, μ_t) = |2t − 2s| = |t−s| × 2，而 W₂(μ₀,μ₁) = 2，恰好 W₂(μ_s,μ_t) = |t−s|·W₂(μ₀,μ₁) ✓——等速、无弯折，这就是"直线"。</p>
+      <p>对比线性插值：(1−t)δ₀ + tδ₂ 在 t=0.5 时是 {0,2} 两点各半——中间形状是"劈开的两个重影"，不是 δ₁。差距一目了然。</p>
+    </div>
+
+    <p>插值是两个分布的事，重心是任意多个的事。<span class="term">Wasserstein 重心</span>（Wasserstein Barycenter）：给定分布 ν₁…ν_K 与权重 λ_k ≥ 0（∑λ_k = 1），</p>
+
+    <div class="formula">ν* = arg min<sub>ν</sub> ∑<sub>k=1..K</sub> λ<sub>k</sub> W<sub>2</sub><sup>2</sup>(ν, ν<sub>k</sub>)</div>
+
+    <p>它是"在 Wasserstein 几何里的加权平均"：欧氏空间里平均是 ∑λ_k x_k，这里平均的是整个分布。应用图景很直接：把同一字体的 26 个字母各看作一个形状分布，"平均字体"就是 Wasserstein 重心；把一组人脸照片看作像素分布，重心给出"平均脸"且保留清晰边缘（线性平均只会糊）。</p>
+
+    <p>重心还有一个更几何的读法：<strong>重心坐标与流形上的插值</strong>。固定一组"锚"分布 {ν_k}，任何分布 ν 都可以通过求解重心问题的反问题，被表示成权重 λ(ν)——这组权重就是 ν 在以锚为顶点的 Wasserstein 单纯形上的"重心坐标"。在这层坐标里做线性插值，再映回分布空间，就实现了"沿流形插值"：权重空间直线移动，分布空间沿测地网滑动。第7章的域适应里"把目标域表示成源域类别的凸组合"用的正是这套坐标。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>本章的三件套是一条升级链：对偶给出"价格" → 最优值成为"距离" → 距离上长出"几何"（测地线、重心、坐标）。OT 至此不再是一个优化问题，而是一个带有完整几何结构的分布空间——应用章节里所有"对齐、插值、平均"的操作，都是在这个空间里做初等几何。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>把 Wasserstein 重心等同于逐点线性平均 ∑λ_k ν_k。两者天壤之别：两个相距 10 的单峰分布，线性平均是双峰（两团质量原地保留、各半），Wasserstein 重心是中间位置的单峰（质量整体搬过去）。混用这两者在图像平均、形状匹配里会得到完全不同的结果——要"平均形状"用重心，要"混合样本"用线性。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 5.4-1</div>
+              <div class="q-text">写出位移插值 μ_t 的定义，并说出它比线性插值强在哪里。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              μ_t = ((1−t)id + tT)#μ，T 为最优映射。它是 Wasserstein 测地线（等速、中间时刻是真实中间形状）；线性插值只是叠化，中间时刻出重影。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 5.4-2</div>
+              <div class="q-text">写出 Wasserstein 重心的定义式，并举一个它区别于线性平均的例子。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              ν* = argmin_ν Σ λ_k W₂²(ν, ν_k)。两个分离单峰：线性平均 = 双峰重影，Wasserstein 重心 = 中间的单峰（整体搬迁）。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <h2><span class="sec-no">🃏</span>概念卡：本章概念的一分钟画像</h2>
+    <p>翻面前先自问：这个概念我能用一句话讲清楚吗？</p>
+    <div class="flip-grid">
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 1</div>
+            <div class="q-text">Kantorovich 对偶（Kantorovich Duality）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">max ∫φ dμ + ∫ψ dν，约束 φ(x)+ψ(y) ≤ c(x,y)。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">给运输成本一套"价格"解释，并是证明 W_p 性质的工具。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">外包公司报价：不敢越过任何一条真实运费。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">把 φ 当成位置的固有属性；它依赖整个问题且平移不唯一。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">第6章半离散对偶、第7章 WGAN 的 KR 对偶。</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 2</div>
+            <div class="q-text">c-变换（c-transform）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">φ^c(y) = inf_x [c(x,y) − φ(x)]，给定 φ 时 ψ 的最优选择。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">把双函数对偶压缩成单函数无约束问题。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">报价顶到约束上沿，一分利润不浪费。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为 φ 任意；距离成本下最优 φ 自动 1-Lipschitz。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">第7章 WGAN：W₁ = sup_{Lip f≤1} E_μ f − E_ν f 的来源。</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 3</div>
+            <div class="q-text">Wasserstein 距离（Wasserstein Distance）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">W_p(α,β) = (min_π ∫ d(x,y)^p dπ)^{1/p}。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">在分布之间给出带底空间几何的真距离。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">搬运计费：感知整体平移，不像 KL 只看同点差值。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">忘掉 1/p 次方——不开方的最小成本不是距离。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">一切需要"分布间距离"的场景；第7章 ML 损失。</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 4</div>
+            <div class="q-text">粘合引理（Gluing Lemma）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">π₁∈U(α,β) 与 π₂∈U(β,γ) 可粘成三边际耦合 σ(x,y,z)。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">W_p 三角不等式的证明工具。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">以中间站 β 为桥，把两段运输拼成一张三联运单。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为拼接自动成立；需要按条件分布显式构造。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">所有需要"经由中间分布接力"的论证。</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 5</div>
+            <div class="q-text">分位数函数（Quantile Function）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">F⁻¹(t) = inf{x : F(x) ≥ t}，第 t 份质量的位置。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">一维 OT 闭式解：W_p^p = ∫₀¹|F_α⁻¹−F_β⁻¹|^p dt。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">把分布熨平成均匀后的坐标尺。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为一维最优是一对一映射；权重不等时质量必须分裂。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">第6章 Sliced Wasserstein 的核心引擎。</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 6</div>
+            <div class="q-text">位移插值（Displacement Interpolation）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">μ_t = ((1−t)id + tT)#μ，粒子沿最优映射匀速滑动。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">给出 Wasserstein 空间的测地线（分布间的"直线"）。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">搬家的中途快照，而不是两张照片叠化。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">与线性插值 (1−t)μ+tν 混用——后者中间出重影。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">形状 morphing、第7章图形学应用。</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 7</div>
+            <div class="q-text">Wasserstein 重心（Wasserstein Barycenter）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">argmin_ν Σ λ_k W₂²(ν, ν_k)，分布的加权几何平均。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">在分布空间定义"平均形状"，并给出重心坐标。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">把多个分布往中间搬，而不是原地混合。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">当成线性平均 Σλ_k ν_k；分离单峰会变双峰。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">第7章域适应的目标表示、第8章多边际 OT。</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <h2><span class="sec-no">📝</span>分层习题</h2>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>判断对错：既然强对偶保证原问题与对偶问题最优值相等，那么求出对偶最优解 (φ, ψ) 后，任意满足 φ(x)+ψ(y) = c(x,y) 的 (x,y) 对都可以作为最优传输的运输对。</div>
+      <details>
+        <summary>提示</summary>
+        <p>互补松弛条件只在最优耦合的支撑集上成立；反方向的蕴涵需要什么？</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p>错。方向反了：互补松弛说"最优耦合 π* 的支撑集上必有 φ(x)+ψ(y)=c(x,y)"（π* 只走价格顶满的边），但"等号成立的 (x,y)"可能比 π* 的支撑集大得多——所有顶满约束的边构成一个图，最优耦合只是其中一个满足边际的子图。例如 μ=ν=均匀于 {0,1}、c=|x−y| 时 φ≡0、ψ(y)=y 使 (0,0)、(1,1) 顶满，但 (0,0) 与 (1,1) 之外还有别的对偶解能让别的边也顶满。易错点：把"支撑集 ⊂ 等号集"误读成"等号集 = 支撑集"。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>选择：下列量中，满足距离三公理（同一性、对称性、三角不等式）的是（A）min_π ∫ d(x,y)² dπ（B）W₂ = (min_π ∫ d(x,y)² dπ)^{1/2}（C）KL(μ‖ν)（D）熵正则代价 ⟨C, P_ε⟩。</div>
+      <details>
+        <summary>提示</summary>
+        <p>逐个检查同一性（μ=ν 时是否为 0）与三角不等式（Minkowski 需要哪一步）。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p>B。A 错：不开平方时三角不等式不成立（Minkowski 只对范数成立）；C 错：KL 不对称，且支撑不同时为无穷，连同一性方向的有限性都没有；D 错：第4章算过 μ=ν 时 ⟨C,P_ε⟩ = 0.424 ≠ 0，同一性直接失败。易错点：A 与 B 只差一个开方，正是这个开方决定了"是不是距离"。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>μ = 0.25δ₀ + 0.75δ_₂，ν = 0.5δ₁ + 0.5δ₃。用分位数闭式解手算 W₁，并给出对应的最优耦合验证。</div>
+      <details>
+        <summary>提示</summary>
+        <p>断点在哪里？分三段积分；耦合验证时让 μ 的 x=2 处质量劈成两股。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p>F_μ⁻¹(t) = 0（t ≤ 0.25）、2（t &gt; 0.25）；F_ν⁻¹(t) = 1（t ≤ 0.5）、3（t &gt; 0.5）。断点 0.25、0.5 分三段：</p>
+          <p>[0, 0.25]：|0−1| = 1，贡献 0.25；[0.25, 0.5]：|2−1| = 1，贡献 0.25；[0.5, 1]：|2−3| = 1，贡献 0.5。</p>
+          <p>W₁ = 0.25 + 0.25 + 0.5 = <strong>1</strong>。</p>
+          <p>耦合验证：π(0,1) = 0.25（μ 的 0 全给 ν 的 1），ν 的 1 还缺 0.25 由 π(2,1) = 0.25 补上，剩余 π(2,3) = 0.5。成本 = 0.25×1 + 0.25×1 + 0.5×1 = 1 ✓。注意 x=2 的 0.75 质量被劈成 0.25 + 0.5 两股——Monge 映射不存在，Kantorovich 耦合兜底。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>设 μ = δ_a、ν = δ_b 为 ℝ 上两个单点分布。(i) 写出位移插值 μ_t；(ii) 验证 W₂(μ_s, μ_t) = |t−s|·W₂(μ,ν)；(iii) 计算 ν₁ = δ_a、ν₂ = δ_b 各半权重的 Wasserstein 重心，并与线性平均比较。</div>
+      <details>
+        <summary>提示</summary>
+        <p>重心问题是 min_ν ½W₂²(ν,δ_a) + ½W₂²(ν,δ_b)；先对候选 ν = δ_x 求解，再论证一般解也是单点。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p>(i) T(x) = x + (b−a)，μ_t = δ_{a + t(b−a)}。</p>
+          <p>(ii) W₂(μ_s, μ_t) = |a + t(b−a) − a − s(b−a)| = |t−s|·|b−a| = |t−s|·W₂(μ,ν) ✓。</p>
+          <p>(iii) 对 ν = δ_x：½(x−a)² + ½(x−b)²，求导 (x−a) + (x−b) = 0，x = (a+b)/2。一般情形：重心目标 ∫(x−a)²dν + ∫(x−b)²dν 的一半…完整写法：令 m = ∫x dν 为 ν 的均值，展开 ½E[(X−a)²] + ½E[(X−b)²] = E[X²] − m(a+b) + (a²+b²)/2，在均值固定为 (a+b)/2 时由 E[X²] ≥ m² 取等 ⟺ ν 是单点。故重心 = δ_{(a+b)/2}。线性平均 = ½δ_a + ½δ_b 是双峰——两者完全不同：重心把质量搬到中点，线性平均原地各留一半。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l3">L3 建模应用</span>你在做字体设计工具：已把 10 款黑体字体的字母"a"轮廓各自转成单位质量的形状分布 ν₁…ν_₁₀。产品经理要求生成"介于这 10 款之间的平均字体"。同事的方案是把 10 个轮廓图做像素级加权平均。指出该方案的问题，给出你基于本章工具的完整方案（含目标函数、几何含义、需要的数值子程序）。</div>
+      <details>
+        <summary>提示</summary>
+        <p>像素平均对形状做了什么？重心问题的输入输出各是什么？</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p>像素平均的问题：两个位置错开的细笔画平均后变成"两条淡笔画"而非"中间一条笔画"——线性平均保留质量位置、只调浓度，笔画会重影、发虚，这是把分布当图片混合。</p>
+          <p>方案：求 Wasserstein 重心 ν* = argmin_ν Σ_{k=1..10} (1/10) W₂²(ν, ν_k)。几何含义：在 W₂ 几何里找"到 10 款字体距离平方和最小"的分布，笔画会被整体搬到折中位置而非叠化。数值子程序：离散化后（每款字体 → 点云/网格分布），用第4章 Sinkhorn 计算 W₂² 及其对 ν 的梯度，迭代更新重心（barycentric Sinkhorn 迭代：交替求各 ν_k 到当前重心的耦合、再按耦合力矩更新重心位置与质量）；要中间风格时调整权重 λ 即可在同一框架内滑动（重心坐标）。</p>
+        </div>
+      </details>
+    </div>
+
+    <h2><span class="sec-no">✍️</span>本章自测</h2>
+    <p class="quiz-hint">点击选项判分，答错会给出原因。</p>
+
+    <div class="quiz-block" data-answer="c">
+      <div class="q-no">自测 1</div>
+      <div class="q-stem">Kantorovich 对偶问题的约束是：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. φ(x) + ψ(y) ≥ c(x,y)</li>
+        <li data-opt="b">B. φ(x) · ψ(y) ≤ c(x,y)</li>
+        <li data-opt="c">C. φ(x) + ψ(y) ≤ c(x,y)</li>
+        <li data-opt="d">D. ∫φ dμ = ∫ψ dν</li>
+      </ul>
+      <div class="quiz-explain">解析：对偶是 max ∫φ dμ + ∫ψ dν s.t. φ(x)+ψ(y) ≤ c(x,y)，选 C。A 错：不等号方向反了——那样目标无上界（报价随便抬）；B 错：约束是可加结构，乘积形式来自哪里都不沾边；D 错：这是两个积分的相等，不是逐点约束，对偶约束必须对每个 (x,y) 成立。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 2</div>
+      <div class="q-stem">W_p 定义中外层 1/p 次方的作用是：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 让数值更小，方便比较</li>
+        <li data-opt="b">B. 使三角不等式成立（经由 Minkowski 不等式）</li>
+        <li data-opt="c">C. 消除熵偏差</li>
+        <li data-opt="d">D. 让 W_p 对 p 单调</li>
+      </ul>
+      <div class="quiz-explain">解析：三角不等式证明最后一步要对 L^p 范数用 Minkowski，只有开 1/p 次方才合法，选 B。A 错：数值缩放不是目的，且改变尺度的不是重点；C 错：熵偏差是第4章 Sinkhorn 的事，与开方无关；D 错：W_p 对 p 的单调性来自 Jensen 不等式，不是开方的"作用"。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="a">
+      <div class="q-no">自测 3</div>
+      <div class="q-stem">μ = 0.5δ₀ + 0.5δ₂，ν = 0.5δ₁ + 0.5δ₃，则 W₁(μ,ν) =</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 1</li>
+        <li data-opt="b">B. 2</li>
+        <li data-opt="c">C. 0.5</li>
+        <li data-opt="d">D. 4</li>
+      </ul>
+      <div class="quiz-explain">解析：分位数两段各差 1，各积 0.5，W₁ = 1，选 A。B 错：把两段贡献直接相加忘乘质量权重 0.5；C 错：只算了一段；D 错：把坐标差 2（0→2 的距离）当成了运输距离，每对实际距离是 1。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="d">
+      <div class="q-no">自测 4</div>
+      <div class="q-stem">三角不等式 W_p(α,γ) ≤ W_p(α,β) + W_p(β,γ) 的证明核心步骤是：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 直接对三个分布分别求闭式解再比较</li>
+        <li data-opt="b">B. 利用熵正则的严格凸性</li>
+        <li data-opt="c">C. 对 α 与 γ 取独立耦合</li>
+        <li data-opt="d">D. 用粘合引理把两个最优耦合沿 β 粘成三边际耦合，再用底空间三角不等式与 Minkowski</li>
+      </ul>
+      <div class="quiz-explain">解析：选 D，这是本章唯一的技术性证明，粘合引理提供接力结构。A 错：一般维数没有闭式解；B 错：熵正则是第4章算法，性质证明不需要它；C 错：独立耦合几乎从不最优，且丢掉了"经过 β"的结构。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 5</div>
+      <div class="q-stem">μ = δ₀、ν = δ₂ 各半权重的 Wasserstein 重心（W₂²）是：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 0.5δ₀ + 0.5δ₂</li>
+        <li data-opt="b">B. δ₁</li>
+        <li data-opt="c">C. δ₂</li>
+        <li data-opt="d">D. δ₀ 与 δ₂ 的任意混合</li>
+      </ul>
+      <div class="quiz-explain">解析：重心是 argmin ½W₂²(ν,δ₀) + ½W₂²(ν,δ₂) = δ₁（质量搬到中点），选 B。A 错：那是线性平均，双峰重影；C 错：只靠近一端，权重不对称才可能；D 错：混合分布的 W₂² 目标严格更大（E[X²] 大于均值平方），唯一解是中点单点。</div>
+    </div>
+
+    <div class="retell">
+      <h3>🗣️ 用自己的话，三句话讲完本章</h3>
+      <p>对着空气（或室友）说出这三句。说卡壳的那句，回去重读对应小节。</p>
+      <details>
+        <summary>句1：这章解决什么问题？——</summary>
+        <div class="retell-answer">参考答案：前四章只有"运输方案"和"成本数值"，本章问这个数值能不能当真正的距离用（三公理），以及它能否给出分布空间的几何结构（插值与重心）。</div>
+      </details>
+      <details>
+        <summary>句2：核心机制是什么？——</summary>
+        <div class="retell-answer">参考答案：Kantorovich 对偶给出价格体系；W_p = (min∫d^p dπ)^{1/p} 经粘合引理+Minkowski 验证三公理成为距离；一维有分位数闭式解 ∫|F_α⁻¹−F_β⁻¹|^p；位移插值 ((1−t)id+tT)#μ 给出测地线，Wasserstein 重心 argmin Σλ_k W₂² 给出几何平均。</div>
+      </details>
+      <details>
+        <summary>句3：它和前后章怎么分工？——</summary>
+        <div class="retell-answer">参考答案：本章给第2–4章的"方案与算法"配上"尺子与几何"；第6章把尺子带到连续域（Brenier、半离散、切片），第7章用这把尺子做机器学习损失，第8章用它比较多边际与非同空间的对象。</div>
+      </details>
+    </div>
+
+    <div class="review-plan">
+      <h3>🔁 间隔复习计划</h3>
+      <p>回忆本身比重读有效 10 倍。到点只做一件事：翻卡 + 重做标记题。</p>
+      <table>
+        <tr><th>时间点</th><th>复习内容</th><th>预计用时</th></tr>
+        <tr><td>第 1 天</td><td>概念卡 1–7 全部 + 回忆卡 5.2-1、5.3-2</td><td>12 分钟</td></tr>
+        <tr><td>第 3 天</td><td>概念卡 3、5、6（W_p、分位数、位移插值）+ 重做 L2 第一题（W₁ 手算）</td><td>12 分钟</td></tr>
+        <tr><td>第 7 天</td><td>三句话复述 + 自测错题 + 默写 W_p 定义与一维闭式解</td><td>10 分钟</td></tr>
+        <tr><td>第 15 天</td><td>只做合上书挑战；能全过就毕业</td><td>15 分钟</td></tr>
+      </table>
+    </div>
+
+    <div class="final-challenge">
+      <h3>📕 合上书挑战</h3>
+      <p class="fc-sub">现在关掉这个页面，拿一张纸，凭记忆完成以下任务。全部做完再回来核对——这是本章真正的毕业考试。</p>
+      <ol id="challenge-list">
+        <li><span class="fc-check"></span>写出 Kantorovich 对偶（目标+约束）与 c-变换定义，说出强对偶结论</li>
+        <li><span class="fc-check"></span>写出 W_p 定义，逐条说出三公理及三角不等式的证明骨架（粘合引理 → 底空间三角 → Minkowski）</li>
+        <li><span class="fc-check"></span>默写一维闭式解，并重算 μ=(1/3)δ₀+(2/3)δ₁、ν=0.5δ₀+0.5δ₂ 的 W₁（答案 2/3，分段 0 + 1/6 + 1/2）</li>
+        <li><span class="fc-check"></span>写出位移插值公式，并对 δ₀→δ₂ 验证测地线性质 W₂(μ_s,μ_t)=|t−s|·W₂(μ₀,μ₁)</li>
+        <li><span class="fc-check"></span>解释 Wasserstein 重心与线性平均的区别（双峰重影 vs 中间单峰）</li>
+        <li><span class="fc-check"></span>回答本章的主线问题：OT 的最优值何时是一把真正的"距离"尺子，它长出的几何有什么用？（一句话）</li>
+      </ol>
+    </div>
+
+    <div class="complete-zone">
+      <button class="btn-complete" id="btn-complete" onclick="markDone()">✓ 我已完成本章（含合上书挑战）</button>
+    </div>
+
+    <div class="chapter-nav">
+      <a href="chapter-04.html"><span class="nav-dir">← 上一章</span>第4章 熵正则与 Sinkhorn 算法</a>
+      <a href="chapter-06.html" class="next"><span class="nav-dir">下一章 →</span>第6章 连续域与半离散方法</a>
+    </div>
+
+  </div>
+</div>
+
+<footer class="footer">
+  <div class="wrap">第5章 对偶、Wasserstein 距离与几何 · 最优传输互动讲义 · 基于 Peyré &amp; Cuturi (2019)</div>
+</footer>
+
+<script src="/lectures-assets/mermaid.min.js"></script>
+<script>
+mermaid.initialize({
+  startOnLoad: true,
+  theme: "base",
+  themeVariables: {
+    primaryColor: "#e3edf7",
+    primaryBorderColor: "#1d5f9e",
+    primaryTextColor: "#1d5f9e",
+    lineColor: "#5c554b",
+    secondaryColor: "#fbeedd",
+    tertiaryColor: "#f5f1e8",
+    fontFamily: "-apple-system, PingFang SC, sans-serif",
+    fontSize: "14px"
+  },
+  flowchart: { curve: "linear", htmlLabels: false }
+});
+</script>
+<script>
+// 自测题判分
+document.querySelectorAll(".quiz-block").forEach(block => {
+  const answer = block.dataset.answer;
+  const explain = block.querySelector(".quiz-explain");
+  block.querySelectorAll(".quiz-opts li").forEach(li => {
+    li.addEventListener("click", () => {
+      const opts = block.querySelectorAll(".quiz-opts li");
+      opts.forEach(o => o.classList.add("disabled"));
+      if (li.dataset.opt === answer) {
+        li.classList.add("correct");
+      } else {
+        li.classList.add("wrong");
+        block.querySelector(`[data-opt="${answer}"]`).classList.add("correct");
+      }
+      explain.classList.add("show");
+    });
+  });
+});
+
+// 合上书清单打勾
+document.querySelectorAll("#challenge-list li").forEach(li => {
+  li.addEventListener("click", () => li.classList.toggle("checked"));
+});
+
+// 完成标记 → localStorage
+const KEY = "ot_progress_v1";
+const CH = "5";
+function loadProgress() {
+  try { return JSON.parse(localStorage.getItem(KEY)) || {}; } catch (e) { return {}; }
+}
+const progress = loadProgress();
+const btn = document.getElementById("btn-complete");
+if (progress[CH] && progress[CH].done) {
+  btn.textContent = "✓ 已完成 · 再次点击重置";
+  btn.classList.add("done");
+}
+function markDone() {
+  const p = loadProgress();
+  if (p[CH] && p[CH].done) {
+    delete p[CH];
+    btn.textContent = "✓ 我已完成本章（含合上书挑战）";
+    btn.classList.remove("done");
+  } else {
+    p[CH] = { done: true, completedAt: Date.now(), reviewsDone: 0 };
+    btn.textContent = "✓ 已完成 · 复习提醒已开启";
+    btn.classList.add("done");
+  }
+  localStorage.setItem(KEY, JSON.stringify(p));
+}
+</script>
+
+</body>
+</html>

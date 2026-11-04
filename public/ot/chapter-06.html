@@ -1,0 +1,718 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第6章 连续域与半离散方法 · 最优传输互动讲义</title>
+<link rel="stylesheet" href="/lectures-assets/style.css">
+</head>
+<body>
+
+<nav class="topbar">
+  <div class="topbar-inner">
+    <span class="brand"><a href="index.html" style="color:inherit">← 学习地图</a></span>
+    <span class="crumb">③ 连续与扩展 / 第6章</span>
+  </div>
+</nav>
+
+<div class="wrap">
+
+  <div class="lecture-head">
+    <span class="ch-label">CHAPTER 06 · 连续与扩展</span>
+    <h1>连续域与半离散方法</h1>
+    <p class="lead">本章回答的核心问题：第5章把 OT 的最优值锻造成了真距离 W_p，可现实里的分布是连续的（图像、密度、点云母分布）——连续域上 OT 什么时候有干净的映射解？一边连续一边离散时怎么算？以及从样本出发，这些量的统计误差有多大？</p>
+  </div>
+
+  <div class="position-bar">
+    <strong>本章在主线上的位置：</strong>第5章给出 Wasserstein 距离与一维闭式解 → <u>本章把尺子带进连续域：Brenier 定理给出平方成本下的最优映射，半离散方法（Laguerre 单元）处理"连续对点云"，再配两件数值工具——Sinkhorn divergence 修熵偏差、Sliced Wasserstein 用投影绕过维数灾难</u> → 第7章拿着这套工具进机器学习流水线。<br>
+    第6章回答主线上的第6个问题：<strong>连续分布（图像、点云）上 OT 怎么定义良、怎么算得起？</strong>
+    <div class="map-inline">
+      <span class="node">① Ch1–2 问题与定义（尺子从哪来）</span><span class="arrow">→</span>
+      <span class="node">② Ch3–4 离散与算法（怎么算、怎么算快）</span><span class="arrow">→</span>
+      <span class="node">③ Ch5 对偶与 Wasserstein 几何（最优值是距离）</span><span class="arrow">→</span>
+      <span class="node here">③ Ch6 连续域与半离散方法（连续怎么算）</span><span class="arrow">→</span>
+      <span class="node">④ Ch7–8 应用与前沿</span>
+    </div>
+  </div>
+
+  <div class="objectives">
+    <h4>🎯 学完本章，合上书你应该能：</h4>
+    <ol>
+      <li>写出 Monge 问题与 Brenier 定理的条件与结论（平方成本、μ 绝对连续 ⇒ T = ∇u 凸梯度），并解释"凸梯度是单调映射的高维推广"；</li>
+      <li>对一维均匀分布手算最优映射 T = F_ν⁻¹∘F_μ 与 W₂²（如 U[0,1] → U[2,3] 得 T(x)=x+2、W₂²=4）；</li>
+      <li>写出半离散 OT 的对偶目标与 Laguerre 单元定义，手算一维两站点的单元边界与 W₂²；</li>
+      <li>写出 Sinkhorn divergence S_ε 的定义，说出它如何抵消熵偏差（接第4章 0.424 的账）；</li>
+      <li>说出样本估计 W 的统计误差 ~ n^{−1/d} 的维数灾难含义，写出 Sliced Wasserstein 的定义并手算一个小例。</li>
+    </ol>
+  </div>
+
+  <div class="lecture">
+
+    <div class="figure">
+      <div class="mermaid">
+flowchart TB
+  A["W_p 尺子有了 但连续耦合是无穷维对象"] --> B["Monge 形式：存在映射时问题变有限维"]
+  B --> C["Brenier：平方成本下 T 是凸函数梯度"]
+  C --> D["一维特例：单调重排 T 用分位数复合"]
+  C --> E["半离散：连续对点云 对偶塌缩成有限维凸函数"]
+  E --> F["Laguerre 单元：加权距离变换切分支撑"]
+  D --> G["数值两件套：S_ε 修偏差 SW 绕维数灾难"]
+  F --> G
+  G --> H["代价：样本误差 n 的负 d 分之一次方 高维只能投影或近似"]
+  classDef hot fill:#fbeedd,stroke:#c4651f,stroke-width:2.5px,color:#c4651f;
+  classDef danger fill:#fae9e7,stroke:#b03a2e,stroke-width:2.5px,color:#b03a2e;
+  class C hot;
+  class H danger;
+      </div>
+      <div class="caption">本章推导主线：连续耦合无穷维 → Monge/Brenier 给出映射结构 → 一维单调重排可手算 → 半离散用 Laguerre 单元化有限维 → 数值端 S_ε 与 SW 补救，样本维数灾难成为绕不开的账单。</div>
+    </div>
+
+    <h2><span class="sec-no">6.1</span>Brenier 定理：平方成本下最优方案是一张"凸梯度"地图</h2>
+
+    <p>第5章确认 W_p 是距离，但 Kantorovich 耦合 π 是联合测度——连续域上它是一个无穷维对象，既存不下来也算不动。第2章的老问题回来了：什么时候方案能塌缩成一张映射？回忆 <span class="term">Monge 问题</span>（Monge Problem）：找映射 T 最小化</p>
+
+    <div class="formula">inf<sub>T : T<sub>#</sub>μ = ν</sub> ∫ c(x, T(x)) dμ(x)</div>
+
+    <p>第2、5章都见过它的死穴：μ = δ₀、ν 两点劈开时，一个点不能拆两半，映射不存在。但有一类成本 + 一类源分布，死穴消失——这就是本章第一块基石。</p>
+
+    <p><span class="term">Brenier 定理</span>（Brenier's Theorem，1991）：取平方欧氏成本 c(x,y) = ‖x − y‖²，若 μ 在 ℝᵈ 上<span class="term">绝对连续</span>（absolutely continuous，有密度、不给任何零测集质量），则最优 Monge 映射存在且（μ-几乎处处）唯一，并且它恰是某个凸函数的梯度：</p>
+
+    <div class="formula">T = ∇u，&nbsp;&nbsp;u : ℝᵈ → ℝ 为凸函数</div>
+
+    <p>为什么是"凸梯度"？一维时凸函数 u 的导数 u′ 单调不减——T = ∇u 就是"单调映射"的高维推广：不交叉、不翻转，近处的点送去近处。这与第5章一维"最优方案必单调"的直觉完全咬合。再看必要条件：最优处扰动 T 一小步成本不降，变分运算恰好给出 T = ∇(‖x‖²/2 − φ(x)) 的形式，其中 φ 是第5章的对偶势；‖x‖²/2 − φ 凸当且仅当对偶约束顶紧——<strong>Brenier 映射就是第5章价格体系在平方成本下的显影</strong>。</p>
+
+    <div class="box insight">
+      <span class="box-tag">✅ 手算示例：U[0,1] 搬到 U[2,3]</span>
+      <p>μ = U[0,1]，ν = U[2,3]，c(x,y) = (x−y)²。一维最优映射由单调重排给出（分位数复合，第5章工具）：</p>
+      <p>F_μ(x) = x（x ∈ [0,1]）；F_ν(y) = y − 2（y ∈ [2,3]），故 F_ν⁻¹(t) = 2 + t。</p>
+      <p>T(x) = F_ν⁻¹(F_μ(x)) = x + 2。验证推前：x ~ U[0,1] ⟹ x+2 ~ U[2,3] ✓。</p>
+      <p>W₂² = ∫₀¹ (x + 2 − x)² dx = ∫₀¹ 4 dx = <strong>4</strong>。与第5章分位数闭式核对：∫₀¹ |t − (2+t)|² dt = 4 ✓。</p>
+      <p>再看 u：T = u′ ⟹ u(x) = x²/2 + 2x，u″ = 1 &gt; 0，确为凸函数——Brenier 预言的"凸梯度"在最小的例子里显形。</p>
+    </div>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>Brenier 把"找无穷维耦合"变成"找一个凸函数"——优化空间从测度变成函数，且结构极强（梯度场、无交叉）。平方成本是钥匙：只有它让一阶条件直接给出梯度形式。换 |x−y| 之类的成本，最优映射可以大片不唯一（运输退化成"整段平移任意滑"）。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>把 Brenier 当成"任何两个分布间都有最优映射"。错，两个条件缺一不可：成本必须是平方型（更准确地说是扭曲条件满足的成本），μ 必须绝对连续。反例就在眼前：μ = δ₀、ν = 0.5δ₁ + 0.5δ_₃，质量必须劈叉，Monge 解不存在，只有 Kantorovich 耦合兜底（第5章 L2 习题刚算过这种劈叉）。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 6.1-1</div>
+              <div class="q-text">写出 Brenier 定理的两个条件与结论（T 的结构）。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              条件：c = ‖x−y‖²、μ 绝对连续。结论：最优 Monge 映射存在唯一，T = ∇u，u 凸——单调映射的高维推广。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 6.1-2</div>
+              <div class="q-text">一维时最优映射怎么用两个 CDF 复合写出？μ=U[0,1]、ν=U[2,3] 时它是什么？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              T = F_ν⁻¹ ∘ F_μ（单调重排）。例中 F_ν⁻¹(t)=2+t，T(x)=x+2，W₂²=∫₀¹4 dx = 4。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <h2><span class="sec-no">6.2</span>半离散 OT：连续分布对点云，对偶塌缩成有限维凸函数</h2>
+
+    <p>上一节要求两边都是"好"的连续分布。可现实最常见的局面是：<strong>一边连续（密度模型、渲染图像），一边离散（点云 y₁…y_m 带权重 bⱼ）</strong>。这叫<span class="term">半离散 OT</span>（Semi-discrete OT）。它的惊人之处在于：对偶问题从无穷维自动塌缩成 m 维。</p>
+
+    <p>回看第5章对偶 max ∫φ dμ + ∫ψ dν。ν = Σⱼ bⱼδ_{yⱼ} 时，ψ 只需要在 m 个点 yⱼ 上取值——ψ 变成一个 m 维向量。再用 c-变换把 φ 顶到约束上沿：φ(x) = min_j [c(x, yⱼ) − ψⱼ]。对偶目标变成只含 ψ ∈ ℝᵐ 的凹函数：</p>
+
+    <div class="formula">g(ψ) = ∑<sub>j</sub> ψⱼ bⱼ + ∫ min<sub>j</sub> [ c(x, yⱼ) − ψⱼ ] dμ(x)</div>
+
+    <p>这个结构有漂亮的几何读法。固定 ψ，每个源点 x 会选择"调整后最便宜"的目标点——x 归给使 c(x,yⱼ) − ψⱼ 最小的那个 j。于是源空间被切成 m 块，第 j 块叫 <span class="term">Laguerre 单元</span>（Laguerre Cell，即 power diagram 的胞腔）：</p>
+
+    <div class="formula">L<sub>j</sub>(ψ) = { x : c(x, yⱼ) − ψⱼ ≤ c(x, yₖ) − ψₖ&nbsp; ∀k }</div>
+
+    <p>ψⱼ 的经济含义沿用第5章：站点 yⱼ 的"收货补贴"——ψⱼ 越高，j 越抢手，单元越大。最优传输的约束只剩一句话：<strong>每个单元的 μ-质量恰好等于 bⱼ</strong>。g(ψ) 的梯度正是 (bⱼ − μ(Lⱼ(ψ)))，所以求解 = 用牛顿法/梯度法调 ψ 直到各单元质量达标。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 一句话看穿几何：这就是一次加权距离变换</span>
+      <p>平方成本时展开 c(x,yⱼ) − ψⱼ = ‖x‖² − 2⟨x,yⱼ⟩ + ‖yⱼ‖² − ψⱼ，比较它等价于比较加权平方距离场 ‖x − yⱼ‖² − ψⱼ——<strong>Laguerre 图就是对 m 个站点的加权距离做一次欧氏距离变换（weighted Voronoi / power diagram），单元边界即距离场相等处</strong>。ψ=0 时退化为普通 Voronoi 图；ψ 非零就是给每个站点发"半径补贴"再切蛋糕。</p>
+    </div>
+
+    <div class="box insight">
+      <span class="box-tag">✅ 手算示例：一维两站点，全步骤</span>
+      <p>μ = U[0,1]（密度 1），ν = 0.5δ_{0.25} + 0.5δ_{0.75}，c = (x−y)²。设边界为 x*，单元 L₁ = [0, x*]，L₂ = [x*, 1]。</p>
+      <p>第 1 步：边界方程。两站在 x* 处调整后成本相等：(x* − 0.25)² − ψ₁ = (x* − 0.75)² − ψ₂。展开：x*² − 0.5x* + 0.0625 − ψ₁ = x*² − 1.5x* + 0.5625 − ψ₂ ⟹ x* = 0.5 + (ψ₁ − ψ₂)。</p>
+      <p>第 2 步：质量约束定 ψ。要求 μ(L₁) = x* = 0.5 ⟹ ψ₁ = ψ₂。对偶平移自由度（第5章：势加常数不变）允许取 ψ₁ = ψ₂ = 0，得 x* = 0.5。</p>
+      <p>第 3 步：算 W₂²。单元内全部质量运到本站：</p>
+      <p>W₂² = ∫₀^0.5 (x − 0.25)² dx + ∫_0.5^1 (x − 0.75)² dx = 2 × [ (x−0.25)³/3 ]₀^0.5 = 2 × (0.125/3 + 0.125/3) = 2 × (1/96) = <strong>1/48 ≈ 0.0208</strong>。</p>
+      <p>对称性自检：μ 关于 0.5 对称、两站关于 0.5 对称 ⇒ ψ 必相等、边界必在中点 ✓。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>默认 ψ = 0（普通 Voronoi）就是最优划分。错：ψ=0 只在"普通 Voronoi 恰好质量匹配"时成立。上例若权重改成 (1/3, 2/3)，ψ 必须调整把边界推到 x* = 1/3——习题 L2 第二题就让你完整推一遍。半离散数值方法的全部工作量，就在"调 ψ 使单元质量等于 b"这一步。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 6.2-1</div>
+              <div class="q-text">写出半离散 OT 的对偶目标 g(ψ)，并说出它为什么只有 m 维。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              g(ψ) = Σⱼ ψⱼbⱼ + ∫ min_j[c(x,yⱼ)−ψⱼ] dμ。ν 只有 m 个原子，ψ 只需 m 个值；φ 被 c-变换消去。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 6.2-2</div>
+              <div class="q-text">写出 Laguerre 单元定义与"ψ 的经济含义 + 最优性条件"。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              Lⱼ(ψ) = {x : c(x,yⱼ)−ψⱼ 最小}。ψⱼ 是站点补贴，抬高则单元扩大；最优 ⟺ 每个单元 μ-质量 = bⱼ。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <h2><span class="sec-no">6.3</span>Sinkhorn divergence：把第4章欠下的熵偏差账还清</h2>
+
+    <p>第4章留了一笔账：熵正则让 Sinkhorn 飞快，但 ⟨C, P_ε⟩ 不是距离——当时算出 μ = ν 时它竟等于 0.424 而非 0，同一性直接失败。如果拿它当机器学习损失（第7章的需求），模型会学到"把自己的分布挪开一点"这种荒唐梯度。<span class="term">Sinkhorn divergence</span>（Sinkhorn Divergence）的修法朴素而有效：<strong>把两个"自运输"的偏差项减掉</strong>：</p>
+
+    <div class="formula">S<sub>ε</sub>(a, b) = OT<sub>ε</sub>(a, b) − ½ OT<sub>ε</sub>(a, a) − ½ OT<sub>ε</sub>(b, b)</div>
+
+    <p>其中 OT_ε(a,b) = ⟨C, P_ε⟩ 是熵正则代价。接第4章的数：若 OT_ε(a,a) = OT_ε(b,b) = 0.424，则 S_ε(a,b) = OT_ε(a,b) − 0.424——那 0.424 的"直流偏置"被对称地抵消。</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>性质</th><th>内容</th><th>意义</th></tr>
+        <tr><td>同一性</td><td>S_ε(a,a) = 0 自动成立</td><td>结构使然，不用证明</td></tr>
+        <tr><td>非负性</td><td>S_ε(a,b) ≥ 0（等号 ⟺ a = b）</td><td>可以当损失/差异度量</td></tr>
+        <tr><td>ε → 0</td><td>S_ε → OT（真实 Wasserstein 成本）</td><td>小 ε 逼近第5章的尺子</td></tr>
+        <tr><td>ε → ∞</td><td>S_ε → ½‖E[a] − E[b]‖² 型 MMD（能量距离）</td><td>大 ε 退化为均值比较，插值于 OT 与 MMD 之间</td></tr>
+      </table>
+    </div>
+
+    <p>实现上只比 Sinkhorn 贵一点：算三次 Sinkhorn（(a,b)、(a,a)、(b,b)），自项的缩放向量在迭代间可以复用。梯度经 Sinkhorn 层自动微分——第7章的生成模型损失函数到此配齐。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>信号处理直觉：OT_ε(a,b) 里混着一个与 a、b 各自"自缠绕程度"有关的直流分量，减掉两个自项就是去偏置。深层一点：OT_ε 可写成某种核范数的平方，S_ε 恰是对应的 MMD——非负性因此免费获得。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>以为 S_ε 彻底消除了 ε 的影响。没有——它消除的是"同一性失败"这类系统偏差，数值仍随 ε 变化（ε 大趋于 MMD、ε 小趋于 OT）。ε 依然要按第4章的尺度规则选：与成本矩阵的中位数同量级。另外 S_ε 不是距离（三角不等式一般不成立），当"差异度量/损失"用，别当"尺子"用。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 6.3-1</div>
+              <div class="q-text">写出 S_ε 定义，并指出它修掉的第4章的具体账单数字。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              S_ε(a,b) = OT_ε(a,b) − ½OT_ε(a,a) − ½OT_ε(b,b)。修掉 μ=ν 时 ⟨C,P_ε⟩=0.424≠0 的熵偏差（自项相减抵消）。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 6.3-2</div>
+              <div class="q-text">S_ε 在 ε→0 与 ε→∞ 时分别趋于什么？计算上要跑几次 Sinkhorn？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              ε→0：真实 OT；ε→∞：MMD/能量距离（均值比较）。三次 Sinkhorn：(a,b)、(a,a)、(b,b)，自项缩放向量可复用。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <h2><span class="sec-no">6.4</span>样本与切片：维数灾难面前，把高维问题射成一维</h2>
+
+    <p>理论再美，现实给的不是密度函数而是 n 个样本 x₁…x_n。最直接的估计是<span class="term">插件估计</span>（Plug-in Estimator）：用经验分布 μ̂ = (1/n)Σδ_{xᵢ} 算 W(μ̂, ν̂)。坏消息来得很快：E|W(μ̂,μ)| ~ n^{−1/d}。这就是<span class="term">维数灾难</span>（Curse of Dimensionality）的统计形态——d=2 的图像要 1% 误差需 n ≈ 10⁴，d=100 的特征空间需要 n ≈ 10²⁰⁰，永远不够。</p>
+
+    <p>但第5章留了一张王牌：<strong>一维 W₂² 有分位数闭式解，排序即得，O(n log n)</strong>。<span class="term">Sliced Wasserstein 距离</span>（Sliced Wasserstein Distance）的策略：把高维分布投影到所有一维方向上，对每个方向用闭式解，再对方向平均：</p>
+
+    <div class="formula">SW₂²(μ, ν) = ∫<sub>S<sup>d−1</sup></sub> W₂²( P<sub>θ#</sub>μ,&nbsp; P<sub>θ#</sub>ν ) dθ</div>
+
+    <p>P_θ(x) = ⟨x, θ⟩ 是到单位向量 θ 方向的投影。实现时随机采 L 个方向蒙特卡洛平均；每个方向上两个经验分布排序后逐位配对（一维单调重排，第5章），总成本 O(L·n log n)。SW 与 W 在弱收敛意义下等价（SW(μₙ,μ)→0 ⟺ μₙ⇀μ），所以它可以当替代品进损失函数。</p>
+
+    <div class="box insight">
+      <span class="box-tag">✅ 手算示例：两个点的 SW₂²</span>
+      <p>ℝ² 中 μ = δ_{(0,0)}，ν = δ_{(1,0)}。方向 θ = (cos φ, sin φ) 上，两点的投影标量分别是 0 与 cos φ，一维 W₂² = cos²φ。于是</p>
+      <p>SW₂² = (1/2π) ∫₀^{2π} cos²φ dφ = (1/2π) × π = <strong>1/2</strong>。</p>
+      <p>对比真实 W₂² = 1。<strong>SW ≠ W</strong>——它不是 W 的近似值，而是另一把共享拓扑的尺子。这一点必须钉死，否则后面所有使用都会误读数值。</p>
+    </div>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>CT 扫描直觉：医生拍不到三维器官，就从所有角度拍一维投影再重建信息。Sliced Wasserstein 同理——方向积分把"高维无闭式解"换成"无穷多个一维闭式解的平均"。更妙的是投影与排序都可微，整条链路能反向传播。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>两个。其一：把 SW 当 W 的"高效近似算法"——上例算出 1/2 vs 1，数值本身不同，要的是它的拓扑与梯度方向，不是数值相等。其二：以为 L 个方向越大越接近 W——L 只降蒙特卡洛方差，极限是 SW 本身，永远到不了 W。需要真 W 的场合请回 Sinkhorn/半离散。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 6.4-1</div>
+              <div class="q-text">插件估计 W(μ̂,ν̂) 的统计误差速率是什么？对 d=2、d=100 各意味着什么？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              ~n^{−1/d}。d=2：1% 误差需 n≈10⁴；d=100：n≈10²⁰⁰ 不可达——高维不能靠堆样本。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 6.4-2</div>
+              <div class="q-text">写出 SW₂² 定义，说明每个一维投影项靠什么定理闭式求解、复杂度多少。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              SW₂² = ∫_{S^{d−1}} W₂²(P_θ#μ, P_θ#ν) dθ。一维 W₂² 用分位数闭式解（排序配对），L 方向总成本 O(L·n log n)。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <h2><span class="sec-no">🃏</span>概念卡</h2>
+    <p>翻到背面之前，先出声说出这五个字段。说不全的，背面就是答案。</p>
+    <div class="flip-grid">
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 1</div>
+            <div class="q-text">Brenier 定理（Brenier's Theorem）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">平方成本 + μ 绝对连续 ⇒ 最优 Monge 映射存在唯一，T = ∇u，u 凸。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">连续 OT 什么时候塌缩成一张可计算的映射。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">凸梯度 = 不交叉不翻转的单调搬运，高维版的"左土给左坑"。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为任何分布对都有 Monge 解；μ = δ 劈叉即死。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">第7章生成模型的映射视角、形状插值理论保证。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 2</div>
+            <div class="q-text">单调重排（Monotone Rearrangement）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">一维最优映射 T = F_ν⁻¹ ∘ F_μ，按分位数对齐搬运。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">一维连续 OT 的显式解，手算与切片法的引擎。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">两队人各按身高排队，第 t 名配第 t 名。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为一维也可劈叉时仍有映射；权重不等时必须用耦合。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">6.4 节 Sliced Wasserstein 每个投影方向的计算。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 3</div>
+            <div class="q-text">半离散 OT（Semi-discrete OT）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">μ 连续、ν = Σbⱼδ_{yⱼ} 的 OT；对偶塌缩为 m 维凹函数 g(ψ)。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">连续密度对点云/网格的传输怎么算。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">给每个站点发补贴 ψⱼ，点源按调整后运费自选站点。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">ψ=0 的普通 Voronoi 就是答案；质量不匹配时必须调 ψ。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">图形学网格生成、蓝噪声采样、第7章点云处理。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 4</div>
+            <div class="q-text">Laguerre 单元（Laguerre Cell / Power Diagram）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">Lⱼ(ψ) = {x : c(x,yⱼ)−ψⱼ 在所有站点中最小}。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">半离散 OT 的几何显影：源空间的传输分区。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">加权距离变换切蛋糕；ψ 是每块蛋糕的"半径补贴"。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">与普通 Voronoi 混同；ψ≠0 时边界偏移但仍是直线（平面）。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">半离散牛顿法：调 ψ 使 μ(Lⱼ)=bⱼ 的每一步迭代。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 5</div>
+            <div class="q-text">Sinkhorn Divergence</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">S_ε(a,b) = OT_ε(a,b) − ½OT_ε(a,a) − ½OT_ε(b,b)。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">熵正则代价的熵偏差（μ=ν 时值非零，第4章的 0.424）。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">减两个自项，像信号处理去直流偏置。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">当成距离；三角不等式不成立，是差异度量不是尺子。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">第7章一切"以 OT 为损失"的 ML 训练。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 6</div>
+            <div class="q-text">Sliced Wasserstein（SW）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">SW₂²(μ,ν) = ∫_{S^{d−1}} W₂²(P_θ#μ, P_θ#ν) dθ。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">高维样本下 W 的统计误差 n^{−1/d} 不可承受。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">CT 扫描：所有角度的一维投影平均，代替高维直算。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">当成 W 的近似；它是共享拓扑的另一把尺子，数值不等。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">第7章生成模型、点云损失（O(L·n log n) 可微）。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 7</div>
+            <div class="q-text">样本复杂度与维数灾难（Sample Complexity）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">E|W(μ̂,μ)| ~ n^{−1/d}：n 个样本估计 W 的统计误差速率。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">解释为什么高维 OT 不能靠"多采点"解决。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">d 维空间撒 n 个点，平均间隙 ~ n^{−1/d}，误差被间隙锁死。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为 Sinkhorn 快就能对抗它；算法快 ≠ 统计误差小。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">第7章 mini-batch 偏差分析、何时改用 SW 的决策依据。</span></div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+    <h2><span class="sec-no">📝</span>分层习题</h2>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>判断对错：Brenier 定理保证 ℝᵈ 上任意两个概率分布之间都存在最优 Monge 映射 T = ∇u。</div>
+      <details>
+        <summary>提示</summary>
+        <p>定理对 μ 与成本各有什么要求？构造一个劈叉反例。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p>错。两个条件缺一不可：(i) 成本为平方型 c = ‖x−y‖²；(ii) 源分布 μ 绝对连续（不给零测集赋质量）。反例：μ = δ₀，ν = 0.5δ₁ + 0.5δ_₃——单点质量必须劈成两股送往两处，任何映射都做不到，Monge 问题无解，只有 Kantorovich 耦合存在（第5章 L2 第一题刚手算过这种劈叉）。易错点：把"Kantorovich 松弛下总有解"误记成"Monge 下总有解"；Brenier 说的恰是"Monge 何时也有解"。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>选择：下列量中，在 a = b 时严格为 0、且可直接用作无熵偏差的可微 OT 损失的是（A）OT_ε(a,b) = ⟨C, P_ε⟩（B）Sinkhorn divergence S_ε(a,b)（C）OT_ε(a,a)（D）εH(P_ε)。</div>
+      <details>
+        <summary>提示</summary>
+        <p>回忆第4章算过的 μ=ν 时哪个量等于 0.424。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p>B。A 错：μ=ν 时 ⟨C,P_ε⟩ = 0.424 ≠ 0，同一性失败；C 错：那正是偏差项本身（自缠绕成本）；D 错：熵项是正则化子，不度量分布差异。B 对：S_ε(a,a) = OT_ε(a,a) − ½OT_ε(a,a) − ½OT_ε(a,a) = 0 恒成立，且可证明非负、凸、可微。易错点：A 与 B 数值相近时感觉"差不多"，但当损失用时，A 的系统偏差会被优化器利用，把分布往错方向推。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>μ = U[0,2]，ν = U[1,3]，c = (x−y)²。(i) 写出 Brenier 映射 T 与凸势 u；(ii) 计算 W₂²；(iii) 若成本换成 c(x,y) = |x−y|，W₁ 变吗？说明理由。</div>
+      <details>
+        <summary>提示</summary>
+        <p>一维单调重排；注意平移型问题里两种成本的关系。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p>(i) F_μ(x) = x/2（[0,2]），F_ν⁻¹(t) = 1 + 2t。T(x) = F_ν⁻¹(F_μ(x)) = 1 + 2·(x/2) = x + 1。u′ = T ⟹ u(x) = x²/2 + x，u″ = 1 &gt; 0 凸 ✓。</p>
+          <p>(ii) W₂² = ∫₀² (x + 1 − x)² · (1/2) dx = ∫₀² (1/2) dx = <strong>1</strong>。（注意密度是 1/2 不是 1。）</p>
+          <p>(iii) 不变，W₁ = 1。一维纯平移中每个粒子都走距离 1，任何度量成本 |x−y| 的 p 次方在此例（距离恒为 1）下给出 1^p = 1。一般规律：一维 W₁ 不依赖"是否平方"，W₁ = ∫|F_μ⁻¹ − F_ν⁻¹| dt 总是成立；W₂ 才是平方成本的专属。易错点：(ii) 忘乘密度 1/2 会得 2。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>半离散手算：μ = U[0,1]，ν = (1/3)δ₀ + (2/3)δ₁，c = (x−y)²。(i) ψ₁ = ψ₂ = 0 时单元边界在哪、质量匹配吗？(ii) 调整 ψ 使质量匹配，求边界与 W₂²。</div>
+      <details>
+        <summary>提示</summary>
+        <p>边界方程 x² − ψ₁ = (x−1)² − ψ₂；质量匹配要求 L₁ = [0, x*] 的 μ-质量 = 1/3。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p>(i) 边界方程：x*² − ψ₁ = (x*−1)² − ψ₂ ⟹ x*² − ψ₁ = x*² − 2x* + 1 − ψ₂ ⟹ 2x* = 1 + ψ₁ − ψ₂ ⟹ x* = 0.5 + (ψ₁−ψ₂)/2。ψ=0 时 x* = 0.5，μ(L₁) = 0.5 ≠ 1/3——不匹配，站点 0 的单元太大，要缩小 ⟹ 降低 ψ₁ 相对 ψ₂。</p>
+          <p>(ii) 质量匹配要求 x* = 1/3 ⟹ ψ₁ − ψ₂ = 2(1/3 − 1/2) = −1/3（取 ψ₂ = 0、ψ₁ = −1/3：站点 0 被"罚款"，单元收缩）。</p>
+          <p>W₂² = ∫₀^{1/3} x² dx + ∫_{1/3}¹ (x−1)² dx = [x³/3]₀^{1/3} + [(x−1)³/3]_{1/3}¹ = (1/81) + (0 − (−2/3)³/3) = 1/81 + 8/81 = 9/81 = <strong>1/9 ≈ 0.111</strong>。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l3">L3 建模应用</span>你在做三维扫描后处理：激光雷达给出一个约 200 万点的地面点云（视为离散分布 ν），设计软件里有一个连续参数化的地形曲面模型（密度 μ_θ，θ 是少数形状参数）。目标：调 θ 让曲面的质量分布贴合点云。给出完整方案：选哪类 OT 工具、目标函数怎么写、梯度从哪来、为什么不用"直接 Sinkhorn 两经验分布"也不用 SW。</div>
+      <details>
+        <summary>提示</summary>
+        <p>一边连续一边离散是什么问题？μ_θ 有解析密度意味着什么？</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p>选型：半离散 OT。μ_θ 有连续密度、ν 是 200 万原子点云——正是半离散的设定。</p>
+          <p>目标函数：min_θ g_θ 的对偶值，即 W₂²(μ_θ, ν) = max_ψ { Σⱼ ψⱼbⱼ + ∫ min_j [c(x,yⱼ)−ψⱼ] dμ_θ }，内层用牛顿法解 ψ（每步要算 Laguerre 单元 Lⱼ(ψ) 的 μ_θ-质量及其对 ψ、θ 的导数）。</p>
+          <p>梯度：Danskin 定理——最优值对 θ 的梯度只需在最优 ψ* 处对 μ_θ 求导（ψ* 视为常数），单元积分对 θ 的导数由 μ_θ 的解析密度显式给出，全自动微分也可。</p>
+          <p>为什么不用两经验分布 Sinkhorn：把 μ_θ 离散化成 200 万点再跑 Sinkhorn 是 2×10⁶ 平方规模的核矩阵，内存爆炸且丢掉了 μ_θ 的解析结构。为什么不用 SW：本问题需要"真 W₂"的数值与映射（曲面贴合是几何任务，SW 是另一把尺子），且 μ_θ 连续可积分，半离散恰好精确利用这一点。额外收益：Laguerre 单元本身即"曲面上的分区图"，可直接可视化贴合质量。</p>
+        </div>
+      </details>
+    </div>
+
+    <h2><span class="sec-no">✍️</span>本章自测</h2>
+    <p class="quiz-hint">点击选项判分，答错会给出原因。</p>
+
+    <div class="quiz-block" data-answer="c">
+      <div class="q-no">自测 1</div>
+      <div class="q-stem">Brenier 定理成立需要的条件组合是：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 任意成本 + 任意两个分布</li>
+        <li data-opt="b">B. |x−y| 成本 + ν 离散</li>
+        <li data-opt="c">C. 平方成本 ‖x−y‖² + 源分布 μ 绝对连续</li>
+        <li data-opt="d">D. 熵正则 + 两边都是离散分布</li>
+      </ul>
+      <div class="quiz-explain">解析：选 C。A 错：μ = δ 劈叉时 Monge 无解，定理的两个条件缺一不可；B 错：|x−y| 成本下最优映射常不唯一（整段可滑），且绝对连续要求仍在；D 错：熵正则是第4章的数值技巧，与 Monge 存在性无关。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 2</div>
+      <div class="q-stem">半离散 OT 中，Laguerre 单元边界在最优点满足：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 每个单元到其站点的欧氏距离都相等</li>
+        <li data-opt="b">B. 每个单元的 μ-质量恰好等于目标权重 bⱼ</li>
+        <li data-opt="c">C. 所有 ψⱼ 必须为零</li>
+        <li data-opt="d">D. 单元面积全部相等</li>
+      </ul>
+      <div class="quiz-explain">解析：选 B，这正是对偶梯度为零的条件（∂g/∂ψⱼ = bⱼ − μ(Lⱼ) = 0）。A 错：边界是"调整后成本 c−ψ 相等"，不是距离相等；C 错：ψ=0 只在普通 Voronoi 恰好质量匹配时成立（本章两例中一例必须调 ψ）；D 错：面积由 bⱼ 决定，权重不等则单元不等。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="a">
+      <div class="q-no">自测 3</div>
+      <div class="q-stem">μ = U[0,1]，ν = 0.5δ_{0.25} + 0.5δ_{0.75}，平方成本下半离散 OT 的 W₂² 为：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 1/48</li>
+        <li data-opt="b">B. 1/24</li>
+        <li data-opt="c">C. 1/12</li>
+        <li data-opt="d">D. 1/96</li>
+      </ul>
+      <div class="quiz-explain">解析：边界 0.5，W₂² = 2×∫₀^0.5(x−0.25)²dx = 2×(1/96) = 1/48，选 A。B 错：忘记积分结果要除以 3（(x−0.25)³/3 的 /3）；C 错：量级算错一倍还多；D 错：只算了一个单元，忘乘 2（对称的两块）。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="d">
+      <div class="q-no">自测 4</div>
+      <div class="q-stem">Sinkhorn divergence S_ε(a,b) = OT_ε(a,b) − ½OT_ε(a,a) − ½OT_ε(b,b) 修掉的问题是：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. Sinkhorn 迭代太慢</li>
+        <li data-opt="b">B. 数值下溢</li>
+        <li data-opt="c">C. ε 太大时收敛到 MMD</li>
+        <li data-opt="d">D. 熵偏差：a = b 时 OT_ε(a,a) ≠ 0（如第4章的 0.424）</li>
+      </ul>
+      <div class="quiz-explain">解析：选 D，减两个自项让同一性 S_ε(a,a)=0 自动成立。A 错：S_ε 反而多算两次 Sinkhorn，不为提速；B 错：下溢靠 log-domain 稳定化解决，与 S_ε 无关；C 错：ε→∞ 趋于 MMD 是 S_ε 的性质而非被修掉的问题。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 5</div>
+      <div class="q-stem">关于 Sliced Wasserstein，正确的是：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 方向数 L 趋于无穷时 SW 收敛到真实 W</li>
+        <li data-opt="b">B. 每个投影方向上用一维分位数闭式解，复杂度 O(L·n log n)，且 SW 与 W 共享弱收敛拓扑</li>
+        <li data-opt="c">C. SW 消除了 n^{−1/d} 的统计误差</li>
+        <li data-opt="d">D. SW 只对高斯分布有定义</li>
+      </ul>
+      <div class="quiz-explain">解析：选 B。A 错：L→∞ 收敛到 SW 本身，本章算例 SW₂²=1/2 而 W₂²=1——另一把尺子；C 错：SW 的样本性质更好但没有"消除"维数灾难，经验 SW 仍有采样误差；D 错：定义对任意分布成立，投影 + 一维排序即可。</div>
+    </div>
+
+    <div class="retell">
+      <h3>🗣️ 用自己的话，三句话讲完本章</h3>
+      <p>对着空气（或室友）说出这三句。说卡壳的那句，回去重读对应小节。</p>
+      <details>
+        <summary>句1：这章解决什么问题？——</summary>
+        <div class="retell-answer">参考答案：第5章把 OT 最优值锻造成真距离，但连续分布（图像、密度、点云母分布）上的 OT 什么时候有干净的映射解、一边连续一边离散怎么算、从样本估计的统计误差多大——本章逐一回答。</div>
+      </details>
+      <details>
+        <summary>句2：核心机制是什么？——</summary>
+        <div class="retell-answer">参考答案：Brenier 定理（平方成本 + μ 绝对连续 ⇒ T=∇u 凸梯度）给出连续映射结构；一维单调重排 T=F_ν⁻¹∘F_μ 提供手算引擎；半离散 OT 的对偶塌缩成 m 维凹函数、Laguerre 单元（加权距离变换）做传输分区；Sinkhorn divergence 减自项修熵偏差；Sliced Wasserstein 用投影平均绕开高维无闭式解。</div>
+      </details>
+      <details>
+        <summary>句3：它和前后章怎么分工？——</summary>
+        <div class="retell-answer">参考答案：第5章给尺子和几何，本章给连续域的存在性与数值引擎；第7章把这套工具（S_ε、SW、映射视角）组装成机器学习的可微损失，第8章把框架推广到跨空间、非平衡、多边际。</div>
+      </details>
+    </div>
+
+    <div class="review-plan">
+      <h3>🔁 间隔复习计划</h3>
+      <p>回忆本身比重读有效 10 倍。到点只做一件事：翻卡 + 重做标记题。</p>
+      <table>
+        <tr><th>时间点</th><th>复习内容</th><th>预计用时</th></tr>
+        <tr><td>第 1 天</td><td>概念卡 1–7 全部 + 回忆卡 6.1-1、6.2-2</td><td>12 分钟</td></tr>
+        <tr><td>第 3 天</td><td>概念卡 1、3、6（Brenier、半离散、SW）+ 重做 L2 第二题（半离散手算）</td><td>12 分钟</td></tr>
+        <tr><td>第 7 天</td><td>三句话复述 + 自测错题 + 默写 Brenier 定理条件与 S_ε 定义</td><td>10 分钟</td></tr>
+        <tr><td>第 15 天</td><td>只做合上书挑战；能全过就毕业</td><td>15 分钟</td></tr>
+      </table>
+    </div>
+
+    <div class="final-challenge">
+      <h3>📕 合上书挑战</h3>
+      <p class="fc-sub">现在关掉这个页面，拿一张纸，凭记忆完成以下任务。全部做完再回来核对——这是本章真正的毕业考试。</p>
+      <ol id="challenge-list">
+        <li><span class="fc-check"></span>写出 Brenier 定理的条件与结论，给出 Monge 解不存在的一个反例</li>
+        <li><span class="fc-check"></span>对 μ=U[0,1]、ν=U[2,3] 手推 T(x)=x+2 与 W₂²=4，并写出凸势 u</li>
+        <li><span class="fc-check"></span>写出半离散对偶 g(ψ) 与 Laguerre 单元定义，重算 μ=U[0,1]、ν=0.5δ_{0.25}+0.5δ_{0.75} 的边界（0.5）与 W₂²（1/48）</li>
+        <li><span class="fc-check"></span>写出 S_ε 定义，解释为什么 S_ε(a,a)=0 自动成立，说出 ε→0/∞ 两个极限</li>
+        <li><span class="fc-check"></span>写出 SW₂² 定义，重算 δ_{(0,0)} 对 δ_{(1,0)} 的 SW₂²=1/2，并说出它与 W 的关系（另一把尺子，共享拓扑）</li>
+        <li><span class="fc-check"></span>回答本章的主线问题：连续分布（图像、点云）上 OT 怎么定义良、怎么算得起？（一句话）</li>
+      </ol>
+    </div>
+
+    <div class="complete-zone">
+      <button class="btn-complete" id="btn-complete" onclick="markDone()">✓ 我已完成本章（含合上书挑战）</button>
+    </div>
+
+    <div class="chapter-nav">
+      <a href="chapter-05.html"><span class="nav-dir">← 上一章</span>第5章 对偶、Wasserstein 距离与几何</a>
+      <a href="chapter-07.html" class="next"><span class="nav-dir">下一章 →</span>第7章 应用：机器学习中的 OT</a>
+    </div>
+
+  </div>
+</div>
+
+<footer class="footer">
+  <div class="wrap">第6章 连续域与半离散方法 · 最优传输互动讲义 · 基于 Peyré &amp; Cuturi (2019)</div>
+</footer>
+
+<script src="/lectures-assets/mermaid.min.js"></script>
+<script>
+mermaid.initialize({
+  startOnLoad: true,
+  theme: "base",
+  themeVariables: {
+    primaryColor: "#e3edf7",
+    primaryBorderColor: "#1d5f9e",
+    primaryTextColor: "#1d5f9e",
+    lineColor: "#5c554b",
+    secondaryColor: "#fbeedd",
+    tertiaryColor: "#f5f1e8",
+    fontFamily: "-apple-system, PingFang SC, sans-serif",
+    fontSize: "14px"
+  },
+  flowchart: { curve: "linear", htmlLabels: false }
+});
+</script>
+<script>
+// 自测题判分
+document.querySelectorAll(".quiz-block").forEach(block => {
+  const answer = block.dataset.answer;
+  const explain = block.querySelector(".quiz-explain");
+  block.querySelectorAll(".quiz-opts li").forEach(li => {
+    li.addEventListener("click", () => {
+      const opts = block.querySelectorAll(".quiz-opts li");
+      opts.forEach(o => o.classList.add("disabled"));
+      if (li.dataset.opt === answer) {
+        li.classList.add("correct");
+      } else {
+        li.classList.add("wrong");
+        block.querySelector(`[data-opt="${answer}"]`).classList.add("correct");
+      }
+      explain.classList.add("show");
+    });
+  });
+});
+
+// 合上书清单打勾
+document.querySelectorAll("#challenge-list li").forEach(li => {
+  li.addEventListener("click", () => li.classList.toggle("checked"));
+});
+
+// 完成标记 → localStorage
+const KEY = "ot_progress_v1";
+const CH = "6";
+function loadProgress() {
+  try { return JSON.parse(localStorage.getItem(KEY)) || {}; } catch (e) { return {}; }
+}
+const progress = loadProgress();
+const btn = document.getElementById("btn-complete");
+if (progress[CH] && progress[CH].done) {
+  btn.textContent = "✓ 已完成 · 再次点击重置";
+  btn.classList.add("done");
+}
+function markDone() {
+  const p = loadProgress();
+  if (p[CH] && p[CH].done) {
+    delete p[CH];
+    btn.textContent = "✓ 我已完成本章（含合上书挑战）";
+    btn.classList.remove("done");
+  } else {
+    p[CH] = { done: true, completedAt: Date.now(), reviewsDone: 0 };
+    btn.textContent = "✓ 已完成 · 复习提醒已开启";
+    btn.classList.add("done");
+  }
+  localStorage.setItem(KEY, JSON.stringify(p));
+}
+</script>
+
+</body>
+</html>

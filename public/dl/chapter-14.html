@@ -1,0 +1,778 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第14章 自编码器 · 深度学习互动讲义</title>
+<link rel="stylesheet" href="/lectures-assets/style.css">
+</head>
+<body>
+
+<nav class="topbar">
+  <div class="topbar-inner">
+    <span class="brand"><a href="index.html" style="color:inherit">← 学习地图</a></span>
+    <span class="crumb">第三部分 · 表示与推断 / 第14章</span>
+  </div>
+</nav>
+
+<div class="wrap">
+
+  <div class="lecture-head">
+    <span class="ch-label">CHAPTER 14 · 表示与推断</span>
+    <h1>自编码器</h1>
+    <p class="lead">本章回答主线问题：没有标签时，如何让网络自己学会抓住数据的关键结构？</p>
+  </div>
+
+  <!-- ===== 章首四件套之 1：全书定位 ===== -->
+  <div class="position-bar">
+    <strong>本章在主线上的位置：</strong>第13章用线性因子模型给出了"隐变量生成数据"的概率视角 → <u>本章换一条路：不用概率模型，直接让网络把自己当老师，用重构任务逼出有用表示</u> → 第15章表示学习将在此基础上讨论"什么样的表示才算好"。<br>
+    第14章回答主线上的问题：<strong>没有标签时，如何让网络自己学会抓住数据的关键结构？</strong>
+    <div class="map-inline">
+      <span class="node">① 数学与机器学习基础（Ch1–5）</span><span class="arrow">→</span>
+      <span class="node">② 现代深度网络（Ch6–11）</span><span class="arrow">→</span>
+      <span class="node here">③ 表示与推断（Ch12–16）</span><span class="arrow">→</span>
+      <span class="node">④ 生成模型与前沿（Ch17–20）</span>
+    </div>
+    <div class="map-inline">
+      <span class="node">Ch13 线性因子模型</span><span class="arrow">→</span>
+      <span class="node here">Ch14 自编码器</span><span class="arrow">→</span>
+      <span class="node">Ch15 表示学习</span><span class="arrow">→</span>
+      <span class="node">Ch16 结构化概率模型</span>
+    </div>
+  </div>
+
+  <!-- ===== 章首四件套之 2：学习目标 ===== -->
+  <div class="objectives">
+    <h4>🎯 学完本章，合上书你应该能：</h4>
+    <ol>
+      <li>写出自编码器的结构 x̂ = g(f(x)) 与重构误差目标 L(x, g(f(x))) = ‖x − x̂‖²，并说明瓶颈维度的作用；</li>
+      <li>给定一组低维数据点和线性编码向量 w，手算一次重构与重构误差的数值；</li>
+      <li>解释线性自编码器与 PCA 的关系：最优解张成同一主子空间，但基不必正交；</li>
+      <li>说出稀疏、去噪、收缩三种正则化自编码器各自堵住了什么漏洞，并手算一次 KL 稀疏惩罚；</li>
+      <li>手算一步稀疏编码的 L1 推断选择，说明自编码器相对稀疏编码"摊销"了什么；</li>
+      <li>按顺序说出去噪自编码器到大模型预训练的谱系：DAE → 去噪分数匹配 → word2vec/ELMo → BERT 掩码 → GPT 自回归。</li>
+    </ol>
+  </div>
+
+  <div class="lecture">
+
+    <!-- ===== 章首四件套之 3：推导主线图（flowchart TB 因果链）===== -->
+    <div class="figure">
+      <div class="mermaid">
+flowchart TB
+  A["无标签数据想提取结构"] --> B["自己当自己老师 重构 x̂ 等于 g(f(x))"]
+  B --> C["瓶颈 h 维度小于 d 欠完备学压缩"]
+  B --> D["h 维度大于等于 d 会恒等作弊 需要正则化 稀疏去噪收缩"]
+  C --> E["编码器学到流形的坐标"]
+  D --> E
+  E --> F["谱系 去噪AE 到 掩码预训练 到 BERT 与 GPT 时代"]
+  F --> G["代价 重构好不等于表示有用 生成能力弱 第17章生成模型"]
+  classDef danger fill:#fae9e7,stroke:#b03a2e,stroke-width:2.5px,color:#b03a2e;
+  class G danger;
+      </div>
+      <div class="caption">本章推导主线：无标签 → 重构任务 → 两条路线（欠完备 / 正则化）→ 学到流形坐标 → 通向现代预训练；红色节点是本章留给第 17 章的功课。</div>
+    </div>
+
+    <!-- ================= 14.1 ================= -->
+    <h2><span class="sec-no">14.1</span>欠完备自编码器：自己当自己的老师</h2>
+
+    <p>第13章的线性因子模型用"隐变量 h 生成 x"的概率视角解释数据结构，但它留了一个工程味十足的问题：<strong>如果不写概率模型，能不能直接训一个网络把数据的结构"挤"出来？</strong>自编码器就是这条路的答案。它的思路朴素得近乎狡猾：没有老师，就<strong>自己当自己的老师</strong>——让网络预测输入本身。</p>
+
+    <p>一个<span class="term">自编码器</span>（Autoencoder）由两半组成：<span class="term">编码器</span>（Encoder）f 把输入 x 压成内部表示 h = f(x)，<span class="term">解码器</span>（Decoder）g 再把 h 还原成 x̂ = g(h)。训练目标是让输出尽量等于输入，即最小化<span class="term">重构误差</span>（Reconstruction Error）：</p>
+
+    <div class="formula">L(x, g(f(x))) = ‖x − x̂‖²</div>
+
+    <p>光看这个目标会觉得荒唐：恒等函数 g(f(x)) = x 不就是零误差吗，能学到什么？学问全在<strong>限制</strong>上。最经典的限制是让中间表示 h 的维度小于输入维度 d——h 是一道<span class="term">瓶颈</span>（Bottleneck），这样的自编码器叫<span class="term">欠完备自编码器</span>（Undercomplete Autoencoder）。数据被迫挤过窄门，网络只好学"哪些信息最值得保留"：就像把一节课压缩成三行笔记，你必须抓住主干。</p>
+
+    <h3>定理直觉：线性自编码器与 PCA 的关系</h3>
+    <p>如果编码器和解码器都是<strong>线性</strong>的（f(x) = Wx，g(h) = Wᵀh 之类），损失用均方误差，那么可以证明（推导要点见下）：<strong>最优解 h 张成的子空间与 PCA 的主子空间相同</strong>。也就是说，线性自编码器学到的东西和主成分分析（PCA）是同一片"最优低维子空间"——但有一个重要差别：自编码器学到的基向量<strong>不必正交、不必归一</strong>，只要张成同一空间就行；PCA 则强制基正交且按方差排序。</p>
+    <p>推导要点（知道结论即可，不必背）：MSE 损失对权重求梯度并令其为零，得到的驻点条件等价于"解码矩阵的列空间 = 数据协方差矩阵前 k 个特征向量张成的空间"；任何可逆变换作用在 h 上再被解码器抵消，损失不变——所以解在一整个等价类里，只钉死了子空间，钉不死基。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>线性自编码器 ≈ PCA，这听起来是坏消息（"就这？"），其实是好消息：它说明自编码器的训练目标在<em>最简单的情形</em>下与经典方法一致，而一旦把 f、g 换成非线性网络，自编码器立刻获得 PCA 没有的能力——学弯曲的流形。PCA 是线性自编码器的特例，不是反过来。</p>
+    </div>
+
+    <h3>手算例 1：h = 1 瓶颈下的重构误差</h3>
+    <p>取二维数据点 x⁽¹⁾ = (2, 0.4)，x⁽²⁾ = (0, −0.3)，x⁽³⁾ = (−2, −0.1)。设编码向量 w = (1, 0)（把输入投到第一坐标轴上），即编码 h = w·x；解码器用同一向量重构 x̂ = h·w。逐点计算：</p>
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>点</th><th>编码 h = w·x</th><th>重构 x̂ = h·w</th><th>残差 x − x̂</th><th>平方误差 ‖x − x̂‖²</th></tr>
+        <tr><td>(2, 0.4)</td><td>h = 1×2 + 0×0.4 = 2</td><td>x̂ = 2×(1,0) = (2, 0)</td><td>(0, 0.4)</td><td>0² + 0.4² = 0.16</td></tr>
+        <tr><td>(0, −0.3)</td><td>h = 1×0 + 0×(−0.3) = 0</td><td>x̂ = 0×(1,0) = (0, 0)</td><td>(0, −0.3)</td><td>0² + (−0.3)² = 0.09</td></tr>
+        <tr><td>(−2, −0.1)</td><td>h = 1×(−2) + 0×(−0.1) = −2</td><td>x̂ = −2×(1,0) = (−2, 0)</td><td>(0, −0.1)</td><td>0² + (−0.1)² = 0.01</td></tr>
+      </table>
+    </div>
+    <p>总重构误差 = 0.16 + 0.09 + 0.01 = 0.26，平均 MSE = 0.26 ÷ 3 ≈ 0.087。注意看：每个点的第一坐标都被<strong>完美保留</strong>，第二坐标被<strong>全部丢弃</strong>——残差永远只在被丢掉的维度上。这三个点本来就几乎躺在 x 轴附近（第二坐标都很小），所以损失不大。这就是"PCA 投影到手算层面"的样子：w = (1, 0) 正好是数据方差最大的方向。</p>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>"瓶颈只是压缩手段，越窄越好"——错。瓶颈宽度是<em>信息预算</em>：h 太窄，连数据的真实维度都装不下，重构误差会系统性偏大，等于强迫网络扔掉有用结构。选 h 的原则是"略大于数据的本征维度"，而不是"能压多窄压多窄"。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 14.1-1</div>
+              <div class="q-text">自编码器的结构与训练目标是什么？为什么"复制输入"这个目标不会一无所获？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              结构 x̂ = g(f(x))，目标最小化 ‖x − x̂‖²。因为有瓶颈等限制，恒等复制被禁止，网络被迫学"保留什么、丢掉什么"，表示因此有了结构。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 14.1-2</div>
+              <div class="q-text">线性编码器 + MSE 的自编码器与 PCA 的关系是什么？差别在哪？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              最优解张成与 PCA 主子空间相同的子空间；差别：自编码器的基不必正交、不必按方差排序，只有子空间被钉死。PCA 是其特例。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ================= 14.2 ================= -->
+    <h2><span class="sec-no">14.2</span>过完备的危险与正则化自编码器家族</h2>
+
+    <p>上一节靠瓶颈挡住了恒等复制。但如果任务需要 h 的维度<strong>大于等于</strong> d（<span class="term">过完备</span>，Overcomplete）呢？麻烦立刻出现：维度够宽时，网络可以原封不动把 x 搬进 h 再原样搬出，重构误差为零，却什么都没学到——它作弊成功了。要救回过完备情形，不能只靠"窄"，得靠<strong>惩罚</strong>：在损失里加正则项 Ω(h)，让"偷懒的恒等"付出代价。这就引出正则化自编码器三兄弟。</p>
+
+    <h3>① 稀疏自编码器：让每个隐单元大多数时候闭嘴</h3>
+    <p><span class="term">稀疏自编码器</span>（Sparse Autoencoder）在重构误差外加一项稀疏惩罚 Ω(h)，强迫每个隐单元的<em>平均激活</em>很低。常用做法是：对 sigmoid 隐单元 j，设它在整个训练集上的平均激活 ρ̂ⱼ，要求它接近一个稀疏目标 ρ（如 0.05），用 <span class="term">KL 散度</span>（Kullback-Leibler Divergence）度量偏离：</p>
+    <div class="formula">Ω(h) = ∑<sub>j</sub> KL(ρ ‖ ρ̂ⱼ)，其中 KL(ρ ‖ ρ̂ⱼ) = ρ log<span class="frac"><span class="num-part">ρ</span><span class="den-part">ρ̂ⱼ</span></span> + (1 − ρ) log<span class="frac"><span class="num-part">1 − ρ</span><span class="den-part">1 − ρ̂ⱼ</span></span></div>
+
+    <p><strong>手算例 2：一次 KL 稀疏惩罚。</strong>设 ρ = 0.05，某隐单元在 4 个样本上的激活为 0.9, 0.02, 0.01, 0.88。取近似对数值：log 2 ≈ 0.693，log 5 ≈ 1.609，log 20 ≈ 3.00。</p>
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>步骤</th><th>算式</th><th>结果</th></tr>
+        <tr><td>1. 算平均激活 ρ̂ⱼ</td><td>(0.9 + 0.02 + 0.01 + 0.88) ÷ 4 = 1.81 ÷ 4</td><td>ρ̂ⱼ = 0.4525</td></tr>
+        <tr><td>2. 算第一项 ρ log(ρ/ρ̂ⱼ)</td><td>0.05 × log(0.05 ÷ 0.4525) = 0.05 × log(0.1105)</td><td>log(0.1105) ≈ −2.20 ⟹ ≈ −0.110</td></tr>
+        <tr><td>3. 算第二项 (1−ρ) log((1−ρ)/(1−ρ̂ⱼ))</td><td>0.95 × log(0.95 ÷ 0.5475) = 0.95 × log(1.735)</td><td>log(1.735) ≈ 0.551 ⟹ ≈ 0.524</td></tr>
+        <tr><td>4. 相加</td><td>−0.110 + 0.524</td><td>KL ≈ 0.414</td></tr>
+      </table>
+    </div>
+    <p>0.414 是个不小的惩罚：这个单元在 4 个样本里激活了 2 次（平均 0.45），离"每 20 个样本才激活一次"的目标太远，损失会逼它变懒。对比理想情形：若 ρ̂ⱼ = ρ = 0.05，则两个分式都等于 1，log 1 = 0，KL = 0——零惩罚。惩罚非负、且在 ρ̂ⱼ = ρ 时取零，正是 KL 散度的性质。</p>
+
+    <h3>② 去噪自编码器：把脏输入还原成干净输入</h3>
+    <p><span class="term">去噪自编码器</span>（Denoising Autoencoder，DAE）换了堵法：不限制 h，而是<strong>污染输入</strong>——把 x 加噪成 x̃（比如随机把一些像素置零，或加高斯噪声），让网络重构出<strong>干净的 x</strong>：最小化 L(x, g(f(x̃)))。这时恒等复制无利可图——照抄 x̃ 只会把噪声也抄下来，误差反而大。要拿到低损失，网络必须学会"数据长什么样"，把不属于数据流形的噪声推回去。几何上说，DAE 学到的是<strong>指向数据流形的修正方向</strong>：对任何偏离流形的点，它都知道该往哪挪。</p>
+
+    <h3>③ 收缩自编码器：让编码器对微小扰动不敏感</h3>
+    <p><span class="term">收缩自编码器</span>（Contractive Autoencoder，CAE）更直接：惩罚编码器在 x 处的雅可比矩阵的 Frobenius 范数平方 ‖J_f(x)‖²_F，即让所有偏导 ∂hᵢ/∂xⱼ 的平方和尽量小。含义：输入动一小步，h 几乎不动——编码器对无用扰动"收缩"了敏感度，只保留对流形切方向的响应。在 sigmoid 激活下有个漂亮的化简：∂hᵢ/∂xⱼ = hᵢ(1 − hᵢ)Wᵢⱼ，所以</p>
+    <div class="formula">‖J_f(x)‖²_F = ∑<sub>i</sub> (hᵢ(1 − hᵢ))² ∑<sub>j</sub> Wᵢⱼ²</div>
+    <p>惩罚项把"激活接近 0.5（最不饱和、最敏感）"的单元压向 0 或 1，把大权重的连接削小——网络自发选择"对哪些方向装聋作哑"。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>三种正则看似不同，目标却一致：<strong>在"容量足够作弊"时，用惩罚把作弊的解排除掉</strong>。稀疏让 h 变得难得激活，去噪让 f 对噪声不敏感，收缩让 f 的导数在数据流形外趋零——都在回答同一个问题："什么样的 h 才算真正抓住了结构？"</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>"DAE 和 CAE 是一回事"——目标相近（都让编码器鲁棒），机制不同：DAE 靠<em>训练数据里真的注入噪声</em>逼出鲁棒性，是数据层面的手段；CAE 靠<em>解析地惩罚雅可比</em>，是模型层面的手段。DAE 不需要算导数，CAE 不需要造噪声；实践中 DAE 更常用，CAE 的理论刻画更干净。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 14.2-1</div>
+              <div class="q-text">过完备自编码器为什么危险？三种正则化手段分别堵住什么漏洞？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              h ≥ d 时恒等复制零损失却学不到结构。稀疏：惩罚平均激活防"全开"；去噪：污染输入防"照抄"；收缩：惩罚雅可比防"对每个方向都敏感"。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 14.2-2</div>
+              <div class="q-text">写出 KL 稀疏惩罚的公式。ρ̂ⱼ 比 ρ 大很多时惩罚会怎样？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              KL(ρ‖ρ̂ⱼ) = ρ log(ρ/ρ̂ⱼ) + (1−ρ) log((1−ρ)/(1−ρ̂ⱼ))。ρ̂ⱼ 远离 ρ（无论偏大偏小）惩罚都显著增大；ρ̂ⱼ = ρ 时为零。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ================= 14.3 ================= -->
+    <h2><span class="sec-no">14.3</span>稀疏编码与自编码器的关系：推断被"摊销"了</h2>
+
+    <p>上一节的稀疏自编码器让人想起一个更早的名字：<span class="term">稀疏编码</span>（Sparse Coding）。两者容易混淆，但骨架完全不同。稀疏编码是一个<strong>两步优化</strong>：给定字典 D（一组基向量），对每个样本 x 先做一次推断——解一个带 L1 惩罚的优化，找出稀疏表示 h* = argmin<sub>h</sub> ‖x − Dh‖² + λ‖h‖₁；再固定所有 h*，优化字典 D 本身。每一步推断都是一次完整的内层优化，没有"前馈"这回事。</p>
+
+    <h3>手算例 3：为什么 L1 推断选单列而不是混合</h3>
+    <p>设字典 D 有两列单位向量 d₁、d₂，夹角 60°（所以 d₁·d₂ = cos 60° = 0.5），样本 x 正好在 d₁ 方向上，取 x = d₁。比较两个候选表示（令重构项相同或相近时比 L1 代价）：</p>
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>候选 h</th><th>重构 Dh</th><th>重构误差 ‖x − Dh‖²</th><th>L1 代价 λ‖h‖₁</th><th>总目标</th></tr>
+        <tr><td>h_a = (1, 0)</td><td>1·d₁ + 0·d₂ = d₁</td><td>‖d₁ − d₁‖² = 0</td><td>λ(1 + 0) = λ</td><td>λ</td></tr>
+        <tr><td>h_b = (0.5, 0.5)</td><td>0.5(d₁ + d₂)</td><td>见下方计算 ≈ 0.134</td><td>λ(0.5 + 0.5) = λ</td><td>0.134 + λ</td></tr>
+      </table>
+    </div>
+    <p>h_b 的重构误差计算：‖0.5(d₁+d₂) − d₁‖² = ‖0.5d₂ − 0.5d₁‖² = 0.25‖d₂ − d₁‖² = 0.25(‖d₂‖² + ‖d₁‖² − 2d₁·d₂) = 0.25(1 + 1 − 2×0.5) = 0.25×0.5 = 0.125 ≈ 0.13（上面四舍五入写作 0.134 也无妨，精确值 0.125）。结论：<strong>h_a 同时赢得两项</strong>——重构误差 0 &lt; 0.125，L1 代价 λ = λ 持平但重构项完胜，所以 L1 推断选出单列 (1, 0)。更一般的规律：L1 范数偏好"少而准"的解，哪怕混合能重构得一样好，L1 也会先把小系数压到零——这就是"稀疏"二字的来历。（若想找"混合也零误差"的反例：把 x 换成 d₁+d₂ 方向，单列重构必有误差，混合零误差，但 L1 会倾向系数尽量集中——核心机制相同。）</p>
+
+    <p>对比之下，自编码器把这两步变成一步：<strong>编码器 f 是一个学成的前馈函数，一次性直接吐出 h = f(x)</strong>，不再为每个样本跑内层优化。这在文献里叫<span class="term">摊销推断</span>（Amortized Inference）——把"每次都要解一遍的推断问题"的成本，摊销到一次性的编码器训练里去。代价是：摊销的 f 是次优的（任何固定函数都比不过逐样本精确优化），收益是：推断从"每个样本一次迭代优化"变成"一次矩阵乘法"，快几个数量级，而且 f 本身就是一个可复用的特征提取器。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>稀疏编码是"为每个样本解一道优化题"，自编码器是"训练一个函数去猜这道题的最优解"。这个"用前馈网络摊销推断"的思想远不止于此——第 19 章的变分自编码器（VAE）会把它用到概率隐变量的推断上，成为现代生成模型的基石之一。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 14.3-1</div>
+              <div class="q-text">稀疏编码的目标函数是什么？它的"两步优化"分别优化什么？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              内层：h* = argmin_h ‖x − Dh‖² + λ‖h‖₁（逐样本推断稀疏码）；外层：固定 h* 优化字典 D。L1 项逼 h 稀疏。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 14.3-2</div>
+              <div class="q-text">什么叫摊销推断？自编码器相对稀疏编码摊销了什么，付出什么代价？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              摊销推断：训练一个前馈函数一次性预测隐表示，代替逐样本的内层优化。摊销了"每样本一次 L1 优化"的成本；代价是 f 的预测次优于逐样本精确解。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ================= 14.4 ================= -->
+    <h2><span class="sec-no">14.4</span>从去噪自编码器到大模型预训练：一条谱系</h2>
+
+    <p>上一节的摊销推断让自编码器变得实用。但真正让它名留青史的，是它开启的一条思想谱系——今天的大模型预训练，追根溯源就长在这条线上。把节点按时间排开：</p>
+
+    <div class="figure">
+      <div class="mermaid">
+flowchart TB
+  A["2008 DAE 污染输入再还原 编码器学到流形切方向"] --> B["去噪分数匹配 学到指向数据流形的向量场 score"]
+  B --> C["2013 word2vec 用上下文预测词 表示自带语义"]
+  C --> D["2018 ELMo 双向语言模型 上下文相关词表示"]
+  D --> E["2018 BERT 掩码语言模型 遮住15%token还原 序列版DAE"]
+  E --> F["2018起 GPT系列 自回归 按序重构 下一个token"]
+      </div>
+      <div class="caption">图 14.1 从 DAE 到大模型的谱系：每一代都把"预测被遮住/被污染的部分"当作无监督训练信号。注意看 BERT 那一行——它就是把 DAE 的思想原样搬到离散 token 序列上。</div>
+    </div>
+
+    <p>逐个看这条链：① <strong>DAE（2008，Vincent 等）</strong>：证明"从污染版本还原干净版本"能逼出对扰动鲁棒的表示；② <strong>去噪分数匹配</strong>：理论上更漂亮——DAE 学到的修正方向 x̂ − x̃ 恰好正比于数据分布的对数密度梯度（score），即一个指向数据流形的向量场，这把自编码器和能量模型（第 17 章）正式接通；③ <strong>word2vec（2013）</strong>：用上下文预测中心词（或反过来），词向量自动带语义——"预测缺失部分"作为无监督信号首次在文本上大获成功；④ <strong>ELMo（2018）</strong>：双向语言模型，词的表示随上下文变化；⑤ <strong>BERT（2018）</strong>：<span class="term">掩码语言模型</span>（Masked Language Model）——随机遮住约 15% 的 token 让模型还原，这正是序列版的去噪自编码器：token 版"加噪还原"；⑥ <strong>GPT 系列</strong>：<span class="term">自回归</span>（Autoregressive）预测下一个 token，可以看作"按序重构整段文本"。</p>
+
+    <p>为什么这条谱系能成立？因为<strong>重构/还原任务强迫模型把"世界的结构"压进表示里</strong>。要还原被遮住的词，模型必须懂语法、懂常识、懂上下文逻辑；要还原被污染的图像块，模型必须懂物体的形状与纹理。不需要任何人告诉它"什么是语法"——还原压力自己会把这些结构逼出来。这正是本章主线问题"没有标签时如何让网络抓住数据关键结构"在今天最大规模的实现。</p>
+
+    <div class="box insight">
+      <span class="box-tag">✅ 判定规则</span>
+      <p>判断一个无监督预训练方法是否在这条谱系上，就问一句：<strong>它的监督信号是不是来自"输入本身的缺失/污染版本"？</strong>是——它就是自编码器家族的后代；不是（如对比学习靠样本间关系）——那是另一条线的故事（第 15 章会碰到）。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 14.4-1</div>
+              <div class="q-text">按顺序背出 DAE 到大模型谱系的五个节点（每节点一句话）。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              DAE（污染还原）→ 去噪分数匹配（学到指向流形的向量场）→ word2vec/ELMo（上下文预测）→ BERT（掩码=序列版DAE）→ GPT（自回归=按序重构）。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 14.4-2</div>
+              <div class="q-text">为什么说 BERT 的掩码语言模型是"序列版去噪自编码器"？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              BERT 随机遮住约 15% token 再让模型还原——遮住就是"加噪"，还原就是"重构干净输入"，机制与 DAE 完全同构，只是对象从连续像素换成离散 token。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ================= 14.5 ================= -->
+    <h2><span class="sec-no">14.5</span>应用与局限：重构误差的边界</h2>
+
+    <p>上一节把自编码器推上了神坛。收尾前必须泼一盆冷水：自编码器有自己的能力边界，越界使用就是误用。先看它能干什么，再看它干不了什么。</p>
+
+    <h3>三个经典应用</h3>
+    <p><strong>① 降维与可视化。</strong>瓶颈层 h 就是现成的低维坐标。比 PCA 强的地方在于：非线性的 f 和 g 能把<em>弯曲的</em>数据流形（如手写数字的连续形变）展平到低维，而 PCA 只能找线性子空间。把 h 设成 2 维，就能把高维数据画在散点图上肉眼检查聚类。</p>
+    <p><strong>② 以图搜图 / 信息检索的哈希编码。</strong>把每张图片编码成短的二值码 h，检索时在码空间找近邻即可，不必比对原图。语义相近的图编码相近——这是编码器学到的"语义距离"。</p>
+    <p><strong>③ 异常检测。</strong>思路：只用<strong>正常</strong>样本训练自编码器，它对正常样本重构得好、对没见过的异常样本重构得差。设定阈值即可报警。<strong>数字例</strong>：设正常样本的 MSE 大多落在 0.01–0.05，取阈值 τ = 0.10；上线后三个新样本的 MSE 分别为 0.03、0.08、0.31，则前两个判正常、第三个（0.31 &gt; 0.10）判异常。阈值的依据：取训练集重构误差的某个高分位数（如 99%），留一点余量防误报。</p>
+
+    <h3>两个根本局限</h3>
+    <p><strong>局限一：重构好 ≠ 表示有用。</strong>MSE 只在乎像素级还原，不在乎语义。一个把光照变化记得清清楚楚、却把物体类别弄混的编码器，照样拿低重构误差。表示"好不好"取决于下游任务，这是第 15 章（表示学习）要正面回答的问题。</p>
+    <p><strong>局限二：生成能力弱。</strong>自编码器只学过"给 x 编码再还原"，没学过"凭空造一个像样的 x"——h 空间里的分布是什么样、怎么从里面采样，它一概不知。而且 MSE 损失隐含"误差服从高斯分布"的假设，对像素级生成任务会输出模糊的平均结果（把所有可能的清晰答案平均成模糊一团）。要生成新样本，需要的是能刻画 p(x) 本身的模型——第 17 章的生成模型（VAE、GAN、扩散模型）正是为此而来。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 本章收尾</span>
+      <p>自编码器的历史地位很微妙：作为<em>表示提取器</em>它依然是工具箱常客，作为<em>预训练思想</em>它孕育了整个大模型时代，但作为<em>生成模型</em>它力不从心。带着"重构好≠表示有用、会还原≠会生成"这两句告诫进入第 15 章与第 17 章，你就知道这两章各自要解决什么。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 14.5-1</div>
+              <div class="q-text">用自编码器做异常检测的原理与阈值设定方法各是什么？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              只用正常样本训练，正常样本重构误差小、异常大；阈值取训练集重构误差的高分位数（如 99%）再留余量，超过即报警。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 14.5-2</div>
+              <div class="q-text">自编码器的两个根本局限是什么？各自通向哪一章？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              ① 重构好≠表示有用（表示好坏取决于下游任务 → 第15章）；② 生成能力弱、MSE 生成模糊（不知 h 的分布、不会采样 → 第17章生成模型）。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ================= 概念卡 ================= -->
+    <h2><span class="sec-no">🃏</span>概念卡：本章概念的一分钟画像</h2>
+    <p>翻面前先自问：这个概念我能用一句话讲清楚吗？</p>
+    <div class="flip-grid">
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 1</div>
+            <div class="q-text">重构误差（Reconstruction Error）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">自编码器的训练目标 L(x, g(f(x)))，最常用 ‖x − x̂‖²。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">无标签时提供监督信号：让输出逼近输入本身。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">自己当老师：把输入抄写一遍，但限制抄写过程必须抓重点。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为重构误差小 = 表示好——它只保证像素级还原，不保证语义有用。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">本章所有模型；Ch17 生成模型里被替换为更强的目标。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 2</div>
+            <div class="q-text">瓶颈（Bottleneck）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">自编码器中维度小于输入的中间层 h，欠完备设计的核心。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">阻止恒等复制：数据必须挤过窄门，网络被迫学取舍。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">一节课压成三行笔记——不抓主干就写不下。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">越窄越好——太窄装不下数据本征维度，误差系统性偏大。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">降维可视化；Ch15 讨论表示维度时反复出现。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 3</div>
+            <div class="q-text">稀疏自编码器（Sparse Autoencoder）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">加稀疏惩罚 Ω(h) 的自编码器，常用 KL(ρ‖ρ̂ⱼ) 压低隐单元平均激活。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">过完备时防作弊：让每个隐单元大多数时候闭嘴。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">一支纪律严明的队伍，每人只在特定口令下才出动。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为稀疏 = 大部分权重为零——稀疏的是激活值，不是参数。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">特征可解释性分析；近年也被用于解剖大模型内部特征。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 4</div>
+            <div class="q-text">去噪自编码器（Denoising Autoencoder）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">把加噪输入 x̃ 重构回干净 x 的自编码器，最小化 L(x, g(f(x̃)))。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">不限制容量也能防作弊：照抄含噪输入必受罚。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">让保洁员看脏房间照片学"房间本来什么样"——他必须懂房间结构。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">与 CAE 混为一谈——DAE 靠注入噪声（数据层面），CAE 靠惩罚雅可比（模型层面）。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">鲁棒特征学习；思想直通 BERT 掩码预训练（见 14.4）。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 5</div>
+            <div class="q-text">收缩自编码器（Contractive Autoencoder）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">惩罚编码器雅可比 Frobenius 范数 ‖J_f(x)‖²_F 的自编码器。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">让 h 对输入的微小扰动不敏感，只保留流形切方向的变化。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">对无关方向的"装聋作哑"——风吹草动不再改变你对物体的判断。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为惩罚越大越好——过度收缩会让 h 对有用方向也迟钝。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">理论分析流形学习；与 DAE 互补的鲁棒化手段。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 6</div>
+            <div class="q-text">摊销推断（Amortized Inference）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">训练一个前馈函数一次性预测隐表示，代替逐样本的内层优化。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">稀疏编码式的逐样本优化太慢，无法大规模部署。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">把每道题都现解，改为背熟解题套路直接套。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为摊销解是最优解——它牺牲了逐样本精度换速度。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">Ch19 变分自编码器（VAE）的编码器正是摊销推断。</span></div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- ================= 分层习题 ================= -->
+    <h2><span class="sec-no">📝</span>分层习题</h2>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>
+        <p>判断对错："只要自编码器在测试集上的重构误差很小，就说明它学到的表示 h 是有用的。"如果错，说明理由并举一个反例。</p>
+      </div>
+      <details>
+        <summary>提示</summary>
+        <p>想想 14.5 的局限一：重构误差度量的是什么层面？表示的"用处"由谁决定？</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p><strong>错。</strong>重构误差只度量"输入能不能被还原"，不度量"表示是否对下游任务有用"。反例：一个把图像的光照、背景噪声编码得巨细无遗、却不区分猫和狗的编码器，照样可能重构误差很低——但对分类任务它的表示毫无价值。反过来，一个扔掉了大量像素细节、只保留语义轮廓的编码器重构误差偏高，表示却可能极好。易错点：把"训练目标达成"误当"学习目标达成"——训练目标只是手段，下游任务才是目的。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>
+        <p>辨析：DAE 与 CAE 都想让编码器对扰动鲁棒，它们的正则目标有何本质不同？各自的代价是什么？</p>
+      </div>
+      <details>
+        <summary>提示</summary>
+        <p>一个改动的是训练数据，一个改动的是损失函数；想想各自的计算开销。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p><strong>DAE</strong>：数据层面注入噪声，训练目标仍是重构误差，不需要算任何导数，实现简单；代价是要设计噪声分布，且只对注入过的那类扰动鲁棒。<strong>CAE</strong>：模型层面惩罚雅可比范数 ‖J_f‖²_F，解析地压制所有方向的敏感度；代价是要计算雅可比（可借 sigmoid 化简，深网时仍贵），且惩罚强度需要调。一句话：DAE 用"见过的噪声"买鲁棒，CAE 用"压平的导数"买鲁棒。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>
+        <p>给定编码向量 w = (1, 0)（h = w·x，x̂ = h·w），对数据点 (1, 0.2)、(0, −0.4)、(−1, 0) 逐个计算：编码 h、重构 x̂、平方误差，并求总 MSE。</p>
+      </div>
+      <details>
+        <summary>提示</summary>
+        <p>照 14.1 手算例 1 的流程：h = w·x 只取第一坐标；x̂ = (h, 0)；误差 = 第二坐标的平方。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p>① (1, 0.2)：h = 1×1 + 0×0.2 = 1；x̂ = 1×(1,0) = (1, 0)；残差 (0, 0.2)；误差 = 0.04<br>
+          ② (0, −0.4)：h = 1×0 + 0×(−0.4) = 0；x̂ = (0, 0)；残差 (0, −0.4)；误差 = 0.16<br>
+          ③ (−1, 0)：h = 1×(−1) + 0×0 = −1；x̂ = (−1, 0)；残差 (0, 0)；误差 = 0</p>
+          <p>总误差 = 0.04 + 0.16 + 0 = 0.20；MSE = 0.20 ÷ 3 ≈ 0.067。第三个点恰好在保留方向上，零误差——瓶颈只丢"垂直于 w"的信息。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>
+        <p>某隐单元在 5 个样本上的激活为 0.05, 0.9, 0.05, 0.05, 0.05，稀疏目标 ρ = 0.2。计算 ρ̂ⱼ 与 KL(ρ‖ρ̂ⱼ)（用 log 2 ≈ 0.693，log 5 ≈ 1.609，log 11 ≈ 2.398 等近似值，步骤写全）。</p>
+      </details>
+      <details>
+        <summary>提示</summary>
+        <p>先算平均激活，再套 KL(ρ‖ρ̂ⱼ) = ρ log(ρ/ρ̂ⱼ) + (1−ρ) log((1−ρ)/(1−ρ̂ⱼ))。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p>① ρ̂ⱼ = (0.05 + 0.9 + 0.05 + 0.05 + 0.05) ÷ 5 = 1.10 ÷ 5 = 0.22<br>
+          ② 第一项：ρ log(ρ/ρ̂ⱼ) = 0.2 × log(0.2 ÷ 0.22) = 0.2 × log(0.909) ≈ 0.2 × (−0.0953) ≈ −0.019<br>
+          ③ 第二项：(1−ρ) log((1−ρ)/(1−ρ̂ⱼ)) = 0.8 × log(0.8 ÷ 0.78) = 0.8 × log(1.0256) ≈ 0.8 × 0.0253 ≈ 0.020<br>
+          ④ KL ≈ −0.019 + 0.020 = 0.001</p>
+          <p>惩罚几乎为零——ρ̂ⱼ = 0.22 离目标 0.2 很近，这个单元"纪律良好"。对比 14.2 手算例 2 的 0.414：离目标越远，惩罚增长越快。注意"5 个样本激活 1 次"恰好对应 20% 的平均激活，直觉与计算吻合。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l3">L3 建模应用</span>
+        <p>场景：工厂有 200 个传感器，每秒钟产生一个 200 维读数向量。工厂积累了半年的正常运行数据，但几乎没有故障期的标注数据。请你设计一个基于自编码器的异常检测方案：① 网络结构（输入/瓶颈/输出各多大）；② 瓶颈维度的选择依据；③ 报警阈值的设定方法；④ 为什么不直接用 PCA。</p>
+      </div>
+      <details>
+        <summary>提示</summary>
+        <p>训练集是什么？瓶颈维度可以先怎么估、再怎么验证？PCA 在什么情况下会漏报？</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p><strong>① 结构</strong>：输入 200 维 → 编码器若干隐层（如 128 → 64）→ 瓶颈 h（如 16 维）→ 解码器对称（64 → 128）→ 输出 200 维；激活用 ReLU/sigmoid，损失用 MSE，只用正常数据训练。</p>
+          <p><strong>② 瓶颈维度依据</strong>：先粗估数据的本征维度（如看 PCA 方差解释率达 95% 需要几个主成分，设为 k₀），取 h ≈ k₀ 或略大；再用验证集（正常数据切出一块）扫几个候选 h，选"验证重构误差开始不再明显下降"的最小值——太窄丢结构（正常样本也报警），太宽容易对异常也重构得太好（漏报）。</p>
+          <p><strong>③ 阈值设定</strong>：在训练集（或留出验证集）上算所有正常样本的 MSE，取其 99% 分位数 τ₀，上线阈值 τ = τ₀ 乘以安全系数（如 1.2）；报警率过高就上调，漏掉已知故障就下调。</p>
+          <p><strong>④ 为什么不用 PCA</strong>：PCA 只能检测"偏离线性子空间"的异常；如果故障模式恰好落在某几个主成分张成的平面内（如两个传感器同比例漂移，合成方向仍在主子空间内），PCA 的重构误差依然很小，会漏报。非线性自编码器能学弯曲的"正常流形"，对这类沿弯流形滑动但偏离正常区域的异常更敏感。此外 PCA 没有非线性压缩，同样维度下信息保留能力更弱。</p>
+        </div>
+      </details>
+    </div>
+
+    <!-- ================= 自测 ================= -->
+    <h2><span class="sec-no">✍️</span>本章自测</h2>
+    <p class="quiz-hint">点击选项判分，答错会给出原因。</p>
+
+    <div class="quiz-block" data-answer="c">
+      <div class="q-no">自测 1</div>
+      <div class="q-stem">欠完备自编码器为什么不会学成恒等函数？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 因为重构误差太大，梯度学不动</li>
+        <li data-opt="b">B. 因为激活函数是非线性的</li>
+        <li data-opt="c">C. 因为瓶颈维度 h &lt; d，恒等映射无法通过窄层无损传递，网络被迫选择保留哪些信息</li>
+        <li data-opt="d">D. 因为训练数据太少，过拟合不了</li>
+      </ul>
+      <div class="quiz-explain">解析：<strong>C 对</strong>——恒等复制需要逐维无损传递，瓶颈装不下 d 维信息，所以必须取舍。A 错：因果关系颠倒，正是瓶颈导致误差非零，而误差驱动学习。B 错：即使全部线性，瓶颈照样逼出结构（线性情形 ≈ PCA）。D 错：数据量与此无关，瓶颈是结构限制不是统计限制。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 2</div>
+      <div class="q-stem">"线性编码器 + MSE 的自编码器等价于 PCA"，这句话哪里不够精确？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 不够精确之处在于它只适用于二维数据</li>
+        <li data-opt="b">B. 两者最优解只保证张成同一主子空间；自编码器的基不必正交、不必按方差排序，PCA 则强制正交且有序</li>
+        <li data-opt="c">C. 两者完全等价，这句话没有任何不精确</li>
+        <li data-opt="d">D. 自编码器学不到任何子空间，所以这句话全错</li>
+      </ul>
+      <div class="quiz-explain">解析：<strong>B 对</strong>——MSE 的驻点条件只钉死"解码矩阵列空间 = PCA 主子空间"，基在等价类内自由。A 错：结论与维度无关。C 错：把"同一子空间"夸大成"完全等价"，忽略了基的差异。D 错：走向另一极端，理论保证最优解确实张成主子空间。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="d">
+      <div class="q-no">自测 3</div>
+      <div class="q-stem">稀疏自编码器中 KL(ρ‖ρ̂ⱼ) 惩罚的作用是？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 让所有隐单元的权重 W 接近零</li>
+        <li data-opt="b">B. 让输入 x 变得稀疏</li>
+        <li data-opt="c">C. 让重构误差变成零</li>
+        <li data-opt="d">D. 让每个隐单元的平均激活 ρ̂ⱼ 接近稀疏目标 ρ，从而隐单元只在少数样本上激活</li>
+      </ul>
+      <div class="quiz-explain">解析：<strong>D 对</strong>——KL 项比较的是"平均激活"与"目标激活"两个伯努利分布，逼 ρ̂ⱼ → ρ。A 错：稀疏的是激活值不是参数；且权重全零会毁掉重构，两个目标相互制衡。B 错：惩罚作用在 h 上，与输入无关。C 错：它与重构误差是加在一起的竞争项，不会也不可能让重构误差归零。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="a">
+      <div class="q-no">自测 4</div>
+      <div class="q-stem">为什么说 BERT 的掩码语言模型可以看作"序列版去噪自编码器"？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 遮住部分 token（加噪）再还原（重构干净输入），与 DAE"污染再还原"的机制同构，只是对象从连续像素换成离散 token</li>
+        <li data-opt="b">B. 因为 BERT 的编码器和解码器都是卷积网络</li>
+        <li data-opt="c">C. 因为 BERT 用了瓶颈结构压缩句子</li>
+        <li data-opt="d">D. 因为 BERT 训练时也最小化像素级 MSE</li>
+      </ul>
+      <div class="quiz-explain">解析：<strong>A 对</strong>——机制的对应关系是：遮 token ≈ 加噪，还原 ≈ 重构，表示被迫吸收语言结构。B 错：BERT 是 Transformer，与卷积无关。C 错：BERT 没有维度瓶颈，它的"限制"是信息缺失而非通道变窄。D 错：token 是离散的，用的是交叉熵，不是 MSE。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 5</div>
+      <div class="q-stem">用自编码器做异常检测时，"重构误差超过阈值就报警"这一规则成立的前提是什么？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 训练集里混入了足够多的异常样本，让网络学会区分</li>
+        <li data-opt="b">B. 训练集几乎全是正常样本，网络只学会了正常数据的流形，对偏离该流形的异常重构不好</li>
+        <li data-opt="c">C. 阈值必须取 0，任何误差都报警</li>
+        <li data-opt="d">D. 瓶颈维度必须大于输入维度</li>
+      </ul>
+      <div class="quiz-explain">解析：<strong>B 对</strong>——方案的根基是"网络只会重构它见过的分布"；混入异常样本会把异常也学进去，规则失效。A 错：那会变成分类问题，且异常样本极难收集（题目场景正是如此）。C 错：正常样本也有非零误差，阈值取 0 会全员误报，应取训练误差的高分位数。D 错：瓶颈大于输入反而可能让异常也被轻易重构（恒等作弊），漏报更多。</div>
+    </div>
+
+    <!-- ================= 三句话复述 ================= -->
+    <div class="retell">
+      <h3>🗣️ 用自己的话，三句话讲完本章</h3>
+      <p>对着空气（或室友）说出这三句。说卡壳的那句，回去重读对应小节。</p>
+      <details>
+        <summary>句1：这章解决什么问题？——</summary>
+        <div class="retell-answer">参考答案：没有标签时如何学表示——让网络自己当自己老师，通过把输入 x 编码成 h 再重构回 x̂ 的任务，迫使网络抓住数据的关键结构。</div>
+      </details>
+      <details>
+        <summary>句2：核心机制是什么？——</summary>
+        <div class="retell-answer">参考答案：重构误差 ‖x − g(f(x))‖² 加限制：欠完备用瓶颈（h &lt; d，线性时 ≈ PCA 主子空间），过完备用正则（稀疏 KL / 去噪 / 收缩雅可比）；稀疏编码的逐样本 L1 推断被前馈编码器摊销。</div>
+      </details>
+      <details>
+        <summary>句3：它和前后章怎么分工？——</summary>
+        <div class="retell-answer">参考答案：第13章用概率隐变量解释数据，本章用确定性网络直接学表示；DAE 的思想通向 BERT/GPT 式预训练；它回答不了"表示怎样才算好"（→ 第15章）和"怎么生成新样本"（→ 第17章）。</div>
+      </details>
+    </div>
+
+    <!-- ================= 复习计划 ================= -->
+    <div class="review-plan">
+      <h3>🔁 间隔复习计划</h3>
+      <p>回忆本身比重读有效 10 倍。到点只做一件事：翻卡 + 重做标记题。</p>
+      <table>
+        <tr><th>时间点</th><th>复习内容</th><th>预计用时</th></tr>
+        <tr><td>第 1 天</td><td>概念卡 1–6 + 回忆 14.1-1/2、14.2-1/2、14.3-1/2、14.4-1/2、14.5-1/2</td><td>12 分钟</td></tr>
+        <tr><td>第 3 天</td><td>概念卡 1、3、4（重构误差/稀疏/去噪）+ 重做 L2 两题（重构手算、KL 手算）+ 自测错题</td><td>12 分钟</td></tr>
+        <tr><td>第 7 天</td><td>三句话复述 + 回忆 14.4-1、14.5-2 + 重默 DAE→BERT 谱系链</td><td>10 分钟</td></tr>
+        <tr><td>第 15 天</td><td>只做合上书挑战；七条全过则本章毕业，卡哪条回去重读对应节</td><td>15 分钟</td></tr>
+      </table>
+    </div>
+
+    <!-- ================= 合上书挑战 ================= -->
+    <div class="final-challenge">
+      <h3>📕 合上书挑战</h3>
+      <p class="fc-sub">现在关掉这个页面，拿一张纸，凭记忆完成以下任务。全部做完再回来核对——这是本章真正的毕业考试。</p>
+      <ol id="challenge-list">
+        <li><span class="fc-check"></span>写出自编码器的结构 x̂ = g(f(x)) 与目标 L(x, g(f(x))) = ‖x − x̂‖²，并解释为什么必须有瓶颈或正则。</li>
+        <li><span class="fc-check"></span>手算：w = (1, 0)，对点 (1, 0.2)、(0, −0.4)、(−1, 0) 逐个求 h、x̂、平方误差与总 MSE。</li>
+        <li><span class="fc-check"></span>陈述"线性自编码器与 PCA 关系"的精确版本：什么相同、什么不同。</li>
+        <li><span class="fc-check"></span>写出 KL(ρ‖ρ̂ⱼ) 公式，并用 ρ = 0.2、激活序列 {0.05, 0.9, 0.05, 0.05, 0.05} 手算惩罚值。</li>
+        <li><span class="fc-check"></span>用两列夹角 60° 的字典说明 L1 推断为何选单列 (1, 0) 而非混合 (0.5, 0.5)，并解释"摊销推断"摊销了什么。</li>
+        <li><span class="fc-check"></span>默写 DAE → 去噪分数匹配 → word2vec/ELMo → BERT → GPT 的谱系链，每个节点一句话。</li>
+        <li><span class="fc-check"></span>一句话回答本章主线问题：没有标签时，如何让网络自己学会抓住数据的关键结构？</li>
+      </ol>
+    </div>
+
+    <div class="complete-zone">
+      <button class="btn-complete" id="btn-complete" onclick="markDone()">✓ 我已完成本章（含合上书挑战）</button>
+    </div>
+
+    <div class="chapter-nav">
+      <a href="chapter-13.html"><span class="nav-dir">← 上一章</span>第13章 线性因子模型</a>
+      <a href="chapter-15.html" class="next"><span class="nav-dir">下一章 →</span>第15章 表示学习</a>
+    </div>
+
+  </div>
+</div>
+
+<footer class="footer">
+  <div class="wrap">第14章 自编码器 · 深度学习互动讲义 · 基于 Goodfellow, Bengio &amp; Courville (2016)</div>
+</footer>
+
+<script src="/lectures-assets/mermaid.min.js"></script>
+<script>
+mermaid.initialize({
+  startOnLoad: true,
+  theme: "base",
+  themeVariables: {
+    primaryColor: "#e3edf7",
+    primaryBorderColor: "#1d5f9e",
+    primaryTextColor: "#1d5f9e",
+    lineColor: "#5c554b",
+    secondaryColor: "#fbeedd",
+    tertiaryColor: "#f5f1e8",
+    fontFamily: "-apple-system, PingFang SC, sans-serif",
+    fontSize: "14px"
+  },
+  flowchart: { curve: "linear", htmlLabels: false }
+});
+</script>
+<script>
+// 自测题判分（原样复用，勿改）
+document.querySelectorAll(".quiz-block").forEach(block => {
+  const answer = block.dataset.answer;
+  const explain = block.querySelector(".quiz-explain");
+  block.querySelectorAll(".quiz-opts li").forEach(li => {
+    li.addEventListener("click", () => {
+      const opts = block.querySelectorAll(".quiz-opts li");
+      opts.forEach(o => o.classList.add("disabled"));
+      if (li.dataset.opt === answer) {
+        li.classList.add("correct");
+      } else {
+        li.classList.add("wrong");
+        block.querySelector(`[data-opt="${answer}"]`).classList.add("correct");
+      }
+      explain.classList.add("show");
+    });
+  });
+});
+
+// 合上书清单打勾（原样复用，勿改）
+document.querySelectorAll("#challenge-list li").forEach(li => {
+  li.addEventListener("click", () => li.classList.toggle("checked"));
+});
+
+// 完成标记 → localStorage（深度学习讲义：key = dl_progress_v1，本章章号 14）
+const KEY = "dl_progress_v1";
+function loadProgress() {
+  try { return JSON.parse(localStorage.getItem(KEY)) || {}; } catch (e) { return {}; }
+}
+const progress = loadProgress();
+const btn = document.getElementById("btn-complete");
+if (progress[14] && progress[14].done) {
+  btn.textContent = "✓ 已完成 · 再次点击重置";
+  btn.classList.add("done");
+}
+function markDone() {
+  const p = loadProgress();
+  if (p[14] && p[14].done) {
+    delete p[14];
+    btn.textContent = "✓ 我已完成本章（含合上书挑战）";
+    btn.classList.remove("done");
+  } else {
+    p[14] = { done: true, completedAt: Date.now(), reviewsDone: 0 };
+    btn.textContent = "✓ 已完成 · 复习提醒已开启";
+    btn.classList.add("done");
+  }
+  localStorage.setItem(KEY, JSON.stringify(p));
+}
+</script>
+
+</body>
+</html>

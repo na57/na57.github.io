@@ -1,0 +1,793 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第13章 半监督学习 · 机器学习互动讲义</title>
+<link rel="stylesheet" href="/lectures-assets/style.css">
+</head>
+<body>
+
+<nav class="topbar">
+  <div class="topbar-inner">
+    <span class="brand"><a href="index.html" style="color:inherit">← 学习地图</a></span>
+    <span class="crumb">阶段④ · 进阶专题 / 第13章</span>
+  </div>
+</nav>
+
+<div class="wrap">
+
+  <div class="lecture-head">
+    <span class="ch-label">CHAPTER 13 · 进阶专题</span>
+    <h1>半监督学习</h1>
+    <p class="lead">标签很贵、数据遍地——本章回答：没有标签的数据如何参与学习，它帮的是什么忙，何时反而帮倒忙。</p>
+  </div>
+
+  <!-- ===== 章首四件套之 1：全书定位 ===== -->
+  <div class="position-bar">
+    <strong>本章在主线上的位置：</strong>第12章告诉我们泛化误差受假设空间复杂度控制，但所有界都依赖「样本量足够」——当标签稀缺时，样本量的瓶颈不是数据本身，而是标注成本 → <u>本章给出利用未标记数据的四大家族方法</u> → 第14章概率图模型将继承「未观测变量 + 局部结构传播」的思想，把半监督的图方法推广为一般推断。<br>
+    第13章回答主线上的一个问题：<strong>没有标签的数据如何参与学习——它帮的是什么忙、何时反而帮倒忙？</strong>
+    <div class="map-inline">
+      <span class="node">Ch12 计算学习理论（泛化界依赖样本量）</span><span class="arrow">→</span>
+      <span class="node here">Ch13 半监督学习</span><span class="arrow">→</span>
+      <span class="node">Ch14 概率图模型（隐变量与沿边传播的一般化）</span><span class="arrow">→</span>
+      <span class="node">Ch16 强化学习（连监督信号都更稀疏的极端情形）</span>
+    </div>
+  </div>
+
+  <!-- ===== 章首四件套之 2：学习目标 ===== -->
+  <div class="objectives">
+    <h4>🎯 学完本章，合上书你应该能：</h4>
+    <ol>
+      <li>说出半监督学习与主动学习的区别，以及直推（transductive）与归纳（inductive）两种设定的边界；</li>
+      <li>写出聚类假设与流形假设的内容，并解释「未标记数据何时有用」为什么完全押在这两个假设上；</li>
+      <li>手算两高斯混合模型中一个未标记点的一轮 EM 后验归属；</li>
+      <li>写出图半监督的能量函数与闭式解 <span class="var">f</span><sub>u</sub> = (D<sub>uu</sub> − W<sub>uu</sub>)⁻¹W<sub>ul</sub><span class="var">f</span><sub>l</sub>，并在 4 节点链式图上解出未标记节点的标签值；</li>
+      <li>写出协同训练的一轮流程，解释「充分冗余视图」为什么是它成立的前提；</li>
+      <li>解释为什么假设不成立时未标记数据反而有害（伪标签错误自我放大）。</li>
+    </ol>
+  </div>
+
+  <div class="lecture">
+
+    <!-- ===== 章首四件套之 3：推导主线图 ===== -->
+    <div class="figure">
+      <div class="mermaid">
+flowchart LR
+  A["标注数据贵 未标注数据遍地"] --> B["未标注数据何时有用"]
+  B --> C1["聚类假设：同类样本倾向于同簇"]
+  B --> C2["流形假设：邻近点标签相同"]
+  C1 --> D["生成式方法：未标记当隐变量 用EM估计"]
+  C1 --> E["半监督SVM：分割面穿过低密度区"]
+  C2 --> F["图半监督：标签沿边传播"]
+  D --> G["多视图协同训练：两个视图互相标注"]
+  E --> G
+  F --> G
+  G --> H["代价：假设不成立时 未标记数据反而有害"]
+  classDef hot fill:#fbeedd,stroke:#c4651f,stroke-width:2.5px,color:#c4651f;
+  classDef danger fill:#fae9e7,stroke:#b03a2e,stroke-width:2.5px,color:#b03a2e;
+  class C1,C2 hot;
+  class H danger;
+      </div>
+      <div class="caption">本章推导主线：从「标签贵」的困境出发，两个假设分叉出四族方法，最后落到共同的代价——假设错了反而帮倒忙。</div>
+    </div>
+
+    <!-- ===== 13.1 ===== -->
+    <h2><span class="sec-no">13.1</span>未标记样本凭什么有用：两个基本假设</h2>
+
+    <p>上一章的泛化界给了我们一个冷峻的事实：想让误差下降，就得堆样本。但现实中「样本量不足」往往不是没数据，而是没<strong>标签</strong>。想象一个超市商品识别系统：摄像头一天就能拍下一百万张商品图，但请人工一张张标注品类，只标得起 100 张。剩下 999,900 张图躺在硬盘里——它们真的没用吗？<span class="term">半监督学习</span>（Semi-Supervised Learning, SSL）要回答的正是这个问题：<strong>少量有标记样本 + 大量未标记样本，如何一起训练出比只用有标记样本更好的学习器。</strong></p>
+
+    <p>先划清边界，三个概念常被混淆：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>设定</th><th>未标记数据的角色</th><th>一句话</th></tr>
+        <tr><td><span class="term">主动学习</span>（Active Learning）</td><td>学习器<strong>主动挑选</strong>最有价值的未标记样本，<strong>请人标注</strong></td><td>「我该问哪道题？」——标签还是要人来给</td></tr>
+        <tr><td>半监督学习（<span class="term">直推</span> Transductive）</td><td>未标记样本就是测试集本身，只关心<strong>这批</strong>点的标签</td><td>「猜出眼前这堆点的标签就行」</td></tr>
+        <tr><td>半监督学习（<span class="term">归纳</span> Inductive）</td><td>未标记样本只是训练辅助，目标是学出一个能对<strong>任意新样本</strong>预测的模型</td><td>「借这批点学出一个通用分类器」</td></tr>
+      </table>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>把主动学习和半监督学习混为一谈。区别在<strong>谁出钱买标签</strong>：主动学习里学习器「点菜」、专家「买单」，标签预算花在最值钱的样本上；半监督学习根本不新增标注，而是从未标记样本的<strong>分布结构</strong>里免费挖信息。两者可以结合（先半监督再主动），但机制完全不同。</p>
+    </div>
+
+    <p>那么，未标记样本的信息藏在哪里？藏在对数据分布的两个假设里——它们是本章一切方法的「地基」，后面每一族方法都押注其中之一：</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p><strong><span class="term">聚类假设</span>（Cluster Assumption）</strong>：同一簇（cluster）里的样本倾向于拥有相同的类别标签。换句话说，决策边界应该穿过样本分布的<strong>低密度区域</strong>，而不是从密集的人群中间切过去。<br>
+      <strong><span class="term">流形假设</span>（Manifold Assumption）</strong>：高维数据其实分布在一个低维<span class="term">流形</span>（manifold）上，流形上<strong>邻近的点</strong>倾向于有相同的标签。</p>
+    </div>
+
+    <p>回到超市的例子：一百万张未标注商品图之所以有用，是因为它们在像素空间里自动聚成了几万堆——同一堆大概率是同一种商品（聚类假设）；而且每张图在「拍摄角度缓慢变化」的流形上有大量邻居，邻居的标签可以互相借（流形假设）。100 张标注就像 100 颗钉子，把整片未标记的数据海洋「锚定」到类别上。</p>
+
+    <p>注意两个假设的微妙差别：聚类假设关心「<strong>边界在哪</strong>」（不要在数据密集处切分），流形假设关心「<strong>邻近性</strong>」（局部平滑）。13.2 的生成式方法与半监督 SVM 主要押聚类假设，13.3 的图方法主要押流形假设。</p>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>以为「未标记数据总是越多越好」。错。两个假设都是<strong>关于世界的断言</strong>，不是数学定理：如果两类商品的照片真的混在一起分不开簇，聚类假设就不成立，此时塞再多未标记图也只会把分类器带偏（13.4 末尾会正式讨论这个代价）。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 13.1-1</div>
+              <div class="q-text">主动学习与半监督学习的本质区别是什么？直推与归纳又差在哪？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              主动学习（Active Learning）要花钱新增标注，学习器挑「最值得标」的样本请人标；半监督学习不新增标注，直接从未标记数据的分布结构挖信息。直推（Transductive）只关心当前这批未标记点的标签；归纳（Inductive）要借未标记数据学出能泛化到新样本的模型。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 13.1-2</div>
+              <div class="q-text">写出聚类假设与流形假设的内容，并各说一个它关心什么。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              聚类假设（Cluster Assumption）：同簇样本倾向同类，等价于决策边界应穿过低密度区——关心「边界在哪」。流形假设（Manifold Assumption）：数据分布在低维流形上，邻近点标签相同——关心「局部平滑 / 邻近性」。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===== 13.2 ===== -->
+    <h2><span class="sec-no">13.2</span>生成式方法与半监督 SVM</h2>
+
+    <p>上一节立了两块地基，这一节在「聚类假设」上盖前两栋楼。它们的共同思路是：未标记样本虽然缺标签，但我们可以把标签当作<strong>缺失变量</strong>，用概率或几何的手段把它「补」出来。</p>
+
+    <h3>一、生成式方法：未标记样本 = 缺失标签的隐变量</h3>
+
+    <p><span class="term">生成式方法</span>（Generative Methods）假设所有样本（不论有没有标签）都由同一个生成模型 p(<span class="var">x</span>, <span class="var">y</span> | θ) 产生。未标记样本的标签 y 视为<strong>缺失数据 / 隐变量</strong>，用 <span class="term">EM 算法</span>（Expectation-Maximization）迭代求解：</p>
+
+    <ul>
+      <li><strong>E 步</strong>（Expectation）：用当前参数 θ 估计每个未标记样本属于各类的<span class="term">后验概率</span> γ（即「软标签」）；</li>
+      <li><strong>M 步</strong>（Maximization）：把有标记样本的硬标签和未标记样本的软标签一起，重新最大似然估计 θ。</li>
+    </ul>
+
+    <p>下面是一个可以完整手算的最小例子。</p>
+
+    <p><strong>【手算例 1：两高斯混合的一轮 E 步】</strong>已标 4 个一维点：两个属于第 1 类（在 0 附近），两个属于第 2 类（在 4 附近），已知两类各自服从方差为 1 的高斯分布，均值 μ₁ = 0、μ₂ = 4，先验相等（各 1/2）。现在来了一个未标记点 <span class="var">x</span> = 3，求它属于第 2 类的后验概率 γ。</p>
+
+    <p>一维高斯密度：φ(<span class="var">x</span>; μ, 1) = <span class="frac"><span class="num-part">1</span><span class="den-part">√(2π)</span></span> e<sup>−(<span class="var">x</span>−μ)²/2</sup>，其中 <span class="frac"><span class="num-part">1</span><span class="den-part">√(2π)</span></span> ≈ 0.3989。</p>
+
+    <p><strong>第 1 步</strong>：算 x = 3 在第 1 类下的密度。(<span class="var">x</span> − μ₁)² = (3 − 0)² = 9，指数部分 −9/2 = −4.5，e<sup>−4.5</sup> ≈ 0.011109。</p>
+
+    <div class="formula">φ(3; 0, 1) = 0.3989 × e<sup>−4.5</sup> ≈ 0.3989 × 0.011109 ≈ <strong>0.004432</strong></div>
+
+    <p><strong>第 2 步</strong>：算 x = 3 在第 2 类下的密度。(<span class="var">x</span> − μ₂)² = (3 − 4)² = 1，指数部分 −1/2 = −0.5，e<sup>−0.5</sup> ≈ 0.6065。</p>
+
+    <div class="formula">φ(3; 4, 1) = 0.3989 × e<sup>−0.5</sup> ≈ 0.3989 × 0.6065 ≈ <strong>0.2420</strong></div>
+
+    <p><strong>第 3 步</strong>：归一化求后验（先验各 1/2，分子分母的 1/2 约掉）：</p>
+
+    <div class="formula">γ = <span class="frac"><span class="num-part">φ(3; 4, 1)</span><span class="den-part">φ(3; 0, 1) + φ(3; 4, 1)</span></span> = <span class="frac"><span class="num-part">0.2420</span><span class="den-part">0.004432 + 0.2420</span></span> = <span class="frac"><span class="num-part">0.2420</span><span class="den-part">0.2464</span></span> ≈ <strong>0.982</strong></div>
+
+    <p>结论：未标记点 x = 3 以约 98.2% 的「软归属」属于第 2 类。<strong>M 步</strong>会把它按 0.982 的权重计入第 2 类（同时按 0.018 计入第 1 类），重新估计 μ₁、μ₂——例如 μ₂ 的新估计是原来两个第 2 类点（各权重 1）加上 x = 3（权重 0.982）的加权平均：μ₂′ = (1×4₁ + 1×4₂ + 0.982×3) / (1 + 1 + 0.982)。然后回到 E 步再算，直到收敛。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>生成式半监督的本质：未标记样本参与「投票」决定模型参数长什么样。x = 3 虽然没有标签，但它「站在哪里」本身就强烈暗示了第 2 类高斯的形状——这就是分布结构里的免费信息。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>以为 EM 的软标签是「预测结果」。不是。γ 是<strong>当前模型下的后验</strong>，模型错了 γ 就跟着错。如果真实的类条件分布根本不是高斯（比如两类在数轴上交叠缠绕），EM 会自信地把未标记点归错类，而且越迭代越自信——这正是「生成模型假设错了，未标记数据反而有害」的第一种形态。</p>
+    </div>
+
+    <h3>二、半监督 SVM：让分割面穿过低密度区</h3>
+
+    <p>第二栋楼是判别式的。<span class="term">半监督支持向量机</span>（Semi-Supervised SVM, S3VM；直推设定下也叫 <span class="term">TSVM</span>，Transductive SVM）的想法非常几何：普通 SVM 只在有标记样本上找最大间隔；TSVM 进一步要求——<strong>给未标记样本指派一组伪标签，使得整体间隔最大，且分割面恰好穿过样本分布的低密度区</strong>（low-density separation）。</p>
+
+    <p>形式化：除了在有标记样本上的 hinge 损失，还要为每个未标记样本 <span class="var">x</span><sub>j</sub> 引入伪标签 ŷ<sub>j</sub> ∈ {+1, −1} 和它的 hinge 损失，优化目标里同时搜索参数 (w, b) 和所有伪标签 {ŷ<sub>j</sub>}。显然「分割面穿过数据密集区」的指派会让某些未标记点紧挨分割面、损失很大，因此被惩罚；最优解自然把分割面推到「人少的地方」——这正是聚类假设的几何表达。</p>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>以为 TSVM 可以像 SVM 一样凸优化解出。错。枚举所有伪标签指派是 2ᵘ 种组合（u 为未标记样本数），该问题是 <strong>NP-hard</strong>，没有多项式时间精确算法。实践中只能靠启发式：先只用有标记样本训一个 SVM，给未标记样本打初始伪标签，然后成对交换伪标签试探能否增大间隔（local search），或用梯度下降近似（∇TSVM）、退火（S3VM<sup>light</sup>）等手段逼近。这是「优雅思想 + 难看算法」的典型。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 13.2-1</div>
+              <div class="q-text">生成式半监督方法里，未标记样本扮演什么角色？EM 的 E 步和 M 步各自做什么？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              未标记样本的标签被视为缺失的隐变量。E 步：用当前参数估计每个未标记样本属于各类的后验概率 γ（软标签）；M 步：把有标记的硬标签和未标记的软标签加权合并，重新最大似然估计模型参数。两步交替直到收敛。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 13.2-2</div>
+              <div class="q-text">TSVM 的目标是什么？为什么说它押注的是聚类假设？算法上有什么硬伤？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              目标：给未标记样本指派伪标签，使整体间隔最大、分割面穿过低密度区（low-density separation）——「边界不穿密集人群」正是聚类假设。硬伤：伪标签有 2ᵘ 种指派，优化是 NP-hard，只能用局部交换、退火等启发式近似求解。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===== 13.3 ===== -->
+    <h2><span class="sec-no">13.3</span>图半监督：标签沿边传播的一步手算</h2>
+
+    <p>上一节的两族方法押在「聚类假设」上，这一节换一块地基：<strong>流形假设</strong>。<span class="term">图半监督学习</span>（Graph-based SSL）把「邻近点标签相同」直接写进数学结构里。</p>
+
+    <p><strong>构图</strong>：每个样本（有标记 + 未标记）是一个节点；样本间的相似度作为边权 W<sub>ij</sub>（相似则权大，不相似则权为 0 或接近 0）。「标签在图上应当平滑」可以写成一个<span class="term">能量函数</span>（Energy Function）：</p>
+
+    <div class="formula">E(<span class="var">f</span>) = <span class="frac"><span class="num-part">1</span><span class="den-part">2</span></span> ∑<sub>i</sub> ∑<sub>j</sub> W<sub>ij</sub> (<span class="var">f</span><sub>i</sub> − <span class="var">f</span><sub>j</sub>)²</div>
+
+    <p>其中 <span class="var">f</span><sub>i</sub> 是节点 i 的标签值（实数，最后按符号定类）。直觉：如果两个节点由一条粗边（W<sub>ij</sub> 大）相连，而标签差 (f<sub>i</sub> − f<sub>j</sub>) 大，就要付出很大代价——<strong>标签变化沿边要付出代价</strong>，边越粗代价越高。最优的 f 就是让总代价最小的那个「最平滑」的标签配置。</p>
+
+    <p><strong>约束与求解</strong>：有标记节点的 f 固定为已知标签（f<sub>l</sub>），只对未标记部分 f<sub>u</sub> 求最小。令 D 为对角阵，D<sub>ii</sub> = ∑<sub>j</sub> W<sub>ij</sub>（节点度数）。把 W、D 按「标记 / 未标记」分块，对 f<sub>u</sub> 求导置零，得到线性方程组：</p>
+
+    <div class="formula">(D<sub>uu</sub> − W<sub>uu</sub>) <span class="var">f</span><sub>u</sub> = W<sub>ul</sub> <span class="var">f</span><sub>l</sub> 　⟹　 <span class="var">f</span><sub>u</sub> = (D<sub>uu</sub> − W<sub>uu</sub>)<sup>−1</sup> W<sub>ul</sub> <span class="var">f</span><sub>l</sub></div>
+
+    <p>注意 D<sub>uu</sub> − W<sub>uu</sub> 正是图<span class="term">拉普拉斯矩阵</span>（Laplacian）L = D − W 的未标记分块。这个公式不必死记——它可以从每个未标记节点「我的值 = 邻居值的加权平均」的调和条件直接推出来。下面用一个 4 节点链式图完整演示。</p>
+
+    <p><strong>【手算例 2：4 节点链式图】</strong>节点排成一条链：x₁（已标记 +1）— x₂ — x₃ — x₄（已标记 −1），所有边权 W = 1。求未标记节点的标签值 f₂、f₃。</p>
+
+    <p><strong>第 1 步：写 D 矩阵</strong>。每个节点的度数 = 与它相连的边权之和：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>节点</th><th>相连边</th><th>度数 D<sub>ii</sub></th></tr>
+        <tr><td>x₁</td><td>只连 x₂</td><td>1</td></tr>
+        <tr><td>x₂</td><td>连 x₁、x₃</td><td>2</td></tr>
+        <tr><td>x₃</td><td>连 x₂、x₄</td><td>2</td></tr>
+        <tr><td>x₄</td><td>只连 x₃</td><td>1</td></tr>
+      </table>
+    </div>
+
+    <p>所以 D 的对角元为 (1, 2, 2, 1)。</p>
+
+    <p><strong>第 2 步：对每个未标记节点写「值 = 邻居加权平均」</strong>。边权全是 1，所以就是算术平均：</p>
+
+    <p>对 x₂：f₂ = <span class="frac"><span class="num-part">f₁ + f₃</span><span class="den-part">2</span></span>，两边乘 2 得 <strong>2f₂ − f₃ = f₁ = 1</strong> ……（式①）</p>
+
+    <p>对 x₃：f₃ = <span class="frac"><span class="num-part">f₂ + f₄</span><span class="den-part">2</span></span>，两边乘 2 得 <strong>−f₂ + 2f₃ = f₄ = −1</strong> ……（式②）</p>
+
+    <p>（这两式正是 (D<sub>uu</sub> − W<sub>uu</sub>)f<sub>u</sub> = W<sub>ul</sub>f<sub>l</sub> 展开：D<sub>uu</sub> − W<sub>uu</sub> = [[2, −1], [−1, 2]]，W<sub>ul</sub>f<sub>l</sub> = [f₁, f₄]ᵀ = [1, −1]ᵀ。）</p>
+
+    <p><strong>第 3 步：解方程组</strong>。由式①解出 f₂：</p>
+
+    <div class="formula">f₂ = <span class="frac"><span class="num-part">1 + f₃</span><span class="den-part">2</span></span></div>
+
+    <p>代入式②：</p>
+
+    <div class="formula">−<span class="frac"><span class="num-part">1 + f₃</span><span class="den-part">2</span></span> + 2f₃ = −1</div>
+
+    <p>两边乘 2 去分母：−(1 + f₃) + 4f₃ = −2，即 −1 − f₃ + 4f₃ = −2，合并得 3f₃ = −1，所以：</p>
+
+    <div class="formula"><strong>f₃ = −<span class="frac"><span class="num-part">1</span><span class="den-part">3</span></span></strong>，　代回式①：<strong>f₂ = <span class="frac"><span class="num-part">1 + (−1/3)</span><span class="den-part">2</span></span> = <span class="frac"><span class="num-part">2/3</span><span class="den-part">2</span></span> = <span class="frac"><span class="num-part">1</span><span class="den-part">3</span></span></strong></div>
+
+    <p><strong>第 4 步：解读</strong>。f₂ = +1/3 > 0，x₂ 判为 +1 类；f₃ = −1/3 < 0，x₃ 判为 −1 类。注意数值本身的意义：标签值从 x₁ 的 +1 沿链平滑衰减——+1 → +1/3 → −1/3 → −1。离 +1 锚点越近，值越正；这就是「标签沿边传播」的直观图像。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>图半监督 = 在相似度图上做「插值」：已标节点是钉子（f 被钉死），未标节点的值被邻居拉扯到加权平均。整张图的标签像一张被钉住若干点的橡皮膜，自然松弛到最平滑的形状。它与 13.2 的生成式方法形成鲜明对照：不假设数据的生成分布，只假设「邻近即同类」。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>以为边权 W 随便给就行。构图质量决定一切：如果 W 里出现一条「错误的粗边」（把两个不同类的样本连了起来），标签就会沿这条边错误传播，整张图被带歪。实践中常用 k 近邻图（只连最近的 k 个点）或高斯核权 W<sub>ij</sub> = exp(−‖x<sub>i</sub> − x<sub>j</sub>‖²/2σ²)，σ 的选择非常敏感。图错了，再优雅的公式也救不回来。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 13.3-1</div>
+              <div class="q-text">写出图半监督的能量函数，并解释每一项的含义。它押注的是哪个假设？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              E(f) = (1/2)∑ᵢ∑ⱼ Wᵢⱼ(fᵢ − fⱼ)²。Wᵢⱼ 是相似度边权，(fᵢ − fⱼ)² 是相邻节点标签不一致的代价——边越粗、标签差越大，代价越高。最小化它等价于要求标签在图上平滑变化，押注的是流形假设（邻近点标签相同）。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 13.3-2</div>
+              <div class="q-text">写出图半监督未标记部分的闭式解，并说明 D、W 分块的含义。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              f_u = (D_uu − W_uu)⁻¹ W_ul f_l。D 是度数对角阵（D_ii = ∑ⱼ Wᵢⱼ），按标记/未标记分块后，D_uu − W_uu 是拉普拉斯矩阵 L = D − W 的未标记分块；f_l 是钉死的有标记标签。等价于每个未标记节点取值 = 邻居的加权平均。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===== 13.4 ===== -->
+    <h2><span class="sec-no">13.4</span>基于分歧的方法：协同训练</h2>
+
+    <p>前三族方法都在「一个视角」里做文章。这一节换思路：如果数据天然有<strong>两个不同的描述角度</strong>，能不能让它们互相当老师？这就是 <span class="term">协同训练</span>（Co-training，Blum &amp; Mitchell, 1998）。</p>
+
+    <p>Blum 和 Mitchell 研究的是网页分类：每个网页有两种天然视图——</p>
+
+    <ul>
+      <li><strong>视图 1</strong>：页面本身的文字内容；</li>
+      <li><strong>视图 2</strong>：指向该页面的超链接的锚文本（anchor text，例如别人用「机器学习讲义」四个字链过来）。</li>
+    </ul>
+
+    <p>他们提出协同训练成立的前提是<span class="term">充分冗余视图</span>（sufficient and redundant views）：</p>
+
+    <ul>
+      <li><strong>各自充分</strong>（sufficient）：单看任何一个视图，都足以学出一个不错的分类器；</li>
+      <li><strong>条件独立</strong>（conditional independence）：给定类别标签后，两个视图相互独立。</li>
+    </ul>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>为什么这样能奏效？视图 1 的分类器在某批未标记样本上<strong>最有把握</strong>的预测，拿给视图 2 当标签用——因为两个视图（近似）条件独立，视图 1 有把握的样本对视图 2 来说往往是「新鲜的、信息量大的」训练点。两个分类器像两个互不相看答案的学生，各自把自己最确定的题告诉对方，一起把整张卷子的边界越画越准。</p>
+    </div>
+
+    <p><strong>协同训练的一轮（伪代码步骤）</strong>：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>步骤</th><th>动作</th></tr>
+        <tr><td>0. 初始化</td><td>在仅有的有标记样本 L 上，分别用视图 1 特征训练分类器 h₁，用视图 2 特征训练分类器 h₂</td></tr>
+        <tr><td>1. 各自预测</td><td>h₁ 对未标记池 U 中所有样本按视图 1 打标签并给出置信度；h₂ 按视图 2 同样操作</td></tr>
+        <tr><td>2. 交换伪标签</td><td>h₁ 选出置信度最高的若干正例与负例，连标签一起加入 h₂ 的训练集；h₂ 同样把自己最有把握的伪标签样本加给 h₁</td></tr>
+        <tr><td>3. 重训</td><td>h₁、h₂ 各自在扩增后的训练集上重新训练</td></tr>
+        <tr><td>4. 迭代</td><td>回到步骤 1，直到 U 用尽或轮数达到上限</td></tr>
+      </table>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>教科书式的疑问：「条件独立假设在现实里根本不成立（锚文本和正文当然相关），协同训练岂不是空中楼阁？」——这是本章最值得记住的误区讨论。理论上你说得对：<strong>严格条件独立几乎从不成立</strong>。但实践中协同训练依然有效，因为真正需要的只是「两个视图的错误不要在同一些样本上高度相关」，即<strong>分歧足够大</strong>。这启发了后来的放宽：不要求天然双视图，而是用不同学习器、不同特征子集、不同采样人为制造分歧——<span class="term">tri-training</span> 就是代表：用三个分类器，两个一致同意就给第三个打伪标签，彻底摆脱对双视图的依赖（一句话记住：从「数据分歧」走向「学习器分歧」）。</p>
+    </div>
+
+    <p><strong>本节遗留问题（也是全章的收束）</strong>：所有这类「自己给自己打标签」的方法——包括最简单的 <span class="term">自训练</span>（self-training）——都有一个致命软肋：如果第一步的伪标签就错了（因为聚类/流形假设在这个数据集上不成立），错误标签会被加入训练集，下一轮模型对错误模式<strong>更加自信</strong>，再产出更多同方向的错标签——错误自我放大，这就是自训练的<span class="term">确认偏差</span>（confirmation bias）。对策有两条路：一是与其让模型自己猜，不如让它「挑最不确定的样本来问人」——回到 13.1 提到的主动学习；二是给伪标签加置信度门槛、多模型互验等鲁棒机制。半监督学习不是免费午餐，它的一切收益都押在假设上；假设不成立时，未标记数据反而帮倒忙。</p>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 13.4-1</div>
+              <div class="q-text">协同训练要求的「充分冗余视图」是哪两个条件？各是什么意思？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              充分冗余视图（sufficient and redundant views）：①各自充分——每个视图单独都足以训练出一个不错的分类器；②条件独立——给定类别后两个视图相互独立。经典例子：网页分类中「页面文字」与「指向它的链接锚文本」。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 13.4-2</div>
+              <div class="q-text">自训练/伪标签方法最大的风险是什么？它是怎么发生的？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              确认偏差（confirmation bias）：若聚类/流形假设不成立，早期伪标签出错；错标签进入训练集后模型对错误模式更自信，下一轮产出更多同向错标签——错误自我放大。对策：置信度门槛、多模型互验（如 tri-training）、或改用主动学习挑样本人工标注。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===== 概念卡 ===== -->
+    <h2><span class="sec-no">🃏</span>概念卡：本章概念的一分钟画像</h2>
+    <p>翻面前先自问：这个概念我能用一句话讲清楚吗？</p>
+    <div class="flip-grid">
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 1</div>
+            <div class="q-text">半监督学习（Semi-Supervised Learning）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">利用少量有标记样本 + 大量未标记样本共同训练学习器的范式。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">标注昂贵、未标注廉价的矛盾；没有它，未标记数据只能闲置。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">100 颗钉子（标注）钉住整片橡皮膜（未标记数据的分布）。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为未标记数据「免费且总是有益」——它依赖分布假设，假设错了反而有害。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">医疗影像、网页分类等「数据多、标注贵」的场景；Ch14 概率图模型是它的概率化延伸。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 2</div>
+            <div class="q-text">直推学习（Transductive Learning）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">只关心给定这批未标记样本本身的标签，不要求泛化到新样本的学习设定。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">测试集提前可见时，可以利用测试点的分布信息，比纯归纳更准。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">开卷考但只答这张卷子：「猜出眼前这堆点的标签就行」。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">与归纳混为一谈；直推学出的「答案」不能直接拿去预测新样本。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">TSVM、图半监督的经典设定；文档库内部分类、固定用户群标注。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 3</div>
+            <div class="q-text">聚类假设与流形假设（Cluster / Manifold Assumption）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">聚类假设：同簇样本倾向同类（边界应走低密度区）；流形假设：数据分布在低维流形上，邻近点标签相同。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">回答「未标记数据凭什么有用」——它们是全章一切方法的地基。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">聚类假设：「分人群划线别从人堆里过」；流形假设：「近朱者赤」。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">把它们当定理——它们是对世界的断言，不成立时未标记数据帮倒忙。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">聚类假设 → 生成式方法、半监督 SVM；流形假设 → 图半监督。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 4</div>
+            <div class="q-text">生成式半监督（Generative SSL）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">假设数据由生成模型 p(x, y | θ) 产生，把未标记样本的标签当隐变量，用 EM 迭代估计参数。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">让未标记样本参与「塑造」类条件分布的形状，而非干等标签。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">软标签投票：每个未标记点按后验 γ 把自己「劈」给各类。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为 EM 的 γ 是可靠预测——模型族选错时它会自信地错到底。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">类条件分布确实接近已知形式（如高斯混合）时；是 Ch14 隐变量推断的预演。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 5</div>
+            <div class="q-text">图半监督（Graph-based SSL）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">样本为节点、相似度为边权构图，最小化能量 E(f) = (1/2)∑ᵢ∑ⱼ Wᵢⱼ(fᵢ−fⱼ)²，得闭式解 f_u = (D_uu − W_uu)⁻¹W_ul f_l。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">不假设生成分布，直接把「邻近即同类」变成可计算的标签传播。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">橡皮膜插值：标记节点是钉子，未标记节点被邻居拉到加权平均。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">忽视构图——一条错误的粗边会把标签错传到整张图。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">有天然相似度/网络结构的数据（引用网络、社交关系）；Ch14 的沿边推断与此一脉相承。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 6</div>
+            <div class="q-text">协同训练（Co-training）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">在两个充分冗余视图上各训一个分类器，每轮各自把高置信伪标签样本加给对方训练集，迭代互教。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">利用数据天然的「分歧」：一个视图的有把握样本恰是另一视图的信息增量。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">两个互不相看答案的学生，各自把最有把握的题讲给对方听。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">纠结「条件独立现实中不成立」——实践只需要错误不高度相关（分歧够大）。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">天然双视图（网页文字/锚文本）；无双视图时用 tri-training 靠多学习器制造分歧。</span></div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- ===== 分层习题 ===== -->
+    <h2><span class="sec-no">📝</span>分层习题</h2>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>判断正误并说明理由：「直推学习和归纳学习的区别，在于是否使用未标记数据。」</div>
+      <details>
+        <summary>提示</summary>
+        <p>两种设定都使用未标记数据。回想 13.1 表格里「未标记数据的角色」那一列，区别到底在哪一维上？</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer"><strong>错误。</strong>直推（Transductive）与归纳（Inductive）都使用未标记数据——这是它们同属半监督学习的前提。区别在于<strong>目标</strong>：直推只要求猜出当前这批未标记样本（即测试集）的标签；归纳则要求借未标记数据学出一个能对任意新样本预测的模型。易错原因：把「是否用未标记数据」当成了半监督与全监督的分界线，又错误地平移到了直推/归纳上。</div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>某同学说：「协同训练要求两个视图条件独立，但网页的正文和锚文本显然相关，所以协同训练在网页分类上不可能有效。」这个推理哪里出了问题？</div>
+      <details>
+        <summary>提示</summary>
+        <p>区分「理论保证的充分条件」和「实践奏效的必要条件」。Blum &amp; Mitchell 的原始实验恰恰就是做网页分类。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">问题在于把<strong>充分条件当成了必要条件</strong>。严格条件独立确实是理论证明的假设，且现实中几乎从不成立；但实践奏效只需要更弱的条件——两个视图的<strong>错误不要在同一些样本上高度相关</strong>（分歧足够大）。网页正文与锚文本虽相关，但各自包含对方没有的信息（一个描述自己，一个描述别人的评价），分歧足以支撑互教。事实上 Blum &amp; Mitchell 1998 年的原始论文正是在网页分类上取得成功的。这正是 13.4 强调的「理论假设 vs 实践经验」的经典案例。</div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>五节点链式图：x₁（已标记 +1）— x₂ — x₃ — x₄ — x₅（已标记 −1），所有边权 W = 1。用图半监督方法求未标记节点的标签值 f₂、f₃、f₄，并判断各自类别。</div>
+      <details>
+        <summary>提示</summary>
+        <p>先求各节点度数（中间节点度数为 2），再对每个未标记节点写「值 = 邻居的平均」，列出三元一次方程组，利用链的对称性可以更快求解。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p><strong>第 1 步：度数</strong>。x₁、x₅ 是端点，度数 1；x₂、x₃、x₄ 各连两条边，度数 2。D 对角 = (1, 2, 2, 2, 1)。</p>
+          <p><strong>第 2 步：列调和方程</strong>（每个未标记节点 = 邻居算术平均，因边权全 1）：</p>
+          <p>对 x₂：f₂ = (f₁ + f₃)/2 ⟹ <strong>2f₂ − f₃ = f₁ = 1</strong> ……（式①）</p>
+          <p>对 x₃：f₃ = (f₂ + f₄)/2 ⟹ <strong>−f₂ + 2f₃ − f₄ = 0</strong> ……（式②）</p>
+          <p>对 x₄：f₄ = (f₃ + f₅)/2 ⟹ <strong>−f₃ + 2f₄ = f₅ = −1</strong> ……（式③）</p>
+          <p><strong>第 3 步：利用对称性</strong>。链关于中点 x₃ 对称，且两端标签 +1 与 −1 反对称，故应有 f₄ = −f₂ 且 f₃ = 0。验证：f₃ = 0 代入式②得 −f₂ − f₄ = 0，即 f₄ = −f₂，自洽。</p>
+          <p><strong>第 4 步：求解</strong>。把 f₃ = 0 代入式①：2f₂ − 0 = 1 ⟹ <strong>f₂ = 1/2</strong>；代入式③：−0 + 2f₄ = −1 ⟹ <strong>f₄ = −1/2</strong>。检验式②：−1/2 + 2×0 − (−1/2) = −1/2 + 0 + 1/2 = 0 ✓。</p>
+          <p><strong>结论</strong>：f₂ = +1/2（判 +1 类），f₃ = 0（恰在边界上，实践中可判给距离更近的锚点侧或标记为不确定），f₄ = −1/2（判 −1 类）。标签值 +1 → +1/2 → 0 → −1/2 → −1，沿链严格线性衰减——这正是调和函数在链式图上的形态。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>沿用正文手算例 1 的两高斯混合（μ₁ = 0，μ₂ = 4，方差均为 1，先验各 1/2），把未标记点换成 <span class="var">x</span> = 1，重新计算它属于第 2 类的后验 γ。</div>
+      <details>
+        <summary>提示</summary>
+        <p>指数部分：(1−0)²/2 = 0.5，(1−4)²/2 = 4.5。注意这次的两个密度值恰好与正文例子「对调」。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p><strong>第 1 步</strong>：φ(1; 0, 1) = 0.3989 × e<sup>−0.5</sup> ≈ 0.3989 × 0.6065 ≈ <strong>0.2420</strong>。</p>
+          <p><strong>第 2 步</strong>：φ(1; 4, 1) = 0.3989 × e<sup>−4.5</sup> ≈ 0.3989 × 0.011109 ≈ <strong>0.004432</strong>。</p>
+          <p><strong>第 3 步</strong>：归一化（先验 1/2 约掉）：</p>
+          <p>γ = <span class="frac"><span class="num-part">φ(1; 4, 1)</span><span class="den-part">φ(1; 0, 1) + φ(1; 4, 1)</span></span> = <span class="frac"><span class="num-part">0.004432</span><span class="den-part">0.2420 + 0.004432</span></span> = <span class="frac"><span class="num-part">0.004432</span><span class="den-part">0.2464</span></span> ≈ <strong>0.018</strong></p>
+          <p><strong>结论</strong>：x = 1 以约 1.8% 的软归属属于第 2 类（即约 98.2% 属于第 1 类）。与正文 x = 3 的结果（γ ≈ 0.982）镜像对称——这正是两个高斯关于中点 x = 2 对称的体现。体会：后验对「离哪个均值近」极其敏感，指数衰减让较远一类的贡献几乎可以忽略。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l3">L3 建模应用</span>医疗影像场景：医院积累了 10 万张胸部 CT 图像，但放射科医生只来得及标注 500 张（良性/恶性）。你会选择本章哪种半监督方法？依据哪个假设？画出整体流程，并指出最大的风险。</div>
+      <details>
+        <summary>提示</summary>
+        <p>CT 图像没有天然的「双视图」，也很难写出正确的生成分布；但深度特征空间里相似病灶的影像彼此邻近。想想哪一族方法的地基与这个结构最匹配，以及谁负责「构图」。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p><strong>选择</strong>：图半监督（可叠加自训练/tri-training 做工程增强）。</p>
+          <p><strong>依据的假设</strong>：流形假设——先用一个预训练深度网络（或在 500 张标注上微调的网络）提取每张 CT 的特征向量，病灶形态相似的影像在特征空间里互为近邻，标签应当沿这些近邻边平滑传播。不选生成式方法：CT 的类条件分布没有可信的参数形式，假设错了反而有害；不选协同训练（原始版）：单张 CT 没有天然的两个充分冗余视图。</p>
+          <p><strong>流程</strong>：①10 万张 CT 全部过深度网络取特征；②用 k 近邻（如 k = 10）在特征空间构图，边权用高斯核 W<sub>ij</sub> = exp(−‖fᵢ − fⱼ‖²/2σ²)；③500 张已标注节点的 f 钉死为 ±1；④解 f_u = (D_uu − W_uu)⁻¹W_ul f_l 得到 10 万节点的软标签；⑤取 |f| 大的高置信样本加入训练集重训分类器（迭代）；⑥低置信样本转主动学习，请医生优先标注。</p>
+          <p><strong>最大风险</strong>：<strong>确认偏差 + 构图错误</strong>。若某些恶性早期病灶在特征空间里与良性病灶混邻（流形假设局部不成立），错误的粗边会把良性标签传给它；一旦这些高置信错误样本进入训练集，模型会对「漏诊模式」越来越自信——在医疗场景这是致命方向。对策：只采纳极高置信的伪标签、保留医生复核通道、把低置信样本全部转人工。</p>
+        </div>
+      </details>
+    </div>
+
+    <!-- ===== 自测 ===== -->
+    <h2><span class="sec-no">✍️</span>本章自测</h2>
+    <p class="quiz-hint">点击选项判分，答错会给出原因。</p>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 1</div>
+      <div class="q-stem">关于半监督学习与主动学习，下列说法正确的是？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 主动学习不需要人工标注任何新样本</li>
+        <li data-opt="b">B. 半监督学习不新增标注，而是利用未标记数据的分布结构；主动学习则挑选最有价值的样本人工标注</li>
+        <li data-opt="c">C. 两者都要求测试集在训练时不可见</li>
+        <li data-opt="d">D. 主动学习是半监督学习的特例</li>
+      </ul>
+      <div class="quiz-explain">解析：B 正确——核心区别在「谁出钱买标签」：主动学习花钱（挑样本人标），半监督免费（挖分布结构）。A 错：主动学习的全部意义就是花最少的钱买最有价值的标注。C 错：直推式半监督恰恰要求测试集（未标记样本）在训练时可见。D 错：两者机制独立，不存在包含关系，只能结合使用。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="c">
+      <div class="q-no">自测 2</div>
+      <div class="q-stem">「决策边界应当穿过样本分布的低密度区域」这一要求最直接体现了哪个假设？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 流形假设</li>
+        <li data-opt="b">B. 条件独立假设</li>
+        <li data-opt="c">C. 聚类假设</li>
+        <li data-opt="d">D. 充分冗余视图假设</li>
+      </ul>
+      <div class="quiz-explain">解析：C 正确——聚类假设「同簇同类」与「边界走低密度区」互为等价表述（若边界从密集区穿过，同簇就被切开）。A 错：流形假设说的是「邻近点标签相同」，关心局部平滑而非边界位置。B 错：条件独立是协同训练对双视图的假设。D 错：充分冗余视图是协同训练的前提，与边界位置无关。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="d">
+      <div class="q-no">自测 3</div>
+      <div class="q-stem">关于半监督 SVM（TSVM），下列说法正确的是？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 它和 SVM 一样是凸优化问题，可以多项式时间精确求解</li>
+        <li data-opt="b">B. 它押注流形假设，用图拉普拉斯求解</li>
+        <li data-opt="c">C. 它把未标记样本的标签当作隐变量，用 EM 求解</li>
+        <li data-opt="d">D. 它搜索未标记样本的伪标签指派使间隔最大，该问题是 NP-hard，实践中用启发式近似</li>
+      </ul>
+      <div class="quiz-explain">解析：D 正确——TSVM 同时优化分割面与 2ᵘ 种伪标签指派，组合爆炸导致 NP-hard，只能靠局部交换、退火等启发式。A 错：引入伪标签后问题不再凸。B 错：那是图半监督的描述；TSVM 押的是聚类假设（低密度分割）。C 错：那是生成式半监督的描述。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="a">
+      <div class="q-no">自测 4</div>
+      <div class="q-stem">4 节点链式图 x₁(+1)—x₂—x₃—x₄(−1)，边权全为 1，图半监督的解 f₂、f₃ 分别是？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. f₂ = 1/3，f₃ = −1/3</li>
+        <li data-opt="b">B. f₂ = 2/3，f₃ = −2/3</li>
+        <li data-opt="c">C. f₂ = 1/2，f₃ = −1/2</li>
+        <li data-opt="d">D. f₂ = 0，f₃ = 0</li>
+      </ul>
+      <div class="quiz-explain">解析：A 正确——解方程组 2f₂ − f₃ = 1、−f₂ + 2f₃ = −1 得 f₂ = 1/3、f₃ = −1/3。B 错：2/3 是把 5 节点情形的直觉错套过来；代入式①：2×(2/3) − (−2/3) = 2 ≠ 1，不满足。C 错：1/2 是 5 节点链中 f₂ 的值，节点数记混了；代入式①：2×(1/2) + 1/2 = 3/2 ≠ 1。D 错：全 0 不满足任何含锚点的方程（2×0 − 0 = 0 ≠ 1）。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="c">
+      <div class="q-no">自测 5</div>
+      <div class="q-stem">关于协同训练与伪标签方法的风险，下列说法正确的是？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 只要两个视图严格条件独立，协同训练就不会出任何错误</li>
+        <li data-opt="b">B. 自训练的确认偏差可以通过不断增加未标记数据量来消除</li>
+        <li data-opt="c">C. 若聚类/流形假设不成立，早期错误伪标签会进入训练集使模型对错误模式更自信，导致错误自我放大；对策包括置信度门槛、多模型互验与主动学习</li>
+        <li data-opt="d">D. tri-training 仍然要求数据具有天然的两个充分冗余视图</li>
+      </ul>
+      <div class="quiz-explain">解析：C 正确——确认偏差（confirmation bias）的机制与对策见 13.4 末尾。A 错：条件独立只是理论保证的充分条件，且「严格独立」与「零错误」之间没有这种强保证，有限样本下照样出错。B 错：假设不成立时，更多未标记数据只供给更多错误伪标签，反而加速放大——这正是「未标记数据反而有害」。D 错：tri-training 恰恰是为了摆脱双视图要求，用三个学习器两两投票制造分歧。</div>
+    </div>
+
+    <!-- ===== 三句话复述 ===== -->
+    <div class="retell">
+      <h3>🗣️ 用自己的话，三句话讲完本章</h3>
+      <p>对着空气（或室友）说出这三句。说卡壳的那句，回去重读对应小节。</p>
+      <details>
+        <summary>句1：这章解决什么问题？——</summary>
+        <div class="retell-answer">参考答案：标注昂贵而未标注廉价，半监督学习要用少量有标记样本撬动大量未标记样本，回答「没有标签的数据如何参与学习」。</div>
+      </details>
+      <details>
+        <summary>句2：核心机制是什么？——</summary>
+        <div class="retell-answer">参考答案：一切收益押在两个分布假设上——聚类假设（同簇同类、边界走低密度区）派生出生成式方法（EM 补隐变量）与半监督 SVM（低密度分割）；流形假设（邻近同类）派生出图半监督（标签沿边传播，f_u = (D_uu − W_uu)⁻¹W_ul f_l）；分歧思想派生出协同训练（双视图互打高置信伪标签）。</div>
+      </details>
+      <details>
+        <summary>句3：它和前后章怎么分工？——</summary>
+        <div class="retell-answer">参考答案：上接第 12 章——泛化界要求样本量，本章在标签稀缺时把「有效样本量」从未标记数据里补回来；下启第 14 章——「未观测变量 + 沿边局部传播」在概率图模型里被一般化为系统的推断理论；并预告第 16 章监督信号更稀疏的强化学习。</div>
+      </details>
+    </div>
+
+    <!-- ===== 复习计划 ===== -->
+    <div class="review-plan">
+      <h3>🔁 间隔复习计划</h3>
+      <p>回忆本身比重读有效 10 倍。到点只做一件事：翻卡 + 重做标记题。</p>
+      <table>
+        <tr><th>时间点</th><th>复习内容</th><th>预计用时</th></tr>
+        <tr><td>第 1 天</td><td>概念卡 1–6 全部 + 回忆卡 13.1-1、13.2-1、13.3-2、13.4-2</td><td>10 分钟</td></tr>
+        <tr><td>第 3 天</td><td>概念卡 3、5（两个假设 + 图方法）+ 重做 L2 五节点链式图题 + 自测错题</td><td>10 分钟</td></tr>
+        <tr><td>第 7 天</td><td>三句话复述 + 重做 L2 的 EM 题（x = 1 算 γ）+ 概念卡 4、6</td><td>10 分钟</td></tr>
+        <tr><td>第 15 天</td><td>只做合上书挑战；能全过（尤其最后一条主线问题）就毕业</td><td>15 分钟</td></tr>
+      </table>
+    </div>
+
+    <!-- ===== 合上书挑战 ===== -->
+    <div class="final-challenge">
+      <h3>📕 合上书挑战</h3>
+      <p class="fc-sub">现在关掉这个页面，拿一张纸，凭记忆完成以下任务。全部做完再回来核对——这是本章真正的毕业考试。</p>
+      <ol id="challenge-list">
+        <li><span class="fc-check"></span>写出聚类假设与流形假设的内容，并各举一个在现实中可能不成立的反例场景</li>
+        <li><span class="fc-check"></span>用两高斯混合（μ₁ = 0，μ₂ = 4，σ² = 1）对 x = 3 手算一轮 E 步后验 γ（答案 ≈ 0.982），并写出 M 步如何用它更新 μ₂</li>
+        <li><span class="fc-check"></span>写出图半监督的能量函数与闭式解 f_u = (D_uu − W_uu)⁻¹W_ul f_l，并在 4 节点链式图上解出 f₂ = 1/3、f₃ = −1/3（步骤写全）</li>
+        <li><span class="fc-check"></span>画出协同训练一轮的流程（初始化 → 各自预测 → 交换伪标签 → 重训），并写出「充分冗余视图」的两个条件</li>
+        <li><span class="fc-check"></span>解释为什么 TSVM 是 NP-hard，以及实践中用什么思路近似求解</li>
+        <li><span class="fc-check"></span>解释自训练的确认偏差：假设不成立时错误如何自我放大，给出至少两条对策</li>
+        <li><span class="fc-check"></span>一句话回答本章的主线问题：没有标签的数据如何参与学习——它帮的是什么忙、何时反而帮倒忙？</li>
+      </ol>
+    </div>
+
+    <div class="complete-zone">
+      <button class="btn-complete" id="btn-complete" onclick="markDone()">✓ 我已完成本章（含合上书挑战）</button>
+    </div>
+
+    <div class="chapter-nav">
+      <a href="chapter-12.html"><span class="nav-dir">← 上一章</span>第12章 计算学习理论</a>
+      <a href="chapter-14.html" class="next"><span class="nav-dir">下一章 →</span>第14章 概率图模型</a>
+    </div>
+
+  </div>
+</div>
+
+<footer class="footer">
+  <div class="wrap">第13章 半监督学习 · 机器学习互动讲义 · 基于周志华《机器学习》</div>
+</footer>
+
+<script src="/lectures-assets/mermaid.min.js"></script>
+<script>
+mermaid.initialize({
+  startOnLoad: true,
+  theme: "base",
+  themeVariables: {
+    primaryColor: "#e3edf7",
+    primaryBorderColor: "#1d5f9e",
+    primaryTextColor: "#1d5f9e",
+    lineColor: "#5c554b",
+    secondaryColor: "#fbeedd",
+    tertiaryColor: "#f5f1e8",
+    fontFamily: "-apple-system, PingFang SC, sans-serif",
+    fontSize: "14px"
+  },
+  flowchart: { curve: "linear", htmlLabels: false }
+});
+</script>
+<script>
+// 自测题判分（原样复用，勿改）
+document.querySelectorAll(".quiz-block").forEach(block => {
+  const answer = block.dataset.answer;
+  const explain = block.querySelector(".quiz-explain");
+  block.querySelectorAll(".quiz-opts li").forEach(li => {
+    li.addEventListener("click", () => {
+      const opts = block.querySelectorAll(".quiz-opts li");
+      opts.forEach(o => o.classList.add("disabled"));
+      if (li.dataset.opt === answer) {
+        li.classList.add("correct");
+      } else {
+        li.classList.add("wrong");
+        block.querySelector(`[data-opt="${answer}"]`).classList.add("correct");
+      }
+      explain.classList.add("show");
+    });
+  });
+});
+
+// 合上书清单打勾（原样复用，勿改）
+document.querySelectorAll("#challenge-list li").forEach(li => {
+  li.addEventListener("click", () => li.classList.toggle("checked"));
+});
+
+// 完成标记 → localStorage（章号 13）
+const KEY = "ml_progress_v1";
+function loadProgress() {
+  try { return JSON.parse(localStorage.getItem(KEY)) || {}; } catch (e) { return {}; }
+}
+const progress = loadProgress();
+const btn = document.getElementById("btn-complete");
+if (progress[13] && progress[13].done) {
+  btn.textContent = "✓ 已完成 · 再次点击重置";
+  btn.classList.add("done");
+}
+function markDone() {
+  const p = loadProgress();
+  if (p[13] && p[13].done) {
+    delete p[13];
+    btn.textContent = "✓ 我已完成本章（含合上书挑战）";
+    btn.classList.remove("done");
+  } else {
+    p[13] = { done: true, completedAt: Date.now(), reviewsDone: 0 };
+    btn.textContent = "✓ 已完成 · 复习提醒已开启";
+    btn.classList.add("done");
+  }
+  localStorage.setItem(KEY, JSON.stringify(p));
+}
+</script>
+
+</body>
+</html>

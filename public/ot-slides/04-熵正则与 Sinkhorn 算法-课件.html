@@ -1,0 +1,570 @@
+<!DOCTYPE html>
+<!--
+  最优传输课件 · 第4章 熵正则与 Sinkhorn 算法
+  基于 assets/deck-template.html 制作，内容依据《最优传输互动讲义》chapter-04.html
+-->
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第4章 熵正则与 Sinkhorn 算法 · 最优传输课件</title>
+<script>
+window.MathJax = {
+  tex: {
+    inlineMath: [['$', '$'], ['\\(', '\\)']],
+    displayMath: [['$$', '$$'], ['\\[', '\\]']],
+    processEscapes: true,
+    tags: 'none'
+  },
+  svg: { fontCache: 'global', scale: 1.05 },
+  options: { skipHtmlTags: ['script','noscript','style','textarea','pre','code'] }
+};
+</script>
+<!-- MathJax 本地引用（tex-svg 单文件全量组件，约2MB，自带字体数据），file:// 与断网均可用 -->
+<script src="/lectures-assets/tex-svg.js" async></script>
+<style>
+  :root{
+    --primary:#1a365d; --accent:#2b6cb0; --accent-light:#ebf8ff; --accent-border:#bee3f8;
+    --text:#2d3748; --muted:#718096; --border:#e2e8f0; --bg-light:#f7fafc;
+    --success:#38a169; --danger:#e53e3e; --warning:#dd6b20; --warn-bg:#fffaf0;
+  }
+  *{margin:0;padding:0;box-sizing:border-box;}
+  html,body{width:100%;height:100%;overflow:hidden;background:#0f172a;}
+  body{
+    font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Hiragino Sans GB","Microsoft YaHei","WenQuanYi Micro Hei",sans-serif;
+    color:var(--text);
+  }
+  #stage{
+    position:absolute; left:50%; top:50%;
+    width:1280px; height:720px;
+    transform:translate(-50%,-50%) scale(1);
+    transform-origin:center center;
+    background:#ffffff;
+    box-shadow:0 0 40px rgba(0,0,0,.4);
+    overflow:hidden;
+  }
+  .slide{
+    position:absolute; inset:0;
+    padding:36px 60px 52px;
+    display:none;
+    flex-direction:column;
+    background:#ffffff;
+    opacity:0;
+    transition:opacity .35s ease;
+  }
+  .slide.active{ display:flex; opacity:1; }
+
+  #progress{ position:absolute; top:0; left:0; height:6px; background:var(--accent); width:0; z-index:50; transition:width .35s; }
+
+  /* 封面 / 结束页 */
+  .slide-cover{ justify-content:center; align-items:center; text-align:center; }
+  .slide-cover{ background:linear-gradient(135deg,#1a365d 0%,#2b6cb0 100%); color:#fff; }
+  .slide-cover .kicker{ font-size:22px; letter-spacing:6px; opacity:.85; margin-bottom:18px;}
+  .slide-cover h1{ font-size:64px; font-weight:800; line-height:1.2; margin-bottom:22px; letter-spacing:2px;}
+  .slide-cover .sub{ font-size:26px; opacity:.92; margin-bottom:36px;}
+  .slide-cover .meta{ font-size:19px; opacity:.85; line-height:2;}
+  .slide-cover .divider{ width:160px;height:5px;background:#fff;opacity:.6;margin:0 auto 30px;border-radius:3px;}
+  .slide-cover .question{ font-size:24px; background:rgba(255,255,255,.12); border:1px solid rgba(255,255,255,.35); border-radius:12px; padding:12px 28px; margin-bottom:30px;}
+
+  /* 页头：结论式标题 */
+  .slide-head{ display:flex; align-items:baseline; gap:16px; border-bottom:3px solid var(--accent); padding-bottom:9px; margin-bottom:12px;}
+  .slide-head .sec{ font-size:17px; color:var(--accent); font-weight:700; background:var(--accent-light); padding:3px 11px; border-radius:6px; white-space:nowrap;}
+  .slide-head h3{ font-size:29px; color:var(--primary); font-weight:700;}
+  .slide-body{ flex:1; display:flex; flex-direction:column; justify-content:center; min-height:0; }
+
+  p{ font-size:21px; line-height:1.65; margin-bottom:8px;}
+  .lead{ font-size:23px; color:#374151; line-height:1.75;}
+  ul,ol{ margin:0 0 8px 26px; font-size:21px; line-height:1.7;}
+  li{ margin-bottom:5px;}
+  strong{ color:var(--primary); }
+
+  /* 公式块 */
+  .formula{ background:var(--accent-light); border-left:5px solid var(--accent); border-radius:0 10px 10px 0; padding:9px 22px; margin:9px 0; text-align:center; font-size:23px;}
+  .formula-concl{ background:#fffaf0; border-left:5px solid var(--warning);}
+  .MathJax{ font-size:1.05em !important; }
+  mjx-container[display="true"]{ margin:6px 0 !important; }
+
+  /* 表格 */
+  table{ width:100%; border-collapse:collapse; margin:10px 0; font-size:20px;}
+  th{ background:var(--accent); color:#fff; padding:8px 12px; text-align:center; font-weight:600;}
+  td{ padding:7px 12px; border:1px solid var(--border); text-align:center; vertical-align:middle;}
+  tr:nth-child(even) td{ background:var(--bg-light);}
+  td.l{ text-align:left; }
+  table.small{ font-size:18px; }
+  table.small td, table.small th{ padding:6px 10px; }
+
+  /* 组件 */
+  .card{ background:var(--accent-light); border:1px solid var(--accent-border); border-radius:12px; padding:12px 20px; margin:10px 0;}
+  .tip{ background:#ebf8ff; border-left:5px solid var(--accent); border-radius:0 10px 10px 0; padding:10px 20px; margin:10px 0; font-size:20px; color:#2c5282;}
+  .deep{ background:#f0fff4; border-left:5px solid var(--success); border-radius:0 10px 10px 0; padding:10px 20px; margin:10px 0; font-size:20px; color:#22543d;}
+  .warn{ background:var(--warn-bg); border-left:5px solid var(--warning); border-radius:0 10px 10px 0; padding:10px 20px; margin:10px 0; font-size:20px; color:#744210;}
+  .trap{ background:#fef2f2; border-left:5px solid var(--danger); border-radius:0 10px 10px 0; padding:10px 20px; margin:10px 0; font-size:20px; color:#7f1d1d;}
+
+  .pause{
+    background:var(--warn-bg); border:2px dashed var(--warning); border-radius:14px;
+    padding:10px 22px; margin:10px 0; display:flex; align-items:center; gap:16px;
+  }
+  .pause .icon{ font-size:36px; line-height:1; }
+  .pause .txt b{ color:var(--warning); font-size:21px; }
+  .pause .txt p{ font-size:18px; color:#744210; margin:3px 0 0; }
+
+  .cols{ display:flex; gap:28px; align-items:stretch; }
+  .col{ flex:1; min-width:0; }
+
+  /* 推导分步：仅互动模式隐藏，截图(autohide)模式全部可见——此规则不可删 */
+  .step{ opacity:0; transform:translateY(8px); transition:opacity .3s ease, transform .3s ease; }
+  .step.on{ opacity:1; transform:none; }
+  body.autohide .step{ opacity:1 !important; transform:none !important; }
+  .step-hint{ font-size:14px; color:var(--muted); margin-top:4px;}
+  body.autohide .step-hint{ display:none; }
+
+  /* 因果链 */
+  .chain{ margin:6px 0; }
+  .chain .link{ display:flex; align-items:center; gap:14px; margin:6px 0;}
+  .chain .no{ width:34px; height:34px; border-radius:50%; background:var(--accent); color:#fff; font-size:18px; font-weight:700; display:flex; align-items:center; justify-content:center; flex-shrink:0;}
+  .chain .txt{ font-size:21px; line-height:1.5;}
+  .chain .txt strong{ color:var(--primary); }
+
+  /* mermaid 容器：高度封顶，防止溢出 720px 舞台 */
+  .mmd{ background:var(--bg-light); border:1px solid var(--border); border-radius:12px; padding:10px 14px; display:flex; justify-content:center; align-items:center; margin:8px 0;}
+  .mmd .mermaid{ display:flex; justify-content:center; width:100%; visibility:hidden; }
+  .mmd .mermaid[data-done]{ visibility:visible; }
+  .mmd .mermaid svg{ max-width:100%; height:auto; max-height:230px; }
+  .mmd.mmd-tall .mermaid svg{ max-height:330px; }
+  .mmd.mmd-sm svg{ max-height:150px; }
+  .mmd-row{ display:flex; gap:18px; }
+  .mmd-row .mmd{ flex:1; flex-direction:column; }
+  .mmd .cap{ font-size:17px; color:var(--muted); margin-top:6px; text-align:center;}
+  .mmd .cap b{ color:var(--text); }
+
+  #footer{ position:absolute; bottom:0; left:0; right:0; height:40px; display:flex; align-items:center; justify-content:space-between; padding:0 30px; font-size:15px; color:#94a3b8; background:rgba(247,250,252,.85); border-top:1px solid var(--border); z-index:40;}
+  #footer .brand{ font-weight:600; color:var(--accent); }
+
+  .nav{ position:absolute; bottom:48px; right:40px; display:flex; gap:12px; z-index:45;}
+  .nav button{ width:54px; height:54px; border-radius:50%; border:none; background:var(--accent); color:#fff; font-size:24px; cursor:pointer; box-shadow:0 3px 10px rgba(43,108,176,.4); display:flex; align-items:center; justify-content:center;}
+  .nav button:hover{ background:var(--primary); }
+  .nav button:disabled{ background:#cbd5d0; cursor:default; box-shadow:none;}
+
+  #hint{ position:absolute; bottom:48px; left:40px; font-size:14px; color:#94a3b8; z-index:45;}
+
+  body.autohide #progress, body.autohide #footer, body.autohide .nav, body.autohide #hint{ display:none !important; }
+</style>
+</head>
+<body>
+<div id="stage">
+
+  <div id="progress"></div>
+
+  <!-- ★ 1 封面 -->
+  <section class="slide slide-cover active" data-narration="大家好，欢迎来到最优传输互动讲义第4章。上一章我们把离散最优传输写成了线性规划，还全程手算了一遍运输单纯形，理论上很完美。可结尾算了笔账：复杂度大约 n 立方，n 一上万就彻底跑不动，而且解卡在顶点上，本质是组合搜索，显卡帮不上忙。这一章换一种活法：不改约束，改目标——加一项熵，把组合难题烫平成光滑的凸问题，于是求解只剩交替做行归一化和列归一化，这就是 Sinkhorn 算法。本章要回答：最优传输怎么算得快，快到能嵌进机器学习流水线？学完你要能推出解的核结构、手算两轮迭代，并报出那笔偏差账。">
+    <div class="kicker">最优传输 · 第 4 章 · 离散与算法</div>
+    <h1>熵正则与 Sinkhorn 算法</h1>
+    <div class="sub">Entropic Regularization and Sinkhorn —— 加一项熵，LP 变成矩阵缩放</div>
+    <div class="question">本章要回答：OT 怎么算得快，快到能进机器学习流水线？</div>
+    <div class="meta">
+      配套讲义：《最优传输互动讲义》第4章 · 基于 Peyré &amp; Cuturi (2019)<br>
+      ← → 或空格翻页 · 推导页逐步显示
+    </div>
+  </section>
+
+  <!-- ★ 2 全书位置 -->
+  <section class="slide" data-narration="先定位。全书分四段：第一段问题与几何，第1、2章，把搬土方写成严格数学；第二段离散与算法，第3、4章，回答有限点集上怎么算；第三段连续与扩展，第5、6章；第四段应用与前沿，第7、8章。本章是第二段的第2章。第3章给了我们什么？离散最优传输就是一个线性规划，运输单纯形能精确求解，但复杂度 n 立方，n 上万就撞墙。本章解决什么？加一项熵正则，把线性规划变成矩阵缩放，Sinkhorn 交替做行列归一，每轮全是矩阵乘法。往第5章交什么？一个能进流水线的数值引擎，外加一句预告：最优值本身是一把尺子，对偶会把它变成真正的距离。">
+    <div class="slide-head"><span class="sec">定位</span><h3>本章是第②段第 2 章：把「算得出的 OT」变成「算得快的 OT」</h3></div>
+    <div class="slide-body">
+      <div class="mmd-row">
+        <div class="mmd">
+          <div class="mermaid">
+flowchart TB
+  G1["第①段 问题与几何<br>Ch1–2"] --> G2["第②段 离散与算法<br>Ch3–4 · 本章"]:::here
+  G2 --> G3["第③段 连续与扩展<br>Ch5–6"]
+  G3 --> G4["第④段 应用与前沿<br>Ch7–8"]
+  classDef here fill:#2b6cb0,color:#ffffff,stroke:#1a365d,stroke-width:3px
+          </div>
+          <div class="cap"><b>四段结构</b>：本章在第②段收官位</div>
+        </div>
+        <div class="mmd">
+          <div class="mermaid">
+flowchart TB
+  A["Ch3 离散 OT 与线性规划<br>给了：OT 是 LP，但 n³ 撞墙"] --> B["Ch4 熵正则与 Sinkhorn<br>本章：LP 变成矩阵缩放"]:::here
+  B --> C["Ch5 对偶与 Wasserstein<br>交出：最优值本身是一把尺子"]
+  classDef here fill:#2b6cb0,color:#ffffff,stroke:#1a365d,stroke-width:3px
+          </div>
+          <div class="cap"><b>相邻章接口</b>：接复杂度账，交数值引擎</div>
+        </div>
+      </div>
+      <p style="text-align:center;">第3章给了<strong>「OT 是 LP，但 n³ 跑不动」</strong> → 本章用<strong>熵正则 + Sinkhorn 交替行列归一</strong>破局 → 第5章接过<strong>「最优值本身是真距离」</strong>这条线</p>
+    </div>
+  </section>
+
+  <!-- ★ 3 本章主线 -->
+  <section class="slide" data-narration="本章主线是一条五环因果链。第一环，旧账：第3章的精确线性规划复杂度约 n 立方，n 到十万就没戏，而且最优解卡在多面体顶点上，挑顶点本质是组合搜索。第二环，出路：不改约束，改目标，给运输成本减去 epsilon 倍的熵，奖励摊得开的耦合，组合问题被烫平成严格凸问题。第三环，结构：对拉格朗日函数求导置零，一行 KKT 推出解一定是左对角阵乘核再乘右对角阵，未知数从 n 平方塌缩成 2n。第四环，算法：Sinkhorn 迭代，交替把行和纠回 a、列和纠回 b，每轮两次矩阵向量乘，n 平方一轮，显卡友好。第五环，账单：快不是免费的，解自带熵偏差，epsilon 是快与准的旋钮。下面逐环拆开。">
+    <div class="slide-head"><span class="sec">主线</span><h3>加熵烫平组合难题，矩阵缩放换来速度，偏差是账单</h3></div>
+    <div class="slide-body">
+      <div class="chain">
+        <div class="link"><span class="no">1</span><span class="txt"><strong>旧账</strong>：精确 LP 约 O(n³)，解卡顶点 = 组合搜索，n 上万撞墙</span></div>
+        <div class="link"><span class="no">2</span><span class="txt"><strong>出路</strong>：不改约束改目标——加熵正则（Entropic Regularization），烫平成严格凸</span></div>
+        <div class="link"><span class="no">3</span><span class="txt"><strong>结构</strong>：一行 KKT 推出 P = diag(u)Kdiag(v)，n² 个未知数塌缩成 2n 个</span></div>
+        <div class="link"><span class="no">4</span><span class="txt"><strong>算法</strong>：Sinkhorn 交替行列归一，每轮 O(n²) 且全是矩阵乘法，GPU 友好</span></div>
+        <div class="link"><span class="no">5</span><span class="txt"><strong>账单</strong>：熵偏差 + 小 ε 的数值下溢——ε 是快与准的旋钮</span></div>
+      </div>
+      <div class="tip">这条链就是本章的目录：4.1 为什么加熵 → 4.2 核结构与迭代 → 4.3 手算两轮 → 4.4 ε 的权衡。</div>
+    </div>
+  </section>
+
+  <!-- 4 动机 -->
+  <section class="slide" data-narration="先看这堵墙有多高。代入数字：n 取十的五次方，n 立方就是十的十五次方次运算，按每秒十亿次算也要十来天，这还没算 n 平方个变量、八十 GB 量级的成本矩阵存储。更要命的是病根：线性规划的最优解一定卡在可行域顶点上，找顶点就是组合搜索——选哪 n 加 m 减一个格子非零，这类问题天生抗拒并行化。两条直觉的出路都不好走：网络单纯形精确，但每一步都是顺序的枢轴操作，分支满天飞，显卡使不上劲；直接堆更多算力，复杂度本身没变，墙还是那堵墙。本章的方案一句话：不改约束，改目标，加一项熵把组合结构烫平——这就是 Cuturi 2013 年的破局思路。">
+    <div class="slide-head"><span class="sec">动机</span><h3>LP 的病根不只是 n³：顶点搜索天生抗拒并行</h3></div>
+    <div class="slide-body">
+      <p>n = 10⁵（一张 300×300 图像的像素数）时，第3章精确路线的账单：</p>
+      <div class="formula">$$O(n^3) \sim 10^{15}\ \text{次运算} \;\approx\; \text{每秒十亿次也要十来天}, \qquad \text{存储 } n^2 \sim 80\,\text{GB}$$</div>
+      <div class="cols">
+        <div class="col"><div class="card">😇 <strong>网络单纯形（第3章）</strong><br>精确、稀疏，但每步是顺序枢轴操作，分支满天飞——GPU 使不上劲。</div></div>
+        <div class="col"><div class="card">🙂 <strong>直接堆算力</strong><br>复杂度没变，墙还是那堵墙；顶点搜索本质是选哪 n+m−1 个格子非零的组合问题。</div></div>
+      </div>
+      <div class="tip">💡 Cuturi (2013) 的破局思路：不改约束，改目标——加一项熵，把组合难题烫平成光滑凸问题。</div>
+    </div>
+  </section>
+
+  <!-- ★ 5 核心定义 -->
+  <section class="slide" data-narration="现在正式给出本章核心定义。不变的部件：可行域还是 U a b，所有行和等于 a、列和等于 b 的非负耦合矩阵，一条约束都没动。改的是目标：在运输成本后面减去 epsilon 倍的熵。熵 H 度量耦合摊得多开——质量挤在少数格子上熵就小，均匀摊开熵就大；减去它等于奖励雨露均沾。epsilon 叫正则参数，英文 Regularization Parameter，是本章唯一的旋钮。整个式子读作：在所有合法耦合里，找运输成本减去 epsilon 倍熵最小的那个。先把丑话说前头：这不是原问题的近似算法，它是一个新的问题——这句话后面要反复考。">
+    <div class="slide-head"><span class="sec">定义</span><h3>熵正则问题 = 原约束不动 ＋ 目标减去 ε 倍的熵</h3></div>
+    <div class="slide-body">
+      <div class="cols">
+        <div class="col"><div class="card">🗺️ <strong>可行域 U(a, b)：不动</strong><br>行和为 a、列和为 b 的非负耦合多面体，一条约束都没改。</div></div>
+        <div class="col"><div class="card">📋 <strong>目标：减去 εH(P)</strong><br>熵奖励分散的耦合；ε &gt; 0 是正则参数（Regularization Parameter），本章唯一旋钮。</div></div>
+      </div>
+      <div class="formula formula-concl">$$\min_{P \in U(a,b)}\ \langle C,P\rangle - \varepsilon H(P), \qquad H(P) = -\sum_{ij} P_{ij}\big(\log P_{ij} - 1\big)$$</div>
+      <div class="deep">读法：在所有合法耦合里，找「运输成本 − ε × 分散程度」最小的那个。注意：它解的是<strong>另一个问题</strong>，不是原 LP 的近似算法。</div>
+    </div>
+  </section>
+
+  <!-- 6 加熵换来的三个性质 + 温度类比 -->
+  <section class="slide" data-narration="加这一项熵，立刻换来三个性质。第一，严格凸：熵是严格凹函数，线性项加严格凹项得严格凸目标，最优解唯一，不再有一堆等价最优顶点。第二，可微：最优值和最优解都光滑地依赖输入 a、b、C，这意味着最优传输可以嵌进神经网络做反向传播——这是它进机器学习流水线的门票。第三，结构显式：下一页会看到，解有闭式骨架，只剩两个向量要解。再给一个物理图像：成本是能量，熵是混乱度，epsilon 是温度。温度为零，系统冻结在能量最低的构型；升温后按玻尔兹曼分布摊开；温度无穷大，彻底无视成本均匀混合。后面登场的核，正是这个玻尔兹曼权重，不是巧合，是同一个变分原理。">
+    <div class="slide-head"><span class="sec">红利</span><h3>一项熵换三个性质：唯一、可微、有结构</h3></div>
+    <div class="slide-body">
+      <div class="chain">
+        <div class="link"><span class="no">1</span><span class="txt"><strong>严格凸 ⇒ 解唯一</strong>：熵严格凹，线性＋严格凹 = 严格凸，不再有「一堆等价最优顶点」</span></div>
+        <div class="link"><span class="no">2</span><span class="txt"><strong>对输入可微</strong>：最优值与最优解光滑依赖 (a, b, C) ⇒ 可嵌进神经网络反向传播——进 ML 流水线的门票</span></div>
+        <div class="link"><span class="no">3</span><span class="txt"><strong>结构显式</strong>：解有闭式骨架 P = diag(u)Kdiag(v)，只剩两个向量要解（下一页推导）</span></div>
+      </div>
+      <div class="deep">物理图像：⟨C,P⟩ 是能量，H(P) 是熵，ε 是温度。ε=0 冻结在能量最低构型（LP 顶点）；升温按玻尔兹曼分布摊开；ε→∞ 无视成本均匀混合。后面的核 K 正是 Boltzmann 权重。</div>
+    </div>
+  </section>
+
+  <!-- 7 两个极限 -->
+  <section class="slide" data-narration="两个极限行为是全章的罗盘，先背下来。epsilon 趋于零：正则项消失，问题退回原来的线性规划，解趋向真实最优传输的耦合；如果最优解不唯一，取其中熵最大的那个。epsilon 趋于无穷：成本项被彻底淹没，问题变成在边际约束下纯最大化熵，解趋向独立耦合 a b 转置——每个格子的质量就是两个边际的乘积，跟成本毫无关系。所以 epsilon 从大到小，解从糊到底的独立耦合一路锐化到真实的稀疏最优耦合。调 epsilon 就是在「糊但快」与「准但慢」之间选位置。记住这两个端点，后面所有现象都夹在它们中间。下一页做全章最重要的推导。">
+    <div class="slide-head"><span class="sec">罗盘</span><h3>两个极限端点：ε→0 回真 OT，ε→∞ 退化成独立耦合</h3></div>
+    <div class="slide-body">
+      <table>
+        <thead><tr><th>极限</th><th>解的行为</th><th>读法</th></tr></thead>
+        <tbody>
+          <tr><td class="l"><strong>ε → 0（低温）</strong></td><td class="l">解 → 真实 OT 的最优耦合（多解时取熵最大者）</td><td class="l">正则项消失，回到原 LP</td></tr>
+          <tr><td class="l"><strong>ε → ∞（高温）</strong></td><td class="l">解 → 独立耦合 abᵀ</td><td class="l">成本被淹没，只剩「尽量分散」的纯熵项</td></tr>
+        </tbody>
+      </table>
+      <div class="formula">$$P_{\varepsilon} \xrightarrow{\varepsilon \to 0} P^{\star}\ (\text{真 OT}), \qquad P_{\varepsilon} \xrightarrow{\varepsilon \to \infty} ab^{\top}$$</div>
+      <div class="warn">⚠️ ε 从大到小，解从「糊到底的独立耦合」一路锐化到「真实的稀疏最优耦合」——调 ε 就是在糊但快与准但慢之间选位置。</div>
+    </div>
+  </section>
+
+  <!-- ★ 8 推导：KKT 一行出结构 -->
+  <section class="slide" data-narration="重头戏：一行 KKT 推出解的结构。第一步，写拉格朗日函数：目标加上两组边际约束，乘子 f 和 g，它们就是第3章对偶势的化身。第二步，对单个 P i j 求导置零；熵项求导贡献 epsilon 乘 log P i j，于是得到：成本加 epsilon 乘对数 P，减 f i 减 g j，等于零。第三步，把对数 P 解出来再取指数：P i j 等于三个因子的乘积——e 的 f i 除以 epsilon 次方，e 的负成本除以 epsilon 次方，e 的 g j 除以 epsilon 次方。中间那个因子只依赖成本，定义为 Gibbs 核 K；两边两个分别记作 u i 和 v j。结论现身：P 等于 diag u 乘 K 乘 diag v，n 平方个未知数塌缩成 2n 个。为什么不用二阶条件？目标严格凸，KKT 不仅必要而且充分。">
+    <div class="slide-head"><span class="sec">推导</span><h3>对 P 求导置零，解自动裂成「行缩放 × 核 × 列缩放」</h3></div>
+    <div class="slide-body">
+      <div class="step">
+        <p><strong>① 写拉格朗日</strong>（乘子 f、g 就是第2、3章对偶势的化身）</p>
+        <div class="formula">$$\mathcal{L} = \langle C,P\rangle - \varepsilon H(P) + \langle f,\, a - P\mathbb{1}\rangle + \langle g,\, b - P^{\top}\mathbb{1}\rangle$$</div>
+      </div>
+      <div class="step">
+        <p><strong>② 对 P<sub>ij</sub> 求导置零</strong>（熵项贡献 ε log P<sub>ij</sub>）</p>
+        <div class="formula">$$\frac{\partial \mathcal{L}}{\partial P_{ij}} = C_{ij} + \varepsilon \log P_{ij} - f_i - g_j = 0 \;\Rightarrow\; P_{ij} = e^{f_i/\varepsilon} \cdot e^{-C_{ij}/\varepsilon} \cdot e^{g_j/\varepsilon}$$</div>
+      </div>
+      <div class="step">
+        <div class="formula formula-concl">$$\boldsymbol{P = \mathrm{diag}(u)\,K\,\mathrm{diag}(v)}, \qquad K_{ij} = e^{-C_{ij}/\varepsilon},\;\; u_i = e^{f_i/\varepsilon},\;\; v_j = e^{g_j/\varepsilon}$$</div>
+      </div>
+      <p class="step-hint">按空格 / → 逐步展开推导</p>
+      <div class="deep">未知量从 n² 个 P<sub>ij</sub> 塌缩成 2n 个 (u, v)；目标严格凸 ⇒ KKT 不仅必要而且充分，无需二阶条件。</div>
+    </div>
+  </section>
+
+  <!-- 9 Sinkhorn 迭代 -->
+  <section class="slide" data-narration="结构有了，还差边际。把解的形式代回两条约束：diag u 乘 K 乘 v 等于 a，diag v 乘 K 转置乘 u 等于 b。没有闭式解，但有个天然的不动点迭代：固定 v 解 u，u 更新为 a 逐元素除以 K v；固定 u 解 v，v 更新为 b 逐元素除以 K 转置 u。读法很直白：K v 是当前 v 之下每行实际运出的量，u 负责把它纠回 a；列那边同理。所以 Sinkhorn 就是交替做行归一化和列归一化，直到两条边际同时吻合。每轮只有两次矩阵向量乘加两次逐元素除法，n 平方一轮，没有分支没有枢轴，是显卡上教科书级的并行核。Sinkhorn 定理打包票：只要核全正，而 epsilon 大于零时它恒正，迭代必收敛到唯一解。">
+    <div class="slide-head"><span class="sec">算法</span><h3>Sinkhorn 迭代 = 交替行归一化与列归一化</h3></div>
+    <div class="slide-body">
+      <p>把 P = diag(u)Kdiag(v) 代回两条边际约束，再交替固定一个解另一个：</p>
+      <div class="formula">$$\mathrm{diag}(u)Kv = a, \qquad \mathrm{diag}(v)K^{\top}u = b$$</div>
+      <div class="formula formula-concl">$$\boldsymbol{u \leftarrow a\,./\,(Kv), \qquad v \leftarrow b\,./\,(K^{\top}u)}$$</div>
+      <div class="deep">读法：Kv 是当前 v 下每行实际运出的量，u 把它纠回 a；列同理。每轮 = 两次矩阵-向量乘 + 两次逐元素除法，O(n²)/轮、无分支无枢轴——GPU 教科书级并行。K 全正（ε &gt; 0 恒成立）⇒ Sinkhorn 定理保证收敛到唯一解。</div>
+    </div>
+  </section>
+
+  <!-- ★ 10 手算两轮（互动停顿页） -->
+  <section class="slide" data-narration="光说不练假把式，来个能全部算完的三乘三例子。成本矩阵是错开的零一结构，两个边际都是均匀的三分之一，epsilon 取一。第零步造核：成本为零的格子核值是一，成本为一的格子是 e 的负一次方，约零点三六八。好，轮到你了：先算核的行和，再推出第一轮的 u 一、第二轮的 v 一。先暂停视频自己推一遍。推出来了吗？好，对答案。每行行和都是零点三六八加一加零点三六八，等于一点七三六；u 一等于三分之一除以一点七三六，约零点一九二。再看列：核对称，K 转置乘 u 一就是零点一九二乘一点七三六，约三分之一，所以 v 一恰好全是一。对称性让两轮直接收敛，最终 u 全是零点一九二，v 全是一。">
+    <div class="slide-head"><span class="sec">演练</span><h3>3×3 对称例：两轮收敛，u¹ ≈ 0.1920，v¹ = 1</h3></div>
+    <div class="slide-body">
+      <p>设定：C = [[1,0,1],[0,1,1],[1,1,0]]（对角错开的 0/1 结构），a = b = (1/3, 1/3, 1/3)，ε = 1。</p>
+      <div class="step">
+        <p><strong>① 造核</strong>：K = e^(−C)，C=0 处为 1，C=1 处为 e⁻¹ ≈ 0.368</p>
+        <table class="small">
+          <thead><tr><th>K</th><th>列1</th><th>列2</th><th>列3</th></tr></thead>
+          <tbody>
+            <tr><td><strong>行1</strong></td><td>0.368</td><td>1</td><td>0.368</td></tr>
+            <tr><td><strong>行2</strong></td><td>1</td><td>0.368</td><td>0.368</td></tr>
+            <tr><td><strong>行3</strong></td><td>0.368</td><td>0.368</td><td>1</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="step"><p><strong>② 第1轮 · 更新 u</strong>：v⁰ = (1,1,1)，Kv⁰ = 行和 = 0.368+1+0.368 = (1.736, 1.736, 1.736) ⇒ u¹ = a./(Kv⁰) = (1/3)/1.736 ≈ <strong>(0.1920, 0.1920, 0.1920)</strong></p></div>
+      <div class="step"><p><strong>③ 第2轮 · 更新 v</strong>：K 对称，Kᵀu¹ = 0.1920 × 1.736 ≈ (0.3333, 0.3333, 0.3333) ⇒ v¹ = b./(Kᵀu¹) = <strong>(1.0, 1.0, 1.0)</strong>——对称性两轮即收敛</p></div>
+      <div class="pause"><div class="icon">✍️</div><div class="txt"><b>暂停推导</b><p>自己动手：在纸上写出 K 的九个格子，算行和 1.736，再推出 u¹ 与 v¹——三个数全对上再往下看。</p></div></div>
+      <p class="step-hint">按空格 / → 逐步揭示答案</p>
+    </div>
+  </section>
+
+  <!-- 11 对账：熵偏差 0.424 -->
+  <section class="slide" data-narration="把答案组装起来对账。最终耦合 P 等于零点一九二乘核：成本为零的三个格子各拿零点一九二，成本为一的六个格子各拿零点零七零七，行和列和都是三分之一，全部打勾。注意结构：核把贵的格子压小了，但没压成零。现在和真实最优传输对账：这个例子的精确解一目了然——全部质量走零成本格子，派一二、派二一、派三三各三分之一，代价是零。而熵正则解的运输成本是六乘零点零七零七，约零点四二四。这个差就叫熵偏差，英文 Entropic Bias：epsilon 等于一的温度，把四成多的质量烘到了贵格子上。再看熵本身：这个解的熵约二点零七，离理论最大值 log 9 的二点一九七已经很近——熵项确实在强行摊平解。这就是速度的账单。">
+    <div class="slide-head"><span class="sec">对账</span><h3>真实 OT = 0，熵正则 = 0.424——差值就是速度的账单</h3></div>
+    <div class="slide-body">
+      <table class="small">
+        <thead><tr><th>P = 0.1920·K</th><th>列1</th><th>列2</th><th>列3</th><th>行和</th></tr></thead>
+        <tbody>
+          <tr><td><strong>行1</strong></td><td>0.0707</td><td><strong>0.1920</strong></td><td>0.0707</td><td>0.333 ✓</td></tr>
+          <tr><td><strong>行2</strong></td><td><strong>0.1920</strong></td><td>0.0707</td><td>0.0707</td><td>0.333 ✓</td></tr>
+          <tr><td><strong>行3</strong></td><td>0.0707</td><td>0.0707</td><td><strong>0.1920</strong></td><td>0.333 ✓</td></tr>
+        </tbody>
+      </table>
+      <div class="formula formula-concl">$$\text{真实 OT} = 0\ (\pi_{12}=\pi_{21}=\pi_{33}=\tfrac13) \qquad vs \qquad \langle C, P\rangle = 6 \times 0.0707 \approx \boldsymbol{0.424}$$</div>
+      <div class="warn">这 0.424 就是<strong>熵偏差（Entropic Bias）</strong>：ε=1 的「温度」把 43% 的质量烘到了贵格子上。核把贵格子压小，但不压成零。解的熵 ≈ 2.07，已逼近理论最大 log 9 ≈ 2.197。</div>
+    </div>
+  </section>
+
+  <!-- 12 关键认知：解的是另一个问题 -->
+  <section class="slide" data-narration="这一页钉死一个认知：加熵不是逼近同一答案的数值技巧，它解的是另一个问题。看两种算法的指纹就清楚。第3章线性规划的最优解稀疏，非零元最多 2n 减一个，卡在多面体顶点上，走边边角角；熵正则的核全正，解必然全正、稠密，雨露均沾。而且 epsilon 大于零时，熵正则的运输成本严格大于真实最优值——刚才零点四二四对零就是铁证。所以报数时必须交代：这是 epsilon 等于多少的答案，偏差多大。实务上想要稀疏解，可以后处理，取每行最大或设阈值；想要光滑可微，就接受稠密。两种算法两种性格，按需求选，别混着用。下一页看那个旋钮往哪边拧。">
+    <div class="slide-head"><span class="sec">认知</span><h3>加熵不是数值技巧——它解的是另一个问题</h3></div>
+    <div class="slide-body">
+      <div class="cols">
+        <div class="col"><div class="card">🌵 <strong>LP 精确解（第3章）</strong><br>稀疏：非零元 ≤ 2n−1，卡在多面体顶点上，走边边角角；偏差为零但不可微。</div></div>
+        <div class="col"><div class="card">🌧️ <strong>熵正则解（本章）</strong><br>稠密：K 全正 ⇒ P 全正，雨露均沾；光滑可微但 ε &gt; 0 时 ⟨C,P⟩ 严格大于真 OT。</div></div>
+      </div>
+      <div class="warn">⚠️ ε &gt; 0 时 ⟨C, P<sub>ε</sub>⟩ &gt; 真实 OT 恒成立——0.424 vs 0 就是铁证。报数时必须同时交代 ε 与偏差。</div>
+      <div class="deep">要稀疏解就后处理（取每行最大 / 阈值化）；要光滑可微就接受稠密。两种算法两种指纹，按需求选，别混着用。</div>
+    </div>
+  </section>
+
+  <!-- 13 ε 的权衡 -->
+  <section class="slide" data-narration="epsilon 同时控制三件事，而且方向相反，这页把账摊开。第一，解的形态：epsilon 大，解糊，趋向独立耦合，贵格子分到大量质量；epsilon 小，解锐，逼近真实最优传输的稀疏解。第二，熵偏差：大 epsilon 偏差大，零点四二四就是 epsilon 等于一的账；小 epsilon 偏差小，趋于零时消失。第三，收敛速度：大 epsilon 几轮到位；小 epsilon 时线性收敛的速率因子趋向一，轮数爆炸——刚才两轮收敛是 epsilon 等于一且高度对称的奢侈，不能外推。第四，数值稳定：大 epsilon 安全；小 epsilon 时 e 的负成本除以 epsilon 会下溢成零。快与准是拔河，epsilon 就是绳子的中点。下一页单独说最要命的第四条。">
+    <div class="slide-head"><span class="sec">权衡</span><h3>ε 是唯一旋钮：偏差、速度、稳定性三件事方向相反</h3></div>
+    <div class="slide-body">
+      <table>
+        <thead><tr><th></th><th>ε 大（高温）</th><th>ε 小（低温）</th></tr></thead>
+        <tbody>
+          <tr><td class="l"><strong>解的形态</strong></td><td class="l">糊：趋近 abᵀ，贵格子分到大量质量</td><td class="l">锐：逼近真实 OT 的稀疏解</td></tr>
+          <tr><td class="l"><strong>熵偏差</strong></td><td class="l">大（3×3 例 ε=1 时 0.424）</td><td class="l">小，ε→0 时消失</td></tr>
+          <tr><td class="l"><strong>收敛速度</strong></td><td class="l">快（几轮到位）</td><td class="l">慢：线性收敛速率因子 → 1，轮数爆炸</td></tr>
+          <tr><td class="l"><strong>数值稳定</strong></td><td class="l">安全</td><td class="l">危险：e^(−C/ε) 下溢成 0</td></tr>
+        </tbody>
+      </table>
+      <div class="warn">⚠️ 别外推：3×3 例两轮收敛是 ε=1 且高度对称的奢侈。快与准是拔河，ε 是绳子的中点。</div>
+    </div>
+  </section>
+
+  <!-- 14 数值暗礁 + log-domain -->
+  <section class="slide" data-narration="第四条是暗礁，单独拆。epsilon 取零点零一、成本取十，指数就是负一千，e 的负一千次方在双精度下直接是零。核变成稀疏零矩阵，行归一化时 a 除以 K v 就是除以零，第一轮炸出 NaN。所以把 epsilon 调小逼近真解，在朴素实现里根本走不通。解法是对数域稳定化，英文 Log-domain Stabilization：不碰 u、v 本身，直接在对偶变量 f 等于 epsilon 乘 log u、g 等于 epsilon 乘 log v 上迭代，所有矩阵向量乘换成 log-sum-exp，先减最大值再求和，任意小的 epsilon 都稳。代价是 log 和指数比乘法贵，实现也更绕。工程折中是 epsilon 折减：先用大 epsilon 快速收敛到粗解，再逐步降温微调。判停用边际违反度：当前行和列和与目标的偏差小于阈值就停。">
+    <div class="slide-head"><span class="sec">暗礁</span><h3>小 ε 下 e^(−C/ε) 下溢成 0，归一化当场除零</h3></div>
+    <div class="slide-body">
+      <p>ε = 0.01、C<sub>ij</sub> = 10 时：e^(−1000) 在双精度下<strong>就是 0</strong> → K 变零矩阵 → a./(Kv) 除零 → 第一轮炸出 NaN。</p>
+      <div class="formula">$$\text{对数域稳定化：}\quad f \leftarrow \varepsilon\Big(\log a - \mathrm{LSE}_j\tfrac{g_j - C_{ij}}{\varepsilon}\Big), \qquad g \leftarrow \varepsilon\Big(\log b - \mathrm{LSE}_i\tfrac{f_i - C_{ij}}{\varepsilon}\Big)$$</div>
+      <ul>
+        <li><strong>对数域稳定化（Log-domain Stabilization）</strong>：不碰 u、v，在对偶 f = ε log u、g = ε log v 上迭代；log-sum-exp 先减最大值再求和，任意小的 ε 都稳。代价：log/exp 比乘法贵。</li>
+        <li><strong>ε 折减（ε-annealing）</strong>：工程折中——大 ε 快速收敛到粗解，再逐步降温微调。</li>
+        <li><strong>判停</strong>：监控边际违反度（Marginal Violation）‖diag(u)Kv − a‖₁ + ‖diag(v)Kᵀu − b‖₁，小于阈值即停。</li>
+      </ul>
+    </div>
+  </section>
+
+  <!-- 15 工程决策 -->
+  <section class="slide" data-narration="第3、4章合起来是一个完整的工程决策，这页给选型口诀。要精确、规模几千以内：用网络单纯形，答案是顶点、稀疏、零偏差。要规模、要可微、要上显卡、能容忍 epsilon 级偏差：用 Sinkhorn，小 epsilon 配 log-domain，或者 epsilon 折减。没有银弹，只有旋钮。给个量级感：n 等于五千时，核矩阵双精度约两百兆，单张显卡放得下；同样规模走 n 立方的线性规划路线早就投降了。所以机器学习流水线里，Sinkhorn 是默认引擎；而需要精确解证的场合，精确算法仍有一席之地。两章不是替代关系，是工具箱里的两把扳手。下一页扫雷。">
+    <div class="slide-head"><span class="sec">决策</span><h3>第3、4章合起来 = 完整选型：没有银弹，只有旋钮</h3></div>
+    <div class="slide-body">
+      <div class="cols">
+        <div class="col"><div class="card">🎯 <strong>要精确、n ≲ 10³</strong><br>用网络单纯形：顶点解、稀疏、零偏差——精确解证场合的扳手。</div></div>
+        <div class="col"><div class="card">🚀 <strong>要规模、可微、GPU、容忍 ε 级偏差</strong><br>用 Sinkhorn：小 ε 配 log-domain 或 ε 折减——ML 流水线的默认引擎。</div></div>
+      </div>
+      <div class="formula">$$n = 5000:\quad K\ \text{约}\ 200\,\text{MB（float64，单 GPU 放得下）}, \qquad O(n^3)\ \text{LP 路线早已投降}$$</div>
+      <div class="deep">两章不是替代关系，是工具箱里的两把扳手：按「精度要求 × 规模 × 是否要梯度」选。</div>
+    </div>
+  </section>
+
+  <!-- ★ 16 误区页 -->
+  <section class="slide" data-narration="扫三颗雷。第一颗：以为加熵只是数值技巧，逼近同一个答案。错。它解的是另一个问题，epsilon 大于零时熵正则代价严格大于真实最优值，零点四二四就是账单。记法：速度换偏差，没有免费午餐。第二颗：以为 epsilon 越小越好。错。小了收敛变慢，速率因子趋向一；更危险的是核下溢成零矩阵，归一化当场除零。记法：火小准但慢，还可能糊锅，要 log-domain 护航。第三颗：拿熵正则代价直接当 Wasserstein 距离用。错。两个分布相同时它都不是零——刚才的例子 a 等于 b，值却是零点四二四，连距离的第一条公理都不满足。修法是 Sinkhorn 散度，减掉两个自传输项，第6章展开。">
+    <div class="slide-head"><span class="sec">避坑</span><h3>三颗雷：当成免费技巧 / ε 越小越好 / 拿它直接当距离</h3></div>
+    <div class="slide-body">
+      <div class="trap">❌ <strong>加熵只是数值技巧，逼近同一个答案</strong><br>✅ 它解的是另一个问题：ε &gt; 0 时 ⟨C,P<sub>ε</sub>⟩ 严格大于真 OT，0.424 就是账单。记法：速度换偏差，没有免费午餐。</div>
+      <div class="trap">❌ <strong>ε 越小越好</strong><br>✅ 小了收敛变慢（速率因子 → 1），且 K 下溢成零矩阵、归一化除零。记法：火小准但慢，还可能糊锅——要 log-domain 护航。</div>
+      <div class="trap">❌ <strong>拿 ⟨C, P<sub>ε</sub>⟩ 直接当 Wasserstein 距离用</strong><br>✅ a = b 时值也是 0.424 ≠ 0，连「同一分布距离为零」都不满足。修法：Sinkhorn 散度减两个自传输项（第6章展开）。</div>
+    </div>
+  </section>
+
+  <!-- 17 接口页 -->
+  <section class="slide" data-narration="接口页，把相邻两章的分工说清楚。第3章给精确：线性规划、网络单纯形、顶点解、稀疏、零偏差，代价是 n 立方、顺序执行、不可微。本章给速度：熵正则、Sinkhorn、稠密解、可微、显卡友好，代价是熵偏差和数值暗礁。注意表里对偶那一行：Sinkhorn 的 u、v 不是新东西，就是第3章对偶势的指数化，同一对不动点方程，一个用组合枢轴解，一个用乘性更新解——对偶这条线从第2章一路贯穿到本章。钩子来了：到现在为止我们都在算耦合矩阵，可第1章说过，真正想要的是分布之间的距离。下一章回答：最优值本身凭什么是一把尺子？对偶会给出 Wasserstein 距离。">
+    <div class="slide-head"><span class="sec">接口</span><h3>第3章管精确、本章管速度，对偶这条线贯穿始终</h3></div>
+    <div class="slide-body">
+      <table>
+        <thead><tr><th></th><th>第3章 · 精确 LP</th><th>第4章 · 熵正则 Sinkhorn</th></tr></thead>
+        <tbody>
+          <tr><td class="l"><strong>算法本质</strong></td><td class="l">网络单纯形：组合枢轴、顺序执行</td><td class="l">交替行列归一：乘性更新、全矩阵乘法</td></tr>
+          <tr><td class="l"><strong>代价</strong></td><td class="l">~O(n³)，n 上万撞墙</td><td class="l">O(n²)/轮，GPU 友好</td></tr>
+          <tr><td class="l"><strong>解形态</strong></td><td class="l">顶点解、稀疏、不可微</td><td class="l">稠密、可微、带熵偏差</td></tr>
+          <tr><td class="l"><strong>对偶变量</strong></td><td class="l">势 u、v（检验数 Δ = C − u − v）</td><td class="l">同一对势的指数化：u = e^(f/ε)，v = e^(g/ε)</td></tr>
+        </tbody>
+      </table>
+      <div class="tip">钩子：我们一直在算耦合矩阵，可第1章说要的是分布之间的<strong>距离</strong>——下一章回答：最优值本身凭什么是一把尺子？</div>
+    </div>
+  </section>
+
+  <!-- ★ 18 小结页 -->
+  <section class="slide" data-narration="三件套收尾。主线问题：最优传输怎么算得快，快到能进机器学习流水线？答案：给目标减一项 epsilon 倍的熵，组合问题烫平成严格凸问题；KKT 一行推出解自带左对角乘核乘右对角的结构；Sinkhorn 交替行列归一化把它解出来，每轮 n 平方、全是矩阵乘法，还能反向传播。遗留问题两个：一是熵偏差，算的是被抹平的近似值，epsilon 越小越准但越慢越危险；二是小 epsilon 的数值下溢，要靠 log-domain 或 epsilon 折减护航。必背公式两行：P 等于 diag u 乘 K 乘 diag v，核是 e 的负成本除以 epsilon；迭代式 u 更新为 a 逐元素除以 K v，v 更新为 b 逐元素除以 K 转置 u。合上书要能默写。">
+    <div class="slide-head"><span class="sec">小结</span><h3>主线问题 → 答案 → 遗留问题，三句话讲完第4章</h3></div>
+    <div class="slide-body">
+      <div class="chain">
+        <div class="link"><span class="no">1</span><span class="txt"><strong>主线问题</strong>：OT 怎么算得快，快到能进机器学习流水线？</span></div>
+        <div class="link"><span class="no">2</span><span class="txt"><strong>答案</strong>：加熵烫平成严格凸 → KKT 推出 P = diag(u)Kdiag(v) → Sinkhorn 交替行列归一，O(n²)/轮、可微、GPU 友好</span></div>
+        <div class="link"><span class="no">3</span><span class="txt"><strong>遗留问题</strong>：熵偏差（0.424 的账）+ 小 ε 数值下溢（log-domain / ε 折减护航）</span></div>
+      </div>
+      <div class="formula formula-concl">$$\boldsymbol{P = \mathrm{diag}(u)\,K\,\mathrm{diag}(v)},\;\; K = e^{-C/\varepsilon} \qquad u \leftarrow a\,./\,(Kv),\;\; v \leftarrow b\,./\,(K^{\top}u) \quad\text{——合上书也要能默写}$$</div>
+    </div>
+  </section>
+
+  <!-- ★ 19 结束页 -->
+  <section class="slide slide-cover" data-narration="本章毕业。老规矩，合上书拿一张纸，四个挑战：第一，写出熵正则问题的目标与约束，说清加熵换来的三个性质——严格凸、可微、结构显式；第二，从 KKT 一行推出解的结构，写出核和 u、v 的定义；第三，复算三乘三例的两轮迭代，行和一点七三六、u 一约零点一九二、v 一等于一，这些数字要能对上；第四，报出三个数：真实最优值零、熵正则代价零点四二四、偏差零点四二四。全部默对才算毕业。下一章第5章，对偶、Wasserstein 距离与几何：我们回答为什么这个最优值本身是一把真正的尺子——最优传输从算法变成几何。">
+    <div class="kicker">本 章 结 束</div>
+    <h1>加一项熵，把组合难题烫成矩阵乘法</h1>
+    <div class="sub">毕业挑战：合上书，拿一张纸</div>
+    <div class="divider"></div>
+    <div class="meta">
+      ☑ 默写熵正则问题（目标＋约束）与加熵换来的三个性质　　☑ 从 KKT 推出 P = diag(u)Kdiag(v) 及 K、u、v 定义<br>
+      ☑ 复算 3×3 例两轮迭代（行和 1.736，u¹ ≈ 0.1920，v¹ = 1）　　☑ 报出三个数：真实 OT 0 / 熵正则 0.424 / 偏差 0.424<br><br>
+      下一章 · 第5章 对偶、Wasserstein 距离与几何：最优值本身是一把尺子——对偶把它变成真距离。
+    </div>
+  </section>
+
+  <!-- 页脚 -->
+  <div id="footer">
+    <span class="brand">第4章 熵正则与 Sinkhorn 算法 · 最优传输课件</span>
+    <span id="pagenum">1 / 19</span>
+  </div>
+
+  <!-- 导航 -->
+  <div class="nav">
+    <button id="prev" title="上一页 (←)">‹</button>
+    <button id="next" title="下一页 (→ / 空格)">›</button>
+  </div>
+  <div id="hint">← → 翻页 · 空格下一页 · 推导页逐步显示 · 点击左右半屏翻页</div>
+
+</div>
+
+<!-- mermaid 本地引用，保证离线可用；初始化参数全套课件统一，勿改 -->
+<script src="/lectures-assets/mermaid.min.js"></script>
+<script>
+mermaid.initialize({
+  startOnLoad: false,   // 必须为 false：display:none 的隐藏页渲染会得到 0 宽高的退化 SVG，
+                        // 改为页面激活时懒渲染（见 renderMermaid）
+  theme: "base",
+  themeVariables: {
+    primaryColor: "#ebf8ff",
+    primaryBorderColor: "#2b6cb0",
+    primaryTextColor: "#1a365d",
+    lineColor: "#718096",
+    fontFamily: "-apple-system, PingFang SC, sans-serif",
+    fontSize: "15px"
+  },
+  flowchart: { curve: "linear", htmlLabels: false }
+});
+</script>
+<script>
+(function(){
+  const slides = Array.from(document.querySelectorAll('.slide'));
+  const total = slides.length;
+  let idx = 0;
+
+  const params = new URLSearchParams(location.search);
+  const startSlide = parseInt(params.get('slide'), 10);
+  if (params.get('autohide') === '1') document.body.classList.add('autohide');
+  if (!isNaN(startSlide) && startSlide >= 1 && startSlide <= total) idx = startSlide - 1;
+
+  const progress = document.getElementById('progress');
+  const pagenum = document.getElementById('pagenum');
+  const prevBtn = document.getElementById('prev');
+  const nextBtn = document.getElementById('next');
+
+  // 推导分步：每页记住已展开的步数；autohide（截图）模式下 CSS 强制全显
+  const stepState = new Map();
+  function stepsOf(i){ return Array.from(slides[i].querySelectorAll('.step')); }
+  function applySteps(){
+    stepsOf(idx).forEach((el, k)=> el.classList.toggle('on', k < (stepState.get(idx) || 0)));
+  }
+  // 前进一步：先展开本页下一步，全部展开后才翻页
+  function forward(){
+    const steps = stepsOf(idx);
+    const shown = stepState.get(idx) || 0;
+    if (shown < steps.length){ stepState.set(idx, shown + 1); applySteps(); return; }
+    go(idx + 1);
+  }
+  // 后退一步：先收起本页最后一步，收完才回上一页
+  function backward(){
+    const steps = stepsOf(idx);
+    const shown = stepState.get(idx) || 0;
+    if (shown > 0){ stepState.set(idx, shown - 1); applySteps(); return; }
+    go(idx - 1);
+  }
+
+  // mermaid 懒渲染：只在页面激活（有真实宽高）时渲染该页的图，渲染后打 data-done 防重复
+  function renderMermaid(slide){
+    if (typeof mermaid === 'undefined') return;
+    const nodes = Array.from(slide.querySelectorAll('.mermaid:not([data-done])'));
+    if (!nodes.length) return;
+    nodes.forEach(n => n.setAttribute('data-done', ''));
+    mermaid.run({ nodes }).catch(err => {
+      nodes.forEach(n => n.removeAttribute('data-done'));
+      console.error('mermaid 渲染失败：', err);
+    });
+  }
+
+  function render(){
+    slides.forEach((s,i)=> s.classList.toggle('active', i===idx));
+    progress.style.width = ((idx+1)/total*100) + '%';
+    pagenum.textContent = (idx+1) + ' / ' + total;
+    prevBtn.disabled = (idx===0);
+    nextBtn.disabled = (idx===total-1);
+    applySteps();
+    renderMermaid(slides[idx]);
+  }
+  function go(n){ idx = Math.max(0, Math.min(total-1, n)); render(); }
+
+  prevBtn.addEventListener('click', e=>{ e.stopPropagation(); backward(); });
+  nextBtn.addEventListener('click', e=>{ e.stopPropagation(); forward(); });
+
+  document.addEventListener('keydown', e=>{
+    if(e.key==='ArrowRight'||e.key===' '||e.key==='PageDown'){ e.preventDefault(); forward(); }
+    else if(e.key==='ArrowLeft'||e.key==='PageUp'){ e.preventDefault(); backward(); }
+    else if(e.key==='Home'){ stepState.set(idx, 0); go(0); }
+    else if(e.key==='End'){ go(total-1); }
+  });
+
+  document.getElementById('stage').addEventListener('click', e=>{
+    if(e.target.closest('.nav')) return;
+    const x = e.clientX;
+    if(x < window.innerWidth*0.5) backward(); else forward();
+  });
+
+  function fit(){
+    const s = Math.min(window.innerWidth/1280, window.innerHeight/720);
+    document.getElementById('stage').style.transform = 'translate(-50%,-50%) scale(' + s + ')';
+  }
+  window.addEventListener('resize', fit);
+  fit();
+  render();
+})();
+</script>
+</body>
+</html>
