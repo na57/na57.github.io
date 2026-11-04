@@ -1,0 +1,545 @@
+<!DOCTYPE html>
+<!--
+  ======================================================================
+  PGM 课件模板 · deck-template.html
+  用法：cp assets/deck-template.html "NN-章名-课件.html"，然后：
+    1. 全文替换「第X章」「章名」为本章实际内容（共 4 处：title、封面、页脚、结束页预告）
+    2. 按注释逐页填充；页数控制在 18–26；内容规范见 assets/课件制作规范.md
+    3. 每页必须写 data-narration（180–280字口语稿，禁半角双引号，禁 LaTeX）
+  骨架 ★ 页不可删：封面 / 全书位置 / 主线 / 定义 / 推导 / 误区 / 小结 / 结束
+  ======================================================================
+-->
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第4章 哈希表 · 算法导论课件</title>
+<script>
+window.MathJax = {
+  tex: {
+    inlineMath: [['$', '$'], ['\\(', '\\)']],
+    displayMath: [['$$', '$$'], ['\\[', '\\]']],
+    processEscapes: true,
+    tags: 'none'
+  },
+  svg: { fontCache: 'global', scale: 1.05 },
+  options: { skipHtmlTags: ['script','noscript','style','textarea','pre','code'] }
+};
+</script>
+<!-- MathJax 本地引用（tex-svg 单文件全量组件，约2MB，自带字体数据），file:// 与断网均可用 -->
+<script src="assets/tex-svg.js" async></script>
+<style>
+  :root{
+    --primary:#1a365d; --accent:#2b6cb0; --accent-light:#ebf8ff; --accent-border:#bee3f8;
+    --text:#2d3748; --muted:#718096; --border:#e2e8f0; --bg-light:#f7fafc;
+    --success:#38a169; --danger:#e53e3e; --warning:#dd6b20; --warn-bg:#fffaf0;
+  }
+  *{margin:0;padding:0;box-sizing:border-box;}
+  html,body{width:100%;height:100%;overflow:hidden;background:#0f172a;}
+  body{
+    font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Hiragino Sans GB","Microsoft YaHei","WenQuanYi Micro Hei",sans-serif;
+    color:var(--text);
+  }
+  #stage{
+    position:absolute; left:50%; top:50%;
+    width:1280px; height:720px;
+    transform:translate(-50%,-50%) scale(1);
+    transform-origin:center center;
+    background:#ffffff;
+    box-shadow:0 0 40px rgba(0,0,0,.4);
+    overflow:hidden;
+  }
+  .slide{
+    position:absolute; inset:0;
+    padding:36px 60px 52px;
+    display:none;
+    flex-direction:column;
+    background:#ffffff;
+    opacity:0;
+    transition:opacity .35s ease;
+  }
+  .slide.active{ display:flex; opacity:1; }
+
+  #progress{ position:absolute; top:0; left:0; height:6px; background:var(--accent); width:0; z-index:50; transition:width .35s; }
+
+  /* 封面 / 结束页 */
+  .slide-cover{ justify-content:center; align-items:center; text-align:center; }
+  .slide-cover{ background:linear-gradient(135deg,#1a365d 0%,#2b6cb0 100%); color:#fff; }
+  .slide-cover .kicker{ font-size:22px; letter-spacing:6px; opacity:.85; margin-bottom:18px;}
+  .slide-cover h1{ font-size:64px; font-weight:800; line-height:1.2; margin-bottom:22px; letter-spacing:2px;}
+  .slide-cover .sub{ font-size:26px; opacity:.92; margin-bottom:36px;}
+  .slide-cover .meta{ font-size:19px; opacity:.85; line-height:2;}
+  .slide-cover .divider{ width:160px;height:5px;background:#fff;opacity:.6;margin:0 auto 30px;border-radius:3px;}
+  .slide-cover .question{ font-size:24px; background:rgba(255,255,255,.12); border:1px solid rgba(255,255,255,.35); border-radius:12px; padding:12px 28px; margin-bottom:30px;}
+
+  /* 页头：结论式标题 */
+  .slide-head{ display:flex; align-items:baseline; gap:16px; border-bottom:3px solid var(--accent); padding-bottom:9px; margin-bottom:12px;}
+  .slide-head .sec{ font-size:17px; color:var(--accent); font-weight:700; background:var(--accent-light); padding:3px 11px; border-radius:6px; white-space:nowrap;}
+  .slide-head h3{ font-size:29px; color:var(--primary); font-weight:700;}
+  .slide-body{ flex:1; display:flex; flex-direction:column; justify-content:center; min-height:0; }
+
+  p{ font-size:21px; line-height:1.65; margin-bottom:8px;}
+  .lead{ font-size:23px; color:#374151; line-height:1.75;}
+  ul,ol{ margin:0 0 8px 26px; font-size:21px; line-height:1.7;}
+  li{ margin-bottom:5px;}
+  strong{ color:var(--primary); }
+
+  /* 公式块 */
+  .formula{ background:var(--accent-light); border-left:5px solid var(--accent); border-radius:0 10px 10px 0; padding:9px 22px; margin:9px 0; text-align:center; font-size:23px;}
+  .formula-concl{ background:#fffaf0; border-left:5px solid var(--warning);}
+  .MathJax{ font-size:1.05em !important; }
+  mjx-container[display="true"]{ margin:6px 0 !important; }
+
+  /* 表格 */
+  table{ width:100%; border-collapse:collapse; margin:10px 0; font-size:20px;}
+  th{ background:var(--accent); color:#fff; padding:8px 12px; text-align:center; font-weight:600;}
+  td{ padding:7px 12px; border:1px solid var(--border); text-align:center; vertical-align:middle;}
+  tr:nth-child(even) td{ background:var(--bg-light);}
+  td.l{ text-align:left; }
+  table.small{ font-size:18px; }
+  table.small td, table.small th{ padding:6px 10px; }
+
+  /* 组件 */
+  .card{ background:var(--accent-light); border:1px solid var(--accent-border); border-radius:12px; padding:12px 20px; margin:10px 0;}
+  .tip{ background:#ebf8ff; border-left:5px solid var(--accent); border-radius:0 10px 10px 0; padding:10px 20px; margin:10px 0; font-size:20px; color:#2c5282;}
+  .deep{ background:#f0fff4; border-left:5px solid var(--success); border-radius:0 10px 10px 0; padding:10px 20px; margin:10px 0; font-size:20px; color:#22543d;}
+  .warn{ background:var(--warn-bg); border-left:5px solid var(--warning); border-radius:0 10px 10px 0; padding:10px 20px; margin:10px 0; font-size:20px; color:#744210;}
+  .trap{ background:#fef2f2; border-left:5px solid var(--danger); border-radius:0 10px 10px 0; padding:10px 20px; margin:10px 0; font-size:20px; color:#7f1d1d;}
+
+  .pause{
+    background:var(--warn-bg); border:2px dashed var(--warning); border-radius:14px;
+    padding:10px 22px; margin:10px 0; display:flex; align-items:center; gap:16px;
+  }
+  .pause .icon{ font-size:36px; line-height:1; }
+  .pause .txt b{ color:var(--warning); font-size:21px; }
+  .pause .txt p{ font-size:18px; color:#744210; margin:3px 0 0; }
+
+  .cols{ display:flex; gap:28px; align-items:stretch; }
+  .col{ flex:1; min-width:0; }
+
+  /* 推导分步：仅互动模式隐藏，截图(autohide)模式全部可见——此规则不可删 */
+  .step{ opacity:0; transform:translateY(8px); transition:opacity .3s ease, transform .3s ease; }
+  .step.on{ opacity:1; transform:none; }
+  body.autohide .step{ opacity:1 !important; transform:none !important; }
+  .step-hint{ font-size:14px; color:var(--muted); margin-top:4px;}
+  body.autohide .step-hint{ display:none; }
+
+  /* 因果链 */
+  .chain{ margin:6px 0; }
+  .chain .link{ display:flex; align-items:center; gap:14px; margin:6px 0;}
+  .chain .no{ width:34px; height:34px; border-radius:50%; background:var(--accent); color:#fff; font-size:18px; font-weight:700; display:flex; align-items:center; justify-content:center; flex-shrink:0;}
+  .chain .txt{ font-size:21px; line-height:1.5;}
+  .chain .txt strong{ color:var(--primary); }
+
+  /* mermaid 容器：高度封顶，防止溢出 720px 舞台 */
+  .mmd{ background:var(--bg-light); border:1px solid var(--border); border-radius:12px; padding:10px 14px; display:flex; justify-content:center; align-items:center; margin:8px 0;}
+  .mmd .mermaid{ display:flex; justify-content:center; width:100%; visibility:hidden; }
+  .mmd .mermaid[data-done]{ visibility:visible; }
+  .mmd .mermaid svg{ max-width:100%; height:auto; max-height:230px; }
+  .mmd.mmd-tall .mermaid svg{ max-height:330px; }
+  .mmd.mmd-sm svg{ max-height:150px; }
+  .mmd-row{ display:flex; gap:18px; }
+  .mmd-row .mmd{ flex:1; flex-direction:column; }
+  .mmd .cap{ font-size:17px; color:var(--muted); margin-top:6px; text-align:center;}
+  .mmd .cap b{ color:var(--text); }
+
+  #footer{ position:absolute; bottom:0; left:0; right:0; height:40px; display:flex; align-items:center; justify-content:space-between; padding:0 30px; font-size:15px; color:#94a3b8; background:rgba(247,250,252,.85); border-top:1px solid var(--border); z-index:40;}
+  #footer .brand{ font-weight:600; color:var(--accent); }
+
+  .nav{ position:absolute; bottom:48px; right:40px; display:flex; gap:12px; z-index:45;}
+  .nav button{ width:54px; height:54px; border-radius:50%; border:none; background:var(--accent); color:#fff; font-size:24px; cursor:pointer; box-shadow:0 3px 10px rgba(43,108,176,.4); display:flex; align-items:center; justify-content:center;}
+  .nav button:hover{ background:var(--primary); }
+  .nav button:disabled{ background:#cbd5d0; cursor:default; box-shadow:none;}
+
+  #hint{ position:absolute; bottom:48px; left:40px; font-size:14px; color:#94a3b8; z-index:45;}
+
+  body.autohide #progress, body.autohide #footer, body.autohide .nav, body.autohide #hint{ display:none !important; }
+</style>
+</head>
+<body>
+<div id="stage">
+
+  <div id="progress"></div>
+
+  <section class="slide slide-cover active" data-narration="你好，欢迎来到算法导论第四章，哈希表。上一章我们拿到了 O n log n 的排序和 O log n 的二分查找，似乎已经很快了。可现实里的编译器符号表、数据库索引、路由器转发表，要的不是排好序，而是一秒钟成千上万次的插入、删除、按关键字查找。这一章我们就贪心一点，问：单次查找能不能直接压到期望常数时间？答案是可以，代价是放弃键之间的顺序。学完这一章，你会手算链接法和开放寻址的探查过程，会用装载因子估计性能，还会知道全域散列怎样防住恶意输入。我们开始。">
+    <div class="kicker">算法导论 · 第 4 章 · 排序与检索</div>
+    <h1>哈希表</h1>
+    <div class="sub">Hash Tables —— 用期望常数时间做插入、删除、查找的字典</div>
+    <div class="question">本章要回答：单次查找能不能比 O(lg n) 更快？代价是什么？</div>
+    <div class="meta">
+      配套讲义：《算法导论互动讲义》第4章 · 基于 CLRS《算法导论》<br>
+      ← → 或空格翻页 · 推导页逐步显示
+    </div>
+  </section>
+
+  <section class="slide" data-narration="先把本章钉在全书地图上。全书分四段：第一段分析基础，第一二章给你增长率与分治递归两件工具；第二段排序与检索，第三章排序、第四章哈希表、第五章红黑树，本章就在这一段的正中间；第三段是第六七章的图算法；第四段是第八到十章的设计范式与难解性。第三章管批量整理，本章管单次高频存取，而本章主动放弃的东西，正好是第五章红黑树要补回来的。这一页你只要记住一件事：本章承接排序、引出红黑树，是检索路线的中点。站好这个位置，我们开始。">
+    <div class="slide-head"><span class="sec">定位</span><h3>本章在排序与检索段的正中：承接排序，引出红黑树</h3></div>
+    <div class="slide-body">
+      <div class="mmd mmd-sm">
+        <div class="mermaid">
+flowchart LR
+  A["① 分析基础 Ch1–2"] --> B["② 排序与检索 Ch3–5"]:::here
+  B --> C["③ 图算法 Ch6–7"]
+  C --> D["④ 设计范式与难解性 Ch8–10"]
+  classDef here fill:#2b6cb0,color:#ffffff,stroke:#1a365d,stroke-width:3px
+        </div>
+      </div>
+      <p style="text-align:center; margin-top:10px;">第3章解决「<strong>批量整理</strong>」，本章解决「<strong>单次高频存取</strong>」——它付出的代价（不支持有序操作）正是第5章红黑树要补上的。</p>
+    </div>
+  </section>
+
+  <section class="slide" data-narration="这一章的逻辑是一条链，我带你走一遍。第一环，问题：字典只要插入、删除、按关键字查找三件事，排序加二分只能给 O log n，我们要更快。第二环，最直接的念头是直接寻址，键就是下标，时间完美但空间跟着全域爆炸。第三环，出路是散列函数，把大全域压进小表，可鸽巢原理告诉我们冲突必然发生。第四环，冲突来了两条路：链接法挂链，开放寻址在表里继续探，性能都只由装载因子阿尔法说了算。第五环，固定函数会被恶意输入打爆，全域散列随机选函数把运气夺回来。下面逐环拆开。">
+    <div class="slide-head"><span class="sec">主线</span><h3>一条链讲完本章：从空间爆炸到期望常数</h3></div>
+    <div class="slide-body">
+      <div class="chain">
+        <div class="link"><span class="no">1</span><span class="txt"><strong>字典问题</strong>：只要插入、删除、按 key 查找，能不能比 O(lg n) 更快？</span></div>
+        <div class="link"><span class="no">2</span><span class="txt"><strong>直接寻址</strong>：键就是下标，时间 Θ(1)，但空间跟全域 |U| 走 → 爆炸</span></div>
+        <div class="link"><span class="no">3</span><span class="txt"><strong>散列函数</strong>：把大全域压进 m 槽小表；鸽巢原理 → 冲突必然发生</span></div>
+        <div class="link"><span class="no">4</span><span class="txt"><strong>冲突两条路</strong>：链接法挂链 / 开放寻址表内探查，性能只看装载因子 α</span></div>
+        <div class="link"><span class="no">5</span><span class="txt"><strong>全域散列</strong>：随机选函数，把期望从「靠输入善良」变成「靠自己抛硬币」</span></div>
+      </div>
+      <div class="tip">这条链就是本章的目录：4.1 直接寻址 → 4.2 链接法 → 4.3 开放寻址 → 4.4 全域散列 → 4.5 地位与代价</div>
+    </div>
+  </section>
+
+  <section class="slide" data-narration="先看这个问题有多真实。编译器每遇到一个变量名就要查符号表，路由器每收到一个包就要查转发表，这类系统一秒钟要做成千上万次字典操作。最理想的办法是按关键字直接当下标：全域一千个键就开一千格数组，查找插入删除都是一次访问，严格的常数时间。可惜只存五个键，九百九十五格就空着，利用率百分之零点五。换成六十四位整数键，全域大约是二的一点八乘十的十九次方格，折算成内存是一百八十亿 G B，地球上没有机器装得下。问题很清楚：表的大小不该跟全域走，得跟实际数据走。怎么做到？下一页。">
+    <div class="slide-head"><span class="sec">动机</span><h3>直接寻址表时间完美，空间却跟着全域爆炸</h3></div>
+    <div class="slide-body">
+      <p>符号表、转发表、数据库索引要的不是排好序，而是高频的插入、删除、按 key 查找——支持这三件事的结构叫<strong>字典（Dictionary）</strong>。最直接的实现是<strong>直接寻址表（Direct-Address Table）</strong>：键 k 的记录直接放 T[k]。</p>
+      <div class="formula">$$\text{键是 64 位整数：}\ |U|=2^{64}\approx 1.8\times 10^{19}\ \text{格}\;\Rightarrow\;\text{按每格 1 字节} \approx 180\ \text{亿 GB}$$</div>
+      <div class="cols">
+        <div class="col"><div class="card">😇 <strong>小规模已经难看</strong><br>U = {0,…,999} 开 1000 格，只存 {10, 230, 451, 672, 999} 共 5 个键：995 格（99.5%）被浪费，利用率 0.5%。</div></div>
+        <div class="col"><div class="card">🙂 <strong>真实键直接报废</strong><br>空间复杂度 Θ(|U|)，与实际键数 n 无关——只存 5 条记录，也要 1.8×10¹⁹ 格。</div></div>
+      </div>
+      <div class="tip">💡 关键一跃：表的大小必须跟实际数据 n 走，而不是跟全域 |U| 走——这就是下一页的散列函数。</div>
+    </div>
+  </section>
+
+  <section class="slide" data-narration="上一页的出路就是本章的心脏：造一个散列函数 h，把任意大的全域压进零到 m 减一这 m 个槽里，查找从查 T k 变成查 T h k。表长 m 只跟实际键数 n 相称，空间问题解决了。但别高兴太早：鸽巢原理堵死了无冲突的幻想，全域比表大，就至少有两个键被压进同一格。讲义给了个狠数字：全域一千、表长十，至少有一格要承接一百个键。所以记住，冲突不是设计失误，是压缩的必然代价。本章的重心不是避免冲突，而是冲突来了怎么办——两条路，下一页先讲最直白的链接法。">
+    <div class="slide-head"><span class="sec">定义</span><h3>散列函数把大全域压进小表，冲突是压缩的必然代价</h3></div>
+    <div class="slide-body">
+      <div class="cols">
+        <div class="col"><div class="card">🗺️ <strong>散列函数（Hash Function）</strong><br>把全域 U 映射到 {0,…,m−1} 的函数 h；查找从「查 T[k]」变成「查 T[h(k)]」。</div></div>
+        <div class="col"><div class="card">📋 <strong>散列表（Hash Table）</strong><br>只与 n 相称的 m 槽小表，空间 Θ(n) 而不是 Θ(|U|)——直接寻址的空间困境就此解决。</div></div>
+      </div>
+      <div class="formula formula-concl">$$\boldsymbol{h:\ U \to \{0,1,\dots,m-1\},\qquad \text{查找} = T[\,h(k)\,]}$$</div>
+      <div class="warn">⚠️ 鸽巢原理：|U| &gt; m 时，至少两个键被压进同一格——这就是<strong>冲突（Collision）</strong>。例：|U| = 1000、m = 10，至少一格承接 ⌈1000/10⌉ = 100 个键。冲突不是设计失误，是压缩的必然代价。</div>
+    </div>
+  </section>
+
+  <section class="slide" data-narration="链接法的想法一句话：既然多个键会落进同一格，就让每格挂一条链表，同槽的键串在链上。插入时先算 h k，再插到链头，常数时间；查找时先算 h k 定位槽，再顺着链逐个比较。快不快，取决于平均每条链多长，于是定义装载因子阿尔法等于 n 比 m，就是平均每槽链长。在简单均匀散列假设下，也就是每个键等可能落到任一槽，不成功查找要扫完整条链，期望探查约一加阿尔法；成功查找平均只扫半条链，期望约一加二分之阿尔法。只要阿尔法保持常数，两者都是常数。光说不算，下一页我们亲手算一遍。">
+    <div class="slide-head"><span class="sec">链接法</span><h3>链接法：槽上挂一条链，查找快慢只看平均链长 α</h3></div>
+    <div class="slide-body">
+      <div class="cols">
+        <div class="col"><div class="card">🧷 <strong>链接法（Chaining）</strong><br>m 个槽，每格存一条链表的头指针；所有散列到槽 j 的键都串在 T[j] 的链上。</div></div>
+        <div class="col"><div class="card">⚙️ <strong>操作分两步</strong><br>先算 h(k) 定位槽（O(1)），再顺链逐个比较；插入一律插到链头（O(1)），删除同理。</div></div>
+      </div>
+      <div class="formula">$$\text{装载因子（Load Factor）：}\ \alpha = \frac{n}{m} = \text{平均每槽链长}$$</div>
+      <div class="formula formula-concl">$$\text{不成功查找}\approx \boldsymbol{1+\alpha},\qquad \text{成功查找}\approx \boldsymbol{1+\frac{\alpha}{2}}$$</div>
+      <div class="deep">读法：在简单均匀散列假设（Simple Uniform Hashing，每个键等可能落到任一槽）下，只要 α 保持常数（约定 α ≤ 1，即 n ≤ m），两种查找都是 O(1)。</div>
+    </div>
+  </section>
+
+  <section class="slide" data-narration="现在布置本章第一道手算题。表长 m 等于九，散列函数是 h k 等于 k 模九，依次插入九个数：五、二十八、十九、十五、二十、三十三、十二、十七、十，新键一律插到链头。任务：画出九个槽的最终链内容，再算成功查找的平均比较次数。先暂停视频自己推一遍。推出来了吗？好，对答案。前五个键取模落槽：五进槽五，二十八和十九都进槽一，十五进槽六，二十进槽二。后四个：三十三进槽六，十二进槽三，十七进槽八，十进槽一。槽一链头在左是十、十九、二十八，槽六是三十三、十五。清点比较次数：槽一三键分别花一、二、三次，槽六两键花一、二次，其余四个单键各一次，合计十三次，平均约一点四四。">
+    <div class="slide-head"><span class="sec">演练</span><h3>手算 m = 9 链接法：九个键各就各位</h3></div>
+    <div class="slide-body">
+      <p style="font-size:20px;">m = 9，$h(k) = k \bmod 9$，依次插入 <strong>5, 28, 19, 15, 20, 33, 12, 17, 10</strong>，新键插到链头。</p>
+      <div class="pause"><div class="icon">✍️</div><div class="txt"><b>暂停推导</b><p>动手做两件事：① 画出 9 个槽的最终链内容；② 算出成功查找的平均比较次数。</p></div></div>
+      <div class="step"><p style="font-size:20px;"><strong>① 前五个键取模落槽</strong>：$5\bmod 9=5$；$28=3\times9+1 \Rightarrow 1$；$19=2\times9+1 \Rightarrow 1$；$15=1\times9+6 \Rightarrow 6$；$20=2\times9+2 \Rightarrow 2$。</p></div>
+      <div class="step"><p style="font-size:20px;"><strong>② 后四个键</strong>：$33=3\times9+6 \Rightarrow 6$；$12=1\times9+3 \Rightarrow 3$；$17=1\times9+8 \Rightarrow 8$；$10=1\times9+1 \Rightarrow 1$。</p></div>
+      <div class="step"><p style="font-size:20px;"><strong>③ 最终表（链头在左）</strong>：槽1 → 10→19→28；槽2 → 20；槽3 → 12；槽5 → 5；槽6 → 33→15；槽8 → 17；槽 0、4、7 为空。</p></div>
+      <div class="step"><p style="font-size:20px;"><strong>④ 清点比较次数</strong>：槽1 三键花 1、2、3 次，槽6 两键花 1、2 次，其余四个单键各 1 次，合计 $(1{+}2{+}3)+(1{+}2)+4=13$，平均 $13/9 \approx 1.44$ 次。</p></div>
+      <p class="step-hint">按空格 / → 逐步揭示答案</p>
+    </div>
+  </section>
+
+  <section class="slide" data-narration="把刚才的手算和公式对上账。九个键九个槽，链长之和是九，所以阿尔法等于一。公式预言成功查找期望探查一加二分之阿尔法，也就是一点五次；我们实测平均一点四四次，非常接近。为什么不正好相等？因为公式是期望，是对随机键的平均，单个实例允许在它附近波动。再看这张图：槽一挂了三键，槽六挂了两键，槽零、四、七却空着——链长不均是常态，阿尔法描述的只是平均水平。工程上的对策就一条：n 快超过 m 就换更大的表重新散列，把阿尔法按回一以下。链接法讲完了，下一页换一条完全不用链表的路。">
+    <div class="slide-head"><span class="sec">核算</span><h3>实测 1.44 次对上公式 1.5 次：期望允许实例波动</h3></div>
+    <div class="slide-body">
+      <div class="cols">
+        <div class="col">
+          <p style="font-size:20px;">链长之和 $0{+}3{+}1{+}1{+}0{+}1{+}2{+}0{+}1 = 9 = n$，故 $\alpha = n/m = 9/9 = 1$。</p>
+          <div class="formula">$$\text{公式预言：}\ 1+\frac{\alpha}{2}=1.5\ \text{次};\qquad \text{实测：}\ \frac{13}{9}\approx 1.44\ \text{次}$$</div>
+          <div class="deep">✅ 公式是期望，单个实例在其附近波动。工程对策：n 快超过 m 就换更大的表重新散列（rehash），把 α 按回 1 以下。</div>
+        </div>
+        <div class="col">
+          <div class="mmd">
+            <div class="mermaid">
+flowchart LR
+  S1["槽1"] --> A["10"] --> B["19"] --> C["28"]
+  S6["槽6"] --> G["33"] --> H["15"]
+            </div>
+            <div class="cap"><b>链头在左</b>：槽 1 冲突最厉害（3 键），槽 0、4、7 空着</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="slide" data-narration="开放寻址走另一条路：不开堆内存、不要指针，所有元素都塞进表本身。槽被占了怎么办？按一个确定规则找下一个槽，直到撞见空槽为止；查找时沿同一条探查序列走，遇到空槽就判定不存在。探查序列写成 h k i，表示键 k 的第 i 次探查。三种经典规则：线性探测每次往后挪一格；二次探测按平方步长跳；双重散列用第二个函数 h 二决定步长，不同键步长不同，序列最散。双重散列有两条硬要求：h 二不能等于零，否则永远停在首槽；还必须与 m 互质，否则序列只能覆盖一部分槽。元素不超出表，所以阿尔法最多到一。下一页亲手算一条双重散列的探查序列。">
+    <div class="slide-head"><span class="sec">开放寻址</span><h3>开放寻址不挂链：槽被占了，就在表里继续探</h3></div>
+    <div class="slide-body">
+      <p style="font-size:20px;"><strong>开放寻址（Open Addressing）</strong>：元素全存表内；冲突时按探查序列 $h(k,0), h(k,1), \dots$ 找下一空槽，查找沿同一序列、遇空槽即判不存在。必有 $n \le m$，即 $\alpha \le 1$。</p>
+      <div class="formula" style="font-size:21px;">$$\text{线性探测（Linear Probing）：}\ h(k,i) = (\,h'(k)+i\,)\bmod m$$</div>
+      <div class="formula" style="font-size:21px;">$$\text{二次探测（Quadratic Probing）：}\ h(k,i) = (\,h'(k)+c_1 i+c_2 i^2\,)\bmod m$$</div>
+      <div class="formula" style="font-size:21px;">$$\text{双重散列（Double Hashing）：}\ h(k,i) = (\,h_1(k)+i\cdot h_2(k)\,)\bmod m$$</div>
+      <div class="warn">⚠️ 双重散列硬要求：$h_2(k) \neq 0$（否则卡死在首槽）且与 m 互质（否则只覆盖部分槽）；常用技巧：让 $h_2$ 输出落在 $\{1,\dots,m-2\}$。</div>
+    </div>
+  </section>
+
+  <section class="slide" data-narration="表长十三，h 一 k 等于 k 模十三，h 二 k 等于一加 k 模十一，空表开始。先插入十四：十四等于一乘十三加一，h 一等于一，槽一空着，直接放入，共探查一次。再插入七十九：七十九等于六乘十三加一，h 一又是一，可槽一已经被十四占了，冲突。算步长：七十九等于七乘十一加二，所以 h 二等于一加二等于三。第 i 等于一次探查：一加一乘三再模十三等于四，槽四空着，放入，共两次，序列是一到四。以后查找七十九必须重走同一条序列：先看槽一，是十四，不是；再跳三格看槽四，命中。如果中途撞见空槽，就断定它不在表里。下一页算算这条路到底花几次。">
+    <div class="slide-head"><span class="sec">手算</span><h3>双重散列手算：插入 79 的探查序列是 1 → 4</h3></div>
+    <div class="slide-body">
+      <p style="font-size:20px;">m = 13，$h_1(k) = k \bmod 13$，$h_2(k) = 1 + (k \bmod 11)$，空表插入 14 和 79。</p>
+      <div class="step"><p style="font-size:20px;"><strong>① 插入 14</strong>：$14 = 1\times13+1 \Rightarrow h_1(14)=1$。槽 1 为空，直接放入。<strong>共探查 1 次。</strong></p></div>
+      <div class="step"><p style="font-size:20px;"><strong>② 插入 79 首发冲突</strong>：$79 = 6\times13+1 \Rightarrow h_1(79)=1$——槽 1 已被 14 占用，冲突。</p></div>
+      <div class="step"><p style="font-size:20px;"><strong>③ 算步长再探</strong>：$79 = 7\times11+2 \Rightarrow h_2(79)=1+2=3$；$i=1$：$h(79,1)=(1+1\times3)\bmod 13 = 4$，槽 4 为空，放入。</p></div>
+      <div class="step">
+        <div class="formula formula-concl">$$\boldsymbol{h(79,i):\ 1 \to 4\ \text{（共 2 次探查）}}\quad\text{查找 79 重走同一序列，遇空槽即判不存在}$$</div>
+      </div>
+      <p class="step-hint">按空格 / → 逐步展开推导</p>
+    </div>
+  </section>
+
+  <section class="slide" data-narration="开放寻址的核心账目就一条曲线：均匀散列假设下，不成功查找的期望探查次数不超过一除以一减阿尔法。代入数字感受它有多敏感：阿尔法零点五时上界是两次；阿尔法零点九时是十次；阿尔法零点九九时是一百次。表装到九成满，代价比半满时翻了五倍；装到九成九，基本退化到没法用。注意这个上界跟 n 和 m 的绝对值无关，只看表有多满——一百万个键但阿尔法零点五，照样期望两次探查。所以工程铁律是：开放寻址的阿尔法一定压在零点五到零点七以下，越线就扩容。下一页看线性探测为什么比这个理论值还要吃亏。">
+    <div class="slide-head"><span class="sec">账目</span><h3>开放寻址的命悬在一条双曲线上：1/(1−α)</h3></div>
+    <div class="slide-body">
+      <div class="formula formula-concl">$$\text{均匀散列假设下，不成功查找期望探查}\ \le\ \boldsymbol{\frac{1}{1-\alpha}}$$</div>
+      <table>
+        <thead><tr><th>装载因子 α</th><th>上界 1/(1−α)</th><th>含义</th></tr></thead>
+        <tbody>
+          <tr><td>0.5</td><td>2 次</td><td>半满，很健康</td></tr>
+          <tr><td>0.9</td><td>10 次</td><td>九成满，代价翻五倍</td></tr>
+          <tr><td>0.99</td><td>100 次</td><td>九成九，退化到没法用</td></tr>
+        </tbody>
+      </table>
+      <div class="deep">代价不取决于 n 或 m 的绝对值，只取决于「表有多满」——看住 α，就看住了性能。工程铁律：α 控制在 0.5～0.7 以下。</div>
+    </div>
+  </section>
+
+  <section class="slide" data-narration="不用均匀假设，线性探测也有常用近似公式：成功查找约二分之一倍的一加一除以一减阿尔法，不成功约二分之一倍的一加一除以一减阿尔法的平方。代入阿尔法零点五：成功约一点五次，不成功约二点五次，还不算难看。代入阿尔法零点九：成功约五点五次，不成功约五十点五次——而同样阿尔法下双重散列的不成功上界只有十次，差距一下子拉开。问题出在哪？出在探查步长：线性探测的步长恒等于一，跟键完全无关，于是已占用的槽会抱团。这个抱团现象有专门名字，下一页讲聚集。">
+    <div class="slide-head"><span class="sec">对比</span><h3>同样 α 下，线性探测比双重散列吃亏得多</h3></div>
+    <div class="slide-body">
+      <div class="formula" style="font-size:21px;">$$\text{线性探测近似：}\ \text{成功}\approx\tfrac{1}{2}\Bigl(1+\tfrac{1}{1-\alpha}\Bigr),\qquad \text{不成功}\approx\tfrac{1}{2}\Bigl(1+\tfrac{1}{(1-\alpha)^2}\Bigr)$$</div>
+      <table>
+        <thead><tr><th>α</th><th>线性 · 成功</th><th>线性 · 不成功</th><th>双重散列 · 不成功上界</th></tr></thead>
+        <tbody>
+          <tr><td>0.5</td><td>≈ 1.5 次</td><td>≈ 2.5 次</td><td>2 次</td></tr>
+          <tr><td>0.9</td><td>≈ 5.5 次</td><td>≈ 50.5 次</td><td>10 次</td></tr>
+        </tbody>
+      </table>
+      <div class="warn">⚠️ 差距的根源在步长：线性探测步长恒为 1、与键无关，已占用的槽会抱团——这就是下一页的「聚集」。</div>
+    </div>
+  </section>
+
+  <section class="slide" data-narration="聚集是线性探测的慢性病，准确说叫一次聚集。想象表里已占用的槽连成一段堵塞段：新键只要落进这段的任何位置，就得一路走到段尾才能停下，而它停下之后又把段加长了。讲义给出量化：长为 L 的占用段，被下一个键继续加长的概率约是 L 加二除以二 m——段越长越容易被加长，堵的越堵，雪球越滚越大。二次探测缓解了这个问题，但如果两个键起点相同，整条序列仍然一模一样，这叫二次聚集。双重散列让步长随键变化，把聚集压到最轻，所以最接近均匀假设。到这里，性能账全算完了，但还有一个隐患：这些期望都建立在均匀假设上，假设靠不住怎么办？下一页。">
+    <div class="slide-head"><span class="sec">难点</span><h3>聚集让线性探测堵的越堵：雪球滚雪球</h3></div>
+    <div class="slide-body">
+      <p>已占用的槽连成越来越长的「堵塞段」：新键落进段内任何位置都要一路走到段尾，走完段又更长——这就是<strong>聚集（Clustering）</strong>。</p>
+      <div class="formula">$$\text{一次聚集：长为 } L \text{ 的占用段被下一键加长的概率} \approx \frac{L+2}{2m}\ \text{（段越长越易加长）}$$</div>
+      <ul>
+        <li><strong>一次聚集（Primary Clustering）</strong>：线性探测的雪球，段越滚越大；</li>
+        <li><strong>二次聚集</strong>：二次探测缓解了它，但两键起点相同 ⇒ 整条序列仍相同；</li>
+        <li><strong>双重散列</strong>：步长随键变化，聚集最轻，最接近均匀假设。</li>
+      </ul>
+      <div class="tip">💡 还剩一个隐患：这些期望都建立在均匀散列假设上——假设靠不住怎么办？</div>
+    </div>
+  </section>
+
+  <section class="slide" data-narration="前面所有期望都赌一件事：输入是均匀的。可散列函数是固定的，现实输入往往有规律，更糟的是对手可能知道你的 h——他可以故意挑 n 个全部散列到同一槽的键，把你的链接法打成一条长度为 n 的链表。二零一一年的 HashDoS 攻击就是用这招打垮了多种语言的哈希表。固定函数加最坏输入等于必输，出路只有一条：函数不固定，建表时随机选。全域散列备一个函数族 H，要求对任意两个不同的键，随机抽一个函数时它俩冲突的概率不超过 m 分之一。注意，m 分之一正是瞎撞的冲突率——全域族把任意一对键的冲突率压到了理论下限。这样的族真的存在吗？下一页给你构造。">
+    <div class="slide-head"><span class="sec">全域散列</span><h3>固定函数防不住恶意输入，全域散列把运气夺回来</h3></div>
+    <div class="slide-body">
+      <p style="font-size:20px;">均匀假设可能靠不住：h 固定，对手知道 h 就能故意挑 n 个全落同槽的键，把链接法打成 Θ(n) 链表——2011 年针对多种语言哈希表的 <strong>HashDoS 攻击</strong>正是此理。出路：<strong>函数不固定，建表时随机选</strong>，这就是<strong>全域散列（Universal Hashing）</strong>。</p>
+      <div class="formula formula-concl">$$\text{全域函数族 } H:\quad \forall\, k \neq l,\quad \Pr_{h \in H}[\,h(k)=h(l)\,] \le \frac{1}{m}$$</div>
+      <div class="deep">✅ 1/m 正是「随机瞎撞」的冲突率——全域族把任意一对键的冲突率压到了理论下限；随机性在选函数上，不在输入上，对手不知道你抽中哪个函数，就无法准备必撞的输入。</div>
+    </div>
+  </section>
+
+  <section class="slide" data-narration="构造很简单。取一个不小于全域大小的素数 p，a 从一到 p 减一里选，b 从零到 p 减一里选，定义 h a b k 等于 a k 加 b 先模 p 再模 m。这些函数合起来就是全域族。看个手算小例：p 十七、m 六、a 三、b 五。键十：三乘十加五等于三十五，模十七得一，再模六还是一。键二：三乘二加五等于十一，模十七是十一，再模六得五。键二十七：三乘二十七加五等于八十六，模十七得一，再模六是一——和键十撞了。可见全域不承诺某个函数不冲突；它承诺的是：a 有十六种、b 有十七种，共二百七十二个函数均匀随机抽，任何固定键对撞上的概率不超过六分之一。配合链接法，期望链长不超过一加阿尔法，三个操作全部期望常数。">
+    <div class="slide-head"><span class="sec">构造</span><h3>((ak+b) mod p) mod m：一个可构造的全域族</h3></div>
+    <div class="slide-body">
+      <div class="formula" style="font-size:21px;">$$h_{ab}(k) = (\,(ak+b)\bmod p\,)\bmod m,\qquad p\ \text{为素数且}\ p \ge |U|,\ a \in \{1,\dots,p-1\},\ b \in \{0,\dots,p-1\}$$</div>
+      <p style="font-size:20px;">小例子（手算全程）：p = 17，m = 6，a = 3，b = 5，即 $h(k) = ((3k+5)\bmod 17)\bmod 6$：</p>
+      <table class="small">
+        <thead><tr><th>键 k</th><th>3k + 5</th><th>mod 17</th><th>mod 6</th><th>h(k)</th></tr></thead>
+        <tbody>
+          <tr><td>10</td><td>35</td><td>35 − 34 = 1</td><td>1</td><td><strong>1</strong></td></tr>
+          <tr><td>2</td><td>11</td><td>11</td><td>11 − 6 = 5</td><td>5</td></tr>
+          <tr><td>27</td><td>86</td><td>86 − 85 = 1</td><td>1</td><td><strong>1</strong>（与 10 撞）</td></tr>
+        </tbody>
+      </table>
+      <div class="deep">全域不承诺某个函数不冲突；它承诺：a、b 共 16×17 = 272 个函数均匀随机抽，<strong>任何固定键对</strong>冲突概率 ≤ 1/6。链接法 + 全域散列 ⇒ 期望链长 ≤ 1 + α，插入/删除/查找全部期望 O(1)。</div>
+    </div>
+  </section>
+
+  <section class="slide" data-narration="扫三个雷。第一个，把期望 O 一记成最坏 O 一。错。如果 n 个键碰巧全落进同一槽，链长就是 n，一次查找退化成线性的 n。期望说的是平均的键、在均匀假设下；要堵住最坏输入，只能靠刚讲的全域散列，而且那也只是期望意义。第二个，在开放寻址表里直接删键清空槽。错。清空会斩断别人的探查序列：把槽一的十四抹掉，再找七十九时会在槽一遇空，误判不存在。正确做法是放一个特殊的已删除标记，查找跳过它，插入复用它。第三个，以为全域散列是找一个更好的固定函数。恰恰相反，它承认没有固定函数能对所有输入都好，于是把随机性从输入搬到函数选择上——期望是抛自己的硬币，不是赌对手的善意。">
+    <div class="slide-head"><span class="sec">避坑</span><h3>三个高频误区：期望当最坏、删键清槽、误解全域</h3></div>
+    <div class="slide-body">
+      <div class="trap">❌ <strong>「期望 O(1) 就是最坏 O(1)」</strong><br>✅ 若 n 个键全落同一槽，链长为 n，查找退化为 Θ(n)。期望说的是平均的键、在均匀散列假设下；堵最坏输入靠全域散列，也只是期望意义。</div>
+      <div class="trap">❌ <strong>开放寻址里「直接删掉一个键、清空槽位」</strong><br>✅ 清空会斩断他人的探查序列：抹掉槽 1 的 14，再找 79 会在槽 1 遇空误判「不存在」。正确做法：置特殊标记 DELETED，查找跳过、插入复用。</div>
+      <div class="trap">❌ <strong>全域散列是「找一个更好的固定函数」</strong><br>✅ 恰恰相反：它承认没有固定函数对所有输入都好，把随机性从「输入分布」转移到「函数选择」——期望是抛自己的硬币，不是赌对手的善意。</div>
+    </div>
+  </section>
+
+  <section class="slide" data-narration="把本章放回排序与检索的版图，三种结构的分工一目了然。查找、插入、删除这三件事，已排序数组查找要对数时间、增删要线性挪位置，红黑树三项全是对数最坏时间，而哈希表三项全是期望常数——这是它赢的三场。但翻过来：最小值，数组常数、树对数，哈希表不支持，只能全表扫；前驱后继，哈希表不支持；按序遍历，哈希表输出的顺序毫无意义。原因很本质：散列函数是故意把相近的键打散到远处，打散越均匀性能越好，顺序信息也就被有意销毁了。所以口诀是：要顺序选树，不要顺序选哈希。那么红黑树怎么既快又有序？这正是下一章。">
+    <div class="slide-head"><span class="sec">接口</span><h3>哈希赢存取、输顺序，有序操作交给红黑树</h3></div>
+    <div class="slide-body">
+      <table class="small">
+        <thead><tr><th>操作</th><th>已排序数组（第3章）</th><th>哈希表（本章）</th><th>红黑树（第5章）</th></tr></thead>
+        <tbody>
+          <tr><td class="l"><strong>查找</strong></td><td>O(lg n) 最坏</td><td><strong>O(1) 期望</strong></td><td>O(lg n) 最坏</td></tr>
+          <tr><td class="l"><strong>插入</strong></td><td>O(n)（要挪位置）</td><td><strong>O(1) 期望</strong></td><td>O(lg n) 最坏</td></tr>
+          <tr><td class="l"><strong>删除</strong></td><td>O(n)</td><td><strong>O(1) 期望</strong></td><td>O(lg n) 最坏</td></tr>
+          <tr><td class="l"><strong>最小值</strong></td><td>O(1)</td><td>不支持（全表扫 Θ(n)）</td><td>O(lg n) 最坏</td></tr>
+          <tr><td class="l"><strong>前驱/后继</strong></td><td>O(1)（按下标）</td><td>不支持</td><td>O(lg n) 最坏</td></tr>
+          <tr><td class="l"><strong>按序遍历</strong></td><td>O(n) 且天然有序</td><td>输出顺序无意义</td><td>O(n) 中序即有序</td></tr>
+        </tbody>
+      </table>
+      <div class="tip">钩子：哈希表故意把相近的键打散到远处——顺序被有意销毁。要 MINIMUM、SUCCESSOR、范围查询？请等第5章红黑树，它用 O(lg n) 的存取代价保住全序。</div>
+    </div>
+  </section>
+
+  <section class="slide" data-narration="三句话讲完本章。第一句，解决什么：字典的插入、删除、按关键字查找能不能比对数时间更快——能，期望常数，代价是放弃键之间的顺序。第二句，核心机制：散列函数把大全域压进 m 槽小表，冲突必然发生；链接法槽上挂链，成功查找期望一加二分之阿尔法；开放寻址表内探查，不成功查找上界一除以一减阿尔法；装载因子阿尔法是唯一要盯住的变量；全域散列随机选函数，对任何输入都保住期望。第三句，承上启下：第三章管批量整理，本章管高频存取，需要最小值、前驱、范围查询时，请交给第五章红黑树。屏幕上这条公式是本章的毕业证，合上书也要能默写。">
+    <div class="slide-head"><span class="sec">小结</span><h3>三句话讲完第4章</h3></div>
+    <div class="slide-body">
+      <div class="chain">
+        <div class="link"><span class="no">1</span><span class="txt"><strong>解决什么</strong>：字典的插入/删除/按 key 查找能否比 O(lg n) 更快——能，期望 O(1)，代价是放弃顺序。</span></div>
+        <div class="link"><span class="no">2</span><span class="txt"><strong>核心机制</strong>：散列函数把大全域压进 m 槽小表；冲突必然，链接法挂链、开放寻址表内探；装载因子 α 是唯一要盯住的变量；全域散列随机选函数保住期望。</span></div>
+        <div class="link"><span class="no">3</span><span class="txt"><strong>承上启下</strong>：第3章管批量整理，本章管高频存取；要 MINIMUM、前驱、范围查询，交给第5章红黑树。</span></div>
+      </div>
+      <div class="formula formula-concl">$$\text{链接法成功}\approx \boldsymbol{1+\frac{\alpha}{2}}\qquad \text{开放寻址不成功}\le \boldsymbol{\frac{1}{1-\alpha}}\quad\text{——合上书也要能默写}$$</div>
+    </div>
+  </section>
+
+  <section class="slide slide-cover" data-narration="本章到此结束，但真正的考试现在才开始。关掉页面，拿一张纸，完成四件事：第一，写出装载因子的定义，默写链接法成功查找一加二分之阿尔法、不成功一加阿尔法、开放寻址不成功一除以一减阿尔法这三条公式；第二，画出 m 等于九、九键插入后的链接法散列表，九个槽全标出来；第三，手算 m 等于十三的双重散列下插入十四和七十九的完整探查序列，每步写算式；第四，不看资料说出阿尔法零点五和零点九时开放寻址的探查上界，并用聚集解释线性探测为什么更差。全过，本章毕业。下一章预告：二叉搜索树与红黑树——哈希表放弃的顺序，它用对数时间全部保住。我们下一章见。">
+    <div class="kicker">本 章 结 束</div>
+    <h1>用放弃顺序，换期望常数</h1>
+    <div class="sub">毕业挑战：合上书，拿一张纸</div>
+    <div class="divider"></div>
+    <div class="meta">
+      ☑ 默写 α 定义与三条期望探查公式　　☑ 画出 m = 9 九键链接法散列表<br>
+      ☑ 手算 m = 13 双重散列插入 14、79 的探查序列　　☑ 说出 α = 0.5、0.9 的 1/(1−α) 上界并用聚集解释线性探测<br><br>
+      下一章 · 第5章 二叉搜索树与红黑树：哈希表放弃的顺序，它用 O(lg n) 最坏代价全部保住
+    </div>
+  </section>
+
+  <!-- 页脚：brand 改为本章标题；总页数改 pagenum 初值 -->
+  <div id="footer">
+    <span class="brand">第4章 哈希表 · 算法导论课件</span>
+    <span id="pagenum">1 / 19</span>
+  </div>
+
+  <!-- 导航 -->
+  <div class="nav">
+    <button id="prev" title="上一页 (←)">‹</button>
+    <button id="next" title="下一页 (→ / 空格)">›</button>
+  </div>
+  <div id="hint">← → 翻页 · 空格下一页 · 推导页逐步显示 · 点击左右半屏翻页</div>
+
+</div>
+
+<!-- mermaid 本地引用，保证离线可用；初始化参数全套课件统一，勿改 -->
+<script src="assets/mermaid.min.js"></script>
+<script>
+mermaid.initialize({
+  startOnLoad: false,   // 必须为 false：display:none 的隐藏页渲染会得到 0 宽高的退化 SVG，
+                        // 改为页面激活时懒渲染（见 renderMermaid）
+  theme: "base",
+  themeVariables: {
+    primaryColor: "#ebf8ff",
+    primaryBorderColor: "#2b6cb0",
+    primaryTextColor: "#1a365d",
+    lineColor: "#718096",
+    fontFamily: "-apple-system, PingFang SC, sans-serif",
+    fontSize: "15px"
+  },
+  flowchart: { curve: "linear", htmlLabels: false }
+});
+</script>
+<script>
+(function(){
+  const slides = Array.from(document.querySelectorAll('.slide'));
+  const total = slides.length;
+  let idx = 0;
+
+  const params = new URLSearchParams(location.search);
+  const startSlide = parseInt(params.get('slide'), 10);
+  if (params.get('autohide') === '1') document.body.classList.add('autohide');
+  if (!isNaN(startSlide) && startSlide >= 1 && startSlide <= total) idx = startSlide - 1;
+
+  const progress = document.getElementById('progress');
+  const pagenum = document.getElementById('pagenum');
+  const prevBtn = document.getElementById('prev');
+  const nextBtn = document.getElementById('next');
+
+  // 推导分步：每页记住已展开的步数；autohide（截图）模式下 CSS 强制全显
+  const stepState = new Map();
+  function stepsOf(i){ return Array.from(slides[i].querySelectorAll('.step')); }
+  function applySteps(){
+    stepsOf(idx).forEach((el, k)=> el.classList.toggle('on', k < (stepState.get(idx) || 0)));
+  }
+  // 前进一步：先展开本页下一步，全部展开后才翻页
+  function forward(){
+    const steps = stepsOf(idx);
+    const shown = stepState.get(idx) || 0;
+    if (shown < steps.length){ stepState.set(idx, shown + 1); applySteps(); return; }
+    go(idx + 1);
+  }
+  // 后退一步：先收起本页最后一步，收完才回上一页
+  function backward(){
+    const steps = stepsOf(idx);
+    const shown = stepState.get(idx) || 0;
+    if (shown > 0){ stepState.set(idx, shown - 1); applySteps(); return; }
+    go(idx - 1);
+  }
+
+  // mermaid 懒渲染：只在页面激活（有真实宽高）时渲染该页的图，渲染后打 data-done 防重复
+  function renderMermaid(slide){
+    if (typeof mermaid === 'undefined') return;
+    const nodes = Array.from(slide.querySelectorAll('.mermaid:not([data-done])'));
+    if (!nodes.length) return;
+    nodes.forEach(n => n.setAttribute('data-done', ''));
+    mermaid.run({ nodes }).catch(err => {
+      nodes.forEach(n => n.removeAttribute('data-done'));
+      console.error('mermaid 渲染失败：', err);
+    });
+  }
+
+  function render(){
+    slides.forEach((s,i)=> s.classList.toggle('active', i===idx));
+    progress.style.width = ((idx+1)/total*100) + '%';
+    pagenum.textContent = (idx+1) + ' / ' + total;
+    prevBtn.disabled = (idx===0);
+    nextBtn.disabled = (idx===total-1);
+    applySteps();
+    renderMermaid(slides[idx]);
+  }
+  function go(n){ idx = Math.max(0, Math.min(total-1, n)); render(); }
+
+  prevBtn.addEventListener('click', e=>{ e.stopPropagation(); backward(); });
+  nextBtn.addEventListener('click', e=>{ e.stopPropagation(); forward(); });
+
+  document.addEventListener('keydown', e=>{
+    if(e.key==='ArrowRight'||e.key===' '||e.key==='PageDown'){ e.preventDefault(); forward(); }
+    else if(e.key==='ArrowLeft'||e.key==='PageUp'){ e.preventDefault(); backward(); }
+    else if(e.key==='Home'){ stepState.set(idx, 0); go(0); }
+    else if(e.key==='End'){ go(total-1); }
+  });
+
+  document.getElementById('stage').addEventListener('click', e=>{
+    if(e.target.closest('.nav')) return;
+    const x = e.clientX;
+    if(x < window.innerWidth*0.5) backward(); else forward();
+  });
+
+  function fit(){
+    const s = Math.min(window.innerWidth/1280, window.innerHeight/720);
+    document.getElementById('stage').style.transform = 'translate(-50%,-50%) scale(' + s + ')';
+  }
+  window.addEventListener('resize', fit);
+  fit();
+  render();
+})();
+</script>
+</body>
+</html>
