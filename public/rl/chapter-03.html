@@ -1,0 +1,787 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第3章 有限马尔可夫决策过程 · 强化学习互动讲义</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+<nav class="topbar">
+  <div class="topbar-inner">
+    <span class="brand"><a href="index.html" style="color:inherit">← 学习地图</a></span>
+    <span class="crumb">第一段 · 表格法基础 / 第3章</span>
+  </div>
+</nav>
+
+<div class="wrap">
+
+  <div class="lecture-head">
+    <span class="ch-label">CHAPTER 03 · 表格法基础</span>
+    <h1>有限马尔可夫决策过程</h1>
+    <p class="lead">状态回来了——用一套数学语言，把"决策影响未来"说死。</p>
+  </div>
+
+  <!-- ===== 章首四件套之 1：全书定位 ===== -->
+  <div class="position-bar">
+    <strong>本章在主线上的位置：</strong>第 2 章在无状态环境里练熟了价值估计与探索 → <u>本章把状态与状态转移请回来，给出全书的形式化语言 MDP，并用 Bellman 方程把值函数定义成"能算的方程"</u> → 第 4 章用动态规划解这个方程，第 5 章起在不知道方程时采样逼近它。<br>
+    第3章回答主线上的第三个问题：<strong>当动作会改变未来状态时，"局面的好坏"如何被严格定义？</strong>
+    <div class="map-inline">
+      <span class="node">Ch1 引言：RL 问题</span><span class="arrow">→</span>
+      <span class="node">Ch2 多臂老虎机（无状态，练价值估计）</span><span class="arrow">→</span>
+      <span class="node here">Ch3 有限 MDP（建模语言）</span><span class="arrow">→</span>
+      <span class="node">Ch4 动态规划（模型内求解）</span><span class="arrow">‖</span>
+      <span class="node">Ch5-8 无模型表格法（MC/TD/规划）</span><span class="arrow">‖</span>
+      <span class="node">Ch9-11 函数逼近（大规模状态）</span><span class="arrow">‖</span>
+      <span class="node">Ch12-13 策略梯度与前沿</span>
+    </div>
+    <div style="margin-top:8px; font-size:12.5px; color:var(--ink-faint)">
+      全书四段分工：<strong>表格法基础（1–4）</strong>在状态可枚举的小世界里建立全部概念；<strong>表格型无模型（5–8）</strong>扔掉环境模型，用采样学习；<strong>函数逼近（9–11）</strong>把值表换成参数化函数以应对大状态空间；<strong>策略与前沿（12–13）</strong>直接优化策略本身。
+    </div>
+  </div>
+
+  <!-- ===== 章首四件套之 2：学习目标 ===== -->
+  <div class="objectives">
+    <h4>🎯 学完本章，合上书你应该能：</h4>
+    <ol>
+      <li>写出 MDP 的四要素与动态函数 p(s′,r|s,a)，并解释马尔可夫性质的含义</li>
+      <li>写出状态值函数 v_π 与动作值函数 q_π 的定义，说出两者的分工</li>
+      <li>写出 Bellman 期望方程（v_π 与 q_π 两式），并在 4×4 网格世界上手算验证一个状态的值</li>
+      <li>写出 Bellman 最优方程，解释为什么"对 q* 取贪心"就直接得到最优策略</li>
+      <li>说出最优值函数唯一而最优策略可以不唯一的原因</li>
+    </ol>
+  </div>
+
+  <div class="lecture">
+
+    <!-- ===== 章首四件套之 3：推导主线 ===== -->
+    <div class="figure">
+      <div class="mermaid">
+flowchart LR
+  A["动作改变未来状态<br>老虎机框架装不下"] --> B["MDP：状态+转移+奖励<br>四要素"]
+  B --> C["策略 π 下<br>局面值多少？"]
+  C --> D["值函数 v_π 与 q_π<br>对回报取期望"]
+  D --> E["值之间互相引用<br>怎么算？"]
+  E --> F["Bellman 方程<br>把定义变成方程组"]
+  F --> G["代价：方程组要会解<br>Ch4 动态规划"]
+  classDef hot fill:#fbeedd,stroke:#c4651f,stroke-width:2.5px,color:#c4651f;
+  classDef danger fill:#fae9e7,stroke:#b03a2e,stroke-width:2.5px,color:#b03a2e;
+  class F hot;
+  class G danger;
+      </div>
+      <div class="caption">本章推导主线：状态转移逼出 MDP，MDP 逼出值函数，值函数的互相引用逼出 Bellman 方程。红色节点是留给第 4 章的账：方程有了，谁来解？</div>
+    </div>
+
+    <!-- ============ 3.1 ============ -->
+    <h2><span class="sec-no">3.1</span>从老虎机到 MDP：状态入场</h2>
+
+    <p>第 2 章的上下文老虎机已经引入了状态，但动作不影响下一个状态。本章补上最后一条边：<strong>动作 → 状态转移</strong>。一旦动作改变未来，"这一步赚多少"就不再等于"这一步值多少"——决策有了长期后果。</p>
+
+    <p><span class="term">马尔可夫决策过程</span>（Markov Decision Process, MDP）用四个要素刻画这类问题：</p>
+    <ul>
+      <li>状态集合 𝒮、动作集合 𝒜、奖励集合 ℛ（本章假定三者都<strong>有限</strong>，故称有限 MDP）；</li>
+      <li><span class="term">动态函数</span>（Dynamics）p(s′, r | s, a)：在状态 s 执行动作 a 后，转移到 s′ 并得到奖励 r 的概率。</li>
+    </ul>
+
+    <p>关键的假设藏在 p 的写法里：它只依赖 (s, a)，不依赖更早的历史。这就是<span class="term">马尔可夫性质</span>（Markov Property）：<strong>状态是对未来的充分统计量</strong>——知道现在，过去怎么来的无所谓。</p>
+
+    <h3>在网格世界里把 p 写具体</h3>
+    <p>回到第 1 章的 4×4 网格世界（终点 (1,1) 与 (4,4)，每步 −1，撞墙停原地，γ=1）：</p>
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>情形</th><th>p(s′, r | s, a) 的取值</th></tr>
+        <tr><td>s=(2,2)，a=上</td><td>p((1,2), −1 | (2,2), 上) = 1，其余组合为 0（确定性转移）</td></tr>
+        <tr><td>s=(1,3)，a=上（撞墙）</td><td>p((1,3), −1 | (1,3), 上) = 1——原地不动，奖励仍是 −1</td></tr>
+        <tr><td>s=(2,1)，a=左（撞墙）</td><td>p((2,1), −1 | (2,1), 左) = 1</td></tr>
+        <tr><td>s=(1,2)，a=左（进终点）</td><td>p((1,1), −1 | (1,2), 左) = 1；终点是吸收态，回合结束</td></tr>
+      </table>
+    </div>
+    <p>这个环境是确定性的（每个 (s,a) 只对应一个结果），但 MDP 框架完全允许随机转移——比如"机器人打滑"可以写成 p=0.8 到目标格、0.2 到相邻格。<strong>p 就是环境的"物理定律"，第 4 章会假定它已知。</strong></p>
+
+    <div class="figure">
+      <div class="mermaid">
+flowchart LR
+  S["状态 s"] -->|"按 π 选动作 a"| P["动态函数 p"]
+  P -->|"概率分布"| NS["新状态 s′"]
+  P -->|"概率分布"| R["奖励 r"]
+  NS --> S
+      </div>
+      <div class="caption">图 3.1 MDP 的单步转移。注意与第 1 章闭环图的区别：现在转移规则 p 被显式写出，它是环境的全部"物理"。</div>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>"马尔可夫性质是说环境没有记忆"——不准确。它说的是<strong>状态这个变量已经把记忆装下了</strong>。如果历史真的影响未来（如牌局里出过的牌），解决办法是把历史信息塞进状态里（记牌），而不是放弃马尔可夫框架。"状态要足以决策"是建模者的责任，不是环境的义务。</p>
+    </div>
+
+    <!-- 回忆卡片 3.1 -->
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 3.1-1</div>
+              <div class="q-text">写出动态函数 p(s′, r | s, a) 的含义，并指出马尔可夫性质体现在哪。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              在 s 执行 a 后转移到 s′ 并得奖励 r 的概率；它只依赖当前 (s,a) 而非历史——状态是未来的充分统计量。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 3.1-2</div>
+              <div class="q-text">MDP 与上下文老虎机的本质区别是什么？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              MDP 中动作通过 p 影响下一个状态，决策有长期后果；上下文老虎机中动作不影响后续状态，只有即时收益。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 3.2 ============ -->
+    <h2><span class="sec-no">3.2</span>策略与值函数：给"局面的好坏"下定义</h2>
+
+    <p>有了 MDP，第 1 章的词汇可以全部严格化。<span class="term">策略</span>（Policy）π(a|s)：在状态 s 选动作 a 的概率——注意是<strong>概率分布</strong>，确定性策略只是它的特例（某动作概率为 1）。</p>
+
+    <p>值函数是"回报的期望"。两个版本，分工不同：</p>
+
+    <div class="formula">v<sub>π</sub>(s) = 𝔼<sub>π</sub>[ G<sub>t</sub> | S<sub>t</sub> = s ]　　（<span class="term">状态值函数</span> State-Value Function）</div>
+    <div class="formula">q<sub>π</sub>(s, a) = 𝔼<sub>π</sub>[ G<sub>t</sub> | S<sub>t</sub> = s, A<sub>t</sub> = a ]　　（<span class="term">动作值函数</span> Action-Value Function）</div>
+
+    <p>读法：v_π(s) = "在 s，<strong>之后一切按 π 行事</strong>，平均能拿多少回报"；q_π(s,a) = "在 s，<strong>先强制走一步 a</strong>，之后按 π 行事，平均能拿多少"。一个是"局面分"，一个是"这步棋分"。选择动作时需要的是后者；描述局面时前者更简洁。</p>
+
+    <h3>网格世界实例：均匀随机策略的值</h3>
+    <p>设策略为"四个方向各 1/4 概率"的均匀随机策略。第 4 章会教你如何算出它的值函数，这里先给出收敛结果（每个格子的数 = 从该格出发、随机乱走到终点的期望步数取负）：</p>
+    <div class="tbl-wrap">
+      <table>
+        <tr><th></th><th>列1</th><th>列2</th><th>列3</th><th>列4</th></tr>
+        <tr><th>行1</th><td>0</td><td>−14</td><td>−20</td><td>−22</td></tr>
+        <tr><th>行2</th><td>−14</td><td>−18</td><td>−20</td><td>−20</td></tr>
+        <tr><th>行3</th><td>−20</td><td>−20</td><td>−18</td><td>−14</td></tr>
+        <tr><th>行4</th><td>−22</td><td>−20</td><td>−14</td><td>0</td></tr>
+      </table>
+    </div>
+    <p>读表：(2,2) 的值是 −18——随机乱走平均要 18 步才能到终点；角落 (1,4) 是 −22，离两个终点都最远。注意两个终点值为 0（已结束，无更多 −1）。<strong>值函数把"延迟回报"变成了每个格子上一个可以比较的数字</strong>——这正是第 1 章许下的承诺。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>值函数的定义里有三个主角：状态 s、策略 π、期望 𝔼。换策略，同状态的值就变——<strong>值永远是"相对于某个策略"的</strong>。所以 v_π 不是地图的属性，是"地图 + 走法"的共同属性。</p>
+    </div>
+
+    <!-- 回忆卡片 3.2 -->
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 3.2-1</div>
+              <div class="q-text">写出 v_π(s) 与 q_π(s,a) 的定义，并说明两者分工。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              v_π(s)=𝔼_π[G_t|S_t=s]（局面分）；q_π(s,a)=𝔼_π[G_t|S_t=s, A_t=a]（先走 a 再按 π 的分）。选动作用 q，描述局面用 v。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 3.2-2</div>
+              <div class="q-text">为什么值函数总是带下标 π？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              值是"按 π 走下去"的期望回报；同一状态换策略，后续轨迹不同，期望回报就不同——值是策略的属性，不是状态的固有属性。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 3.3 ============ -->
+    <h2><span class="sec-no">3.3</span>Bellman 期望方程：值函数的自我引用</h2>
+
+    <p>上一节定义了 v_π，但"对未来无穷步取期望"没法直接算。出路藏在第 1 章的递推 G<sub>t</sub> = R<sub>t+1</sub> + γG<sub>t+1</sub> 里：把期望拆开，会发现 <strong>v_π(s) 可以由后继状态的 v_π(s′) 表示</strong>——</p>
+
+    <div class="formula">v<sub>π</sub>(s) = ∑<sub>a</sub> π(a|s) ∑<sub>s′,r</sub> p(s′,r|s,a) [ r + γ v<sub>π</sub>(s′) ]</div>
+
+    <p>这就是<span class="term">Bellman 期望方程</span>（Bellman Expectation Equation）。读法分两层：先按策略 π 对动作取平均（∑<sub>a</sub>），再按环境动态 p 对结果取平均（∑<sub>s′,r</sub>）；方括号 = 即时奖励 + 折扣后的"下一局面分"。<strong>当前局面的分 = 一步之后的平均收获 + 下一局面的分</strong>。</p>
+
+    <p>q_π 有完全平行的一式：</p>
+
+    <div class="formula">q<sub>π</sub>(s,a) = ∑<sub>s′,r</sub> p(s′,r|s,a) [ r + γ ∑<sub>a′</sub> π(a′|s′) q<sub>π</sub>(s′,a′) ]</div>
+
+    <h3>网格世界手算验证：(2,2) 的值为什么是 −18</h3>
+    <p>用 3.2 节的收敛值表来"验证方程成立"。均匀随机策略下，(2,2) 四方向各 1/4：</p>
+    <ul>
+      <li>上 → (1,2)：r + γv = −1 + (−14) = −15</li>
+      <li>下 → (3,2)：r + γv = −1 + (−20) = −21</li>
+      <li>左 → (2,1)：r + γv = −1 + (−14) = −15</li>
+      <li>右 → (2,3)：r + γv = −1 + (−20) = −21</li>
+    </ul>
+    <div class="formula">v<sub>π</sub>(2,2) = ¼ × [ (−15) + (−21) + (−15) + (−21) ] = ¼ × (−72) = <strong>−18</strong> ✓</div>
+    <p>与表中值一致——Bellman 方程在收敛值上严格成立。再验证一个带撞墙的：(1,3)，上撞墙停在 (1,3)：</p>
+    <ul>
+      <li>上 → 停 (1,3)：−1 + (−20) = −21；下 → (2,3)：−1 + (−20) = −21</li>
+      <li>左 → (1,2)：−1 + (−14) = −15；右 → (1,4)：−1 + (−22) = −23</li>
+    </ul>
+    <div class="formula">v<sub>π</sub>(1,3) = ¼ × [ (−21) + (−21) + (−15) + (−23) ] = ¼ × (−80) = <strong>−20</strong> ✓</div>
+
+    <div class="box insight">
+      <span class="box-tag">✅ 判定规则</span>
+      <p>Bellman 期望方程对<strong>任意策略</strong>成立，它不是优化工具而是<em>一致性条件</em>：一组数若真是 v_π，就必须在每个状态上满足它。有限 MDP 中它是 |𝒮| 个未知数、|𝒮| 个方程的线性方程组——可解。怎么高效解，是第 4 章的事。</p>
+    </div>
+
+    <!-- 回忆卡片 3.3 -->
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 3.3-1</div>
+              <div class="q-text">写出 v_π 的 Bellman 期望方程，并指出两层求和各自在对什么取平均。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              v_π(s) = ∑_a π(a|s) ∑_{s′,r} p(s′,r|s,a)[r + γv_π(s′)]；外层对策略的动作选择取平均，内层对环境的转移与奖励取平均。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 3.3-2</div>
+              <div class="q-text">Bellman 期望方程是优化方法吗？它的本质是什么？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              不是。它是对任意策略都成立的一致性条件（值函数必须满足的自我引用），把"定义"变成"可解的方程组"——求解才是第 4 章的事。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 3.4 ============ -->
+    <h2><span class="sec-no">3.4</span>Bellman 最优方程：从"评价"到"最好"</h2>
+
+    <p>评价一个策略还不够，我们要的是最好的策略。定义<span class="term">最优状态值函数</span> v*(s) = max<sub>π</sub> v_π(s)：所有策略里能拿到的最高局面分；<span class="term">最优动作值函数</span> q*(s,a) = max<sub>π</sub> q_π(s,a)。可以证明：有限 MDP 中 v*、q* <strong>存在且唯一</strong>（但达到它们的策略可以不唯一——多条路一样近）。</p>
+
+    <p>v* 也满足一个自我引用方程，只是把"按 π 取平均"换成"取 max"：</p>
+
+    <div class="formula">v*(s) = max<sub>a</sub> ∑<sub>s′,r</sub> p(s′,r|s,a) [ r + γ v*(s′) ]</div>
+    <div class="formula">q*(s,a) = ∑<sub>s′,r</sub> p(s′,r|s,a) [ r + γ max<sub>a′</sub> q*(s′,a′) ]</div>
+
+    <p>这就是<span class="term">Bellman 最优方程</span>（Bellman Optimality Equation）。直觉：<strong>最优局面的分 = 选最好的那步棋，再领最优的下一局面分</strong>。注意它是<em>非线性</em>的（max 在里面），不能像期望方程那样解线性方程组——第 4 章用迭代对付它。</p>
+
+    <h3>网格世界：最优值表与一次验证</h3>
+    <p>4×4 网格世界的最优值函数（每格 = 到最近终点的最少步数取负）：</p>
+    <div class="tbl-wrap">
+      <table>
+        <tr><th></th><th>列1</th><th>列2</th><th>列3</th><th>列4</th></tr>
+        <tr><th>行1</th><td>0</td><td>−1</td><td>−2</td><td>−3</td></tr>
+        <tr><th>行2</th><td>−1</td><td>−2</td><td>−3</td><td>−2</td></tr>
+        <tr><th>行3</th><td>−2</td><td>−3</td><td>−2</td><td>−1</td></tr>
+        <tr><th>行4</th><td>−3</td><td>−2</td><td>−1</td><td>0</td></tr>
+      </table>
+    </div>
+    <p>验证 (2,2)（v* = −2）。四个动作的"r + γv*(s′)"：</p>
+    <ul>
+      <li>上 → (1,2)：−1 + (−1) = −2；左 → (2,1)：−1 + (−1) = −2</li>
+      <li>下 → (3,2)：−1 + (−3) = −4；右 → (2,3)：−1 + (−3) = −4</li>
+    </ul>
+    <div class="formula">v*(2,2) = max{ −2, −2, −4, −4 } = <strong>−2</strong> ✓　（上、左并列最优）</div>
+
+    <h3>为什么 q* 一出来，最优策略就是白送的</h3>
+    <p>拿到 q* 后，最优策略无需任何额外搜索：<strong>在每个状态选 argmax<sub>a</sub> q*(s,a) 即可</strong>。因为 q* 已经把"先走 a 之后全最优"的长期后果折进了分数——对 q* 的一步贪心，等价于对全局的最优。这叫<em>贪心化</em>，第 4 章的策略改进定理会给它严格证明。</p>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>"对 v* 也能一步贪心"——不行！v*(s′) 是<em>下一个局面</em>的分，从 s 选动作需要知道"哪个 a 能把我送到好的 s′"，这必须借助 p 算期望（即先算 q）。有了 q* 才能甩开模型直接查表。这个 v 与 q 的微妙差别，第 6、7 章选算法时会反复出现。</p>
+    </div>
+
+    <!-- 回忆卡片 3.4 -->
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 3.4-1</div>
+              <div class="q-text">Bellman 最优方程与期望方程的唯一差别是什么？这个差别带来什么后果？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              把 ∑π（按策略平均）换成 max_a（取最优动作）；max 使方程非线性，不能解线性方程组，需要迭代方法。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 3.4-2</div>
+              <div class="q-text">为什么说"最优策略是对 q* 的一步贪心"？对 v* 行吗？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              q*(s,a) 已包含"走 a 后全最优"的长期回报，argmax 即全局最优。对 v* 不行：v* 是下一状态的分，从动作到状态还要经 p 取期望，缺了 q 这层就无法直接选动作。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 3.5 ============ -->
+    <h2><span class="sec-no">3.5</span>错误直觉大扫除</h2>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 误区一：值函数就是"这一格的奖励"</span>
+      <p>网格世界里每步即时奖励都是 −1，但各格 v_π 从 −14 到 −22 不等。值是<strong>对未来全部奖励的折扣期望</strong>，即时奖励只是方程里的 r 一项。看到 v(2,2)=−18 要读出"随机走平均还要 18 步"，而不是"这一格扣 18 分"。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 误区二：γ 小是"近视的缺陷"</span>
+      <p>γ 是<strong>任务定义的一部分</strong>：它规定了多远算远。金融风控里 γ 接近 1，高频交易里 γ 很小——都是合理的任务设定。把 γ 当超参数随手调，等于悄悄换了优化目标。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 误区三：马尔可夫假设是"作弊的简化"</span>
+      <p>它不是对世界的断言，而是对<em>状态设计</em>的要求：凡影响未来的历史信息都应装进状态。扑克牌把"已出的牌"记入状态后就马尔可夫了。真正的问题不是假设太强，而是状态设计太懒。</p>
+    </div>
+
+    <div class="box idea">
+      <span class="box-tag">💡 本章给下一章留的账</span>
+      <p>现在手里有两组方程：Bellman 期望方程（评价 π）与最优方程（定义 v*）。但它们都是"方程组"——16 个格子的网格世界就是 16 个互相纠缠的方程。<strong>如何系统地解出 v_π 与 v*？</strong>第 4 章的动态规划给出第一套答案：只要 p 已知，就能迭代求解。</p>
+    </div>
+
+    <!-- 回忆卡片 3.5 -->
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 3.5-1</div>
+              <div class="q-text">"v(2,2) = −18"与"这一步奖励是 −1"矛盾吗？各说明什么？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              不矛盾。−1 是单步即时奖励；−18 是从 (2,2) 出发按随机策略走下去的期望累计回报（平均还要 18 步到终点）。值是对未来的预测，不是已发生的分数。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 3.5-2</div>
+              <div class="q-text">为什么最优值函数唯一，最优策略却可以不唯一？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              v* 是 max 出来的数，唯一；但多个动作可能并列取得 max（如 (2,2) 的上与左），不同并列选择构成不同最优策略，值相同。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===== 章末五件套之 1：概念卡 ===== -->
+    <h2><span class="sec-no">🃏</span>概念卡：本章概念的一分钟画像</h2>
+    <p>翻面前先自问：这个概念我能用一句话讲清楚吗？</p>
+    <div class="flip-grid">
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 1</div>
+            <div class="q-text">马尔可夫性质（Markov Property）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">未来只依赖当前状态与动作，与到达当前的历史无关。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">让决策只需看"现在"，不必背历史包袱。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">棋局本身包含全部信息，不必知道这盘棋怎么走到这。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">当成对环境的断言——其实是对状态设计的要求。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">全书所有算法的理论地基；第 9 章函数逼近也建立在它之上。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 2</div>
+            <div class="q-text">动态函数 p(s′,r|s,a)</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">在 s 执行 a 后转移到 s′ 并得奖励 r 的概率分布。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">用一个对象封装环境的全部"物理规律"。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">环境的规则手册：每个动作的所有可能后果及概率。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为必须确定——随机转移（打滑、噪声）完全合法。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">第 4 章 DP 假定它已知；第 5 章起讨论未知时怎么办。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 3</div>
+            <div class="q-text">策略 π(a|s)</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">在状态 s 选各动作的概率分布；确定性策略是其特例。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">把"行为"变成可评价、可改进的数学对象。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">棋风：每个局面下的出手习惯（可含随机性）。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为策略必须确定——随机策略既合法也常必需（探索）。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">第 4 章策略迭代的主角；第 13 章直接参数化它。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 4</div>
+            <div class="q-text">状态值函数 v_π(s)</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">𝔼_π[G_t | S_t=s]：在 s 按 π 行事的期望回报。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">把延迟回报折算成每个局面的"好坏分"。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">棋手扫一眼棋盘说"我占优"的那个数。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">当成即时奖励；它是关于未来的预测，且依赖 π。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">第 4 章策略评估的对象；第 9 章被参数化逼近。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 5</div>
+            <div class="q-text">动作值函数 q_π(s,a)</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">𝔼_π[G_t | S_t=s, A_t=a]：先走 a 再按 π 的期望回报。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">直接回答"这步棋值多少"，支持无模型选动作。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">每个候选落子的"出价单"。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">与 v_π 混用——选动作要 q，只有 v 还得借 p 折算。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">第 6、7 章 Q-learning/SARSA 的主角；贪心化的依据。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 6</div>
+            <div class="q-text">Bellman 最优方程</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">v*(s) = max_a Σp[r + γv*(s′)]：最优值的自我引用。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">把"最优"从策略搜索变成方程求解。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">最好的局面 = 走最好的那步 + 领最好的下一局面。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">当线性方程组解——max 使其非线性，须迭代。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">第 4 章值迭代的更新规则直接由它改写而来。</span></div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- ===== 章末五件套之 2：分层习题 ===== -->
+    <h2><span class="sec-no">📝</span>分层习题</h2>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>以下说法哪些正确？① v_π(s) 只与状态 s 有关，与策略无关；② Bellman 期望方程对任意策略成立；③ 已知 q* 后，无需知道 p 也能选出最优动作；④ 已知 v* 后，无需知道 p 也能选出最优动作。</div>
+      <details>
+        <summary>提示</summary>
+        <p>逐条对照值函数定义中的下标 π、期望方程的适用条件、q 与 v 在"选动作"上的差别。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          ①错：v_π 是"按 π 走下去"的期望回报，换 π 值就变。②对：它是一致性条件，任意策略的值函数都满足。③对：argmax_a q*(s,a) 即最优动作，q* 已含转移后果。④错：v* 是下一状态的分，从动作到状态必须经 p 取期望——没有 p 算不出 q，无法选动作。
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>"既然最优值函数唯一，最优策略也必然唯一。"对吗？</div>
+      <details>
+        <summary>提示</summary>
+        <p>想想网格世界 (2,2) 的 max：上 −2、左 −2。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          不对。v* 是 max 的<em>结果</em>，唯一；但取得 max 的动作可以有多个并列（(2,2) 的上与左同为 −2）。每个并列最优动作的任意组合都是一个最优策略——值唯一，策略可以不唯一。
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>用 3.2 节收敛值表，验证 v_π(2,3) = −20（均匀随机策略，γ=1，每步 −1）。(2,3) 的四邻：(1,3)=−20，(3,3)=−18，(2,2)=−18，(2,4)=−20。</div>
+      <details>
+        <summary>提示</summary>
+        <p>套 Bellman 期望方程：v_π(s) = ¼ Σ[r + v(邻)]，四邻无撞墙。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          上：(−1)+(−20)=−21；下：(−1)+(−18)=−19；左：(−1)+(−18)=−19；右：(−1)+(−20)=−21。<br>
+          v_π(2,3) = ¼ × (−21−19−19−21) = ¼ × (−80) = <strong>−20</strong> ✓ 与表中值一致。
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>用 3.4 节最优值表，验证 v*(3,3) = −2，并给出 (3,3) 的全部最优动作。(3,3) 四邻：上 (2,3)=−3，下 (4,3)=−1，左 (3,2)=−3，右 (3,4)=−1。</div>
+      <details>
+        <summary>提示</summary>
+        <p>套 Bellman 最优方程：v*(s) = max_a [−1 + v*(邻)]。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          上：−1+(−3)=−4；下：−1+(−1)=−2；左：−1+(−3)=−4；右：−1+(−1)=−2。<br>
+          v*(3,3) = max{−4, −2, −4, −2} = <strong>−2</strong> ✓；最优动作：<strong>下、右</strong>（都走向终点 (4,4) 方向）。这再次说明最优策略不唯一。
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l3">L3 建模应用</span>把"电梯调度"建模为 MDP：一部电梯服务 10 层楼，乘客随机在各层按上下按钮，电梯决定上/下/停/开关门。请给出状态、动作、奖励、动态函数的来源，指出马尔可夫性质由什么保证，以及为什么直接求 v* 不现实。</div>
+      <details>
+        <summary>提示</summary>
+        <p>状态要装下"影响未来的全部信息"；想想 p 从哪来、状态空间多大。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <strong>状态</strong>：电梯位置与方向、各层上下按钮状态、轿内目的楼层集合、（可选）各层等待人数估计。<strong>动作</strong>：上行/下行/停层/开关门。<strong>奖励</strong>：每步 −Σ各层等待时间增量（或 −等待人数），送达乘客 +1。<strong>动态函数 p</strong>：电梯运动确定，但乘客到达随机——p 需从历史客流数据估计或仿真生成。<strong>马尔可夫性</strong>：由"按钮状态 + 轿内目的地"等状态分量保证（历史已被装进去）。<strong>为何难求 v*</strong>：状态组合爆炸（2¹⁰ 按钮 × 10 层 × 方向……），p 又含随机客流——正是第 5 章以后无模型方法、第 9 章函数逼近的用武之地。
+        </div>
+      </details>
+    </div>
+
+    <!-- ===== 章末五件套之 3：自测 ===== -->
+    <h2><span class="sec-no">✍️</span>本章自测</h2>
+    <p class="quiz-hint">点击选项判分，答错会给出原因。</p>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 1</div>
+      <div class="q-stem">马尔可夫性质的准确含义是：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 环境没有任何记忆</li>
+        <li data-opt="b">B. 给定当前状态与动作，未来与历史条件独立</li>
+        <li data-opt="c">C. 状态转移必须是确定性的</li>
+        <li data-opt="d">D. 奖励只与当前状态有关</li>
+      </ul>
+      <div class="quiz-explain">解析：B 正确。A 错：状态可以包含历史摘要（记忆被装进状态）；C 错：p 允许完全随机；D 错：奖励可依赖 (s,a,s′) 三元组。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="c">
+      <div class="q-no">自测 2</div>
+      <div class="q-stem">v_π(s) 定义中的期望 𝔼<sub>π</sub> 是对什么取的？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 只对环境的随机转移</li>
+        <li data-opt="b">B. 只对策略的随机选择</li>
+        <li data-opt="c">C. 对策略选择与环境转移共同产生的整条轨迹</li>
+        <li data-opt="d">D. 对初始状态的分布</li>
+      </ul>
+      <div class="quiz-explain">解析：C 正确——轨迹由 π 与 p 共同生成。A、B 各漏一半；D 错：期望值以 S_t=s 为条件，初始分布不进入定义。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="a">
+      <div class="q-no">自测 3</div>
+      <div class="q-stem">Bellman 期望方程 v_π(s) = Σ_a π(a|s) Σ_{s′,r} p[r + γv_π(s′)] 的本质是：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 值函数必须满足的一致性条件（自我引用），可化为线性方程组求解</li>
+        <li data-opt="b">B. 一种通过试错学习值函数的算法</li>
+        <li data-opt="c">C. 只有最优策略才满足的方程</li>
+        <li data-opt="d">D. 把回报定义改写成期望的形式变换</li>
+      </ul>
+      <div class="quiz-explain">解析：A 正确，它对任意策略成立且未知数以线性方式出现。B 错：它不含任何学习/采样机制；C 错：任意策略都满足；D 错：关键在于用了 G_t=R+γG_{t+1} 的递归结构，不是简单变形。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="d">
+      <div class="q-no">自测 4</div>
+      <div class="q-stem">已知 q*(s,a) 后获得最优策略的正确做法是：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 对每个状态做一步策略评估</li>
+        <li data-opt="b">B. 解一组 Bellman 期望方程</li>
+        <li data-opt="c">C. 用动态函数 p 做一次前向搜索</li>
+        <li data-opt="d">D. 直接对每个状态取 argmax_a q*(s,a)</li>
+      </ul>
+      <div class="quiz-explain">解析：D 正确，q* 已把长期后果折入。A、B 错：评价已经完成，无需再做；C 错：查表即可，前向搜索是对 v* 或未知 q 时的补救。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 5</div>
+      <div class="q-stem">Bellman 最优方程比期望方程更难解，因为：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 它包含 γ</li>
+        <li data-opt="b">B. max 算子使方程非线性，不能写成线性方程组</li>
+        <li data-opt="c">C. 它要求奖励非负</li>
+        <li data-opt="d">D. 它的解不唯一</li>
+      </ul>
+      <div class="quiz-explain">解析：B 正确，故第 4 章用迭代法逼近。A 错：两者都含 γ；C 错：对奖励符号无要求；D 错：恰好相反，v* 唯一，是策略可能不唯一。</div>
+    </div>
+
+    <!-- ===== 章末五件套之 4：三句话复述 ===== -->
+    <div class="retell">
+      <h3>🗣️ 用自己的话，三句话讲完本章</h3>
+      <p>对着空气（或室友）说出这三句。说卡壳的那句，回去重读对应小节。</p>
+      <details>
+        <summary>句1：这章解决什么问题？——</summary>
+        <div class="retell-answer">参考答案：当动作会改变未来状态时，如何严格定义"局面的好坏"——用有限 MDP（𝒮, 𝒜, ℛ, p）建模序贯决策，用值函数 v_π/q_π 把延迟回报折算成状态与动作的分。</div>
+      </details>
+      <details>
+        <summary>句2：核心机制是什么？——</summary>
+        <div class="retell-answer">参考答案：Bellman 方程。利用 G_t = R + γG_{t+1} 的递归，值函数被写成自我引用的一致性条件（期望方程，线性）；把按策略平均换成 max 即得最优方程（非线性），v*/q* 唯一且对 q* 一步贪心即最优策略。</div>
+      </details>
+      <details>
+        <summary>句3：它和前后章怎么分工？——</summary>
+        <div class="retell-answer">参考答案：第 2 章只有动作没有状态，本章补全状态与转移给出建模语言；但 Bellman 方程只是"列方程"，第 4 章在 p 已知时用动态规划求解，第 5 章起讨论 p 未知时用采样逼近。</div>
+      </details>
+    </div>
+
+    <!-- ===== 章末五件套之 5：间隔复习计划 ===== -->
+    <div class="review-plan">
+      <h3>🔁 间隔复习计划</h3>
+      <p>回忆本身比重读有效 10 倍。到点只做一件事：翻卡 + 重做标记题。</p>
+      <table>
+        <tr><th>时间点</th><th>复习内容</th><th>预计用时</th></tr>
+        <tr><td>第 1 天</td><td>概念卡 1–6 全部 + 回忆卡 3.1-1、3.2-1、3.3-1</td><td>10 分钟</td></tr>
+        <tr><td>第 3 天</td><td>概念卡 4、5、6（值函数家族）+ 重做自测错题 + L2 第 1 题（Bellman 验证）</td><td>10 分钟</td></tr>
+        <tr><td>第 7 天</td><td>三句话复述出声说一遍 + 回忆卡 3.4-1、3.4-2、3.5-1</td><td>10 分钟</td></tr>
+        <tr><td>第 15 天</td><td>只做合上书挑战；六条全过则本章毕业，卡在哪条就重读对应小节</td><td>15 分钟</td></tr>
+      </table>
+    </div>
+
+    <!-- 合上书挑战 -->
+    <div class="final-challenge">
+      <h3>📕 合上书挑战</h3>
+      <p class="fc-sub">现在关掉这个页面（或遮住屏幕），拿一张纸，凭记忆完成以下任务。全部做完再回来核对——这是本章真正的毕业考试。</p>
+      <ol id="ch03-challenge-list">
+        <li><span class="fc-check"></span>写出 MDP 四要素与 p(s′,r|s,a)，用一句话说清马尔可夫性质</li>
+        <li><span class="fc-check"></span>写出 v_π 与 q_π 的定义式，并说清两者在"选动作"上的分工</li>
+        <li><span class="fc-check"></span>写出 Bellman 期望方程，并手算验证网格世界 v_π(2,2) = −18</li>
+        <li><span class="fc-check"></span>写出 Bellman 最优方程，并手算验证 v*(2,2) = −2，列出最优动作</li>
+        <li><span class="fc-check"></span>解释"已知 q* 一步贪心即最优，但对 v* 不行"的原因</li>
+        <li><span class="fc-check"></span>回答本章的主线问题：当动作会改变未来状态时，"局面的好坏"如何被严格定义？（一句话）</li>
+      </ol>
+    </div>
+
+    <div class="complete-zone">
+      <button class="btn-complete" id="ch03-btn-complete" onclick="markDone()">✓ 我已完成本章（含合上书挑战）</button>
+    </div>
+
+    <div class="chapter-nav">
+      <a href="chapter-02.html"><span class="nav-dir">← 上一章</span>第2章 多臂老虎机</a>
+      <a href="chapter-04.html" class="next"><span class="nav-dir">下一章 →</span>第4章 动态规划</a>
+    </div>
+
+  </div>
+</div>
+
+<footer class="footer">
+  <div class="wrap">第3章 有限马尔可夫决策过程 · 强化学习互动讲义 · 基于 Sutton &amp; Barto (2018, 2nd ed)</div>
+</footer>
+
+<script src="assets/mermaid.min.js"></script>
+<script>
+mermaid.initialize({
+  startOnLoad: true,
+  theme: "base",
+  themeVariables: {
+    primaryColor: "#e3edf7",
+    primaryBorderColor: "#1d5f9e",
+    primaryTextColor: "#1d5f9e",
+    lineColor: "#5c554b",
+    secondaryColor: "#fbeedd",
+    tertiaryColor: "#f5f1e8",
+    fontFamily: "-apple-system, PingFang SC, sans-serif",
+    fontSize: "14px"
+  },
+  flowchart: { curve: "linear", htmlLabels: false }
+});
+</script>
+<script>
+// 自测题逻辑
+document.querySelectorAll(".quiz-block").forEach(block => {
+  const answer = block.dataset.answer;
+  const explain = block.querySelector(".quiz-explain");
+  block.querySelectorAll(".quiz-opts li").forEach(li => {
+    li.addEventListener("click", () => {
+      const opts = block.querySelectorAll(".quiz-opts li");
+      opts.forEach(o => o.classList.add("disabled"));
+      if (li.dataset.opt === answer) {
+        li.classList.add("correct");
+      } else {
+        li.classList.add("wrong");
+        block.querySelector(`[data-opt="${answer}"]`).classList.add("correct");
+      }
+      explain.classList.add("show");
+    });
+  });
+});
+
+// 合上书清单打勾
+document.querySelectorAll("#ch03-challenge-list li").forEach(li => {
+  li.addEventListener("click", () => li.classList.toggle("checked"));
+});
+
+// 完成标记 → localStorage（第3章）
+const KEY = "rl_progress_v1";
+function loadProgress() {
+  try { return JSON.parse(localStorage.getItem(KEY)) || {}; } catch (e) { return {}; }
+}
+const progress = loadProgress();
+const btn = document.getElementById("ch03-btn-complete");
+if (progress[3] && progress[3].done) {
+  btn.textContent = "✓ 已完成 · 再次点击重置";
+  btn.classList.add("done");
+}
+function markDone() {
+  const p = loadProgress();
+  if (p[3] && p[3].done) {
+    delete p[3];
+    btn.textContent = "✓ 我已完成本章（含合上书挑战）";
+    btn.classList.remove("done");
+  } else {
+    p[3] = { done: true, completedAt: Date.now(), reviewsDone: 0 };
+    btn.textContent = "✓ 已完成 · 复习提醒已开启";
+    btn.classList.add("done");
+  }
+  localStorage.setItem(KEY, JSON.stringify(p));
+}
+</script>
+
+</body>
+</html>

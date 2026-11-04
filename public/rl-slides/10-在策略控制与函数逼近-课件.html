@@ -1,0 +1,563 @@
+<!DOCTYPE html>
+<!--
+  ======================================================================
+  强化学习课件 · 第10章 在策略控制与函数逼近
+  依据 assets/deck-template.html + assets/课件制作规范.md 制作
+  讲义来源：强化学习讲义/chapter-10.html（只读）
+  ======================================================================
+-->
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第10章 在策略控制与函数逼近 · 强化学习课件</title>
+<script>
+window.MathJax = {
+  tex: {
+    inlineMath: [['$', '$'], ['\\(', '\\)']],
+    displayMath: [['$$', '$$'], ['\\[', '\\]']],
+    processEscapes: true,
+    tags: 'none'
+  },
+  svg: { fontCache: 'global', scale: 1.05 },
+  options: { skipHtmlTags: ['script','noscript','style','textarea','pre','code'] }
+};
+</script>
+<!-- MathJax 本地引用（tex-svg 单文件全量组件，约2MB，自带字体数据），file:// 与断网均可用 -->
+<script src="assets/tex-svg.js" async></script>
+<style>
+  :root{
+    --primary:#1a365d; --accent:#2b6cb0; --accent-light:#ebf8ff; --accent-border:#bee3f8;
+    --text:#2d3748; --muted:#718096; --border:#e2e8f0; --bg-light:#f7fafc;
+    --success:#38a169; --danger:#e53e3e; --warning:#dd6b20; --warn-bg:#fffaf0;
+  }
+  *{margin:0;padding:0;box-sizing:border-box;}
+  html,body{width:100%;height:100%;overflow:hidden;background:#0f172a;}
+  body{
+    font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Hiragino Sans GB","Microsoft YaHei","WenQuanYi Micro Hei",sans-serif;
+    color:var(--text);
+  }
+  #stage{
+    position:absolute; left:50%; top:50%;
+    width:1280px; height:720px;
+    transform:translate(-50%,-50%) scale(1);
+    transform-origin:center center;
+    background:#ffffff;
+    box-shadow:0 0 40px rgba(0,0,0,.4);
+    overflow:hidden;
+  }
+  .slide{
+    position:absolute; inset:0;
+    padding:36px 60px 52px;
+    display:none;
+    flex-direction:column;
+    background:#ffffff;
+    opacity:0;
+    transition:opacity .35s ease;
+  }
+  .slide.active{ display:flex; opacity:1; }
+
+  #progress{ position:absolute; top:0; left:0; height:6px; background:var(--accent); width:0; z-index:50; transition:width .35s; }
+
+  .slide-cover{ justify-content:center; align-items:center; text-align:center; }
+  .slide-cover{ background:linear-gradient(135deg,#1a365d 0%,#2b6cb0 100%); color:#fff; }
+  .slide-cover .kicker{ font-size:22px; letter-spacing:6px; opacity:.85; margin-bottom:18px;}
+  .slide-cover h1{ font-size:64px; font-weight:800; line-height:1.2; margin-bottom:22px; letter-spacing:2px;}
+  .slide-cover .sub{ font-size:26px; opacity:.92; margin-bottom:36px;}
+  .slide-cover .meta{ font-size:19px; opacity:.85; line-height:2;}
+  .slide-cover .divider{ width:160px;height:5px;background:#fff;opacity:.6;margin:0 auto 30px;border-radius:3px;}
+  .slide-cover .question{ font-size:24px; background:rgba(255,255,255,.12); border:1px solid rgba(255,255,255,.35); border-radius:12px; padding:12px 28px; margin-bottom:30px;}
+
+  .slide-head{ display:flex; align-items:baseline; gap:16px; border-bottom:3px solid var(--accent); padding-bottom:9px; margin-bottom:12px;}
+  .slide-head .sec{ font-size:17px; color:var(--accent); font-weight:700; background:var(--accent-light); padding:3px 11px; border-radius:6px; white-space:nowrap;}
+  .slide-head h3{ font-size:29px; color:var(--primary); font-weight:700;}
+  .slide-body{ flex:1; display:flex; flex-direction:column; justify-content:center; min-height:0; }
+
+  p{ font-size:21px; line-height:1.65; margin-bottom:8px;}
+  .lead{ font-size:23px; color:#374151; line-height:1.75;}
+  ul,ol{ margin:0 0 8px 26px; font-size:21px; line-height:1.7;}
+  li{ margin-bottom:5px;}
+  strong{ color:var(--primary); }
+
+  .formula{ background:var(--accent-light); border-left:5px solid var(--accent); border-radius:0 10px 10px 0; padding:9px 22px; margin:9px 0; text-align:center; font-size:23px;}
+  .formula-concl{ background:#fffaf0; border-left:5px solid var(--warning);}
+  .MathJax{ font-size:1.05em !important; }
+  mjx-container[display="true"]{ margin:6px 0 !important; }
+
+  table{ width:100%; border-collapse:collapse; margin:10px 0; font-size:20px;}
+  th{ background:var(--accent); color:#fff; padding:8px 12px; text-align:center; font-weight:600;}
+  td{ padding:7px 12px; border:1px solid var(--border); text-align:center; vertical-align:middle;}
+  tr:nth-child(even) td{ background:var(--bg-light);}
+  td.l{ text-align:left; }
+  table.small{ font-size:18px; }
+  table.small td, table.small th{ padding:6px 10px; }
+
+  .card{ background:var(--accent-light); border:1px solid var(--accent-border); border-radius:12px; padding:12px 20px; margin:10px 0;}
+  .tip{ background:#ebf8ff; border-left:5px solid var(--accent); border-radius:0 10px 10px 0; padding:10px 20px; margin:10px 0; font-size:20px; color:#2c5282;}
+  .deep{ background:#f0fff4; border-left:5px solid var(--success); border-radius:0 10px 10px 0; padding:10px 20px; margin:10px 0; font-size:20px; color:#22543d;}
+  .warn{ background:var(--warn-bg); border-left:5px solid var(--warning); border-radius:0 10px 10px 0; padding:10px 20px; margin:10px 0; font-size:20px; color:#744210;}
+  .trap{ background:#fef2f2; border-left:5px solid var(--danger); border-radius:0 10px 10px 0; padding:10px 20px; margin:10px 0; font-size:20px; color:#7f1d1d;}
+
+  .pause{
+    background:var(--warn-bg); border:2px dashed var(--warning); border-radius:14px;
+    padding:10px 22px; margin:10px 0; display:flex; align-items:center; gap:16px;
+  }
+  .pause .icon{ font-size:36px; line-height:1; }
+  .pause .txt b{ color:var(--warning); font-size:21px; }
+  .pause .txt p{ font-size:18px; color:#744210; margin:3px 0 0; }
+
+  .cols{ display:flex; gap:28px; align-items:stretch; }
+  .col{ flex:1; min-width:0; }
+
+  .step{ opacity:0; transform:translateY(8px); transition:opacity .3s ease, transform .3s ease; }
+  .step.on{ opacity:1; transform:none; }
+  body.autohide .step{ opacity:1 !important; transform:none !important; }
+  .step-hint{ font-size:14px; color:var(--muted); margin-top:4px;}
+  body.autohide .step-hint{ display:none; }
+
+  .chain{ margin:6px 0; }
+  .chain .link{ display:flex; align-items:center; gap:14px; margin:6px 0;}
+  .chain .no{ width:34px; height:34px; border-radius:50%; background:var(--accent); color:#fff; font-size:18px; font-weight:700; display:flex; align-items:center; justify-content:center; flex-shrink:0;}
+  .chain .txt{ font-size:21px; line-height:1.5;}
+  .chain .txt strong{ color:var(--primary); }
+
+  .mmd{ background:var(--bg-light); border:1px solid var(--border); border-radius:12px; padding:10px 14px; display:flex; justify-content:center; align-items:center; margin:8px 0;}
+  .mmd .mermaid{ display:flex; justify-content:center; width:100%; visibility:hidden; }
+  .mmd .mermaid[data-done]{ visibility:visible; }
+  .mmd .mermaid svg{ max-width:100%; height:auto; max-height:230px; }
+  .mmd.mmd-tall .mermaid svg{ max-height:330px; }
+  .mmd.mmd-sm svg{ max-height:150px; }
+  .mmd-row{ display:flex; gap:18px; }
+  .mmd-row .mmd{ flex:1; flex-direction:column; }
+  .mmd .cap{ font-size:17px; color:var(--muted); margin-top:6px; text-align:center;}
+  .mmd .cap b{ color:var(--text); }
+
+  #footer{ position:absolute; bottom:0; left:0; right:0; height:40px; display:flex; align-items:center; justify-content:space-between; padding:0 30px; font-size:15px; color:#94a3b8; background:rgba(247,250,252,.85); border-top:1px solid var(--border); z-index:40;}
+  #footer .brand{ font-weight:600; color:var(--accent); }
+
+  .nav{ position:absolute; bottom:48px; right:40px; display:flex; gap:12px; z-index:45;}
+  .nav button{ width:54px; height:54px; border-radius:50%; border:none; background:var(--accent); color:#fff; font-size:24px; cursor:pointer; box-shadow:0 3px 10px rgba(43,108,176,.4); display:flex; align-items:center; justify-content:center;}
+  .nav button:hover{ background:var(--primary); }
+  .nav button:disabled{ background:#cbd5d0; cursor:default; box-shadow:none;}
+
+  #hint{ position:absolute; bottom:48px; left:40px; font-size:14px; color:#94a3b8; z-index:45;}
+
+  body.autohide #progress, body.autohide #footer, body.autohide .nav, body.autohide #hint{ display:none !important; }
+</style>
+</head>
+<body>
+<div id="stage">
+
+  <div id="progress"></div>
+
+  <!-- ★ 1 封面 -->
+  <section class="slide slide-cover active" data-narration="大家好，欢迎来到强化学习第十讲。上一章我们学会了在函数逼近下做预测——评估一个给定的策略。但预测从来不是终点，强化学习的目的是控制：在每一个状态里比较动作、选出更好的那一个。这一章做两件事：第一，把预测的武器升级成控制的武器，半梯度 Sarsa 登场；第二，面对服务器调度、恒温控制这类没有终点的持续任务，连什么叫好都要重新定义——折扣回报在这里会发散，平均奖励才是正解。学完你要能手算一步半梯度 Sarsa 更新，也要能手算一组差分值。我们开始。">
+    <div class="kicker">强化学习 · 第 10 章 · 函数逼近</div>
+    <h1>在策略控制与函数逼近</h1>
+    <div class="sub">On-policy Control with Approximation —— 预测学会评估，控制还要学会选择</div>
+    <div class="question">本章要回答：逼近之下怎么做在策略控制？没有终点的任务，目标该是什么？</div>
+    <div class="meta">
+      配套讲义：《强化学习互动讲义》第10章 · 基于 Sutton &amp; Barto (2018, 2nd ed)<br>
+      ← → 或空格翻页 · 推导页逐步显示
+    </div>
+  </section>
+
+  <!-- ★ 2 全书位置 -->
+  <section class="slide" data-narration="先看位置。第九到第十三章是本书的第三阶段：函数逼近。第九章打头，解决逼近下的预测；本章接棒，把预测升级为在策略控制，并为持续任务换上平均奖励这个新目标；第十一章画风突变，揭示离策略加函数逼近再加自举的致命危险；十二、十三章收尾，讲资格迹和策略梯度。注意本章的位置很特别：它是最后一个还能照搬第九章工具箱的章节——在策略、回合任务，一切都还温顺。从下一章起，好时光就结束了。">
+    <div class="slide-head"><span class="sec">定位</span><h3>本章是最后一个能照搬第9章工具箱的章节</h3></div>
+    <div class="slide-body">
+      <div class="mmd mmd-sm">
+        <div class="mermaid">
+flowchart LR
+  A["Ch1-4 表格法基础<br>MDP 与动态规划"] --> B["Ch5-8 表格型无模型<br>MC 与 TD 控制"]
+  B --> C["Ch9 逼近预测"] --> D["Ch10 逼近下的<br>在策略控制"]:::here
+  D --> E["Ch11-13 离策略·<br>资格迹·策略梯度"]
+  classDef here fill:#2b6cb0,color:#ffffff,stroke:#1a365d,stroke-width:3px
+        </div>
+      </div>
+      <p style="text-align:center; margin-top:10px;">本章仍在「在策略温室」里；下一章离策略进场，收敛保证开始崩塌。</p>
+    </div>
+  </section>
+
+  <!-- ★ 3 本章主线 -->
+  <section class="slide" data-narration="本章主线环环相扣。第一环，控制需要动作价值——只在状态层面打分，推不出该选哪个动作。第二环，把动作编码进特征，加上 epsilon 贪心，半梯度 Sarsa 就搞定了有终点的回合任务。第三环，可是持续任务没有终点，折扣目标随策略漂移，这是新问题。第四环，平均奖励重新定义好：不看总账，看每步平均进账。第五环，差分半梯度 Sarsa 用双时标让 w 和 r 巴分头更新。每一环都在回答上一环还差什么，我们就按这个顺序走。">
+    <div class="slide-head"><span class="sec">主线</span><h3>从「比较动作」到「双时标」，每一步都在补上一环的缺口</h3></div>
+    <div class="slide-body">
+      <div class="chain">
+        <div class="link"><span class="no">1</span><span class="txt"><strong>缺口</strong>：控制要在同一状态比较动作，$\hat{v}(s)$ 做不到（10.1）</span></div>
+        <div class="link"><span class="no">2</span><span class="txt"><strong>动作进特征</strong>：$\hat{q}(s,a,\boldsymbol{w})$ + ε-贪心 = 半梯度 Sarsa（10.1–10.2）</span></div>
+        <div class="link"><span class="no">3</span><span class="txt"><strong>新问题</strong>：持续任务没有终点，折扣目标随策略漂移（10.3–10.4）</span></div>
+        <div class="link"><span class="no">4</span><span class="txt"><strong>新目标</strong>：平均奖励 $r(\pi)$ + 差分回报（10.3）</span></div>
+        <div class="link"><span class="no">5</span><span class="txt"><strong>新算法</strong>：差分半梯度 Sarsa，$\boldsymbol{w}$ 与 $\bar{r}$ 双时标（10.5）</span></div>
+      </div>
+      <div class="tip">目录对应：10.1 半梯度 Sarsa → 10.2 n 步与爬山车 → 10.3 平均奖励 → 10.4 折扣失效 → 10.5 差分 Sarsa → 10.6 反驳 γ≈1。</div>
+    </div>
+  </section>
+
+  <!-- 4 动机页 -->
+  <section class="slide" data-narration="先问一个扎心的问题：上一章学到的状态价值 v hat，能不能直接拿来做控制？想象你站在围棋的某个局面，v hat 告诉你这个局面值七分——然后呢？你有上百个落子点，每个落子通向一个新局面，哪个最好？没有环境模型，你无法枚举一步之后的后继状态，v hat 这一个数推不出任何动作建议。这就是控制和预测的鸿沟：预测只需回答这里值多少，控制必须回答该往哪走。答案是把动作请进函数：让价值函数同时接受状态和动作两个输入，在同一状态里给每个动作打分，直接比较。这就是动作价值 q hat，下一页给定义。">
+    <div class="slide-head"><span class="sec">动机</span><h3>v̂ 只会打分不会选择：无模型时状态值推不出动作</h3></div>
+    <div class="slide-body">
+      <div class="cols">
+        <div class="col"><div class="card">🧭 <strong>预测的问题</strong><br>「这个状态值多少？」—— $\hat{v}(s)$ 一个数就够，Ch9 已解决。</div></div>
+        <div class="col"><div class="card">⚔️ <strong>控制的问题</strong><br>「在这里哪个动作最好？」—— 要在同一状态<strong>比较</strong>动作，无模型时 $\hat{v}(s)$ 无能为力。</div></div>
+      </div>
+      <div class="deep">决策的那一刻需要的是「每个候选动作各值多少」——动作必须成为函数的输入，这就是动作价值 $\hat{q}(s,a,\boldsymbol{w})$。</div>
+      <div class="warn">⚠️ 有模型时可用 $\hat{v}$ 做一步前瞻 $\max_a \sum p\,\hat{v}(s')$；无模型设定下此路不通。</div>
+    </div>
+  </section>
+
+  <!-- ★ 5 核心定义页 -->
+  <section class="slide" data-narration="动作价值的定义，三个部件。第一，函数签名变了：q hat 吃状态和动作两个输入，输出这一步动作的长期价值估计。第二，特征设计的关键一跃：特征 x 是状态动作对的函数，把动作也编码进去——比如每个动作对应一段专属的特征槽位。注意所有动作共享同一个参数 w，相似动作价值相近的泛化是白送的收益，千万别拆成每个动作一个独立模型。第三，控制闭环照旧：决策时对每个候选动作算一次 q hat，取最大，或者以 epsilon 概率随机探索——这就是 epsilon 贪心策略改进，和第六章一模一样。公式读法：w 转置乘 x；线性逼近下，梯度就是特征本身。">
+    <div class="slide-head"><span class="sec">定义</span><h3>动作价值 = 动作进特征，所有动作共享一个 w</h3></div>
+    <div class="slide-body">
+      <div class="cols">
+        <div class="col"><div class="card">🗺️ <strong>动作进特征</strong><br>$\boldsymbol{x}(s,a)$ 把动作编码进特征（如每动作一段槽位），动作价值随动作可比较。</div></div>
+        <div class="col"><div class="card">📋 <strong>共享参数 + ε-贪心</strong><br>一个 $\boldsymbol{w}$ 服务所有动作（泛化白送）；决策时逐动作算 $\hat{q}$，取 max 或以 ε 探索。</div></div>
+      </div>
+      <div class="formula formula-concl">$$\hat{q}(s, a, \boldsymbol{w}) = \boldsymbol{w}^\top \boldsymbol{x}(s, a) \;\approx\; q_\pi(s, a), \qquad \nabla \hat{q} = \boldsymbol{x}(s,a)$$</div>
+      <div class="deep">读法：把表格 Sarsa 的「查表项」换成 w 转置 x——one-hot 特征就是它的特例，你早就见过它。</div>
+    </div>
+  </section>
+
+  <!-- 6 半梯度 Sarsa 更新式 -->
+  <section class="slide" data-narration="更新规则是第六章表格 Sarsa 的直接推广，叫半梯度 Sarsa。看公式：w 加阿尔法乘德尔塔乘梯度，德尔塔是即时奖励、加伽马乘下一步的 q hat、减当前的 q hat。和在策略预测唯一的区别：评估对象从状态换成状态动作对，样本从状态转移换成五元组——状态、动作、奖励、下一状态、下一动作。之所以叫在策略，是因为行为策略和目标策略是同一个：都是对当前 q hat 的 epsilon 贪心。若下一状态是终止态，约定 q hat 为零。半梯度三个字还是第九章的意思：自举目标里含着 w，却被当成常数冻结，那笔账第十一章再算。">
+    <div class="slide-head"><span class="sec">方法</span><h3>半梯度 Sarsa：表格 Sarsa 的查表项换成 wᵀx</h3></div>
+    <div class="slide-body">
+      <div class="formula formula-concl">$$\boldsymbol{w} \leftarrow \boldsymbol{w} + \alpha\, \big[\, R + \gamma\, \hat{q}(S', A', \boldsymbol{w}) - \hat{q}(S, A, \boldsymbol{w}) \,\big]\, \nabla \hat{q}(S, A, \boldsymbol{w})$$</div>
+      <ul>
+        <li>样本是五元组 $(S, A, R, S', A')$；终止态约定 $\hat{q}(\text{终止}, \cdot) = 0$；</li>
+        <li><strong>在策略</strong>：行为策略 = 目标策略 = 对 $\hat{q}$ 的 ε-贪心；</li>
+        <li>「半梯度」同 Ch9：自举目标含 $\boldsymbol{w}$ 却被冻结成常数。</li>
+      </ul>
+      <div class="tip">💡 线性时 $\nabla\hat{q} = \boldsymbol{x}(S,A)$：更新量 = $\alpha\,\delta\,\boldsymbol{x}$，朝着当前特征方向挪一步。</div>
+    </div>
+  </section>
+
+  <!-- ★ 7 手算页：两步回合 -->
+  <section class="slide" data-narration="手算一个两步回合。特征：S 零配 right 是一零，S 一配 right 是零一；w 初始零点二、零点五，α 零点五，γ 一。第一步 S 零右移奖励零：当前 q hat 零点二，自举项零点五，德尔塔零点三，w 沿一零走零点一五，变零点三五、零点五。第二步 S 一右移奖励一后终止：自举项零，德尔塔零点五，w 沿零一走零点二五，变零点三五、零点七五。对照真值：两对的真值都是一，w 两分量从零点二到零点三五、零点五到零点七五，都在朝一爬，方向全对。">
+    <div class="slide-head"><span class="sec">演练</span><h3>两步回合：w 从 (0.2, 0.5) 走到 (0.35, 0.75)</h3></div>
+    <div class="slide-body">
+      <div class="step"><p>① 设定：$\boldsymbol{x}(S_0,\mathrm{right})=(1,0)$，$\boldsymbol{x}(S_1,\mathrm{right})=(0,1)$；$\boldsymbol{w}_0=(0.2,\,0.5)$，$\alpha=0.5$，$\gamma=1$。轨迹：$(S_0,\mathrm{right}) \xrightarrow{R=0} (S_1,\mathrm{right}) \xrightarrow{R=1}$ 终止。</p></div>
+      <div class="step"><p>② 第 1 步：$\hat{q}(S_0)=0.2$，自举项 $\gamma\hat{q}(S_1)=0.5$，$\delta = 0 + 0.5 - 0.2 = \boldsymbol{0.3}$；$\boldsymbol{w} \leftarrow (0.2,0.5) + 0.5{\times}0.3{\times}(1,0) = \boldsymbol{(0.35,\, 0.5)}$。</p></div>
+      <div class="step"><p>③ 第 2 步：终止自举为 0，$\delta = 1 + 0 - 0.5 = \boldsymbol{0.5}$；$\boldsymbol{w} \leftarrow (0.35,0.5) + 0.5{\times}0.5{\times}(0,1) = \boldsymbol{(0.35,\, 0.75)}$。</p></div>
+      <div class="step"><p>④ 对照真值 $q(S_0)=q(S_1)=1$：w 两分量 $0.2{\to}0.35$、$0.5{\to}0.75$，都朝 1 移动 ✅</p></div>
+      <p class="step-hint">按空格 / → 逐步揭示答案</p>
+    </div>
+  </section>
+
+  <!-- 8 n 步半梯度 Sarsa -->
+  <section class="slide" data-narration="一步 Sarsa 自举快、方差小，但第七章的教训还在耳边：一步 TD 和蒙特卡洛之间有一整个谱系，n 步往往比两个端点都好。逼近之下完全平行：把更新靶子从一步 TD 目标换成 n 步回报——前 n 减一个奖励是实测，第 n 步用当前 q hat 自举收尾，其余结构原样照搬：靶子减估计、乘梯度、乘步长。权衡也原样保留：n 大偏向蒙特卡洛，方差大、要等更久才能更新；n 小偏向一步 TD，自举偏置大。注意一个细节：n 再大也只减少自举带来的偏差，函数类造成的逼近偏差纹丝不动——那是特征的责任，不是 n 的。下一页看这套武器的第一场实战：爬山车。">
+    <div class="slide-head"><span class="sec">拓展</span><h3>n 步回报把靶子放长，偏置–方差权衡在逼近下原样保留</h3></div>
+    <div class="slide-body">
+      <div class="formula">$$G_{t:t+n} = R_{t+1} + \gamma R_{t+2} + \cdots + \gamma^{n-1} R_{t+n} + \gamma^{n}\, \hat{q}(S_{t+n}, A_{t+n}, \boldsymbol{w})$$</div>
+      <div class="formula formula-concl">$$\boldsymbol{w} \leftarrow \boldsymbol{w} + \alpha\, \big[\, G_{t:t+n} - \hat{q}(S_t, A_t, \boldsymbol{w}) \,\big]\, \nabla \hat{q}(S_t, A_t, \boldsymbol{w})$$</div>
+      <div class="cols">
+        <div class="col"><div class="warn">🎚️ <strong>n 大 → 偏 MC</strong>：实测占比高、方差大、更新延迟长。</div></div>
+        <div class="col"><div class="warn">🎚️ <strong>n 小 → 偏一步 TD</strong>：自举偏置大，但快、稳。</div></div>
+      </div>
+      <div class="deep">n 只调自举偏差，调不动逼近偏差——逼近偏差是特征与函数类的责任。</div>
+    </div>
+  </section>
+
+  <!-- 9 Mountain Car -->
+  <section class="slide" data-narration="爬山车：动力不足的小车卡在谷底，必须先反向荡起积蓄动能才能翻顶。状态是位置和速度两个连续量，奖励恒负一——连续状态没法列表，正是函数逼近的用武之地。特征是瓦片编码：二维状态空间铺多层错开的网格，任何状态每层恰好点亮一格，得稀疏二值特征，线性模型够用。妙处：邻近状态在多数层共享瓦片，一次更新自动泛化到附近，多层偏移提供分辨率。配 ε 贪心，Sutton 对比 n 等于一和八，中等的 n 明显更快。本质：把近者值近的先验硬编码进特征。">
+    <div class="slide-head"><span class="sec">实战</span><h3>Mountain Car：瓦片编码把「近者值近」硬编码进特征</h3></div>
+    <div class="slide-body">
+      <div class="cols">
+        <div class="col">
+          <p>🚗 <strong>任务</strong>：动力不足的小车要先反向荡起积蓄动能才能翻顶；状态 =（位置，速度）连续量，奖励恒 −1 直到过顶。</p>
+          <div class="card">🧱 <strong>瓦片编码（Tile Coding）</strong><br>多层彼此偏移的网格；每层点亮一格 → 稀疏二值特征；线性 $\hat{q}=\boldsymbol{w}^\top\boldsymbol{x}$ 即够用。</div>
+        </div>
+        <div class="col">
+          <ul>
+            <li>邻近状态共享大量瓦片 → 更新<strong>自动泛化</strong>到附近；</li>
+            <li>多层偏移提供分辨率——层数与粒度是泛化与分辨率的权衡；</li>
+            <li>ε-贪心 + n 步：Sutton 对比 $n{=}1$ 与 $n{=}8$，<strong>中等 n 学习明显更快</strong>。</li>
+          </ul>
+          <div class="deep">本质：手工设计的「核」——用粗粒度划分换线性方法的速度、稳定与可解释性。</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 10 持续任务问题 -->
+  <section class="slide" data-narration="前两节都默认回合会结束——爬山车总会过顶。但大量真实任务没有终点：服务器调度、恒温控制、常驻机器人，交互永不停止，这叫持续任务。没有终点会出什么事？看总回报：如果策略每步平均进账为正，累计奖励随时间线性增长，回报发散到无穷，值函数的定义直接崩塌。那用折扣行不行？伽马小于一确实能让折扣回报收敛，表格法里我们也一直这么干。但在函数逼近下，折扣目标藏着一个更深的毛病——它的评价标准会随被评价的策略一起动，连什么叫改进都说不清，这一页后面专门讲。所以持续任务需要一个新的、干净的目标，下一页给出答案：平均奖励。">
+    <div class="slide-head"><span class="sec">问题</span><h3>没有终点，「总回报」发散——好的定义本身塌了</h3></div>
+    <div class="slide-body">
+      <div class="cols">
+        <div class="col"><div class="card">🔁 <strong>持续任务（Continuing）</strong><br>服务器调度、恒温控制、常驻机器人：无终止态，交互永不停止。</div></div>
+        <div class="col"><div class="card">🏁 <strong>回合任务（Episodic）</strong><br>爬山车总会过顶：有终止态，前几节的折扣武器照用。</div></div>
+      </div>
+      <div class="formula">$$\text{若每步平均进账 } > 0:\quad \sum_{t} R_t \;\to\; \infty \quad\Rightarrow\quad \text{「总回报」无法定义「好」}$$</div>
+      <div class="warn">⚠️ 折扣 γ&lt;1 能让回报收敛，但逼近下它的评价标准随策略漂移（10.4）——持续任务需要新目标。</div>
+    </div>
+  </section>
+
+  <!-- ★ 11 定义：平均奖励 -->
+  <section class="slide" data-narration="持续任务里好的定义，叫平均奖励：策略拍下，每步奖励的长期平均。两种写法等价：一是极限写法，前 h 步奖励期望的平均取极限；二是分布写法，稳态分布缪下，对策略和转移概率求全期望。这里的缪是策略诱导的稳态分布——长期跑下来各状态的时间占比。定义成立需要一个技术条件：遍历性，从任何状态出发都能到达任何状态。它保证极限存在、与起始状态无关、稳态分布唯一——于是平均奖励是策略的固有属性，一个干干净净的标量。读法一句话：长期跑下去，每步平均进账多少。它不关心你从哪出发，也不依赖任何参数 w，这一点后面还要大用。先别急，下一页用两状态例子算出具体数字。">
+    <div class="slide-head"><span class="sec">定义</span><h3>平均奖励 r(π)：与起点无关、与 w 无关的单一标量</h3></div>
+    <div class="slide-body">
+      <div class="formula formula-concl">$$r(\pi) = \lim_{h\to\infty} \frac{1}{h} \sum_{t=1}^{h} \mathbb{E}[R_t] \;=\; \sum_{s} \mu_\pi(s) \sum_{a} \pi(a|s) \sum_{s', r} p(s', r | s, a)\; r$$</div>
+      <div class="cols">
+        <div class="col"><div class="card">⚖️ <strong>稳态分布 $\mu_\pi$</strong><br>策略 $\pi$ 长期运行下各状态的时间占比。</div></div>
+        <div class="col"><div class="card">🔗 <strong>遍历性（Ergodicity）</strong><br>任何状态可达任何状态 → 极限存在、与起点无关、$\mu_\pi$ 唯一。</div></div>
+      </div>
+      <div class="deep">读法：长期跑下去每步平均进账多少——它是策略的固有属性，一个干净的标量。</div>
+    </div>
+  </section>
+
+  <!-- 12 例子：两状态 MRP -->
+  <section class="slide" data-narration="最小的例子：两个状态 A、B 互相跳。A 到 B 奖励零，B 到 A 奖励二，全部确定性。三步算完。第一步求稳态分布：这是周期二的确定性环，长期看一半时间在 A、一半在 B，缪各半。第二步求平均奖励：零点五乘零、加零点五乘二，等于一。直觉检验：每两步进账二，平均每步一，对上了。这个例子马上还要再用一次，记住两个数：缪各半，平均奖励等于一。顺便看它多干净：不依赖起始状态，不依赖任何逼近参数，策略定了它就是定数。下一页回答一个更细的问题：平均一样高，但身处 A 和身处 B 还是有差别——差多少？">
+    <div class="slide-head"><span class="sec">例子</span><h3>两状态环：每两步进账 2，r(π) = 1</h3></div>
+    <div class="slide-body">
+      <div class="cols">
+        <div class="col">
+          <div class="step"><p><strong>① 稳态分布</strong>：周期 2 确定性环 → $\mu(A) = \mu(B) = \frac{1}{2}$</p></div>
+          <div class="step"><p><strong>② 平均奖励</strong>：$r(\pi) = 0.5 \times 0 + 0.5 \times 2 = \boldsymbol{1}$</p></div>
+          <div class="step"><p><strong>③ 直觉检验</strong>：每两步进账 2，平均每步 1 ✓</p></div>
+          <p class="step-hint">按空格 / → 逐步展开</p>
+        </div>
+        <div class="col">
+          <div class="mmd mmd-tall">
+            <div class="mermaid">
+flowchart LR
+  A["状态 A"] -->|"R = 0"| B["状态 B"]
+  B -->|"R = 2"| A
+            </div>
+          </div>
+          <p style="text-align:center; font-size:18px; color:var(--muted);">确定性 MRP：μ 各半，与起点无关</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 13 差分回报与差分值 -->
+  <section class="slide" data-narration="有了平均奖励基准线，定义差分回报：每步奖励扣掉平均水平再累计，各项绕零波动，遍历性保证收敛。差分值函数满足差分贝尔曼方程：v 等于即时奖励减平均奖励加后继 v，取期望。继续两状态例：v A 等于零减一加 v B；v B 等于二减一加 v A。取基准 v A 零，解出 v B 一，回代成立。微妙处：所有 v 同加常数方程仍成立——差分值只定到加性常数，有意义的只是相对差：B 比 A 好一。读法：不是这里值多少，而是比平均水平好多少。">
+    <div class="slide-head"><span class="sec">定义</span><h3>差分值只确定到常数：有意义的只是「比平均好多少」</h3></div>
+    <div class="slide-body">
+      <div class="formula">$$G_t = \big(R_{t+1} - r(\pi)\big) + \big(R_{t+2} - r(\pi)\big) + \cdots, \qquad v(s) = \mathbb{E}\big[\, R - r(\pi) + v(S') \,\big]$$</div>
+      <div class="step"><p><strong>续算两状态环</strong>：$v(A) = 0 - 1 + v(B)$；$v(B) = 2 - 1 + v(A) = 1 + v(A)$。取基准 $v(A)=0$ → $v(B)=\boldsymbol{1}$，回代 ✓</p></div>
+      <div class="deep">直觉：平均奖励是基准线，每步先与基准比较；全体 v 同加常数方程仍成立 → 只有相对差有意义。</div>
+    </div>
+  </section>
+
+  <!-- 14 折扣目标失效 -->
+  <section class="slide" data-narration="清算折扣目标。表格法里它干净：每状态独立表项，误差可同时为零。逼近下不行：参数量远小于状态数，必须回答哪个状态的误差更重要——第九章答案是按缪加权。麻烦正在这：缪依赖被评估的策略。策略一改，分布和权重跟着改，评价标准随被测量者一起动，最优策略陷入循环定义，连两个策略谁好都无法比较。而平均奖励是单一标量，不依赖 w、不依赖加权，干干净净。结论：持续任务加逼近用平均奖励；回合任务折扣照用。">
+    <div class="slide-head"><span class="sec">清算</span><h3>折扣目标的软肋：μ_π 随被评估的策略一起动</h3></div>
+    <div class="slide-body">
+      <table>
+        <thead><tr><th></th><th>表格法</th><th>函数逼近</th></tr></thead>
+        <tbody>
+          <tr><td class="l"><strong>误差目标</strong></td><td class="l">逐状态精确表示，零误差目标明确</td><td class="l">只能最小化 $\|v_\pi - \hat{v}\|_{\mu_\pi}$ 投影误差</td></tr>
+          <tr><td class="l"><strong>权重 $\mu_\pi$</strong></td><td class="l">不影响目标定义</td><td class="l"><strong>随被评估策略改变</strong> → 循环定义</td></tr>
+          <tr><td class="l"><strong>后果</strong></td><td class="l">「最优」无歧义</td><td class="l">两套权重下的误差无法比较，「改进」说不清</td></tr>
+        </tbody>
+      </table>
+      <div class="formula formula-concl">$$\text{continuing + 逼近} \;\Rightarrow\; r(\pi)\text{（单一标量）} \;;\qquad \text{episodic} \;\Rightarrow\; \gamma \lt 1 \text{ 照用}$$</div>
+    </div>
+  </section>
+
+  <!-- ★ 15 差分半梯度 Sarsa -->
+  <section class="slide" data-narration="目标定了，算法就是把半梯度 Sarsa 改差分版：γ 退休，德尔塔里减去平均奖励估计 r 巴。核心是差分 TD 误差：奖励减 r 巴加下一 q hat 减当前 q hat。更新双时标：w 用 α 快步走，r 巴用 β 慢挪，β 远小于 α。为什么两速？r 巴和 w 互为输入，同速会互相追逐振荡；让 r 巴近似冻结，w 快速追踪，r 巴再缓缓挪一步。直觉：r 巴是会学习的基准线；德尔塔一肩两职——告诉 w 哪个动作超预期，告诉 r 巴基准该升该降。">
+    <div class="slide-head"><span class="sec">方法</span><h3>差分半梯度 Sarsa：γ 退休，r̄ 上岗，双时标走路</h3></div>
+    <div class="slide-body">
+      <div class="formula formula-concl">$$\delta_t = R_{t+1} - \bar{r}_t + \hat{q}(S_{t+1}, A_{t+1}, \boldsymbol{w}) - \hat{q}(S_t, A_t, \boldsymbol{w})$$</div>
+      <div class="formula">$$\boldsymbol{w} \leftarrow \boldsymbol{w} + \alpha\, \delta_t\, \nabla \hat{q}(S_t, A_t, \boldsymbol{w}), \qquad \bar{r} \leftarrow \bar{r} + \beta\, \delta_t, \qquad \beta \ll \alpha$$</div>
+      <div class="cols">
+        <div class="col"><div class="deep">🎯 <strong>δ 一肩挑两职</strong>：告诉 w 哪里比预期好，同时告诉 r̄ 基准线该往哪挪。</div></div>
+        <div class="col"><div class="tip">⏱️ <strong>双时标</strong>：r̄ 近似冻结当锚，w 围锚快速追踪；β≪α 避免互相追逐振荡。</div></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ★ 16 手算页（互动停顿）：两组 δ/r̄ -->
+  <section class="slide" data-narration="差分版手算一遍，还是那台两状态环，真值平均奖励一。特征 A 一零、B 零一，w 初始两个零点五，r 巴起点零点五，α 零点五、β 零点一。第一步 A 到 B 奖励零：德尔塔是零减零点五加零点五减零点五，得负零点五；w 沿 A 退到零点二五、零点五；r 巴收零点一乘负零点五，降到零点四五。第二步 B 到 A 奖励二：德尔塔是二减零点四五加零点二五减零点五，得一点三；w 涨到零点二五、一点一五；r 巴升到零点五八。方向检查：r 巴朝真值一震荡上行，w 呈现 B 比 A 好约一的形状。">
+    <div class="slide-head"><span class="sec">演练</span><h3>两步更新：δ = −0.5 压 r̄ 到 0.45，δ = 1.3 又抬到 0.58</h3></div>
+    <div class="slide-body">
+      <div class="step"><p>① 设定：$\boldsymbol{x}(A)=(1,0)$，$\boldsymbol{x}(B)=(0,1)$；$\boldsymbol{w}_0=(0.5,0.5)$，$\bar{r}_0=0.5$，$\alpha=0.5$，$\beta=0.1$（真值 $r(\pi)=1$）。</p></div>
+      <div class="step"><p>② $A{\to}B$（$R{=}0$）：$\delta = 0 - 0.5 + 0.5 - 0.5 = \boldsymbol{-0.5}$；$\boldsymbol{w} \leftarrow (0.25,\,0.5)$；$\bar{r} \leftarrow 0.5 + 0.1{\times}(-0.5) = \boldsymbol{0.45}$。</p></div>
+      <div class="step"><p>③ $B{\to}A$（$R{=}2$）：$\delta = 2 - 0.45 + 0.25 - 0.5 = \boldsymbol{1.3}$；$\boldsymbol{w} \leftarrow (0.25,\,1.15)$；$\bar{r} \leftarrow 0.45 + 0.1{\times}1.3 = \boldsymbol{0.58}$。</p></div>
+      <div class="step"><p>④ 方向检查：$\bar{r}\colon 0.5 \to 0.45 \to 0.58$ 朝真值 $1$ 震荡爬升；$\hat{q}(B) - \hat{q}(A) = 0.9 \approx 1$ —— 正是 $v(B)-v(A)=1$ 的形状 ✅</p></div>
+      <div class="pause"><div class="icon">✍️</div><div class="txt"><b>暂停推导</b><p>遮住 ②③④，只用 ① 的设定推出两组 δ 与 r̄，再对答案。</p></div></div>
+      <p class="step-hint">按空格 / → 逐步揭示答案</p>
+    </div>
+  </section>
+
+  <!-- 17 γ=0.999 三条反驳 -->
+  <section class="slide" data-narration="听到这里，很多人还剩最后一个抵抗：何必发明新目标？伽马取得足够接近一，折扣不就约等于平均了吗？三条反驳。第一，方差爆炸：伽马趋近一时，折扣回报的有效累计时域约一除以一减伽马步——伽马取三个九，就是一千步的奖励噪声全灌进一个更新信号，学习又慢又抖。第二，缪依赖不消失：循环定义源于目标里含随策略变动的权重，伽马再大，这个结构性毛病原样保留。第三，最优策略不一致：折扣把近期奖励不成比例地放大，会偏爱先甜后苦的行为，只有取伽马趋一的病态极限，两者才趋于一致。一句话：平均奖励是持续任务的母语，折扣是回合任务的母语——用错语言不是不能表达，而是词不达意。">
+    <div class="slide-head"><span class="sec">反驳</span><h3>「γ 取 0.999 就行了」为什么不成立</h3></div>
+    <div class="slide-body">
+      <div class="chain">
+        <div class="link"><span class="no">1</span><span class="txt"><strong>方差爆炸</strong>：有效时域 $\approx 1/(1-\gamma)$ 步；γ=0.999 → 约 1000 步奖励噪声灌进一个更新信号。</span></div>
+        <div class="link"><span class="no">2</span><span class="txt"><strong>$\mu_\pi$ 依赖不消失</strong>：循环定义源于「权重随策略变」，γ 再大也原样保留。</span></div>
+        <div class="link"><span class="no">3</span><span class="txt"><strong>最优策略不一致</strong>：折扣偏爱「先甜后苦」，只有 γ→1 的病态极限才趋于平均奖励最优。</span></div>
+      </div>
+      <div class="deep">平均奖励是 continuing 的母语，γ&lt;1 是 episodic 的母语——用错语言不是不能表达，而是词不达意。</div>
+    </div>
+  </section>
+
+  <!-- ★ 18 误区页 -->
+  <section class="slide" data-narration="本章扫三颗雷。第一颗：动作多了，给每个动作单独训练一个函数。错——特征是状态动作对的函数，所有动作共享一个 w，动作间的泛化是白送的收益；拆成一堆互不相干的模型，等于把泛化扔进垃圾桶。第二颗：r 巴用历史奖励的滑动平均估计就行。错——滑动平均是行为分布下的滞后均值，与值函数不自洽；用德尔塔驱动 r 巴，才与差分贝尔曼方程一致，w 和 r 巴收敛到同一组方程的解。第三颗：n 越大信息越全，直接取到回合结束最好。错——n 大偏向蒙特卡洛，方差大、更新慢；n 小自举偏置大；爬山车上中等的 n 明显优于两端。三颗雷，对应本章三个最容易想当然的地方。">
+    <div class="slide-head"><span class="sec">避坑</span><h3>三颗雷：分头训练、滑动平均、n 越大越好</h3></div>
+    <div class="slide-body">
+      <div class="trap">❌ <strong>「每个动作单独训练一个函数」</strong><br>✅ 特征是 (s,a) 的函数，所有动作共享一个 w——动作间泛化是白送的收益，拆开等于扔掉。</div>
+      <div class="trap">❌ <strong>「r̄ 用历史奖励的滑动平均估就行」</strong><br>✅ 滑动平均是行为分布下的滞后均值，与值函数不自洽；δ 驱动才让 w 与 r̄ 收敛到差分 Bellman 方程的同一组解。</div>
+      <div class="trap">❌ <strong>「n 越大信息越全，直接取到回合结束最好」</strong><br>✅ n 大偏 MC（方差大、更新慢），n 小偏一步 TD（偏置大）；Mountain Car 上中等 n 优于两端。</div>
+    </div>
+  </section>
+
+  <!-- 19 接口页 -->
+  <section class="slide" data-narration="本章和前后章怎么分工？往前接第九章：半梯度工具原样搬来，只需把评估对象从状态换成状态动作对——第九章负责评估，本章负责选择。往后接第十一章：本章一切都在在策略的温室里进行，行为策略就是目标策略；一旦允许两者不同——比如用旧数据学新策略、边探索边学贪心策略——第九章的收敛保证和本章的平稳更新都会崩塌，那就是致命三角的故事。还有一个远房亲戚先记住：第十三章的 Actor-Critic，critic 学值函数、actor 学策略，也是双时标结构——和本章 w 与 r 巴的双时标是同一个设计思想。下一章，温室要塌了。">
+    <div class="slide-head"><span class="sec">接口</span><h3>第9章给工具，本章在温室里用，第11章拆温室</h3></div>
+    <div class="slide-body">
+      <table>
+        <thead><tr><th></th><th>第9章</th><th>第10章（本章）</th><th>第11章</th></tr></thead>
+        <tbody>
+          <tr><td class="l"><strong>任务</strong></td><td class="l">逼近预测 $\hat{v}$</td><td class="l">逼近在策略控制 $\hat{q}$</td><td class="l">离策略 + 逼近</td></tr>
+          <tr><td class="l"><strong>环境</strong></td><td class="l">在策略</td><td class="l">在策略温室（行为=目标）</td><td class="l">温室拆除，发散登场</td></tr>
+          <tr><td class="l"><strong>远亲</strong></td><td class="l" colspan="3">双时标设计（w 与 r̄）将在 Ch13 Actor-Critic 中重现</td></tr>
+        </tbody>
+      </table>
+      <div class="tip">钩子：一旦行为策略 ≠ 目标策略，前两章的全部保证都会失效——下一章看灾难现场。</div>
+    </div>
+  </section>
+
+  <!-- ★ 20 小结页 -->
+  <section class="slide" data-narration="三句话讲完第十章。第一句，解决什么：函数逼近下怎么做在策略控制，以及没有终点的持续任务该用什么目标定义好。第二句，核心机制：动作编码进特征 x，回合任务用半梯度 Sarsa 配 epsilon 贪心；持续任务用平均奖励 r 拍定义好，差分半梯度 Sarsa 让 w 和 r 巴双时标更新，贝塔远小于阿尔法。第三句，承上启下：本章是最后一个能照搬第九章工具箱的章节，第十一章起，离策略会让一切失控。合上书挑战自己：能默写半梯度 Sarsa 和差分 Sarsa 两组更新式吗？能重算零点三五、零点七五，和那两组德尔塔、r 巴吗？">
+    <div class="slide-head"><span class="sec">小结</span><h3>三句话讲完第10章</h3></div>
+    <div class="slide-body">
+      <div class="chain">
+        <div class="link"><span class="no">1</span><span class="txt"><strong>解决什么</strong>：逼近下的在策略控制 + 持续任务的目标定义。</span></div>
+        <div class="link"><span class="no">2</span><span class="txt"><strong>核心机制</strong>：动作进特征 $\boldsymbol{x}(s,a)$；episodic 用半梯度 Sarsa，continuing 用差分版（δ 减 $\bar{r}$，双时标 β≪α）。</span></div>
+        <div class="link"><span class="no">3</span><span class="txt"><strong>承上启下</strong>：最后的温室章节；Ch11 离策略让保证崩塌。</span></div>
+      </div>
+      <div class="formula formula-concl">$$\boldsymbol{w} \leftarrow \boldsymbol{w} + \alpha\, \delta_t\, \nabla \hat{q}, \qquad \delta_t = R - \bar{r} + \hat{q}' - \hat{q} \;\; (\text{continuing}) \quad\text{——合上书也要能默写}$$</div>
+    </div>
+  </section>
+
+  <!-- ★ 21 结束页 -->
+  <section class="slide slide-cover" data-narration="本章到此结束。毕业挑战六道题：一，说清控制为什么必须用 q hat 而不能只用 v hat；二，默写半梯度 Sarsa 更新式，说清线性时梯度等于什么；三，用两步回合片段手算出 w 等于零点三五、零点七五的全过程；四，写出平均奖励定义和差分贝尔曼方程，在两状态环上算出 r 拍等于一、B 比 A 好一；五，解释持续任务加逼近下折扣目标失效的缪依赖原因；六，写出差分 TD 误差与双时标更新，说清 r 巴为什么不能用滑动平均代替。全部能默写才算过关。下一章画风突变：离策略、自举、函数逼近三件事凑齐，权重会在你眼皮底下发散到无穷——我们去看灾难现场。">
+    <div class="kicker">本 章 结 束</div>
+    <h1>动作进特征，目标随任务换母语</h1>
+    <div class="sub">毕业挑战：合上书，拿一张纸</div>
+    <div class="divider"></div>
+    <div class="meta">
+      ☑ 默写半梯度 Sarsa 与差分 Sarsa 两组更新式　　☑ 重算 (0.35, 0.75) 与两组 δ/r̄<br>
+      ☑ 两状态环算出 r(π)=1、v(B)−v(A)=1　　☑ 讲清 μ_π 依赖与双时标<br><br>
+      下一章 · 第11章 离策略方法与致命三角：温室拆除，权重发散
+    </div>
+  </section>
+
+  <div id="footer">
+    <span class="brand">第10章 在策略控制与函数逼近 · 强化学习课件</span>
+    <span id="pagenum">1 / 21</span>
+  </div>
+
+  <div class="nav">
+    <button id="prev" title="上一页 (←)">‹</button>
+    <button id="next" title="下一页 (→ / 空格)">›</button>
+  </div>
+  <div id="hint">← → 翻页 · 空格下一页 · 推导页逐步显示 · 点击左右半屏翻页</div>
+
+</div>
+
+<script src="assets/mermaid.min.js"></script>
+<script>
+mermaid.initialize({
+  startOnLoad: false,
+  theme: "base",
+  themeVariables: {
+    primaryColor: "#ebf8ff",
+    primaryBorderColor: "#2b6cb0",
+    primaryTextColor: "#1a365d",
+    lineColor: "#718096",
+    fontFamily: "-apple-system, PingFang SC, sans-serif",
+    fontSize: "15px"
+  },
+  flowchart: { curve: "linear", htmlLabels: false }
+});
+</script>
+<script>
+(function(){
+  const slides = Array.from(document.querySelectorAll('.slide'));
+  const total = slides.length;
+  let idx = 0;
+
+  const params = new URLSearchParams(location.search);
+  const startSlide = parseInt(params.get('slide'), 10);
+  if (params.get('autohide') === '1') document.body.classList.add('autohide');
+  if (!isNaN(startSlide) && startSlide >= 1 && startSlide <= total) idx = startSlide - 1;
+
+  const progress = document.getElementById('progress');
+  const pagenum = document.getElementById('pagenum');
+  const prevBtn = document.getElementById('prev');
+  const nextBtn = document.getElementById('next');
+
+  const stepState = new Map();
+  function stepsOf(i){ return Array.from(slides[i].querySelectorAll('.step')); }
+  function applySteps(){
+    stepsOf(idx).forEach((el, k)=> el.classList.toggle('on', k < (stepState.get(idx) || 0)));
+  }
+  function forward(){
+    const steps = stepsOf(idx);
+    const shown = stepState.get(idx) || 0;
+    if (shown < steps.length){ stepState.set(idx, shown + 1); applySteps(); return; }
+    go(idx + 1);
+  }
+  function backward(){
+    const steps = stepsOf(idx);
+    const shown = stepState.get(idx) || 0;
+    if (shown > 0){ stepState.set(idx, shown - 1); applySteps(); return; }
+    go(idx - 1);
+  }
+
+  function renderMermaid(slide){
+    if (typeof mermaid === 'undefined') return;
+    const nodes = Array.from(slide.querySelectorAll('.mermaid:not([data-done])'));
+    if (!nodes.length) return;
+    nodes.forEach(n => n.setAttribute('data-done', ''));
+    mermaid.run({ nodes }).catch(err => {
+      nodes.forEach(n => n.removeAttribute('data-done'));
+      console.error('mermaid 渲染失败：', err);
+    });
+  }
+
+  function render(){
+    slides.forEach((s,i)=> s.classList.toggle('active', i===idx));
+    progress.style.width = ((idx+1)/total*100) + '%';
+    pagenum.textContent = (idx+1) + ' / ' + total;
+    prevBtn.disabled = (idx===0);
+    nextBtn.disabled = (idx===total-1);
+    applySteps();
+    renderMermaid(slides[idx]);
+  }
+  function go(n){ idx = Math.max(0, Math.min(total-1, n)); render(); }
+
+  prevBtn.addEventListener('click', e=>{ e.stopPropagation(); backward(); });
+  nextBtn.addEventListener('click', e=>{ e.stopPropagation(); forward(); });
+
+  document.addEventListener('keydown', e=>{
+    if(e.key==='ArrowRight'||e.key===' '||e.key==='PageDown'){ e.preventDefault(); forward(); }
+    else if(e.key==='ArrowLeft'||e.key==='PageUp'){ e.preventDefault(); backward(); }
+    else if(e.key==='Home'){ stepState.set(idx, 0); go(0); }
+    else if(e.key==='End'){ go(total-1); }
+  });
+
+  document.getElementById('stage').addEventListener('click', e=>{
+    if(e.target.closest('.nav')) return;
+    const x = e.clientX;
+    if(x < window.innerWidth*0.5) backward(); else forward();
+  });
+
+  function fit(){
+    const s = Math.min(window.innerWidth/1280, window.innerHeight/720);
+    document.getElementById('stage').style.transform = 'translate(-50%,-50%) scale(' + s + ')';
+  }
+  window.addEventListener('resize', fit);
+  fit();
+  render();
+})();
+</script>
+</body>
+</html>

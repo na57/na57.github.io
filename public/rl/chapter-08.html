@@ -1,0 +1,931 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第8章 表格型方法的统一 · 强化学习互动讲义</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+<nav class="topbar">
+  <div class="topbar-inner">
+    <span class="brand"><a href="index.html" style="color:inherit">← 学习地图</a></span>
+    <span class="crumb">第二段 · 表格型无模型方法 / 第8章</span>
+  </div>
+</nav>
+
+<div class="wrap">
+
+  <div class="lecture-head">
+    <span class="ch-label">CHAPTER 08 · 表格型无模型方法</span>
+    <h1>表格型方法的统一：规划与学习</h1>
+    <p class="lead">第5–7章把无模型学习的武器备齐了；本章把它们收进同一个坐标系，再让经验顺手喂出一个环境模型——用模型在"脑内"重演经验，把每一次更新都花在刀刃上。</p>
+  </div>
+
+  <!-- 本章定位 -->
+  <div class="position-bar">
+    <strong>本章在主线上的位置：</strong>第5–7章给出了从 MC 到 TD 到 n 步的完整谱系 → <u>本章用一个统一视图收编它们，并让"学来的模型"反过来产生经验（Dyna），用优先扫掠把更新花在刀刃上</u> → 第9章起离开表格、进入函数逼近。<br>
+    第8章回答主线上的一个问题：<strong>无模型方法（学习）与有模型方法（规划）真的是两回事吗？能不能让同一个更新公式同时消化真实经验和模拟经验？</strong>
+    <div class="map-inline">
+      <span class="node">Ch1–4 表格法基础（老虎机 · MDP · 动态规划）</span><span class="arrow">→</span>
+      <span class="node">Ch5 蒙特卡洛（等回合结束）</span><span class="arrow">→</span>
+      <span class="node">Ch6 时序差分（一步自举）</span><span class="arrow">→</span>
+      <span class="node">Ch7 n步自举（光谱折中）</span><span class="arrow">→</span>
+      <span class="node here">Ch8 统一与规划</span><span class="arrow">→</span>
+      <span class="node">Ch9–11 函数逼近</span><span class="arrow">→</span>
+      <span class="node">Ch12–13 策略与前沿</span>
+    </div>
+  </div>
+
+  <!-- 学习目标 -->
+  <div class="objectives">
+    <h4>🎯 学完本章，合上书你应该能：</h4>
+    <ol>
+      <li>说出统一视图的三个维度（更新深度、更新宽度、策略关系），并把 MC、TD(0)、DP、n 步方法、期望 Sarsa 对号入座</li>
+      <li>区分分布模型与样本模型，写出表格型样本模型的学习规则 Model(s, a) ← (r, s′)，并说明经验的"直接"与"间接"两种用途</li>
+      <li>画出 Dyna-Q 架构图，指出真实经验与模拟经验各自流向哪一次 Q 更新</li>
+      <li>手算 Dyna-Q 的 Q-planning 迭代与价值沿模型回传的全过程（0.5 → 0.75 → 0.875 → 0.9375 → 0.421875）</li>
+      <li>解释阻塞与捷径两类模型过时，写出 Dyna-Q+ 的探索奖励 r + κ√τ 并说明它对付的是哪一类</li>
+      <li>手算优先扫掠的入队、弹出、更新、前驱入队全过程，并说明阈值 θ 两个极端（→0 与过大）各自退化成什么</li>
+    </ol>
+  </div>
+
+  <div class="lecture">
+
+    <!-- 推导主线图 -->
+    <div class="figure">
+      <div class="mermaid">
+flowchart LR
+  A["第5-7章<br>无模型方法齐备"] --> B["经验还能<br>喂出模型"]
+  B --> C["模型产出<br>模拟经验"]
+  C --> D["Dyna 真实与模拟<br>同炉更新"]
+  D --> E["模型会错<br>阻塞与捷径"]
+  E --> F["Dyna-Q+ 探索奖励<br>与优先扫掠"]
+  F --> G["代价 表格装不下<br>大状态空间"]
+  G --> H["第9章<br>函数逼近"]
+  classDef hot fill:#fbeedd,stroke:#c4651f,stroke-width:2.5px,color:#c4651f;
+  classDef danger fill:#fae9e7,stroke:#b03a2e,stroke-width:2.5px,color:#b03a2e;
+  class F hot;
+  class H danger;
+      </div>
+      <div class="caption">图 8.0 本章推导主线：方法齐备之后，经验多出一个用法——学模型；模型反过来生产模拟经验，与真实经验同炉更新；模型会错，于是有 Dyna-Q+ 与优先扫掠两把补丁。末端的红点——表格表示本身的极限——正是第9章函数逼近的入口。</div>
+    </div>
+
+    <!-- ============ 8.1 ============ -->
+    <h2><span class="sec-no">8.1</span>统一视图：三个维度收编前五章</h2>
+
+    <p>第5章蒙特卡洛、第6章时序差分、第7章 n 步自举，看上去是三个不同的算法，各有一套公式、一套直觉。但把它们和第4章的动态规划摆在一起，你会发现它们其实生活在同一个<span class="term">设计空间</span>（Design Space）里，只是坐标不同。这个空间由三个维度张成：</p>
+
+    <ul>
+      <li><strong>更新深度</strong>：目标值回望多远。一步（TD(0)、DP）→ n 步（第7章）→ 直到回合结束（MC，深度 ∞）。</li>
+      <li><strong>更新宽度</strong>：目标值对后继取的是<span class="term">采样更新</span>（Sample Update，只用一个实际采到的后继）还是<span class="term">期望更新</span>（Expected Update，对所有后继按概率加权求和）。</li>
+      <li><strong>策略关系</strong>：<span class="term">在策略</span>（On-Policy，学的就是正在行为的策略）还是<span class="term">离策略</span>（Off-Policy，学目标策略、用行为策略采数据）。</li>
+    </ul>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>方法</th><th>更新深度</th><th>更新宽度</th><th>策略关系</th><th>目标值的"造法"</th></tr>
+        <tr><td>动态规划（DP）</td><td>1 步</td><td>期望</td><td>均可</td><td>∑ p(s′,r|s,a) [ r + γV(s′) ]</td></tr>
+        <tr><td>蒙特卡洛（MC）</td><td>∞（整回合）</td><td>采样</td><td>均可</td><td>实际回报 G<sub>t</sub></td></tr>
+        <tr><td>TD(0) / Sarsa</td><td>1 步</td><td>采样</td><td>在策略</td><td>R + γQ(S′, A′)</td></tr>
+        <tr><td>Q-learning</td><td>1 步</td><td>采样</td><td>离策略</td><td>R + γ max<sub>a′</sub> Q(S′, a′)</td></tr>
+        <tr><td>期望 Sarsa</td><td>1 步</td><td>目标动作处期望</td><td>均可</td><td>R + γ ∑<sub>a′</sub> π(a′|S′) Q(S′, a′)</td></tr>
+        <tr><td>n 步方法</td><td>中间（1 与 ∞ 之间）</td><td>采样</td><td>均可</td><td>n 步回报 G<sub>t:t+n</sub></td></tr>
+      </table>
+    </div>
+
+    <p>注意期望 Sarsa 的位置：它在目标动作处做了一步期望，说明"宽度"不是非黑即白——你可以只在目标值的某一部分取期望。这三个维度是<strong>坐标轴</strong>，不是三档开关；已经学过的每一个方法都是这个空间里的一个点，而空间里还空着大量没命名的点。</p>
+
+    <p>更重要的是，所有这些点的<strong>更新骨架是同一个</strong>：</p>
+
+    <div class="formula">新估计 ← 旧估计 + 步长 × ( 目标 − 旧估计 )</div>
+
+    <p>第5–7章的全部差别，只是在"目标怎么造"上做排列组合：MC 用整回合回报造目标，TD 用一步自举造目标，n 步用 n 步回报造目标，DP 用模型期望造目标。骨架纹丝不动。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>这把统一视图的钥匙会一路用到函数逼近：第9章之后，V 和 Q 从查表换成参数化函数，"目标怎么造"的排列组合<strong>原封不动地保留</strong>，更新骨架也原封不动。换掉的只是价值的表示方式。所以现在把三维坐标系刻进脑子，后面五章都是它的填格子游戏。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>"三个维度是给算法排名次的：期望比采样精确，所以期望更新全面优于采样更新。" 错。期望更新消掉了采样方差，但①它要么需要模型、要么需要额外算力枚举后继；②在函数逼近下，期望目标把函数逼近误差按概率加权地"焊死"进估计，而采样更新有时反而能平均掉一部分误差。选宽度是在"方差、算力、模型可得性"之间做交易，没有免费的精确。</p>
+    </div>
+
+    <!-- 回忆卡片 8.1 -->
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <p class="recall-hint">不要直接点开。先在心里或纸上说出答案，再翻面核对。</p>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 8.1-1</div>
+              <div class="q-text">说出统一视图的三个维度，并把 MC、TD(0)、DP 分别放到"深度 × 宽度"平面的对应格子里。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              深度（1 步 / n 步 / ∞ 整回合）、宽度（采样 / 期望）、策略关系（在策略 / 离策略）。MC = ∞ 深度 · 采样；TD(0) = 1 步 · 采样；DP = 1 步 · 期望。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 8.1-2</div>
+              <div class="q-text">不看讲义，写出所有表格型方法共用的更新骨架。第5–7章的差别只发生在骨架的哪一部分？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              新估计 ← 旧估计 + 步长 × (目标 − 旧估计)。差别只发生在"目标怎么造"：整回合回报、一步自举、n 步回报、模型期望，都是同一个骨架的不同填法。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 8.2 ============ -->
+    <h2><span class="sec-no">8.2</span>模型：从经验里长出的世界模拟器</h2>
+
+    <p>上一节把无模型方法收编进了统一视图。但"经验"这条线索还有另一半没挖完：经验除了直接喂给更新公式（学价值），还能喂出别的东西——<span class="term">模型</span>（Model）。所谓模型，就是智能体对环境动态的内在表示：在状态 s 做动作 a，会得到什么奖励 r、落到哪个后继 s′。</p>
+
+    <p>模型分两种成色：</p>
+
+    <ul>
+      <li><span class="term">分布模型</span>（Distribution Model）：给出完整的转移与奖励分布 p(s′, r | s, a)。有了它就能做期望更新——第4章的动态规划用的就是这种模型。</li>
+      <li><span class="term">样本模型</span>（Sample Model）：不给你完整分布，只按环境的概率吐出一个个采样 (r, s′)。问它"所有可能的后继是什么"，它答不上来；让它"模拟一步"，它能给你一条 plausible 的结果。</li>
+    </ul>
+
+    <p>在表格型设定下，学一个样本模型便宜到近乎免费：<strong>一个字典就够了</strong>。每经历一步 (s, a) → (r, s′)，就往字典里记一笔：</p>
+
+    <div class="formula">Model(s, a) ← (r, s′)</div>
+
+    <p>对确定性环境，这条规则一次命中、永远正确；对随机环境，字典里为每个 (s, a) 存下历次出现的 (r, s′)，模拟时按经验频率抽一条——这就是该 (s, a) 处经验分布的忠实采样器。之后想"在脑内重演一步"，从字典里随机挑一个见过的 (s, a)，查出它当初产生的 (r, s′)，一条<span class="term">模拟经验</span>（Simulated Experience）就造出来了，一分钱真实交互都不用花。</p>
+
+    <p>于是同一条经验有了<strong>两种用途</strong>：</p>
+
+    <ul>
+      <li><span class="term">直接强化学习</span>（Direct RL）：经验直接喂更新公式，改进价值函数与策略——第5–7章干的全是这个；</li>
+      <li><strong>间接用途</strong>：经验先喂给模型学习，模型再产出模拟经验去改进价值与策略——这就是<span class="term">规划</span>（Planning），下一节 Dyna 的主角。</li>
+    </ul>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>直接 RL 是"吃一堑长一智"，模型学习是"把堑记下来，以后在脑子里反复摔"。同一条真实经验被利用了两次：一次当场更新 Q，一次存进模型供日后无限次重放。经验的利用率，就是样本复杂度的命脉。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>"有模型就是 model-based，没模型就是 model-free，按算法名册站队。" 边界其实不在名册上，而在一个问题上：<strong>价值/策略的改进是否经由模型产生的经验</strong>。Q-learning 本身不学模型，是 model-free；DP 全程用模型，是 model-based；而下一节的 Dyna-Q 两者都是——直接更新走 model-free 通路，规划更新走 model-based 通路，同一个智能体，两条通路并行。</p>
+    </div>
+
+    <!-- 回忆卡片 8.2 -->
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 8.2-1</div>
+              <div class="q-text">分布模型和样本模型的差别是什么？各自支持哪种更新？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              分布模型给出完整 p(s′, r | s, a)，支持期望更新（DP 用它）；样本模型只能按分布吐出单个采样 (r, s′)，支持采样更新。表格型下样本模型用一个"Model(s, a) ← (r, s′)"的字典就能学。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 8.2-2</div>
+              <div class="q-text">经验的"直接"与"间接"两种用途分别是什么？判断 model-based 与 model-free 的真正标准是什么？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              直接用途：经验直接喂更新公式（直接 RL）；间接用途：经验先学出模型，模型再产模拟经验做规划。判断标准：价值/策略的改进是否经由模型产生的经验——而不是看算法名册。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 8.3 ============ -->
+    <h2><span class="sec-no">8.3</span>Dyna：真实经验与模拟经验同炉</h2>
+
+    <p>上一节说经验有直接与间接两种用途，那自然有个问题：<strong>能不能两条通路同时开？</strong> 这就是 <span class="term">Dyna</span> 架构的回答。以 Dyna-Q 为例，每在真实环境里走一步，发生三件事：经验直接更新一次 Q（直接 RL）；经验更新一次模型（模型学习）；然后模型产出 n 条模拟经验，每条再更新一次 Q（<span class="term">Q-planning</span>）。</p>
+
+    <div class="figure">
+      <div class="mermaid">
+flowchart LR
+  E["真实经验 (s,a,r,s′)"] --> D["直接RL 更新Q"]
+  E --> M["模型学习 Model(s,a)←(r,s′)"]
+  M --> S["模拟经验 随机抽见过的(s,a)"]
+  S --> P["Q-planning 更新Q 重复n次"]
+  D --> Q["Q表"]
+  P --> Q
+  Q --> A["ε-贪心选动作"]
+  A --> E
+  classDef hot fill:#fbeedd,stroke:#c4651f,stroke-width:2.5px,color:#c4651f;
+  class Q hot;
+      </div>
+      <div class="caption">图 8.1 Dyna-Q 架构：真实经验兵分两路——直接更新 Q，同时训练模型；模型产出的模拟经验再做 n 次 Q-planning。注意两个更新用的是<strong>同一个</strong> Q-learning 公式，只是经验来源不同。</div>
+    </div>
+
+    <p>关键在于：<strong>直接 RL 更新和 Q-planning 更新是同一个公式</strong>，Q(S, A) ← Q(S, A) + α [ R + γ max<sub>a′</sub> Q(S′, a′) − Q(S, A) ]，只是前者吃真实经验、后者吃模拟经验。Dyna 不是一个新算法，而是一个把"学习"与"规划"焊在一起的架构——里面装的更新规则可以换成 Sarsa、期望 Sarsa 中的任何一格。</p>
+
+    <h3>核心算例：一条确定性链上的完整推演</h3>
+
+    <p>环境是一条确定性链：A → B → C → 终点，只有"向右"一个有效动作，进终点得奖励 +1，其余奖励为 0。γ = 0.9，α = 0.5，所有 Q 初始化为 0。</p>
+
+    <p><strong>第一步：真实经验 (C, 右, +1, 终止)。</strong>智能体真的从 C 走进了终点，拿到 +1。直接 RL 更新：</p>
+
+    <div class="formula">Q(C, 右) = 0 + 0.5 × ( 1 + 0.9 × 0 − 0 ) = <strong>0.5</strong></div>
+
+    <p>同时模型学习记下一笔：Model(C, 右) = (+1, 终止)。</p>
+
+    <p><strong>第二步：Q-planning，做 n = 3 次模拟。</strong>假设三次都恰好抽中了字典里唯一的条目 (C, 右)（小字典下这很常见）：</p>
+
+    <ul>
+      <li>模拟 1：目标 = 1 + 0.9 × 0 = 1，Q(C, 右) = 0.5 + 0.5 × (1 − 0.5) = <strong>0.75</strong></li>
+      <li>模拟 2：Q(C, 右) = 0.75 + 0.5 × (1 − 0.75) = <strong>0.875</strong></li>
+      <li>模拟 3：Q(C, 右) = 0.875 + 0.5 × (1 − 0.875) = <strong>0.9375</strong></li>
+    </ul>
+
+    <p>注意这三次模拟做的是<strong>同一件事</strong>：在同一个 (C, 右) 上反复迭代，把 Q 从 0.5 一步步推向真值 1。真实环境一步只给一次更新，模型让它当场又收敛了三次——这就是"模拟经验在同一目标上反复迭代等价于加速收敛"。</p>
+
+    <p><strong>第三步：下一条真实经验 (B, 右, 0, C)。</strong>智能体从 B 走到 C，奖励 0。直接 RL 更新：</p>
+
+    <div class="formula">Q(B, 右) = 0 + 0.5 × ( 0 + 0.9 × 0.9375 − 0 ) = 0.5 × 0.84375 = <strong>0.421875</strong></div>
+
+    <p>看这一步：B 自己没拿到任何奖励，但因为 bootstrap 目标里的 Q(C, 右) 已经被规划推到了 0.9375，价值顺着链<strong>回传</strong>了一格。没有 planning 的话，此刻 Q(C, 右) 只有 0.5，Q(B, 右) 只能学到 0.225——planning 把上游的学习也加速了。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>Dyna 的时间账本：真实交互是最贵的资源（机器人要真的动、用户要真的等），模型内模拟几乎免费。Dyna 用一份真实经验撬动 n 份额外更新，本质上是<strong>用算力换样本</strong>。CPU 闲着也是闲着，不如让智能体在脑内把刚经历的世界多推演几遍。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>"planning 步数 n 越大越好，反正模拟不要钱。" 错在模型的质量上：模拟经验服从的是<strong>学来的模型</strong>，不是真实环境。模型错一点，n 次规划就把这个错误往 Q 表里夯 n 次——n 越大，错误被放大得越扎实。下一节专门处理"模型会错"这件事。</p>
+    </div>
+
+    <!-- 回忆卡片 8.3 -->
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 8.3-1</div>
+              <div class="q-text">画出 Dyna-Q 的信息流：一条真实经验进来之后，分别流向哪几个更新？Q-planning 的更新公式和直接 RL 差在哪？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              真实经验 → 直接 RL 更新 Q；真实经验 → 模型学习；模型 → 模拟经验 → Q-planning 更新 Q；Q → ε-贪心选动作 → 产生下一条真实经验。两个更新的公式完全一样，唯一差别是经验来源：真实 vs 模型模拟。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 8.3-2</div>
+              <div class="q-text">α=0.5、γ=0.9：真实经验 (C,右,+1,终止) 后 Q(C,右)=？三次 Q-planning 后 =？再经历 (B,右,0,C) 后 Q(B,右)=？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              0.5；0.75 → 0.875 → 0.9375；Q(B,右) = 0.5 × (0.9 × 0.9375) = 0.421875。要点：B 没拿奖励，价值是顺着 bootstrap 目标从 C 回传的。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 8.4 ============ -->
+    <h2><span class="sec-no">8.4</span>模型会错：阻塞、捷径与 Dyna-Q+</h2>
+
+    <p>上一节末尾埋了个雷：模拟经验服从的是学来的模型，模型错了，planning 越勤快错得越扎实。模型出错最隐蔽的一种不是"从来没学对"，而是<strong>环境变了，模型过时了</strong>。过时有两个方向，性质完全不同：</p>
+
+    <ul>
+      <li><strong>环境变坏</strong>：<span class="term">阻塞</span>（Blocking）——原来畅通的路被堵了。模型还记着老路，模拟经验依然把智能体往死胡同里引；好在真实交互会立刻给出互相矛盾的反馈，模型迟早被纠正。这类错误是"自爆"的。</li>
+      <li><strong>环境变好</strong>：<span class="term">捷径</span>（Shortcut）——某处新开了一条更短的路。这才是真正的麻烦：<strong>模型里没有的路，永远不会被模拟，也就永远不会被发现</strong>。智能体沿着旧路走得越顺，ε-贪心偶然拐进新路的机会越少，新路在模型里就始终是空白。规划越充分，策略越确定，发现捷径的概率反而越低。</li>
+    </ul>
+
+    <p>Sutton 书中的对照实验（迷宫环境跑到一半，偷偷打开一条更短的通道）正是演示这个不对称性：普通 Dyna-Q 能较快适应阻塞，却对捷径长期"失明"，一直沿着旧路走；而改变后的环境给了更高的潜在回报，智能体毫无察觉。</p>
+
+    <p>出路是给"久未尝试"一个制度性的奖励。<span class="term">Dyna-Q+</span> 记录每个 (s, a) 已经多久没在真实经验里出现过，记为 τ 步；规划（以及更新）时把奖励改成：</p>
+
+    <div class="formula">r + κ√τ</div>
+
+    <p>即：模拟 (s, a) 时，用的奖励不是模型记的 r，而是 r + κ√τ。一个动作越久没在真实世界里试过，它在规划里就显得越诱人——万一环境变好了、它其实变强了呢？κ 是个小系数，控制"怀旧奖励"的强度。效果上，Dyna-Q+ 会定期去重新探索那些冷门的动作，捷径一旦出现就会被撞上。</p>
+
+    <p>要说明的是，r + κ√τ 只是<strong>表格型设定下的一个启发式</strong>：它为每个 (s, a) 维护一个计时器，这在表格装得下时才可行。但它背后的思想——给"不确定性/久违"本身发奖金——是探索问题的一条主线，后面探索专题里会以更系统的形式回来（上置信界、计数奖励都与它一脉相承）。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>阻塞与捷径的不对称，本质是<strong>误差能否自我暴露</strong>：模型高估了某条路（阻塞），现实会打它的脸；模型压根不知道某条路（捷径），现实没有任何机会说话。所以探索机制的首要任务不是"纠错"，而是"让未知的选项保持发言权"。Dyna-Q+ 的 κ√τ 就是给沉默多数发的一张话筒。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>"Dyna-Q+ 的奖励加成是为了更快收敛。" 恰恰相反：κ√τ 故意让 Q 值<strong>偏离</strong>当前模型认为的最优，用短期回报的牺牲换对模型盲区的好奇。它服务的是长期发现，不是短期收敛。收敛性证明里这个加成项是要衰减处理的，别把手段当目的。</p>
+    </div>
+
+    <!-- 回忆卡片 8.4 -->
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 8.4-1</div>
+              <div class="q-text">阻塞与捷径两类模型过时，为什么普通 Dyna-Q 对后者特别迟钝？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              阻塞会被真实交互的矛盾反馈自动纠正；而捷径是"模型里没有的路"，永远不会被模拟、不会被规划，确定性策略又很少偶然走进它——越规划越失明。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 8.4-2</div>
+              <div class="q-text">写出 Dyna-Q+ 的探索奖励公式，说明 τ 的含义，以及这个技巧为什么在表格型之外要慎用。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              r + κ√τ，τ 是 (s, a) 未在真实经验中出现的步数，κ 控制探索奖励强度。它要为每个 (s, a) 维护计时器，只在表格装得下时可行，是表格型启发式；其"给不确定性发奖金"的思想通向后续探索专题。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 8.5 ============ -->
+    <h2><span class="sec-no">8.5</span>优先扫掠：让优先级排队代替随机抽样</h2>
+
+    <p>Dyna-Q 的 planning 从字典里<strong>随机</strong>抽 (s, a) 来模拟。这在字典小、价值都在剧烈变化时没问题；但学到后期，绝大多数 (s, a) 的 Q 值已经收敛，随机抽样会把算力大把浪费在"再更新一次也不会变"的地方。真正值得更新的，是那些<strong>估计刚刚被现实或下游变化打脸</strong>的位置——TD 误差大的地方。</p>
+
+    <p><span class="term">优先扫掠</span>（Prioritized Sweeping）把随机抽样换成一个优先级队列：</p>
+
+    <ul>
+      <li>每次更新后，算该 (s, a) 的 TD 误差绝对值 |δ|；若 |δ| 超过阈值 θ，就把这个 (s, a) 按 |δ| 为优先级入队；</li>
+      <li>每次规划：弹出优先级最高的 (s, a)，执行一次更新；</li>
+      <li>更新完之后，<strong>反向追溯</strong>：查模型，找出所有一步之内能到达 s 的前驱 (s⁻, a⁻)，预测它们更新后的 TD 误差，超过 θ 的也入队。</li>
+    </ul>
+
+    <p>最后这条"前驱入队"是灵魂：一个状态的价值变了，受影响最大的是它的一步前驱；前驱变了再往前传。价值变化像涟漪一样<strong>从终点向外逐格扩散</strong>，每一圈只更新那些变化还显著的格子。</p>
+
+    <h3>核心算例：终点处扔下一颗石子</h3>
+
+    <p>接 8.3 的链 A → B → C → 终点（进终点 +1），α = 0.5，γ = 0.9，θ = 0.1，所有 Q 初始为 0。智能体第一次从 C 走进终点，拿到 +1：</p>
+
+    <p><strong>① 计算 |δ|：</strong>|δ(C, 右)| = |1 + 0.9 × 0 − 0| = <strong>1.0</strong> &gt; θ → 入队，优先级 1.0。</p>
+
+    <p><strong>② 弹出 (C, 右)，更新：</strong>Q(C, 右) = 0 + 0.5 × 1.0 = <strong>0.5</strong>。查模型找前驱：(B, 右) 一步可达 C。预测其误差：|δ(B, 右)| = |0 + 0.9 × 0.5 − 0| = <strong>0.45</strong> &gt; θ → 入队，优先级 0.45。</p>
+
+    <p><strong>③ 弹出 (B, 右)，更新：</strong>Q(B, 右) = 0 + 0.5 × 0.45 = <strong>0.225</strong>。前驱 (A, 右)：|δ(A, 右)| = 0.9 × 0.225 = <strong>0.2025</strong> &gt; θ → 入队。</p>
+
+    <p><strong>④ 弹出 (A, 右)，更新：</strong>Q(A, 右) = 0 + 0.5 × 0.2025 = <strong>0.10125</strong>。再找更上游：|δ| = 0.9 × 0.10125 = <strong>0.091125</strong> &lt; θ → <strong>不入队，扫掠停止</strong>。</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>步骤</th><th>弹出</th><th>更新结果</th><th>前驱预测 |δ|</th><th>判定</th></tr>
+        <tr><td>①</td><td>—（真实经验触发）</td><td>—</td><td>|δ(C,右)| = 1.0</td><td>入队 1.0</td></tr>
+        <tr><td>②</td><td>(C, 右)</td><td>Q = 0.5</td><td>|δ(B,右)| = 0.9 × 0.5 = 0.45</td><td>入队 0.45</td></tr>
+        <tr><td>③</td><td>(B, 右)</td><td>Q = 0.225</td><td>|δ(A,右)| = 0.9 × 0.225 = 0.2025</td><td>入队 0.2025</td></tr>
+        <tr><td>④</td><td>(A, 右)</td><td>Q = 0.10125</td><td>上游 |δ| = 0.9 × 0.10125 = 0.091125</td><td>&lt; θ，停止</td></tr>
+      </table>
+    </div>
+
+    <p>四次更新，价值从终点反向逐格传播，<strong>每格恰好一次</strong>，没有任何一次更新花在"已经收敛"的地方。算力自动聚焦在"惊讶"的前沿（frontier）上——这就是优先扫掠的全部追求。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>还记得第4章动态规划要一遍一遍扫<strong>整个状态空间</strong>吗？优先扫掠是它的"在线版"：不再地毯式扫描，只扫重要的。TD 误差就是"哪里还值得扫"的探测器，模型（反向）就是涟漪扩散的地图。θ 是探测器的灵敏度：θ→0 时涟漪传得又远又久，近乎退化成全空间反复更新；θ 太大时石子落水也激不起浪，几乎不做 planning。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>"优先扫掠总是比随机规划划算。" 不一定。维护优先级队列、为每个状态反查前驱列表，都是有开销的；状态空间小、单次更新便宜时，随机抽样的简单粗暴可能总体更快。优先扫掠的甜头在"状态空间大、变化局部"的任务里——比如环境刚发生局部变化，涟漪恰好只在该区域扩散。</p>
+    </div>
+
+    <!-- 回忆卡片 8.5 -->
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 8.5-1</div>
+              <div class="q-text">优先扫掠的队列里装的是什么、按什么排序？一次弹出更新之后，为什么还要把前驱入队？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              队列装 |TD 误差| 超过阈值 θ 的 (s, a)，按 |δ| 排序。更新 (s, a) 后其价值变了，受影响最大的是一步可达它的前驱；前驱的预测误差若仍超 θ 就入队，让价值变化像涟漪一样从终点反向传播。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 8.5-2</div>
+              <div class="q-text">接 8.3 的链（α=0.5、γ=0.9、θ=0.1）：报出优先扫掠全过程的四个更新值，并说明为什么停在 A。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              Q(C,右)=0.5，Q(B,右)=0.225，Q(A,右)=0.10125；更上游预测误差 0.9×0.10125=0.091125 &lt; θ=0.1，不再入队，扫掠自然终止。每格恰好更新一次。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 8.6 ============ -->
+    <h2><span class="sec-no">8.6</span>规划与学习的对偶 + 错误直觉清算</h2>
+
+    <p>走到这里，本章开头的主线问题已经有了答案。把两个名词并排摆开：</p>
+
+    <ul>
+      <li><strong>学习</strong>（Learning）：用<strong>真实</strong>经验做更新——经验来自环境；</li>
+      <li><strong>规划</strong>（Planning）：用<strong>模拟</strong>经验做更新——经验来自模型。</li>
+    </ul>
+
+    <p>Dyna 证明了二者<strong>共用同一个更新公式</strong>，差别只在经验的来源。这就是<span class="term">规划与学习的对偶</span>（Duality of Planning and Learning）：试错中学到的，和脑内推演算到的，在算法眼里是同构的"经验流"。人类棋手复盘（真实对局）与打谱推演（脑中模拟）长棋力走的是同一条神经回路——Dyna 就是这个事实的计算版。</p>
+
+    <p>本章收尾前，清算三条最容易带走的错误直觉：</p>
+
+    <ul>
+      <li><strong>"Dyna 是一个新算法。"</strong> 错。Dyna 是一个<span class="term">架构</span>（Architecture），不是算法：它只规定"直接 RL + 模型学习 + Q-planning"三条管线怎么接，管线里装的更新公式可以是 Q-learning、Sarsa、期望 Sarsa 中的任何一格——统一视图的每个点都能塞进 Dyna 的壳。</li>
+      <li><strong>"模型越准 Dyna 越好，所以要先花大量经验把模型学准。"</strong> 在表格型确定性环境里成立（字典模型一次学对）；但在随机环境里，字典模型本身就是有偏的采样器，planning 步数越多，这个偏差被放大得越扎实。正确姿势是边学模型边规划、用真实经验持续纠正模型，而不是"先练内功再出山"。</li>
+      <li><strong>"优先扫掠总是划算。"</strong> 队列维护与前驱反查有真实开销；状态空间小、更新便宜时，随机规划可能更简单有效。优先扫掠的价值在"大状态空间 + 局部变化"的场景，不是普适加速器。</li>
+    </ul>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>一句话带走本章：<strong>真实经验与模拟经验是同一种燃料，灌进同一个更新引擎；模型是炼油厂，Dyna-Q+ 防止油品老化，优先扫掠把油优先送到最需要动力的气缸。</strong> 至此表格型方法全部就绪——下一章要换掉的，是"表格"这个容器本身。</p>
+    </div>
+
+    <!-- 回忆卡片 8.6 -->
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 8.6-1</div>
+              <div class="q-text">用一句话陈述规划与学习的对偶：二者的相同点与唯一差别各是什么？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              相同点：共用同一个更新公式（新估计 ← 旧估计 + 步长 × (目标 − 旧估计)）；唯一差别是经验来源——学习用真实经验，规划用模型产生的模拟经验。Dyna 把两条经验流灌进同一个 Q。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 8.6-2</div>
+              <div class="q-text">为什么说 Dyna 是"架构"而不是"算法"？它和统一视图（8.1）是什么关系？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              Dyna 只规定三条管线（直接 RL / 模型学习 / Q-planning）的连接方式，不规定具体更新公式；统一视图三维空间里的任意一个点（Q-learning、Sarsa、期望 Sarsa……）都可以填进 Dyna 的壳里，所以它是装载算法的架构。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 概念卡 ============ -->
+    <h2><span class="sec-no">🃏</span>概念卡：本章概念的一分钟画像</h2>
+    <p>翻面前先自问：这个概念我能用一句话讲清楚吗？</p>
+    <div class="flip-grid">
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 1</div>
+            <div class="q-text">样本模型与分布模型（Sample / Distribution Model）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">分布模型给出完整 p(s′, r | s, a)；样本模型只按该分布吐出单个采样 (r, s′)。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">经验除了学价值还能学什么——学一个"世界模拟器"，让规划成为可能。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">分布模型是查全本菜谱，样本模型是问老师傅"上次你怎么做的"，一次只讲一道。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为样本模型"信息量低所以没用"——它支持采样更新，且表格型下一个字典就能学。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">Dyna 的模型学习、优先扫掠的前驱反查；函数逼近下对应"学习型世界模型"。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 2</div>
+            <div class="q-text">Dyna-Q 架构（Dyna Architecture）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">每条真实经验同时驱动三件事：直接 RL 更新 Q、模型学习、n 次 Q-planning 更新 Q。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">真实交互昂贵：用一份真实经验撬动 n 份模拟更新，拿算力换样本。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">下棋实战（直接 RL）之后当场复盘打谱（planning），同一盘棋榨出多倍经验。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为 Dyna 是一个新算法——它是架构，壳里可装 Q-learning / Sarsa / 期望 Sarsa 任意一格。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">样本昂贵、算力便宜的场景：机器人、调度、昂贵的真实 A/B 实验。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 3</div>
+            <div class="q-text">Q-planning 与模拟经验（Simulated Experience）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">从模型随机抽见过的 (s,a)，查出 Model(s,a)=(r,s′)，对其执行与直接 RL 完全相同的 Q 更新。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">真实经验一步只更新一次；模拟经验让同一目标反复迭代，等价于加速收敛。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">在脑内把刚经历的一步重演 n 遍，把没消化透的经验嚼烂。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为 n 越大越好——模拟服从的是学来的模型，模型错时 n 大反而放大错误。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">Dyna 家族的核心内循环；优先扫掠就是把它的"随机抽"换成"按优先级弹"。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 4</div>
+            <div class="q-text">Dyna-Q+ 探索奖励（Exploration Bonus, r + κ√τ）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">规划时把 (s,a) 的奖励改为 r + κ√τ，τ 是该 (s,a) 未在真实经验中出现的步数。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">捷径型模型过时：模型里没有的新路永远不会被模拟，需要机制主动去撞。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">给久未光顾的店一张"怀旧优惠券"——万一它重新装修（变好）了呢？</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为它为了更快收敛——恰好相反，它故意偏离当前最优去换长期发现。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">非平稳环境的 Dyna；其"给不确定性发奖金"的思想通向后续探索专题（UCB 等）。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 5</div>
+            <div class="q-text">优先扫掠（Prioritized Sweeping）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">按 |TD 误差| 排优先级，超过阈值 θ 的 (s,a) 入队；弹出更新后把预测误差超标的前驱也入队。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">随机 planning 把算力浪费在已收敛的状态上；变化往往集中在局部。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">石子落水，涟漪只往外传几圈——价值变化从终点反向逐格扩散，每格只更新一次。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为它总是划算——队列维护与前驱反查有开销，小状态空间下随机规划可能更简单有效。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">大状态空间 + 局部变化（如布局改动、故障）；也是"异步动态规划"的在线版。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 6</div>
+            <div class="q-text">规划与学习的对偶（Planning–Learning Duality）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">学习=用真实经验更新，规划=用模型产生的模拟经验更新；二者共用同一更新公式。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">回答本章主线：无模型方法与有模型方法是不是两回事——不是，只是经验来源不同。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">真实经验与模拟经验是同一种燃料，灌进同一个更新引擎。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为 model-based / model-free 按算法名册划界——边界在"改进是否经由模型产生的经验"。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">理解后续所有 model-based RL（含函数逼近下的世界模型）的总纲。</span></div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- ============ 分层习题 ============ -->
+    <h2><span class="sec-no">📝</span>分层习题</h2>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>判断并说明理由：「Dyna-Q 属于 model-based 方法，所以它不需要真实经验，靠模型模拟就够了。」这个说法对吗？</div>
+      <details>
+        <summary>提示</summary>
+        <p>Dyna-Q 里模型是从哪来的？把模型的"粮食"断掉会怎样？再想想 model-based / model-free 的划分标准。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p><strong>说法错误，错在两层。</strong></p>
+          <p>① 模型本身是靠真实经验学出来的（Model(s, a) ← (r, s′)）。断掉真实经验，字典永远是空的，模拟经验一条也造不出来；环境一旦变化，旧模型还会把规划带进沟里。真实经验是 Dyna 的"源头活水"。</p>
+          <p>② 说 Dyna-Q"属于 model-based"也只对了一半。按本章的划分标准——价值/策略的改进是否经由模型产生的经验——Dyna-Q 的直接 RL 通路是 model-free，Q-planning 通路是 model-based，两者都是。它恰恰是本章用来证明"两派方法可以同炉"的范例，而不是站队的证据。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>在优先扫掠中，如果把阈值 θ 设为 0 会发生什么？设得非常大又会怎样？这两种极端各自等价于什么？</div>
+      <details>
+        <summary>提示</summary>
+        <p>θ 控制的是"什么值得入队"。θ→0 时队列里会涌进什么？θ 极大时队列里还剩什么？</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p><strong>θ → 0：</strong>任何非零误差都能入队，涟漪永不衰减——一个变化会沿着前驱链传遍整个可达状态空间，且已入队的 (s, a) 在值微调后又可能重新超标入队，近乎退化为<strong>对整个状态空间的反复更新</strong>（类似动态规划的反复扫描），彻底失去"聚焦"的意义，还白白背着队列维护开销。</p>
+          <p><strong>θ 极大：</strong>几乎没有任何 |δ| 能越过门槛，队列常年为空，<strong>几乎不做 planning</strong>——方法退化回纯直接 RL（相当于 Dyna 的 n = 0）。</p>
+          <p>θ 是"聚焦程度"的旋钮：小到 0 等于不聚焦，大到顶等于不规划。工程上常取与"有实际意义的 Q 值变化量"同量级的小正数（如算例中的 0.1）。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>复算 8.3 的全部数字（确定性链 A→B→C→终点，进终点 +1，γ = 0.9，α = 0.5，全零初始化）：真实经验 (C,右,+1,终止) 后的 Q(C,右)；三次 Q-planning（均抽中 (C,右)）后的 Q(C,右)；以及真实经验 (B,右,0,C) 后的 Q(B,右)。然后追问：若 α = 1，上述五个更新值各是多少？</div>
+      <details>
+        <summary>提示</summary>
+        <p>更新式 Q ← Q + α(目标 − Q)，链上只有一个动作，max 不用真的取。α = 1 时更新式变成 Q ← 目标。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p><strong>α = 0.5 的五步：</strong></p>
+          <ul>
+            <li>真实 (C,右,+1,终止)：Q(C,右) = 0 + 0.5×(1 + 0.9×0 − 0) = <strong>0.5</strong></li>
+            <li>模拟 1：Q = 0.5 + 0.5×(1 − 0.5) = <strong>0.75</strong></li>
+            <li>模拟 2：Q = 0.75 + 0.5×(1 − 0.75) = <strong>0.875</strong></li>
+            <li>模拟 3：Q = 0.875 + 0.5×(1 − 0.875) = <strong>0.9375</strong></li>
+            <li>真实 (B,右,0,C)：Q(B,右) = 0 + 0.5×(0 + 0.9×0.9375 − 0) = 0.5×0.84375 = <strong>0.421875</strong></li>
+          </ul>
+          <p><strong>α = 1 的五步：</strong>更新式退化为 Q ← 目标。</p>
+          <ul>
+            <li>真实 (C,右,+1,终止)：Q(C,右) = 1 + 0.9×0 = <strong>1</strong>（一步到真值）</li>
+            <li>模拟 1：Q = 1 + 0.9×0 = <strong>1</strong>；模拟 2：Q = <strong>1</strong>；模拟 3：Q = <strong>1</strong>（已在真值，原地不动）</li>
+            <li>真实 (B,右,0,C)：Q(B,右) = 0 + 0.9×1 = <strong>0.9</strong></li>
+          </ul>
+          <p>对照可见：α = 1 在确定性环境里一步收敛，planning 的"反复迭代"不再产生增量；α &lt; 1 时 planning 的价值正是在两次真实交互之间把同一目标多推几步。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>4 格链 D→C→B→终点（每格只有"向右"动作），进终点奖励 +2，γ = 0.9，α = 0.5，θ = 0.2，所有 Q 初始为 0。智能体从 B 走进终点拿到 +2。完整走一遍优先扫掠：写清每次 |δ| 计算、入队判定、弹出与更新，直到扫掠停止。</div>
+      <details>
+        <summary>提示</summary>
+        <p>真实经验先触发 (B,右) 入队；每次弹出更新后，唯一前驱沿链往左退一格，预测误差 = γ × 刚更新的 Q 值变化。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p><strong>① 真实经验 (B,右,+2,终止)：</strong>|δ(B,右)| = |2 + 0.9×0 − 0| = <strong>2</strong> &gt; θ=0.2 → 入队，优先级 2。</p>
+          <p><strong>② 弹出 (B,右)，更新：</strong>Q(B,右) = 0 + 0.5×2 = <strong>1</strong>。前驱 (C,右)：预测 |δ(C,右)| = |0 + 0.9×1 − 0| = <strong>0.9</strong> &gt; 0.2 → 入队，优先级 0.9。</p>
+          <p><strong>③ 弹出 (C,右)，更新：</strong>Q(C,右) = 0 + 0.5×0.9 = <strong>0.45</strong>。前驱 (D,右)：预测 |δ(D,右)| = |0 + 0.9×0.45 − 0| = <strong>0.405</strong> &gt; 0.2 → 入队，优先级 0.405。</p>
+          <p><strong>④ 弹出 (D,右)，更新：</strong>Q(D,右) = 0 + 0.5×0.405 = <strong>0.2025</strong>。D 没有更上游的前驱（链的起点）→ <strong>队列空，扫掠停止</strong>。</p>
+          <p>结果：Q(B,右)=1，Q(C,右)=0.45，Q(D,右)=0.2025。三次更新、每格一次，价值 2 → 1 → 0.45 → 0.2025 沿链反向传播，与 8.5 算例同构（那里第 ④ 步之后更上游 |δ| = 0.091125 &lt; θ 而停止，这里则是链本身到头）。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l3">L3 建模应用</span>仓库 AGV 调度：真实跑一单要 10 分钟（真实经验昂贵），但有一个廉价仿真器可批量模拟。某天某个货架区刚改了布局。请设计一个 Dyna 风格方案：① 真实经验与模拟经验的分工比例思路；② 模型随布局漂移过时怎么办；③ 为什么此时优先扫掠特别有用。画出架构图（mermaid）。</div>
+      <details>
+        <summary>提示</summary>
+        <p>昂贵资源的预算怎么定？布局改动后哪个量会最先"报警"？报警信号集中在地图的哪个区域？</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p><strong>① 分工比例：</strong>真实经验只承担两样不可替代的工作——学模型（校准仿真器）和少量直接 RL；把绝大部分更新次数留给廉价的 Q-planning。比例思路：按"真实单成本 / 仿真单成本"来配，例如每 1 条真实经验配 50–100 次模拟更新（n 大），真实交互的边际成本被摊薄。仿真器本身也可作为模型来源之一（相当于字典模型的数据扩充），但仍需真实单定期校验。</p>
+          <p><strong>② 模型漂移：</strong>两道工序。被动：真实单一旦给出与模型矛盾的 (r, s′)，立即覆盖字典条目（模型持续重学）。主动：Dyna-Q+ 的 κ√τ 让久未真实验证的 (s, a) 在规划中显得更诱人，驱使 AGV 定期实地复查——布局改动（一种"捷径/阻塞"混合事件）发生后，旧模型的盲区会被探索奖励逐步照亮；改动频繁时还可定期全量重学模型。</p>
+          <p><strong>③ 优先扫掠的主场：</strong>布局改动只影响仓库的一个局部区域。改动后，该区域的 (s, a) 首先出现大 |δ|，入队；涟漪沿前驱链只在与改动区域拓扑相关的格子上扩散，远离改区的状态根本不占算力。若用随机 planning，绝大多数模拟更新会落在与改动无关的 95% 区域——优先扫掠恰好把算力钉死在"惊讶"的 frontier 上。</p>
+          <div class="figure">
+            <div class="mermaid">
+flowchart LR
+  R["真实跑单 10分钟一次"] --> D["直接RL 少量更新Q"]
+  R --> M["模型学习 字典模型"]
+  F["仿真器 廉价批量模拟"] --> M
+  M --> S["模拟经验流"]
+  S --> P["优先扫掠 按TD误差排队"]
+  P --> Q["Q表 调度策略"]
+  D --> Q
+  Q --> R
+  classDef hot fill:#fbeedd,stroke:#c4651f,stroke-width:2.5px,color:#c4651f;
+  class P hot;
+            </div>
+            <div class="caption">参考答案附图：仓库 AGV 的 Dyna 方案——真实单负责校准与少量直接更新，仿真器与字典模型供养廉价模拟经验，优先扫掠把更新聚焦在布局改动区域。</div>
+          </div>
+        </div>
+      </details>
+    </div>
+
+    <!-- ============ 自测 ============ -->
+    <h2><span class="sec-no">✍️</span>本章自测</h2>
+    <p class="quiz-hint">点击选项判分，答错会给出原因。</p>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 1</div>
+      <div class="q-stem">在统一视图的"更新深度"维度上，蒙特卡洛方法位于哪一端？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 1 步端，与 TD(0) 相邻</li>
+        <li data-opt="b">B. ∞ 端——一直回看到回合结束，用完整回报做目标</li>
+        <li data-opt="c">C. n 步端，位于 TD 与 ∞ 之间</li>
+        <li data-opt="d">D. 深度维度对 MC 不适用</li>
+      </ul>
+      <div class="quiz-explain">解析：B 正确——MC 的目标 G<sub>t</sub> 一直累积到回合终止，是深度光谱的 ∞ 端。A 错：1 步端是 TD(0) 与 DP 的位置。C 错：n 步端是第7章方法的位置。D 错：深度维度适用于所有方法，MC 恰好定义了它的一个端点；维度存在的意义正是把 MC 与 TD 连成一条光谱。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="c">
+      <div class="q-no">自测 2</div>
+      <div class="q-stem">在 Dyna 架构中，学出来的模型被谁消费（多选语义：哪两个"消费者"）？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 只被 Q-planning 消费，用来产生模拟经验</li>
+        <li data-opt="b">B. 只被直接 RL 消费，用来替代真实经验</li>
+        <li data-opt="c">C. 被 Q-planning（产出模拟经验）和优先扫掠（反向查找前驱）消费</li>
+        <li data-opt="d">D. 被 ε-贪心策略直接消费，用来选动作</li>
+      </ul>
+      <div class="quiz-explain">解析：C 正确——模型有两个消费者：Q-planning 正向采样 (r, s′) 造模拟经验；优先扫掠反向查"谁能一步到达 s"找前驱。A 错：漏掉了优先扫掠对模型的反向使用。B 错：直接 RL 吃的是真实经验，不碰模型。D 错：ε-贪心只看 Q 表，从不直接查模型。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="d">
+      <div class="q-no">自测 3</div>
+      <div class="q-stem">8.3 算例（α=0.5、γ=0.9、全零初始化）：真实经验 (C,右,+1,终止) 并做 3 次 Q-planning（均抽中 (C,右)）后，Q(C,右) 与随后真实经验 (B,右,0,C) 更新出的 Q(B,右) 分别是：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 0.5 与 0.225</li>
+        <li data-opt="b">B. 1 与 0.9</li>
+        <li data-opt="c">C. 0.875 与 0.39375</li>
+        <li data-opt="d">D. 0.9375 与 0.421875</li>
+      </ul>
+      <div class="quiz-explain">解析：D 正确。0.5 → 0.75 → 0.875 → 0.9375；Q(B,右) = 0.5×(0.9×0.9375) = 0.421875。A 错：那是没做 planning（n=0）时的数字。B 错：那是 α=1 的数字。C 错：0.875 只做了 2 次模拟，且 0.39375 = 0.5×0.9×0.875 是配套错误。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="a">
+      <div class="q-no">自测 4</div>
+      <div class="q-stem">关于优先扫掠的阈值 θ，下列说法正确的是：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. θ→0 近乎退化为全空间反复更新，θ 过大则几乎不做 planning</li>
+        <li data-opt="b">B. θ 越小，规划越聚焦，所以 θ 应尽量小</li>
+        <li data-opt="c">C. θ 只影响更新顺序，不影响哪些 (s,a) 被更新</li>
+        <li data-opt="d">D. θ 必须等于步长 α</li>
+      </ul>
+      <div class="quiz-explain">解析：A 正确——θ 是入队门槛，两个极端分别退化为"不聚焦"和"不规划"。B 错：说反了，θ 越小门槛越低、队列越泛滥，恰恰失去聚焦。C 错：θ 直接决定 |δ| 够不够格入队，当然影响谁被更新。D 错：θ（误差门槛）与 α（步长）是两个独立旋钮，量纲意义都不同。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 5</div>
+      <div class="q-stem">关于规划与学习的对偶，下列说法正确的是：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 规划用期望更新、学习用采样更新，这是二者的本质差别</li>
+        <li data-opt="b">B. 二者共用同一个更新公式，唯一差别在经验来源：真实 vs 模型模拟</li>
+        <li data-opt="c">C. Dyna 是一个新算法，其更新公式不同于 Q-learning</li>
+        <li data-opt="d">D. 模型越准 Dyna 越好，所以应先用大量经验把模型学准再开始规划</li>
+      </ul>
+      <div class="quiz-explain">解析：B 正确——这正是本章主线问题的答案。A 错：宽度（采样/期望）与经验来源（真实/模拟）是两个独立维度，模拟经验同样可以喂采样更新，8.3 的 Q-planning 就是采样更新吃模拟经验。C 错：Dyna 是架构不是算法，壳里的更新公式就是 Q-learning（或 Sarsa 等）。D 错：只在确定性表格环境成立；随机环境里字典模型本身有偏，闷头多学模型再规划会把偏差夯得更实，正确姿势是边学边规划、持续用真实经验纠偏。</div>
+    </div>
+
+    <!-- ============ 复述 ============ -->
+    <div class="retell">
+      <h3>🗣️ 用自己的话，三句话讲完本章</h3>
+      <p>对着空气（或室友）说出这三句。说卡壳的那句，回去重读对应小节。</p>
+      <details>
+        <summary>句1：这章解决什么问题？——</summary>
+        <div class="retell-answer">参考答案：第5–7章的无模型方法看似各不相同、且只用掉了经验的一半价值。本章解决两件事：① 把它们收进"深度 × 宽度 × 策略"的统一视图；② 让经验再喂出一个模型，用模拟经验放大每一份昂贵的真实交互。</div>
+      </details>
+      <details>
+        <summary>句2：核心机制是什么？——</summary>
+        <div class="retell-answer">参考答案：Dyna 架构——真实经验一路直接更新 Q（直接 RL），一路学字典模型；模型产出模拟经验做 n 次 Q-planning，与直接 RL 共用同一更新公式。模型会过时：Dyna-Q+ 用 r + κ√τ 鼓励重探冷门动作；算力要聚焦：优先扫掠按 |TD 误差| 排队，让价值变化像涟漪一样从终点反向传播。</div>
+      </details>
+      <details>
+        <summary>句3：它和前后章怎么分工？——</summary>
+        <div class="retell-answer">参考答案：第5–7章是统一视图里的各个点，本章提供坐标系并打通"学习"与"规划"的任督二脉。但所有方法仍假设 V、Q 装得下一张表——状态空间一大表格就装不下，第9章起把表格换成函数逼近，更新骨架与三维坐标系原封不动地带过去。</div>
+      </details>
+    </div>
+
+    <!-- ============ 复习计划 ============ -->
+    <div class="review-plan">
+      <h3>🔁 间隔复习计划</h3>
+      <p>回忆本身比重读有效 10 倍。到点只做一件事：翻卡 + 重做标记题。</p>
+      <table>
+        <tr><th>时间点</th><th>复习内容</th><th>预计用时</th></tr>
+        <tr><td>第 1 天</td><td>全部 6 张概念卡 + 12 张回忆卡；重做 L2 两道手算题</td><td>15 分钟</td></tr>
+        <tr><td>第 3 天</td><td>概念卡 2、3、5（Dyna 架构 / Q-planning / 优先扫掠）+ 自测错题 + 重算 8.3 的 0.5→0.9375→0.421875</td><td>10 分钟</td></tr>
+        <tr><td>第 7 天</td><td>三句话复述 + 默画 Dyna-Q 架构图 + 重算 8.5 优先扫掠四步 + 合上书挑战</td><td>15 分钟</td></tr>
+        <tr><td>第 15 天</td><td>只重做合上书挑战；能全过就毕业，卡哪条回去重读对应小节</td><td>15 分钟</td></tr>
+      </table>
+    </div>
+
+    <!-- 合上书挑战 -->
+    <div class="final-challenge">
+      <h3>📕 合上书挑战</h3>
+      <p class="fc-sub">现在关掉这个页面，拿一张纸，凭记忆完成以下任务。全部做完再回来核对——这是本章真正的毕业考试。</p>
+      <ol id="ch08-challenge-list">
+        <li><span class="fc-check"></span>画出统一视图的"深度 × 宽度"平面，把 MC、TD(0)、DP、n 步、期望 Sarsa 五个点标上去，并写出它们共用的更新骨架</li>
+        <li><span class="fc-check"></span>写出样本模型的学习规则 Model(s,a) ← (r, s′)，说明经验的直接与间接两种用途，以及 model-based 的真正判定标准</li>
+        <li><span class="fc-check"></span>默画 Dyna-Q 架构图（真实经验三路流向），并复算 0.5 → 0.75 → 0.875 → 0.9375 → 0.421875 的完整过程</li>
+        <li><span class="fc-check"></span>解释阻塞与捷径的不对称，写出 Dyna-Q+ 的探索奖励 r + κ√τ 并说明它对付哪一类、为什么</li>
+        <li><span class="fc-check"></span>复算优先扫掠算例（θ=0.1）：1.0 入队 → 0.5 → 0.45 入队 → 0.225 → 0.2025 入队 → 0.10125 → 0.091125 &lt; θ 停止</li>
+        <li><span class="fc-check"></span>一句话回答本章主线问题：无模型方法（学习）与有模型方法（规划）真的是两回事吗？</li>
+      </ol>
+    </div>
+
+    <div class="complete-zone">
+      <button class="btn-complete" id="ch08-btn-complete" onclick="markDone()">✓ 我已完成本章（含合上书挑战）</button>
+    </div>
+
+    <div class="chapter-nav">
+      <a href="chapter-07.html"><span class="nav-dir">← 上一章</span>第7章 n步自举</a>
+      <a href="chapter-09.html" class="next"><span class="nav-dir">下一章 →</span>第9章 基于函数逼近的在策略预测</a>
+    </div>
+
+  </div>
+</div>
+
+<footer class="footer">
+  <div class="wrap">第8章 表格型方法的统一 · 强化学习互动讲义 · 基于 Sutton &amp; Barto《Reinforcement Learning: An Introduction》(2nd ed, 2018)</div>
+</footer>
+
+<script src="assets/mermaid.min.js"></script>
+<script>
+mermaid.initialize({
+  startOnLoad: true,
+  theme: "base",
+  themeVariables: {
+    primaryColor: "#e3edf7",
+    primaryBorderColor: "#1d5f9e",
+    primaryTextColor: "#1d5f9e",
+    lineColor: "#5c554b",
+    secondaryColor: "#fbeedd",
+    tertiaryColor: "#f5f1e8",
+    fontFamily: "-apple-system, PingFang SC, sans-serif",
+    fontSize: "14px"
+  },
+  flowchart: { curve: "linear", htmlLabels: false }
+});
+</script>
+<script>
+// 自测题判分
+document.querySelectorAll(".quiz-block").forEach(block => {
+  const answer = block.dataset.answer;
+  const explain = block.querySelector(".quiz-explain");
+  block.querySelectorAll(".quiz-opts li").forEach(li => {
+    li.addEventListener("click", () => {
+      const opts = block.querySelectorAll(".quiz-opts li");
+      opts.forEach(o => o.classList.add("disabled"));
+      if (li.dataset.opt === answer) {
+        li.classList.add("correct");
+      } else {
+        li.classList.add("wrong");
+        block.querySelector(`[data-opt="${answer}"]`).classList.add("correct");
+      }
+      explain.classList.add("show");
+    });
+  });
+});
+
+// 合上书清单打勾
+document.querySelectorAll("#ch08-challenge-list li").forEach(li => {
+  li.addEventListener("click", () => li.classList.toggle("checked"));
+});
+
+// 完成标记 → localStorage（键 rl_progress_v1，章号字符串 "8"）
+const CH08_KEY = "rl_progress_v1";
+function loadProgress() {
+  try { return JSON.parse(localStorage.getItem(CH08_KEY)) || {}; } catch (e) { return {}; }
+}
+const progress = loadProgress();
+const btn = document.getElementById("ch08-btn-complete");
+if (progress["8"] && progress["8"].done) {
+  btn.textContent = "✓ 已完成 · 再次点击重置";
+  btn.classList.add("done");
+}
+function markDone() {
+  const p = loadProgress();
+  if (p["8"] && p["8"].done) {
+    delete p["8"];
+    btn.textContent = "✓ 我已完成本章（含合上书挑战）";
+    btn.classList.remove("done");
+  } else {
+    p["8"] = { done: true, completedAt: Date.now(), reviewsDone: 0 };
+    btn.textContent = "✓ 已完成 · 复习提醒已开启";
+    btn.classList.add("done");
+  }
+  localStorage.setItem(CH08_KEY, JSON.stringify(p));
+}
+</script>
+
+</body>
+</html>

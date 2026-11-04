@@ -1,0 +1,765 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第5章 二叉搜索树与红黑树 · 算法导论互动讲义</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+<nav class="topbar">
+  <div class="topbar-inner">
+    <span class="brand"><a href="index.html" style="color:inherit">← 学习地图</a></span>
+    <span class="crumb">阶段② · 排序与检索 / 第5章</span>
+  </div>
+</nav>
+
+<div class="wrap">
+
+  <div class="lecture-head">
+    <span class="ch-label">CHAPTER 05 · 排序与检索</span>
+    <h1>二叉搜索树与红黑树</h1>
+    <p class="lead">副标题：哈希表很快，但它丢了"顺序"——本章回答：如何在 O(lg n) 内同时完成查找与顺序统计。</p>
+  </div>
+
+  <div class="position-bar">
+    <strong>本章在主线上的位置：</strong>哈希表给出期望 O(1) 的精确查找（第 4 章） → <u>红黑树把"顺序"也装进 O(lg n) 的字典</u> → 后续图算法（第 6、7 章）用它做事件队列与增强结构。<br>
+    第5章回答主线上的第三个问题：<strong>当字典操作还包含"第 k 小、前驱、范围查询"时，如何保证每一步都是 O(lg n)？</strong>
+    <div class="map-inline">
+      <span class="node">① 分析基础<br>Ch1 增长率 · Ch2 分治递归</span><span class="arrow">→</span>
+      <span class="node here">② 排序与检索<br>Ch3 排序 · Ch4 哈希表 · <strong>Ch5 红黑树</strong></span><span class="arrow">→</span>
+      <span class="node">③ 图算法<br>Ch6 图基本算法 · Ch7 最短路</span><span class="arrow">→</span>
+      <span class="node">④ 设计范式<br>Ch8 动规 · Ch9 贪心 · Ch10 NP完全</span>
+    </div>
+  </div>
+
+  <div class="objectives">
+    <h4>🎯 学完本章，合上书你应该能：</h4>
+    <ol>
+      <li>说出 BST 的查找、插入、删除、前驱、后继为什么都是 O(<span class="var">h</span>)，并在给定 BST 上画出查找路径；</li>
+      <li>写出红黑树五条性质，并在任意给定树上逐条验证、标出每个结点的黑高 bh；</li>
+      <li>推导红黑树高度上界 <span class="var">h</span> ≤ 2lg(<span class="var">n</span>+1)（bh ≥ h/2、n ≥ 2<sup>bh</sup>−1）；</li>
+      <li>画出左旋/右旋前后结构图，并完整手算一次"插入后修复"的全部情况分支；</li>
+      <li>解释红黑树与 AVL 的取舍（1.44lg(n+2) 与 2lg(n+1) 背后的读写权衡）；</li>
+      <li>手算顺序统计树中一次 OS-SELECT 的逐结点比较过程，说明 size 字段的作用。</li>
+    </ol>
+  </div>
+
+  <div class="lecture">
+
+    <div class="figure">
+      <div class="mermaid">
+flowchart TB
+  A["字典还要支持顺序操作<br>前驱 后继 第k小"] --> B["BST 二叉搜索树<br>操作 O(h) 但高度不受控"]
+  B --> C["随机建树<br>期望高度约 2ln n 但依赖输入顺序"]
+  C --> D["红黑树<br>五性质锁死 h 不超过 2lg(n+1)"]
+  D --> E["旋转加换色修复<br>插入最多 2 次旋转"]
+  E --> F["代价<br>删除更复杂 常数大于 AVL"]
+  F --> G["增强结构<br>顺序统计树 区间树 通往后续章"]
+  classDef hot fill:#fbeedd,stroke:#c4651f,stroke-width:2.5px,color:#c4651f;
+  classDef danger fill:#fae9e7,stroke:#b03a2e,stroke-width:2.5px,color:#b03a2e;
+  class F danger;
+  class D hot;
+      </div>
+      <div class="caption">本章推导主线：从"需要顺序"到"必须自己管住平衡"，每一步都回答"为什么需要下一步"。</div>
+    </div>
+
+    <h2><span class="sec-no">5.1</span>为什么 BST 的操作代价是 O(h)：高度就是一切</h2>
+    <p>上一章的哈希表回答"键 x 在不在"，期望 O(1)。但请它回答"x 的后继是谁""第 k 小的键是什么"，哈希表只能全体遍历——桶的顺序与键的大小毫无关系。<span class="term">二叉搜索树</span>（Binary Search Tree, BST）用一条简单的不变式把"顺序"请回来：对任一结点 <span class="var">x</span>，其左子树中所有键 ≤ <span class="var">x</span>.key，右子树中所有键 ≥ <span class="var">x</span>.key。</p>
+    <p>这条<strong>中序性质</strong>的直接红利：一次中序遍历就按升序输出全部键；查找、最小值、最大值、前驱、后继、插入、删除，每一个操作都只需从根沿一条路径向下走，每步做一次比较。于是全部操作的代价统一为 O(<span class="var">h</span>)，<span class="var">h</span> 是树高。<strong>本章的所有故事，都围绕"如何把 h 摁在 lg n 量级"展开。</strong>以前驱为例：结点有左子树时前驱是左子树最大值，否则是回溯中"最后一次右转"的祖先——两种情形都只走一条路径，仍是 O(<span class="var">h</span>)。</p>
+
+    <h3>在一棵具体的 BST 上看代价</h3>
+    <p>把键集 {15, 6, 18, 3, 7, 17, 20, 2, 4, 13, 9} 按列表顺序插入空树，得到下图（n = 11，h = 4）：</p>
+    <div class="figure">
+      <div class="mermaid">
+flowchart TB
+  A["15"] --> B["6"]
+  A --> C["18"]
+  B --> D["3"]
+  B --> E["7"]
+  C --> F["17"]
+  C --> G["20"]
+  D --> H["2"]
+  D --> I["4"]
+  E --> J["13"]
+  J --> K["9"]
+      </div>
+      <div class="caption">图 5.1 按顺序插入 {15, 6, 18, 3, 7, 17, 20, 2, 4, 13, 9} 得到的 BST，共 11 个结点，高 h = 4。</div>
+    </div>
+    <p><strong>手算 1：查找 13。</strong>逐层比较：① 13 &lt; 15 → 走向左子 6；② 13 &gt; 6 → 走向右子 7；③ 13 &gt; 7 → 走向右子 13，命中。路径 15 → 6 → 7 → 13，共 <strong>3 次比较</strong>，恰好等于 13 的深度。</p>
+    <p><strong>手算 2：插入 8。</strong>查找 8：8 &lt; 15 向左；8 &gt; 6 向右；8 &gt; 7 向右到 13；8 &lt; 13 向左到 9；8 &lt; 9 向左——9 的左子为空（NIL），于是 8 落为 9 的左孩子。插入位置由<strong>一次失败查找的终点</strong>唯一确定，这正是 BST 插入的正确性依据。删除稍麻烦：待删结点有两个孩子时，用其后继（右子树最小值）顶替再删后继，但同样只涉及常数条路径，仍 O(<span class="var">h</span>)。</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>树的形态</th><th>高度 h</th><th>n = 11 时的值</th><th>一次操作代价</th></tr>
+        <tr><td>最坏：按键升/降序插入，退化成链</td><td>h = n</td><td>11</td><td>O(n)，退化成链表</td></tr>
+        <tr><td>最好：完全平衡</td><td>h = ⌊lg n⌋</td><td>⌊lg 11⌋ = 3</td><td>O(lg n)</td></tr>
+        <tr><td>图 5.1 的随机样例</td><td>4</td><td>4</td><td>接近最好</td></tr>
+      </table>
+    </div>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>BST 的所有操作都是"沿一条从根向下的路径走"，代价的真身是 O(h) 而非 O(lg n)。<strong>h 是变量，由插入历史决定</strong>：谁能管住 h，谁就管住了字典的性能。</p>
+    </div>
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>"BST 查找是 O(lg n)"——错。按 1, 2, …, n 顺序插入的 BST 是一条链，查找退化到 O(n)。把 O(lg n) 当成 BST 的默认属性，是忘记了"h 受输入顺序摆布"。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front"><div class="q-tag">回忆 5.1-1</div><div class="q-text">BST 的查找/插入/删除/前驱/后继代价为什么是 O(h) 而不是 O(lg n)？</div><span class="tap">点击翻面 →</span></div>
+            <div class="flip-face flip-back"><div class="a-tag">参考答案</div>这些操作都只在一条从根出发的路径上做常数次比较，代价由路径长度 h 决定。h 取决于插入顺序：最坏 h = n（链），最好 h = ⌊lg n⌋（平衡），lg n 只是平衡时的特例。</div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front"><div class="q-tag">回忆 5.1-2</div><div class="q-text">在 BST 中插入新键时，它的落点由什么唯一确定？</div><span class="tap">点击翻面 →</span></div>
+            <div class="flip-face flip-back"><div class="a-tag">参考答案</div>由一次失败查找的终点唯一确定：按 BST 性质一路比较向下，直到撞上 NIL，新键就占据这个 NIL 的位置。</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <h2><span class="sec-no">5.2</span>为什么不能指望"随机输入"：期望高度救不了你</h2>
+    <p>上一节的坏消息是 h 受输入顺序摆布。一个自然的侥幸心理是：现实中的键序如果"足够随机"，树会不会自然平衡？<span class="term">随机建树</span>（Randomly Built BST）分析回答：对 n 个互异的键，所有 n! 种插入顺序等可能时，期望高度确实不大。精确结论有两层：严格渐近结果（CLRS 12.4 节引用）期望高度约 <strong>4.311·ln n</strong>；而更贴近查找代价的量是<strong>结点期望深度</strong>，约 <strong>2 ln n</strong>。代入本章的 n = 11：</p>
+    <div class="formula">E[<span class="var">h</span>] ≲ 4.311 · ln 11 ≈ 4.311 × 2.398 ≈ 10.3　（上界很松）　　期望查找深度 ≈ 2 ln 11 ≈ 4.8 次比较</div>
+    <p>对照图 5.1：实际树高 4，查找 13 用了 3 次比较——与期望查找深度同量级。看起来随机输入挺美好？问题在于前提：<strong>"所有插入顺序等可能"你无法验证、更无法保证</strong>：日志按时间戳插入近似升序，直接撞 h = n；字典序导入词表同上；更糟的是，CLRS 指出随机插入删除交替后，树高会漂向 Θ(√n)，比 ln n 差一个量级。</p>
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>随机建树把命运交给"输入的运气"，而输入由不由你控制的世界决定。工程上的正确姿态是：<strong>把平衡握在自己手里</strong>——用数据结构内部的不变式强制 h = O(lg n)，与插入顺序无关。</p>
+    </div>
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>"期望高度 O(lg n)，所以 BST 实际使用没问题。"错在两点：期望是对随机输入取的，不是对你这份输入的承诺；"期望"管不住尾部——一旦撞上顺序插入，单次查找退化成 O(n) 且无任何预警。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front"><div class="q-tag">回忆 5.2-1</div><div class="q-text">随机建树的期望高度和期望查找深度各是多少？</div><span class="tap">点击翻面 →</span></div>
+            <div class="flip-face flip-back"><div class="a-tag">参考答案</div>期望高度约 4.311·ln n（较松的上界）；期望查找深度约 2 ln n，它更贴近一次成功查找的实际比较次数。</div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front"><div class="q-tag">回忆 5.2-2</div><div class="q-text">为什么"期望高度 O(lg n)"不能作为依赖 BST 的理由？</div><span class="tap">点击翻面 →</span></div>
+            <div class="flip-face flip-back"><div class="a-tag">参考答案</div>期望是对"所有插入顺序等可能"这一假设取的，现实输入（时间戳、字典序）常近似有序，直接撞 h = n；且删除会破坏随机性，使树高漂向 Θ(√n)。</div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <h2><span class="sec-no">5.3</span>为什么五条性质能锁住高度：红黑树的不变式</h2>
+    <p>上一节的结论是"平衡必须自己管"。<span class="term">红黑树</span>（Red-Black Tree）是管住平衡的方案之一：给每个结点染红或黑，维持五条性质，让任何路径都不会比最短路径长一倍。五条性质逐条列出：</p>
+    <ol>
+      <li>每个结点要么是红色，要么是黑色；</li>
+      <li>根结点是黑色；</li>
+      <li>每个叶结点（NIL，外部空结点）是黑色；</li>
+      <li>若一个结点是红色，则它的两个孩子都是黑色（<strong>红结点不相邻</strong>）；</li>
+      <li>对任一结点，从它到其每个后代叶结点的所有简单路径上，包含的<strong>黑色结点个数相同</strong>——这个数称为该结点的<span class="term">黑高</span> bh（不计自身，计入 NIL 叶）。</li>
+    </ol>
+
+    <h3>在一棵 8 结点的红黑树上逐条验证</h3>
+    <div class="figure">
+      <div class="mermaid">
+flowchart TB
+  A["11 B · bh2"] --> B["2 R · bh1"]
+  A --> C["14 B · bh1"]
+  B --> D["1 B · bh1"]
+  B --> E["7 B · bh0"]
+  E --> F["5 R · bh0"]
+  E --> G["8 R · bh0"]
+  classDef red fill:#fae9e7,stroke:#b03a2e,stroke-width:2.5px,color:#b03a2e;
+  classDef blk fill:#2b2620,stroke:#2b2620,color:#fff;
+  class B,F,G red;
+  class A,C,D,E blk;
+      </div>
+      <div class="caption">图 5.2 一棵 8 结点的合法红黑树（NIL 叶省略）。标签为"键 颜色 · bh"，bh 从叶向根计算（NIL 的 bh = 0）。</div>
+    </div>
+    <p>逐条验证：</p>
+    <ol>
+      <li>性质 1（非红即黑）✔；性质 2（根 11 为黑）✔；性质 3（NIL 叶为黑）✔（约定）。</li>
+      <li>性质 4（红结点孩子必黑）：红结点 2 的孩子是 1(B)、7(B) ✔；红结点 5、8 的孩子都是 NIL(B) ✔。</li>
+      <li>性质 5（黑高一致）：11→2→1→NIL 黑数 = {1, NIL} = 2 = bh(11) ✔；11→2→7→5→NIL 黑数 = {7, NIL} = 2 ✔（5 是红不计）；11→14→NIL 黑数 = {14, NIL} = 2 ✔。五性质全部成立。</li>
+    </ol>
+    <p>注意一个验证中易踩的坑：若误把 7 标成红色，则 2(R) 与 7(R) 红红相邻破坏性质 4，且路径黑数也随之不一致——<strong>五性质是相互咬合的整体，一处染色失误会连锁破坏两条性质</strong>。发现违规后靠换色与旋转修复，正是 5.4 节的主题。</p>
+
+    <h3>高度上界的证明梗概</h3>
+    <p><strong>引理 1（bh ≥ h/2）：</strong>任取一条从根到叶的最长路径，性质 4 禁止红红相邻，红结点两侧必为黑，故红结点最多占一半，黑结点数 bh ≥ h/2。</p>
+    <p><strong>引理 2（n ≥ 2<sup>bh</sup> − 1）：</strong>对子树规模归纳。把每个黑结点"压"掉其红色孩子（红结点必连在黑结点之下），得到一棵每个结点至少 2 个孩子、高恰为 bh 的黑树，故内部结点数 n ≥ 2<sup>bh</sup> − 1。</p>
+    <p>合起来：n ≥ 2<sup>h/2</sup> − 1 ⟹ lg(n+1) ≥ h/2，即</p>
+    <div class="formula"><span class="var">h</span> ≤ 2 lg(<span class="var">n</span> + 1)</div>
+    <p>对 n = 11：h ≤ 2 lg 12 ≈ 2 × 3.58 ≈ 7.2，最长路径不超过 7 条边——查找、插入、删除全部锁进 O(lg n)，<strong>与插入顺序无关</strong>。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>红黑树不追求"严格平衡"，只追求"<strong>没有路径比最短路径长一倍</strong>"：性质 5 保证所有根-叶路径黑数相同，性质 4 保证红结点最多把路径长度翻倍。放松平衡标准换来的，是维护代价的大幅下降（见 5.4、5.5 节）。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front"><div class="q-tag">回忆 5.3-1</div><div class="q-text">默写红黑树的五条性质。</div><span class="tap">点击翻面 →</span></div>
+            <div class="flip-face flip-back"><div class="a-tag">参考答案</div>①结点非红即黑；②根黑；③NIL 叶黑；④红结点的孩子必黑（红红不相邻）；⑤任一结点到其后代叶的所有路径黑结点数相同（黑高 bh 一致）。</div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front"><div class="q-tag">回忆 5.3-2</div><div class="q-text">h ≤ 2lg(n+1) 的证明用了哪两条引理？</div><span class="tap">点击翻面 →</span></div>
+            <div class="flip-face flip-back"><div class="a-tag">参考答案</div>①性质 4 使最长路径上黑结点至少占一半：bh ≥ h/2；②性质 5 使压缩红结点后得完美黑树：n ≥ 2^bh − 1。两式合并即得 h ≤ 2lg(n+1)。</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <h2><span class="sec-no">5.4</span>旋转与插入修复：O(1) 次旋转如何摆平一切</h2>
+    <p>五性质给出目标，但插入、删除会打破它。<span class="term">旋转</span>（Rotation）是修复的扳手：左旋/右旋在 O(1) 内改写常数个指针，<strong>保持中序序列不变</strong>（这是 BST 性质得以保留的全部原因），同时把一边的高度让渡给另一边。</p>
+    <div class="figure">
+      <div class="mermaid">
+flowchart TB
+  subgraph R["右旋 RIGHT-ROTATE(y)"]
+    direction TB
+    Y["y"] --> X["x"]
+    Y --> C["γ"]
+    X --> A["α"]
+    X --> B["β"]
+  end
+  subgraph L["左旋 LEFT-ROTATE(x)"]
+    direction TB
+    X2["x"] --> A2["α"]
+    X2 --> Y2["y"]
+    Y2 --> B2["β"]
+    Y2 --> C2["γ"]
+  end
+  L -- "互逆" --- R
+  classDef hot fill:#fbeedd,stroke:#c4651f,stroke-width:2.5px,color:#c4651f;
+  class Y2,Y hot;
+      </div>
+      <div class="caption">图 5.3 左旋与右旋互为逆操作。中序序列旋转前后都是 α x β y γ；只有 x、y 父子关系和子树 β 的归属被改写（β 从 x 的右子变为 y 的左子）。</div>
+    </div>
+    <p>旋转本身不修复颜色——颜色由插入修复算法（RB-INSERT-FIXUP）负责。算法框架：新结点 z 按 BST 规则插入并<strong>染红</strong>（染黑会立即破坏性质 5；染红至多破坏性质 4），然后沿父链向上修复。所有情形按"<strong>叔结点（父的兄弟）的颜色</strong>"分类：</p>
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>情形</th><th>条件</th><th>动作</th><th>之后</th></tr>
+        <tr><td>情况 1</td><td>父红 且 叔红</td><td>父、叔改黑，祖父改红</td><td>z 上移两层到祖父，继续循环（不旋转）</td></tr>
+        <tr><td>情况 2</td><td>父红、叔黑，z 是"内侧"孩子（如父为左子、z 为右子）</td><td>对父旋转，把 z 转到外侧</td><td>落入情况 3（共 1 次旋转）</td></tr>
+        <tr><td>情况 3</td><td>父红、叔黑，z 是"外侧"孩子</td><td>父改黑、祖父改红，对祖父反向旋转</td><td>性质全部恢复，循环结束（再 1 次旋转）</td></tr>
+      </table>
+    </div>
+    <p>旋转只出现在情况 2、3，各一次且之后即结束，所以<strong>一次插入修复最多 2 次旋转</strong>；换色（情况 1）可能沿父链向上传播，但每步上移两层，循环至多 O(lg n) 轮。</p>
+
+    <h3>完整手算：向 {7B, 2R, 11R} 中插入 4</h3>
+    <p>初始树（图 5.4，NIL 叶省略）：根 7B，左子 2R，右子 11R。先验证合法：红结点 2、11 的孩子均为 NIL(B) ✔；各路径黑数 = {7} + {NIL} 一致 ✔。</p>
+    <div class="figure">
+      <div class="mermaid">
+flowchart TB
+  A["7 B"] --> B["2 R"]
+  A --> C["11 R"]
+  classDef red fill:#fae9e7,stroke:#b03a2e,stroke-width:2.5px,color:#b03a2e;
+  classDef blk fill:#2b2620,stroke:#2b2620,color:#fff;
+  class B,C red;
+  class A blk;
+      </div>
+      <div class="caption">图 5.4 插入前的初始红黑树：根 7B，子 2R 与 11R。</div>
+    </div>
+    <p><strong>第 1 步：BST 插入并染红。</strong>查找 4：4 &lt; 7 向左到 2；4 &gt; 2 向右——2 的右子为 NIL，4 落为 2 的右孩子，染红。破坏了哪条性质？4 红、父 2 也红 ⇒ <strong>性质 4（红红相邻）被破坏</strong>；性质 5 未被破坏（红结点不改变任何路径的黑数）。</p>
+    <p><strong>第 2 步：分类。</strong>z = 4，父 = 2（红），叔 = 父的兄弟 = 11（红）⇒ <strong>情况 1</strong>。</p>
+    <p><strong>第 3 步：执行情况 1。</strong>父 2 与叔 11 改黑，祖父 7 改红，z 上移到 7。局部效果：经过 2 或 11 的路径黑数不变（2、11 变黑使黑数 +1，祖父 7 由黑变红使黑数 −1，恰好抵消）⇒ 性质 5 全局保持 ✔；红红冲突从"4 与 2"上推到"7 与其父"——而 7 没有父。</p>
+    <p><strong>第 4 步：循环收尾。</strong>z = 7 是根，直接改黑（性质 2）。这等价于给全树所有根-叶路径统一 +1 黑数，性质 5 依然一致。</p>
+    <div class="figure">
+      <div class="mermaid">
+flowchart TB
+  A["7 B · bh2"] --> B["2 B · bh1"]
+  A --> C["11 B · bh1"]
+  B --> D["4 R · bh0"]
+  classDef red fill:#fae9e7,stroke:#b03a2e,stroke-width:2.5px,color:#b03a2e;
+  classDef blk fill:#2b2620,stroke:#2b2620,color:#fff;
+  class D red;
+  class A,B,C blk;
+      </div>
+      <div class="caption">图 5.5 插入修复完成后的终态：7B 为根，2B、11B 为其子，4R 挂在 2 的右下。本次修复 0 次旋转、2 轮换色。</div>
+    </div>
+    <p><strong>终态校验。</strong>逐路径数黑：7→2→4→NIL：{2, NIL} = 2；7→2→左NIL：{2, NIL} = 2；7→11→NIL：{11, NIL} = 2 ✔。bh(7) = 2，五性质全部恢复。整个过程<strong>没有使用任何旋转</strong>——情况 1 的换色传播就够了。</p>
+
+    <h3>删除为什么更难：双重黑</h3>
+    <p>删除的思路（CLRS 13.4）只讲框架：删一个结点 y。若 y 原本是<strong>红色</strong>，没有黑高变化，直接收工；若 y 是<strong>黑色</strong>，它原来占据的位置就"少了一个黑"——每条经过该位置的路径黑数 −1，性质 5 被破坏。算法把这个亏欠记成一个虚构的"额外黑色"压在接替结点 x 上，称为<span class="term">双重黑</span>（Double Black），然后按 x 的兄弟与侄子的颜色分四种情况旋转、换色，把这层"多出来的黑"逐步向上推，直到被某个红结点吸收（染黑即可），或推到根（全树统一 −1，无害）。</p>
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>插入最多破坏性质 4，因为新结点染红<strong>不改变任何黑高</strong>；删除则可能破坏性质 5——被删的若是黑结点，黑高直接亏 1。<strong>"会欠债"就是删除比插入多出'双重黑'这一层的原因</strong>。另外记住：插入修复中换色便宜（情况 1 可传播多轮）、旋转罕见（情况 2、3 合计 ≤ 2 次）——这正是写密集场景选红黑树的原因。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front"><div class="q-tag">回忆 5.4-1</div><div class="q-text">为什么新插入的结点一律染红而不染黑？</div><span class="tap">点击翻面 →</span></div>
+            <div class="flip-face flip-back"><div class="a-tag">参考答案</div>染黑会立即让一条路径黑数 +1，破坏性质 5（修复要动全树）；染红不改变任何黑高，至多造成红红相邻（性质 4），这是可用换色与最多 2 次旋转局部修复的较轻违规。</div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front"><div class="q-tag">回忆 5.4-2</div><div class="q-text">一次插入修复最多几次旋转？为什么删除比插入复杂？</div><span class="tap">点击翻面 →</span></div>
+            <div class="flip-face flip-back"><div class="a-tag">参考答案</div>最多 2 次（情况 2、情况 3 各一次，之后即结束）。删除若删掉黑结点会使路径黑数亏 1（性质 5 被破坏），需引入"双重黑"分四种情况向上推债；插入只破坏性质 4，没有债务问题。</div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <h2><span class="sec-no">5.5</span>AVL 与红黑树：平衡标准越严，写代价越高</h2>
+    <p>红黑树不是唯一的自平衡方案。<span class="term">AVL 树</span>（AVL Tree，得名于 Adelson-Velsky 与 Landis）用更严的不变式：任一结点左右子树高度差 ≤ 1。两者的差别本质是"<strong>平衡标准定多严</strong>"的取舍：</p>
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>维度</th><th>AVL 树</th><th>红黑树</th></tr>
+        <tr><td>平衡条件</td><td>左右子树高差 ≤ 1（严格）</td><td>五性质（最长路径 ≤ 2 × 最短）</td></tr>
+        <tr><td>高度上界</td><td>h ≤ 1.44 lg(n+2)</td><td>h ≤ 2 lg(n+1)</td></tr>
+        <tr><td>查找</td><td>更快（树更矮约 1.44/2 倍）</td><td>稍慢</td></tr>
+        <tr><td>旋转</td><td>插入最多 2 次，但删除可达 O(lg n) 次</td><td>插入最多 2 次；删除也只需 O(1) 次</td></tr>
+        <tr><td>附加信息</td><td>平衡因子（2 bit）</td><td>颜色（1 bit）</td></tr>
+        <tr><td>典型用户</td><td>查找密集的数据库索引场景</td><td>Linux CFS 调度器、C++ std::map、Java TreeMap</td></tr>
+      </table>
+    </div>
+    <p>代入数字：n = 10⁶ 时，AVL 保证 h ≤ 1.44 × lg(10⁶+2) ≈ 28.7；红黑树保证 h ≤ 2 × lg(10⁶+1) ≈ 39.9。查找最多差约 11 次比较——对纯查找负载有意义；但若每秒插入删除上万次，AVL 删除时沿父链传播的 O(lg n) 次旋转就成了负担。</p>
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p><strong>查找密集选 AVL，写密集选红黑。</strong>平衡条件越严，读越快、维持不变式越贵；放松标准（允许路径差一倍）换来"换个颜色常常就够了"。这就是内核（Linux CFS 就绪队列）与标准库（std::map）几乎清一色选红黑树的原因。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front"><div class="q-tag">回忆 5.5-1</div><div class="q-text">AVL 与红黑树的高度上界各是多少？谁查找更快？</div><span class="tap">点击翻面 →</span></div>
+            <div class="flip-face flip-back"><div class="a-tag">参考答案</div>AVL：h ≤ 1.44lg(n+2)；红黑树：h ≤ 2lg(n+1)。AVL 更矮，查找更快（n=10⁶ 时约 29 对 40 次比较）。</div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front"><div class="q-tag">回忆 5.5-2</div><div class="q-text">为什么 Linux CFS 与 C++ std::map 选红黑树而不是 AVL？</div><span class="tap">点击翻面 →</span></div>
+            <div class="flip-face flip-back"><div class="a-tag">参考答案</div>这些场景插入删除频繁（写密集）。红黑树插入最多 2 次旋转、删除也只需 O(1) 次；AVL 删除可能沿父链传播 O(lg n) 次旋转。放宽平衡标准换来了维护成本的大幅下降。</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <h2><span class="sec-no">5.6</span>增强结构：在 O(lg n) 的骨架上再装两种能力</h2>
+    <p>红黑树给了一副"所有路径都短"的骨架。CLRS 第 14 章示范了一种方法论——<span class="term">增强</span>（Augmenting）：在每个结点多存一个由子树信息可局部维护的字段，换来全新的 O(lg n) 操作。看两个经典案例。</p>
+
+    <h3>案例一：顺序统计树（Order-Statistic Tree）</h3>
+    <p>每个结点 x 增加字段 <strong>size(x)</strong> = 以 x 为根的子树结点数（含自身），维护规则 size(x) = size(left) + size(right) + 1，插入删除沿路径更新，旋转时 O(1) 重算两个结点，不增加渐近代价。有了它，"找第 i 小的键"（OS-SELECT）每下一层就排除一整棵子树：</p>
+    <div class="formula"><span class="var">r</span> = size(left(x)) + 1　（x 在其子树内的秩）；i = <span class="var">r</span> 命中；i &lt; <span class="var">r</span> 递归左子树；i &gt; <span class="var">r</span> 在右子树找第 i−<span class="var">r</span> 小</div>
+    <p><strong>手算：在下图（n = 7）上找第 i = 3 小的键。</strong></p>
+    <div class="figure">
+      <div class="mermaid">
+flowchart TB
+  A["26 · size7"] --> B["17 · size3"]
+  A --> C["41 · size3"]
+  B --> D["14 · size1"]
+  B --> E["21 · size2"]
+  E --> F["19 · size1"]
+  C --> G["47 · size1"]
+      </div>
+      <div class="caption">图 5.6 顺序统计树示例（沿用 CLRS 的键集，n = 7）。标签为"键 · size"。</div>
+    </div>
+    <ol>
+      <li>在 26：r = size(左子 17) + 1 = 3 + 1 = 4。i = 3 &lt; 4 → 进左子树，i 不变；</li>
+      <li>在 17：r = size(左子 14) + 1 = 1 + 1 = 2。i = 3 &gt; 2 → 进右子树，i ← 3 − 2 = 1；</li>
+      <li>在 21：r = size(左子 19) + 1 = 1 + 1 = 2。i = 1 &lt; 2 → 进左子树，i 不变；</li>
+      <li>在 19：r = size(NIL) + 1 = 1。i = 1 = r → <strong>命中，第 3 小的键是 19</strong>。</li>
+    </ol>
+    <p>校验：中序序列 14, 17, 19, 21, 26, 41, 47，第 3 个正是 19 ✔。共 4 次比较，等于路径长度，O(<span class="var">h</span>)。</p>
+    <div class="box warning">
+      <span class="box-tag">⚠️ 易错点</span>
+      <p>在 21 处最常见的错误是漏算它的左子 19，写出 r = 1 并错误命中 21。记住：<strong>r 永远是"左子树全部规模 + 1"，不是"左孩子是不是空"</strong>。每个分叉口的左子树规模，就是你该往哪走、i 该减多少的唯一依据。</p>
+    </div>
+
+    <h3>案例二：区间树（Interval Tree）</h3>
+    <p>结点存区间 [low, high]，按 low 建红黑树，增强字段 <strong>max(x)</strong> = x 子树中所有区间的最大 high。判定重叠的标准事实：[l₁,h₁] 与 [l₂,h₂] 重叠 ⟺ l₁ ≤ h₂ 且 l₂ ≤ h₁。查找任一与目标重叠的区间：若左子存在且 max(left) ≥ 目标 low，左子树中必有候选，左转；否则右转。</p>
+    <p><strong>小例子：</strong>树中存区间 [16,21]、[8,9]、[25,30]、[5,8]、[15,23]、[17,19]、[26,26] 等，查"谁与 [22,25] 重叠"。在根 [16,21]：左子 max = 23 ≥ 22 → 左转；在 [8,9]：左子 max = 8 &lt; 22 → 右转到 [15,23]；判定 15 ≤ 25 且 22 ≤ 23 ✔，命中区间 <strong>[15,23]</strong>。每步用 max 剪去一整棵不可能有解的子树，代价 O(lg n)。</p>
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>增强的统一配方：<strong>字段必须能由"自身 + 两个孩子的同名字段"在 O(1) 内重算</strong>（size、max 都满足），这样旋转和路径修复才不用全局重算，O(lg n) 总代价不被破坏——CLRS 第 14 章定理给出了这个可证条件。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front"><div class="q-tag">回忆 5.6-1</div><div class="q-text">OS-SELECT 每一步如何决定走向与 i 的更新？</div><span class="tap">点击翻面 →</span></div>
+            <div class="flip-face flip-back"><div class="a-tag">参考答案</div>算 r = size(left)+1（当前结点的秩）。i = r 命中；i &lt; r 进左子树，i 不变；i &gt; r 进右子树，i ← i − r。每层排除一整棵子树，故 O(lg n)。</div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front"><div class="q-tag">回忆 5.6-2</div><div class="q-text">区间树中 max 字段的作用是什么？两区间重叠的充要条件？</div><span class="tap">点击翻面 →</span></div>
+            <div class="flip-face flip-back"><div class="a-tag">参考答案</div>max(x) = 子树中最大 high；若 max(left) ≥ 目标 low 则左子树必有重叠候选，否则直接右转——每步剪掉一整棵子树。重叠 ⟺ l₁ ≤ h₂ 且 l₂ ≤ h₁。</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <h2><span class="sec-no">🃏</span>概念卡：本章概念的一分钟画像</h2>
+    <p>翻面前先自问：这个概念我能用一句话讲清楚吗？</p>
+    <div class="flip-grid">
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front"><div class="q-tag">概念卡 1</div><div class="q-text">二叉搜索树（Binary Search Tree）</div><span class="tap">点击翻面 →</span></div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">满足"左子树键 ≤ x ≤ 右子树键"的二叉树，中序遍历即升序。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">让字典同时支持精确查找与顺序操作（前驱/后继/范围），哈希表做不到这些。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">每个结点是一个分叉口：一次比较排除一半候选。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">"BST 查找是 O(lg n)"——只有平衡时成立，代价的真身是 O(h)。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">一切平衡树（红黑/AVL/B树）的母体；第 6 章优先队列的对照。</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front"><div class="q-tag">概念卡 2</div><div class="q-text">随机建树（Randomly Built BST）</div><span class="tap">点击翻面 →</span></div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">n 个互异键、n! 种插入顺序等可能时得到的 BST。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">解释"普通 BST 平均不慢"：期望高约 4.311·ln n、期望查找深度约 2 ln n。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">随机洗牌后再插入，等于随机选根，大概率分得匀。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">把"期望"当"保证"——输入近似有序（时间戳/字典序）时直接退化到 h = n。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">论证为什么需要自平衡树；快排（Ch3）的孪生分析。</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front"><div class="q-tag">概念卡 3</div><div class="q-text">红黑树五性质与黑高（Red-Black Properties / bh）</div><span class="tap">点击翻面 →</span></div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">非红即黑、根黑、NIL 黑、红结点子必黑、各根-叶路径黑数相同（bh）。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">用可局部维护的不变式把 h 锁进 2lg(n+1)，与插入顺序无关。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">黑色是"必付的税"，每条路径税额相同；红色是"免费的"，但不许连拿两次。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为红黑树严格平衡——它只保证最长路径 ≤ 2×最短。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">std::map、Linux CFS；Ch7 事件队列、Ch8/9 的辅助字典。</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front"><div class="q-tag">概念卡 4</div><div class="q-text">旋转（Rotation）</div><span class="tap">点击翻面 →</span></div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">左旋/右旋：改写 x、y 父子关系与子树 β 归属的 O(1) 局部操作，保持中序序列不变。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">在不破坏 BST 性质的前提下重新分配高度，是所有平衡树的公共扳手。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">像转动门把手：把手（x↔y）换位，门（α、β、γ）整体顺序不动。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为旋转能单独修复红黑性质——旋转只管形状，颜色归修复算法管。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">插入/删除修复的情况 2、3；AVL 的单旋与双旋。</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front"><div class="q-tag">概念卡 5</div><div class="q-text">插入修复三情况（RB-INSERT-FIXUP）</div><span class="tap">点击翻面 →</span></div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">按叔结点颜色分类：叔红→换色上移（情况1）；叔黑且 z 内侧→旋转成外侧（情况2）；叔黑且 z 外侧→换色+反向旋转收工（情况3）。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">修复插入红结点造成的性质 4 违规，保证 h = O(lg n) 不被打破。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">叔红是"家里有余粮"：换色把矛盾上推；叔黑只能靠旋转就地摆平。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为修复要很多次旋转——实际最多 2 次，且出现即结束。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">手算考试必考；理解 std::map 插入的均摊代价。</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front"><div class="q-tag">概念卡 6</div><div class="q-text">AVL 树与增强结构（AVL Tree / Augmenting）</div><span class="tap">点击翻面 →</span></div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">AVL：任一结点左右子树高差 ≤ 1，h ≤ 1.44lg(n+2)；增强：每结点加存可 O(1) 局部维护的字段（size、max）。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">AVL 用更严平衡换更快查找；增强用极小维护代价换来 OS-SELECT、区间查询等新操作。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">AVL 是严格管家；增强是给每个分叉口贴标签（"左边有多少人"）。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">"更平衡=全面更好"——AVL 删除旋转可达 O(lg n) 次；增强若忘记旋转后重算字段则全盘皆错。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">查找密集选 AVL；排行榜、日程冲突检测等用增强红黑树（Ch6/7 复用）。</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <h2><span class="sec-no">📝</span>分层习题</h2>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span><p>判断并说明理由：①"红黑树中红结点的父亲一定是黑色。"②"红黑树是一棵高度平衡（height-balanced）的树。"</p></div>
+      <details>
+        <summary>提示</summary>
+        <p>①回顾性质 4 的逆否形式；②"高度平衡"在 CLRS 里专指什么？红黑树允许最长路径是最短的几倍？</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p>①<strong>正确</strong>。性质 4 说红结点的孩子必黑；若红结点 x 的父亲也是红，则父亲（红）有一个红孩子 x，违反性质 4。故红结点的父亲必黑（逆否命题）。</p>
+          <p>②<strong>错误</strong>。"高度平衡"专指 AVL 式不变式（左右子树高差 ≤ 1）。红黑树允许最长路径达到最短路径的 2 倍，它不是高度平衡树，只是用五性质保证了 h ≤ 2lg(n+1) 这个较弱但够用的界。把"红黑=平衡树的一种"理解成"严格平衡"，会同时误解它的查找代价与维护代价。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span><p>把键 1, 2, 3, 4, 5, 6, 7 依次插入空 BST 得到树 A；以同样顺序插入空红黑树得到树 B。两棵树的中序遍历序列相同吗？高度相同吗？</p></div>
+      <details>
+        <summary>提示</summary>
+        <p>中序序列由 BST 性质决定还是由形状决定？修复会不会改变"谁是谁的前驱"？</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p>中序序列<strong>相同</strong>：都是 1, 2, 3, 4, 5, 6, 7。BST 的中序序列只由键集决定（升序），与树的形状、颜色、修复历史完全无关。</p>
+          <p>高度<strong>不同</strong>：树 A 退化成链，h = 7（6 条边），查找 7 要 7 次比较；树 B 被修复算法不断调整，n = 7 时 h ≤ 2lg(8) = 6，实际形状 h 约 2，任意查找 ≤ 3 次比较。这说明：红黑树不改变"逻辑内容"（中序序列），只改变"物理形状"（高度）。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span><p>从空红黑树开始，依次插入 10、20、30。写出每一步后的树（键 + 颜色），标明每次修复属于情况 1/2/3，并验证终态的五条性质。</p></div>
+      <details>
+        <summary>提示</summary>
+        <p>每次插入先按 BST 落位并染红；然后问三个问题：父红吗？叔（父的兄弟）红吗？z 是内侧还是外侧孩子？注意 30 插入时叔是 NIL——NIL 算什么颜色？</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p><strong>插入 10：</strong>空树，10 成为根。新结点先染红，但性质 2 要求根黑 ⇒ 直接改黑。树：10B。（0 次旋转）</p>
+          <p><strong>插入 20：</strong>20 &gt; 10，落为 10 的右子，染红。父 10 是黑 ⇒ 无违规，结束。树：10B，右子 20R。验证：路径 10→NIL 与 10→20→NIL 的黑数都是 {NIL} = 1 ✔（20 红不计），bh(10) = 1。</p>
+          <p><strong>插入 30：</strong>30 &gt; 10 → 右到 20；30 &gt; 20 → 落为 20 的右子，染红。</p>
+          <p>· 违规判定：父 20 红、z 30 红 ⇒ 性质 4 被破坏。</p>
+          <p>· 分类：叔 = 20 的兄弟 = 10 的左子 = NIL，<strong>NIL 是黑色</strong>（性质 3）⇒ 叔黑；父 20 是祖父 10 的右孩子、z 30 是父 20 的右孩子 ⇒ z 是<strong>外侧</strong>孩子 ⇒ <strong>情况 3</strong>。</p>
+          <p>· 动作：父 20 改黑、祖父 10 改红，对祖父 10 做<strong>左旋</strong>：20 上位为根，10 成为 20 的左子，30 仍为 20 的右子。</p>
+          <p><strong>终态：</strong>根 20B；左子 10R；右子 30R。</p>
+          <p><strong>五性质验证：</strong>①非红即黑 ✔；②根 20 黑 ✔；③NIL 黑 ✔；④红结点 10、30 的孩子全是 NIL(B) ✔；⑤四条根-叶路径（20→10→左NIL、20→10→右NIL、20→30→左NIL、20→30→右NIL）黑数均为 {NIL} = 1 = bh(20) ✔。本次修复：情况 3 一次，<strong>1 次旋转、2 次换色</strong>。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span><p>在图 5.6 的顺序统计树上执行：① OS-SELECT(root, 5)；② 求键 41 的秩 OS-RANK。逐步写出 r 与 i 的变化。</p></div>
+      <details>
+        <summary>提示</summary>
+        <p>①同正文：r = size(left)+1；② OS-RANK 反向走：从 41 回溯到根，"每当你是右孩子，就把'父在其子树内的秩'加进累计名次"。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p>① 找第 5 小：在 26，r = size(17)+1 = 3+1 = 4，i = 5 &gt; 4 → 进右子树，i ← 5 − 4 = 1；在 41，r = size(左子 NIL)+1 = 1（41 只有右子 47），i = 1 = r → 命中 <strong>41</strong>。校验中序序列 14, 17, 19, 21, 26, 41, 47，第 5 个正是 41 ✔，共 2 次比较。</p>
+          <p>② 求 41 的秩：先算 41 在自身子树内的秩 r = size(左 NIL)+1 = 1；41 是 26 的<strong>右孩子</strong>，说明 26 及其左子树（共 size(17)+1 = 4 个结点）都排在 41 前面 ⇒ 累计秩 = 4 + 1 = 5；26 是根，回溯结束。<strong>rank(41) = 5</strong> ✔。两问合起来验证了 OS-SELECT 与 OS-RANK 互为逆运算：select(5) = 41，rank(41) = 5。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l3">L3 建模应用</span><p>你在实现一个在线判题系统的实时排行榜：需要支持"提交后更新某选手分数""查询第 k 名是谁""查询某选手当前名次"，每秒上千次更新、上万次查询。候选：①哈希表 + 每次全排序；②AVL；③红黑树；④增强红黑树。做出选择，说明理由，并给出增强字段设计。</p></div>
+      <details>
+        <summary>提示</summary>
+        <p>把三个操作映射为数据结构操作：更新 = 删除 + 插入；第 k 名 = OS-SELECT；名次 = OS-RANK。再逐方案统计代价。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p><strong>选 ④ 增强红黑树（顺序统计树）</strong>。逐方案核算：</p>
+          <p>① 哈希表查找 O(1)，但"第 k 名"与"名次"都要全量排序 O(n lg n)：每秒上万次查询 × O(n lg n)，不可行。哈希表不支持顺序操作——这正是第 4 章到第 5 章的主线动机。</p>
+          <p>② AVL 与 ③ 红黑树：更新（删+插）与查询都是 O(lg n)，但裸树做"第 k 名/名次"只能中序遍历 O(n)——<strong>必须增强 size 字段</strong>，否则同样不够。</p>
+          <p>④ 增强红黑树：更新 = 一次删除 + 一次插入，各 O(lg n)，插入最多 2 次旋转、删除 O(1) 次旋转，且旋转时 size 可 O(1) 重算（满足增强定理）；OS-SELECT 与 OS-RANK 各 O(lg n)。写密集（每秒千次更新）排除了 AVL（删除旋转可传播 O(lg n) 次），故选红黑而非 AVL。</p>
+          <p>设计：结点 = {score, name, color, left, right, parent, size}，size(x) = size(left)+size(right)+1；同分用 (score, 选手ID) 二元组作键。三个 API 均 O(lg n)，n = 10⁶ 时单次不超过 2lg(10⁶+1) ≈ 40 次比较。</p>
+        </div>
+      </details>
+    </div>
+
+    <h2><span class="sec-no">✍️</span>本章自测</h2>
+    <p class="quiz-hint">点击选项判分，答错会给出原因。</p>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 1</div>
+      <div class="q-stem">一棵含 n 个结点的红黑树，其高度 h 满足什么上界？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. h ≤ lg(n+1)</li>
+        <li data-opt="b">B. h ≤ 2lg(n+1)</li>
+        <li data-opt="c">C. h ≤ 1.44lg(n+2)</li>
+        <li data-opt="d">D. h ≤ ⌊lg n⌋</li>
+      </ul>
+      <div class="quiz-explain">解析：B 对——由 bh ≥ h/2 与 n ≥ 2<sup>bh</sup>−1 合并而来。A 错：那是最短路径（全黑）的界，不是最长路径的界；C 错：1.44lg(n+2) 是 AVL 的上界；D 错：⌊lg n⌋ 是完全平衡树的高度，红黑树允许最长路径达到最短的两倍，给不出这么强的保证。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="c">
+      <div class="q-no">自测 2</div>
+      <div class="q-stem">向红黑树插入新结点时，为什么新结点先染红而不是染黑？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 染红可以让查找路径更短</li>
+        <li data-opt="b">B. 染黑会违反性质 2（根必须是黑色）</li>
+        <li data-opt="c">C. 染黑会立即破坏性质 5（黑高一致），而染红至多破坏性质 4，后者更易局部修复</li>
+        <li data-opt="d">D. 染红可以省一次比较</li>
+      </ul>
+      <div class="quiz-explain">解析：C 对。新结点染黑会让它所在路径黑数 +1，与其他路径不一致——性质 5 的破坏是全局性的；染红不改变任何路径黑数，最坏只是与红父亲红红相邻（性质 4），可用换色和最多 2 次旋转局部修复。A 错：颜色与查找路径长短无直接因果；B 错：性质 2 只约束根结点，与新结点染什么色无关；D 错：插入的比较次数由失败查找决定，与颜色无关。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 3</div>
+      <div class="q-stem">插入修复中，"叔结点是红色"时（情况 1）采取的动作是什么？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 对祖父做一次旋转，然后结束</li>
+        <li data-opt="b">B. 父与叔改黑、祖父改红，z 上移两层继续循环</li>
+        <li data-opt="c">C. 把 z 直接改黑</li>
+        <li data-opt="d">D. 先旋转 z 到外侧，再换色</li>
+      </ul>
+      <div class="quiz-explain">解析：B 对。叔红意味着祖父必黑，把父、叔改黑、祖父改红后经过这一带的路径黑数不变（性质 5 保持），红红冲突被上推到祖父，循环继续。A 错：那是情况 3（叔黑且外侧）的动作；C 错：z 改黑会让路径黑数 +1，直接破坏性质 5；D 错：旋转到外侧是情况 2 的动作，且情况 2 的前提是叔黑。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="c">
+      <div class="q-no">自测 4</div>
+      <div class="q-stem">一次红黑树插入修复，最多需要多少次旋转？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. O(lg n) 次，因为换色可能沿父链传播</li>
+        <li data-opt="b">B. 恰好 1 次</li>
+        <li data-opt="c">C. 最多 2 次（情况 2 与情况 3 各一次，之后循环即结束）</li>
+        <li data-opt="d">D. 0 次，插入修复只靠换色</li>
+      </ul>
+      <div class="quiz-explain">解析：C 对。旋转只出现在情况 2（转外侧）与情况 3（转完收工），链式发生，合计 ≤ 2。A 错：沿父链传播的是情况 1 的换色，不是旋转；B 错：纯情况 1 时 0 次，"恰好 1 次"以偏概全；D 错：叔黑时仅靠换色无法摆平红红冲突，必须旋转。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="d">
+      <div class="q-no">自测 5</div>
+      <div class="q-stem">应用场景：数据几乎只读，查找请求占 99.9%，要求单次查找的比较次数尽可能少。应该选什么结构？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 红黑树，因为它最常用</li>
+        <li data-opt="b">B. 哈希表，因为查找是 O(1)</li>
+        <li data-opt="c">C. 普通 BST，因为实现最简单</li>
+        <li data-opt="d">D. AVL 树，h ≤ 1.44lg(n+2) 比红黑树的 2lg(n+1) 更矮，删除旋转多的短板在只读场景不暴露</li>
+      </ul>
+      <div class="quiz-explain">解析：D 对。查找密集时更矮的树直接省比较次数；AVL 的弱点（删除旋转可达 O(lg n) 次）在只读负载下不触发。A 错："常用"不是技术指标，红黑树的优势在写密集场景；B 错：哈希表期望 O(1) 但题目要求"比较次数尽可能少"的有序结构语境，且哈希有冲突与缓存不友好的常数，最贴题意的是 AVL；C 错：普通 BST 高度不受控，最坏 O(n)。</div>
+    </div>
+
+    <div class="retell">
+      <h3>🗣️ 用自己的话，三句话讲完本章</h3>
+      <p class="retell-sub">对着空气（或室友）说出这三句。说卡壳的那句，回去重读对应小节。</p>
+      <details>
+        <summary>句1：这章解决什么问题？——</summary>
+        <div class="retell-answer">参考答案：哈希表做不了顺序操作，而普通 BST 的高度受输入顺序摆布（最坏退化成链）；本章要在最坏情形下也保证字典的查找、插入、删除与顺序统计全部 O(lg n)。</div>
+      </details>
+      <details>
+        <summary>句2：核心机制是什么？——</summary>
+        <div class="retell-answer">参考答案：红黑树用五条颜色性质（关键是"红红不相邻"与"黑高一致"）把树高锁在 2lg(n+1)；插入删除后用换色与最多 2 次旋转局部修复不变式；增强字段（size、max）在 O(1) 可维护的前提下再送出 OS-SELECT 与区间查询。</div>
+      </details>
+      <details>
+        <summary>句3：它和前后章怎么分工？——</summary>
+        <div class="retell-answer">参考答案：第 4 章哈希表管"精确匹配、期望 O(1)"，本章红黑树管"有序字典、最坏 O(lg n)"，两者互补；第 6、7 章的图算法会把优先队列与事件队列架在这类平衡结构上，第 8、9 章复用"增强字段"的思路。</div>
+      </details>
+    </div>
+
+    <div class="review-plan">
+      <h3>🔁 间隔复习计划</h3>
+      <p>回忆本身比重读有效 10 倍。到点只做一件事：翻卡 + 重做标记题。</p>
+      <table>
+        <tr><th>时间点</th><th>复习内容</th><th>预计用时</th></tr>
+        <tr><td>第 1 天</td><td>全部概念卡 1–6 + 回忆卡 5.3-1（五性质默写）、5.4-2（旋转次数）</td><td>10 分钟</td></tr>
+        <tr><td>第 3 天</td><td>概念卡 3、5（重点）+ 重做 L2 习题（10/20/30 插入手算）+ 自测错题</td><td>10 分钟</td></tr>
+        <tr><td>第 7 天</td><td>三句话复述 + 回忆 5.6-1（OS-SELECT）+ 重做 L3 排行榜题</td><td>10 分钟</td></tr>
+        <tr><td>第 15 天</td><td>只重做合上书挑战；能全过就毕业</td><td>15 分钟</td></tr>
+      </table>
+    </div>
+
+    <div class="final-challenge">
+      <h3>📕 合上书挑战</h3>
+      <p class="fc-sub">现在关掉这个页面，拿一张纸，凭记忆完成以下任务。全部做完再回来核对——这是本章真正的毕业考试。</p>
+      <ol id="challenge-list">
+        <li><span class="fc-check"></span>默写红黑树的五条性质，并给出黑高 bh 的定义。</li>
+        <li><span class="fc-check"></span>写出 h ≤ 2lg(n+1) 的两条引理及合并步骤。</li>
+        <li><span class="fc-check"></span>画出左旋/右旋的前后结构图（α、β、γ 三棵子树的归属变化）。</li>
+        <li><span class="fc-check"></span>手算：向 {7B, 2R, 11R} 插入 4 的完整修复过程（每步违反哪条性质、动作、终态校验）。</li>
+        <li><span class="fc-check"></span>解释 AVL 与红黑树的高度上界差别，并各给一个真实用户（数据库索引 vs Linux CFS）。</li>
+        <li><span class="fc-check"></span>写出 OS-SELECT 的递推规则，并在一棵自构的 7 结点树上找出第 3 小的键。</li>
+        <li><span class="fc-check"></span>一句话回答本章的主线问题：当字典还要支持顺序操作时，如何保证每步 O(lg n)？</li>
+      </ol>
+    </div>
+
+    <div class="complete-zone">
+      <button class="btn-complete" id="btn-complete" onclick="markDone()">✓ 我已完成本章（含合上书挑战）</button>
+    </div>
+
+    <div class="chapter-nav">
+      <a href="chapter-04.html"><span class="nav-dir">← 上一章</span>第4章 哈希表</a>
+      <a href="chapter-06.html" class="next"><span class="nav-dir">下一章 →</span>第6章 图的基本算法</a>
+    </div>
+
+  </div>
+</div>
+
+<footer class="footer">
+  <div class="wrap">第5章 二叉搜索树与红黑树 · 算法导论互动讲义 · 基于 CLRS《算法导论》</div>
+</footer>
+
+<script src="assets/mermaid.min.js"></script>
+<script>
+mermaid.initialize({
+  startOnLoad: true,
+  theme: "base",
+  themeVariables: {
+    primaryColor: "#e3edf7",
+    primaryBorderColor: "#1d5f9e",
+    primaryTextColor: "#1d5f9e",
+    lineColor: "#5c554b",
+    secondaryColor: "#fbeedd",
+    tertiaryColor: "#f5f1e8",
+    fontFamily: "-apple-system, PingFang SC, sans-serif",
+    fontSize: "14px"
+  },
+  flowchart: { curve: "linear", htmlLabels: false }
+});
+</script>
+<script>
+// 自测题判分（原样复用，勿改）
+document.querySelectorAll(".quiz-block").forEach(block => {
+  const answer = block.dataset.answer;
+  const explain = block.querySelector(".quiz-explain");
+  block.querySelectorAll(".quiz-opts li").forEach(li => {
+    li.addEventListener("click", () => {
+      const opts = block.querySelectorAll(".quiz-opts li");
+      opts.forEach(o => o.classList.add("disabled"));
+      if (li.dataset.opt === answer) {
+        li.classList.add("correct");
+      } else {
+        li.classList.add("wrong");
+        block.querySelector(`[data-opt="${answer}"]`).classList.add("correct");
+      }
+      explain.classList.add("show");
+    });
+  });
+});
+
+// 合上书清单打勾（原样复用，勿改）
+document.querySelectorAll("#challenge-list li").forEach(li => {
+  li.addEventListener("click", () => li.classList.toggle("checked"));
+});
+
+// 完成标记 → localStorage（章号 "5"）
+const KEY = "algo_progress_v1";
+function loadProgress() {
+  try { return JSON.parse(localStorage.getItem(KEY)) || {}; } catch (e) { return {}; }
+}
+const progress = loadProgress();
+const btn = document.getElementById("btn-complete");
+if (progress["5"] && progress["5"].done) {
+  btn.textContent = "✓ 已完成 · 再次点击重置";
+  btn.classList.add("done");
+}
+function markDone() {
+  const p = loadProgress();
+  if (p["5"] && p["5"].done) {
+    delete p["5"];
+    btn.textContent = "✓ 我已完成本章（含合上书挑战）";
+    btn.classList.remove("done");
+  } else {
+    p["5"] = { done: true, completedAt: Date.now(), reviewsDone: 0 };
+    btn.textContent = "✓ 已完成 · 复习提醒已开启";
+    btn.classList.add("done");
+  }
+  localStorage.setItem(KEY, JSON.stringify(p));
+}
+</script>
+
+</body>
+</html>

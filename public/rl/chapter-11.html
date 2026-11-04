@@ -1,0 +1,996 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第11章 离策略与函数逼近的致命三角 · 强化学习互动讲义</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+<nav class="topbar">
+  <div class="topbar-inner">
+    <span class="brand"><a href="index.html" style="color:inherit">← 学习地图</a></span>
+    <span class="crumb">阶段三 · 函数逼近 / 第11章</span>
+  </div>
+</nav>
+
+<div class="wrap">
+
+  <div class="lecture-head">
+    <span class="ch-label">CHAPTER 11 · 函数逼近</span>
+    <h1>离策略与函数逼近的致命三角</h1>
+    <p class="lead">在策略下稳如泰山的半梯度 TD，一旦离开自己的数据就会指数发散——本章找出病根，并给出仅有的两条出路。</p>
+  </div>
+
+  <!-- 本章定位 -->
+  <div class="position-bar">
+    <strong>本章在主线上的位置：</strong>第 9–10 章把价值函数换成参数、并证明了在策略半梯度法稳定 → <u>本章画出这条路的地基边界：函数逼近、自举、离策略三者凑齐时更新会失去收缩性而发散，修复只有"换目标"与"换权重"两条路</u> → 第 12–13 章的资格迹与策略梯度都在这块地基上继续盖楼。<br>
+    第11章回答主线上的关键一问：<strong>为什么函数逼近 + 自举 + 离策略三者凑齐就会发散，又该怎么救？</strong>
+    <div class="map-inline">
+      <span class="node">Ch1-4 表格法基础（MDP与动态规划）</span><span class="arrow">→</span>
+      <span class="node">Ch5-8 表格型无模型（MC与TD）</span><span class="arrow">→</span>
+      <span class="node here">Ch11 离策略与致命三角</span><span class="arrow">→</span>
+      <span class="node">Ch12-13 策略与前沿（资格迹与策略梯度）</span>
+    </div>
+  </div>
+
+  <!-- 学习目标 -->
+  <div class="objectives">
+    <h4>🎯 学完本章，合上书你应该能：</h4>
+    <ol>
+      <li>写出重要性采样比 ρ 的定义与离策略半梯度 TD 更新式，并手算一步带 ρ 的更新（w：0.3 → 0.44）</li>
+      <li>在 w→2w 例子上算出发散放大因子，并说出 Baird 反例发散的动力系统根源（正特征值）</li>
+      <li>背出致命三角三要素，并用三个对照实验说明"缺一不可"</li>
+      <li>用两个 MRP 的例子解释贝尔曼误差为什么不可学习，写出 E[δ²] 的方差分解</li>
+      <li>写出 TDC 与 Emphatic TD 的更新骨架，说出各自的收敛依据与代价</li>
+      <li>面对"用历史日志训练估值器"的场景，指出三角三要素各在哪里，并在两条出路之间做选择</li>
+    </ol>
+  </div>
+
+  <div class="lecture">
+
+    <!-- 推导主线图 -->
+    <div class="figure">
+      <div class="mermaid">
+flowchart LR
+  A["离策略需求<br>学演示数据 回放旧经验 Q学习"] --> B["重要性采样修正半梯度<br>每步乘 ρ 折算稀缺度"]
+  B --> C["Baird 反例<br>期望更新权重指数发散"]
+  C --> D["根因 致命三角<br>函数逼近 加 自举 加 离策略"]
+  D --> E["出路一 换目标<br>梯度TD 最小化 MSPBE"]
+  D --> F["出路二 换权重<br>Emphatic TD 强调 M"]
+  E --> G["代价 通向 Ch12-13<br>梯度TD 慢且双时标 Emphatic 方差大"]
+  F --> G
+  classDef hot fill:#fbeedd,stroke:#c4651f,stroke-width:2.5px,color:#c4651f;
+  classDef danger fill:#fae9e7,stroke:#b03a2e,stroke-width:2.5px,color:#b03a2e;
+  class D hot;
+  class G danger;
+      </div>
+      <div class="caption">本章推导主线：离策略是刚需，重要性采样只修均值不修稳定性；Baird 反例把发散摆上桌面，根因是致命三角；两条出路各自付账，代价直接通向后续章节。</div>
+    </div>
+
+    <!-- ================= 11.1 ================= -->
+    <h2><span class="sec-no">11.1</span>为什么需要离策略：重要性采样修正半梯度</h2>
+
+    <p>第 9–10 章一直在<span class="term">在策略</span>（On-policy）的世界里：产生数据的策略和被评估、被改进的策略是同一个。但很多刚需场景天然不是这样——这就是<span class="term">离策略</span>（Off-policy）：用<span class="term">行为策略</span>（Behavior Policy）<span class="var">b</span> 产生的数据，去评估另一个<span class="term">目标策略</span>（Target Policy）<span class="var">π</span>。三种典型动机：</p>
+    <ul>
+      <li><strong>学演示数据</strong>：看专家开车的录像，评估"如果我来开会怎样"——数据来自专家，目标是自己的策略。</li>
+      <li><strong>回放旧经验</strong>：经验回放（Experience Replay）池里的数据是几十个版本前的旧策略产生的。</li>
+      <li><strong>Q-learning</strong>：学的是贪心目标策略，行动上却用 ε-贪心保持探索——学与做本来就是两个策略。</li>
+    </ul>
+
+    <p>数据分布错了位，更新方向就偏了。修正工具是<span class="term">重要性采样比</span>（Importance Sampling Ratio）：</p>
+
+    <div class="formula">ρ<sub>t</sub> = <span class="frac"><span class="num-part">π(A<sub>t</sub> | S<sub>t</sub>)</span><span class="den-part">b(A<sub>t</sub> | S<sub>t</sub>)</span></span></div>
+
+    <p>把它乘到每一步更新前面，得到<strong>离策略半梯度 TD(0)</strong>：</p>
+
+    <div class="formula">w ← w + α ρ<sub>t</sub> δ<sub>t</sub> ∇v̂(S<sub>t</sub>, w)，&nbsp;&nbsp; δ<sub>t</sub> = R<sub>t+1</sub> + γv̂(S<sub>t+1</sub>, w) − v̂(S<sub>t</sub>, w)</div>
+
+    <h3>完整算例：一步带 ρ 的更新</h3>
+    <p>状态 S 下，行为策略 b 以 0.5 / 0.5 选动作 a1 / a2，目标策略 π <strong>必取</strong> a2。设 v̂(S) = w = 0.3，特征 x(S) = (1)（故 ∇v̂ = 1），步长 α = 0.1。观测到 (S, a2) → R = 1 → 终止：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>步骤</th><th>量</th><th>算式</th><th>结果</th></tr>
+        <tr><td>1</td><td>重要性采样比 ρ</td><td>π(a2|S) / b(a2|S) = 1 / 0.5</td><td><strong>2</strong></td></tr>
+        <tr><td>2</td><td>TD 误差 δ</td><td>R + γ·0 − v̂(S) = 1 + 0 − 0.3</td><td><strong>0.7</strong></td></tr>
+        <tr><td>3</td><td>更新量</td><td>α ρ δ ∇v̂ = 0.1 × 2 × 0.7 × 1</td><td><strong>0.14</strong></td></tr>
+        <tr><td>4</td><td>新权重</td><td>w ← 0.3 + 0.14</td><td><strong>0.44</strong></td></tr>
+      </table>
+    </div>
+
+    <p>若这次观测到的是 a1：ρ = π(a1|S) / b(a1|S) = 0 / 0.5 = <strong>0</strong>，更新量整个被乘没——w 不动。这完全合理：目标策略永远不会做 a1，这次观测对"目标策略下的价值"没有任何信息。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>ρ 是<strong>汇率</strong>：把行为策略下的一单位经验，按它在目标策略下的稀缺程度折算。a2 在 b 下出现的频率只有 π 下的一半，所以每见一次 a2 都按双倍计入；a1 在 π 下根本不存在，汇率是 0。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>以为"乘上 ρ，离策略问题就解决了"。错。重要性采样只修正<strong>更新方向的期望</strong>——它改的是均值，不是稳定性。下一节就会看到：方向修对了，更新照样能把 w 吹到无穷。此外多步场景下 ρ 要沿轨迹连乘，方差会爆炸（第 12 章的资格迹还要再面对它一次）。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <p class="recall-hint">不要直接点开。先在心里或纸上说出答案，再翻面核对。</p>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 11.1-1</div>
+              <div class="q-text">写出 ρ<sub>t</sub> 的定义，并说明它在离策略半梯度 TD 更新式里乘在哪里。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              ρ<sub>t</sub> = π(A<sub>t</sub>|S<sub>t</sub>) / b(A<sub>t</sub>|S<sub>t</sub>)。它乘在整步更新前面：w ← w + α ρ<sub>t</sub> δ<sub>t</sub> ∇v̂(S<sub>t</sub>, w)。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 11.1-2</div>
+              <div class="q-text">本节算例中如果观测到的是 a1，w 会怎么变？为什么这合理？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              w 不变：π(a1|S)=0 使 ρ=0，更新量被清零。合理——目标策略从不做 a1，这条数据对评估 π 没有信息。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ================= 11.2 ================= -->
+    <h2><span class="sec-no">11.2</span>发散实例：从 w→2w 到 Baird 星形反例</h2>
+
+    <p>上一节给了带 ρ 的更新式，期望方向也修正了——那离策略半梯度 TD 能用了吗？答案是<strong>不能，它会发散</strong>。本节看两个例子：一个玩具级的精确推导，一个经典的星形反例。</p>
+
+    <h3>算例一：w→2w，期望更新精确算</h3>
+    <p>极小的一条"转移"：估值为 <span class="var">w</span> 的状态以概率 1−ε 转移到一个估值恰为 <strong>2w</strong> 的状态（两个状态的特征成比例、被迫共享同一个标量参数 w），以 ε 终止；奖励全 0。按期望更新逐步计算（把步长按每次扫掠归一），半梯度更新变成：</p>
+
+    <div class="formula">w<sub>k+1</sub> = 2γ(1−ε) · w<sub>k</sub></div>
+
+    <p>取 γ = 0.9、ε = 0.1：放大因子 = 2 × 0.9 × 0.9 = <strong>1.62 &gt; 1</strong>。从 w₀ = 1 开始迭代：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>k</th><th>0</th><th>1</th><th>2</th><th>3</th><th>4</th><th>5</th><th>10</th><th>…</th></tr>
+        <tr><td>w<sub>k</sub></td><td>1</td><td>1.62</td><td>2.6244</td><td>4.2515</td><td>6.8875</td><td>11.1577</td><td>124.4945</td><td>→ ∞</td></tr>
+      </table>
+    </div>
+
+    <p>机制解剖——三件事同时成立才会炸：</p>
+    <ul>
+      <li><strong>自举</strong>（Bootstrapping）：更新目标是"自己估出来的 2w"，误差自喂；</li>
+      <li><strong>函数逼近</strong>：特征成比例 ⇒ w 被强制共享，2w 那个状态的新估值反过来抬高源状态的目标；</li>
+      <li><strong>更新分布错位</strong>：更新按我们指定的分布加权，不看过程实际停在哪个状态——离策略的本质。</li>
+    </ul>
+
+    <h3>算例二：Baird 反例（Baird's Counterexample）</h3>
+    <p>这是 RL 理论里最著名的反例。7 个状态排成星形，参数 w ∈ R⁸，γ = 0.99，奖励恒为 0（所以真值 v<sub>π</sub> 处处 = 0）。特征设计：</p>
+    <ul>
+      <li>状态 i（i = 1..6）：x(i) = 2e<sub>i</sub> + e₈，即 v̂(i) = 2w<sub>i</sub> + w₈</li>
+      <li>状态 7（中心）：x(7) = e₇ + 2e₈，即 v̂(7) = w₇ + 2w₈</li>
+    </ul>
+    <p>每个状态有两个动作：<strong>dashed</strong> 均匀跳到状态 1..6 之一；<strong>solid</strong> 跳到中心状态 7。离策略预测：目标策略 π = 恒选 solid，而更新按行为分布把 7 个状态<strong>均匀加权</strong>。</p>
+
+    <div class="figure">
+      <div class="mermaid">
+flowchart LR
+  I(("状态 i = 1..6<br>v = 2wi + w8")) -->|"solid 目标策略恒选"| H(("状态 7 中心<br>v = w7 + 2w8"))
+  H -->|"solid 自环"| H
+  I -.->|"dashed 均匀散到 1..6"| I
+  H -.->|"dashed 均匀散到 1..6"| I
+      </div>
+      <div class="caption">图 11.1 Baird 星形反例：目标策略（solid）把一切质量吸向中心状态 7，而更新分布仍平摊在全部 7 个状态上——错位由此产生。</div>
+    </div>
+
+    <p>先做<strong>期望（DP 式）扫掠</strong>，初值 w₀ = (1,…,1)（此时 v̂ 处处 = 3.0）。按期望更新逐步计算可得：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>sweep</th><th>0</th><th>5</th><th>10</th><th>20</th><th>50</th><th>69</th></tr>
+        <tr><td>v̂(1..6)</td><td>3.0</td><td>2.366</td><td>−0.23</td><td>−34.2</td><td>≈−24712</td><td rowspan="2">超过 10⁶<br><strong>发散</strong></td></tr>
+        <tr><td>v̂(7)</td><td>3.0</td><td>2.187</td><td>−0.95</td><td>−41.2</td><td>同量级</td></tr>
+      </table>
+    </div>
+
+    <p>再做<strong>采样版</strong>：半梯度 TD + 重要性采样（行为策略 50/50 选两动作，选中 solid 时 ρ = 2，α = 0.01）。模拟（α=0.01）实测：t=100 时 v̂≈2.91；t=1000 时降到 −2.44；t=5000 时 ≈−84033；约 t≈9038 发散。</p>
+
+    <p>这不是噪声问题，是<strong>动力系统意义上的不稳定</strong>：期望更新矩阵的特征值含正实部 <strong>+0.0222</strong> 与 <strong>+0.2393</strong>——对应方向上的分量每步被放大，按几何速度增长。注意 w₀ 全 1 时估值<strong>先降后炸</strong>（前 10 次扫掠还在朝 0 走）：不稳定特征向量方向上的初始分量小，但指数增长终将主导一切。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>把 w 的迭代想成 w<sub>k+1</sub> = A·w<sub>k</sub>。表格里这个矩阵是 γ-收缩（所有特征值模小于 1）；Baird 用特征共享 + 分布错位把它改造成含特征值 +0.2393 的矩阵——每一次迭代在那个方向放大 1.24 倍，没有任何数据量能救。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>以为"步长调小就没事"。错。矩阵有正实部特征值时，<strong>任何 α &gt; 0 都发散</strong>，只是快慢不同——α 改变的是爆炸的时间尺度，不是稳定性本身。采样版用 α=0.01 照样在 t≈9038 发散，就是证据。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 11.2-1</div>
+              <div class="q-text">w→2w 例子里放大因子怎么算？γ=0.9、ε=0.1 时是多少？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              放大因子 = 2γ(1−ε)。代入得 2×0.9×0.9 = 1.62 &gt; 1，故 w<sub>k</sub> = 1.62<sup>k</sup> 指数发散。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 11.2-2</div>
+              <div class="q-text">Baird 反例中真值处处为 0，为什么 w 还会发散？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              期望更新矩阵有正实部特征值（+0.0222、+0.2393），不稳定模式按几何速度增长。根源：自举喂回误差、特征共享造成串扰、更新分布与目标策略占用错位，三者叠加。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ================= 11.3 ================= -->
+    <h2><span class="sec-no">11.3</span>致命三角：三要素缺一不可</h2>
+
+    <p>上一节看到了发散。错不在代码，而在三个" ingredient "的化学反应。Sutton 把它命名为<span class="term">致命三角</span>（The Deadly Triad）：<strong>函数逼近 × 自举 × 离策略</strong>。三者凑齐，稳定性保证就没了；<strong>缺任意一个，都安全</strong>。下面三个对照实验，在同一个 Baird MDP 上每次只拆掉一个角。</p>
+
+    <h3>对照①：去离策略（改回在策略）</h3>
+    <p>同一个目标策略，改用<strong>目标策略自身的占用分布</strong> d<sup>π</sup> 做期望更新（π 恒走 solid，全部权重落在状态 7 上）。按期望更新逐步计算可得 v̂(7)：</p>
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>sweep</th><th>0</th><th>10</th><th>50</th><th>500</th></tr>
+        <tr><td>v̂(7)</td><td>3.0</td><td>1.7962</td><td>0.2308</td><td>0.0（收敛）</td></tr>
+      </table>
+    </div>
+    <p>机制：更新分布与转移结构匹配，关键矩阵正定，更新重新成为收缩。</p>
+
+    <h3>对照②：去自举（改用蒙特卡洛目标）</h3>
+    <p>目标换成真实回报 G = 0（奖励恒 0，回合结束后回报就是 0），<strong>保持同样的离策略采样</strong>。模拟实测：t = 20000 时精确收敛到 v̂ = 0（w = (0.308, …, 0.308, 1.231, −0.615)）。机制：目标不再依赖自己的估值，误差不会自喂放大——最小化的就是真正的均方误差。</p>
+
+    <h3>对照③：去逼近（退回表格）</h3>
+    <p>每个状态独立一格（表格是"特征互不相同"的特例），<strong>保持同样的离策略更新分布</strong>。按期望更新逐步计算可得 V（各状态相同）：</p>
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>sweep</th><th>0</th><th>100</th><th>500</th><th>1000</th></tr>
+        <tr><td>V</td><td>1.0</td><td>0.366</td><td>0.0066</td><td>0（收敛）</td></tr>
+      </table>
+    </div>
+    <p>机制：表格下 Bellman 算子是 γ-收缩，逐格互不串扰，离策略只影响收敛速度不影响稳定性。</p>
+
+    <div class="figure">
+      <div class="mermaid">
+flowchart TB
+  FA["函数逼近<br>参数共享 误差串扰"]
+  BO["自举<br>目标依赖自身估值 误差自喂"]
+  OP["离策略<br>更新分布与占用错位 收缩失效"]
+  FA --- BO
+  BO --- OP
+  OP --- FA
+  classDef danger fill:#fae9e7,stroke:#b03a2e,stroke-width:2.5px,color:#b03a2e;
+  class FA danger;
+  class BO danger;
+  class OP danger;
+      </div>
+      <div class="caption">图 11.2 致命三角：三条边各自无害，凑齐才塌。拆掉任意一个顶点，稳定性保证就回来了。</div>
+    </div>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>函数逼近</th><th>自举</th><th>离策略</th><th>稳定性</th><th>对应</th></tr>
+        <tr><td>×</td><td>√</td><td>√</td><td>安全</td><td>表格型 TD（Ch5–8）</td></tr>
+        <tr><td>√</td><td>×</td><td>√</td><td>安全</td><td>MC + 函数逼近（对照②）</td></tr>
+        <tr><td>√</td><td>√</td><td>×</td><td>安全</td><td>在策略半梯度 TD（Ch9–10，对照①）</td></tr>
+        <tr><td>√</td><td>√</td><td>√</td><td><strong>可能发散</strong></td><td>Baird 反例（11.2）</td></tr>
+      </table>
+    </div>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>三角不是"三个 bug 叠加"，而是三个各自无害的设计撞在一起：逼近让参数共享（误差在状态间串扰），自举让目标依赖自身（误差自喂放大），离策略让更新分布与过程占用错位（收缩性证明失效）。三者凑齐，收缩映射的地基就塌了。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>以为"DQN 有目标网络和经验回放，不就证明三角其实不存在？"错。DQN 恰恰三角全占（深度逼近 × Q 自举 × 回放离策略），它能跑是靠工程手段硬压：目标网络把自举目标冻结半衰，海量回放数据把更新分布拉宽、压住不稳定方向。这是<strong>绕行，不是理论豁免</strong>——不稳的影子在第 12–13 章还会反复出现。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 11.3-1</div>
+              <div class="q-text">背出致命三角三要素，并各给一个"拆掉它就安全"的对照实验。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              函数逼近、自举、离策略。去离策略：在策略 d<sup>π</sup> 更新收敛到 0；去自举：MC 目标收敛到真值；去逼近：表格 TD γ-收缩收敛。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 11.3-2</div>
+              <div class="q-text">为什么说 DQN 的成功不构成对致命三角的反驳？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              DQN 三角全占。目标网络冻结自举目标、海量数据压住不稳定方向，是工程绕行；理论上发散风险仍在，只是被推迟和稀释。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ================= 11.4 ================= -->
+    <h2><span class="sec-no">11.4</span>想直接最小化贝尔曼误差？它不可学习</h2>
+
+    <p>上一节确认了病根。救场的第一个念头很自然：半梯度不靠谱，那就别绕弯子，<strong>直接最小化贝尔曼误差</strong>。定义均方贝尔曼误差（MSBE）：</p>
+
+    <div class="formula">MSBE = ∑<sub>s</sub> μ(s) [ E[R + γv̂(S′) | s] − v̂(s) ]²</div>
+
+    <p>即"期望 TD 误差的平方"按分布 μ 加权。v̂ 越接近满足 Bellman 方程，MSBE 越小——目标看起来天经地义。问题是：<strong>它从数据里估不出来</strong>。</p>
+
+    <h3>完整算例：两个 MRP，同样的数据，不同的贝尔曼误差</h3>
+    <p>两个 MRP 产生的数据<strong>完全相同</strong>：每回合只观测到一个奖励，0 或 1 各半，然后终止。但内部结构不同：</p>
+    <ul>
+      <li><strong>MRP1</strong>：A → B（R = 0，概率 0.5）或 A → C（R = 1，概率 0.5），B、C 随后终止；</li>
+      <li><strong>MRP2</strong>：A′ → 直接终止，R 以各半概率为 0 或 1。</li>
+    </ul>
+
+    <div class="figure">
+      <div class="mermaid">
+flowchart LR
+  subgraph G1["MRP 一"]
+    A(("A")) -->|"P 0.5 R 0"| B(("B 终止"))
+    A -->|"P 0.5 R 1"| C(("C 终止"))
+  end
+  subgraph G2["MRP 二"]
+    A2(("A'")) -->|"P 0.5 R 0"| T1(("终止"))
+    A2 -->|"P 0.5 R 1"| T1
+  end
+      </div>
+      <div class="caption">图 11.3 两个 MRP：数据流一模一样（0/1 各半），内部状态结构不同——贝尔曼误差看得见这堵墙，数据看不见。</div>
+    </div>
+
+    <p>取候选 v̂ ≡ 0，逐步计算两个 MSBE：</p>
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>MRP</th><th>期望 TD 误差</th><th>MSBE</th></tr>
+        <tr><td>MRP1</td><td>BE(A) = 0.5×0 + 0.5×1 − 0 = 0.5；B、C 处为 0</td><td>μ(A) × 0.5² = 0.5 × 0.25 = <strong>0.125</strong></td></tr>
+        <tr><td>MRP2</td><td>BE(A′) = 0.5×0 + 0.5×1 − 0 = 0.5</td><td>1 × 0.5² = <strong>0.25</strong></td></tr>
+      </table>
+    </div>
+
+    <p>数据分布一模一样，MSBE 却差一倍。任何只看数据的估计量都无法同时等于这两个值——<strong>贝尔曼误差不可学习</strong>（Not Learnable）：它依赖 MDP 的内部结构，而不只是数据。</p>
+
+    <p>顺带一提<span class="term">残差梯度法</span>（Residual Gradient）：它直接对样本最小化 E[δ²]。做方差分解：</p>
+
+    <div class="formula">E[δ²] = (E[δ])² + Var[δ]</div>
+
+    <p>它比真正的贝尔曼误差多了一个方差项：奖励和转移的随机性也被惩罚，即使期望误差已经是 0。要想无偏地估计 (E[δ])²，需要对同一状态采<strong>两个相互独立的后继</strong>（double sampling）——表格里勉强可行，函数逼近下几乎做不到（连续状态不会精确重访）。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>MSBE 问的是"住在状态 s 内部看，期望误差多大"——这涉及"哪些数据来自同一个内部状态"。数据里只有奖励流；两个 MRP 内部状态划分不同，数据却相同。贝尔曼误差看得见状态的内部墙，数据看不见。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>把 E[δ²] 当贝尔曼误差最小化。两者差一个 Var[δ]，最优点可能系统性不同：在噪声大的转移上，残差梯度法宁愿牺牲期望误差也要压方差。目标函数一换，学出来的东西就变了。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 11.4-1</div>
+              <div class="q-text">"贝尔曼误差不可学习"是什么意思？用本节的两个 MRP 做证据。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              同样的数据分布可对应不同的 MSBE（0.125 vs 0.25），故无法从数据一致地估计它——它依赖 MDP 内部结构，不只是数据。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 11.4-2</div>
+              <div class="q-text">E[δ²] 与 (E[δ])² 差什么？残差梯度法因此有什么问题？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              差 Var[δ]：E[δ²] = (E[δ])² + Var[δ]。残差梯度法连转移噪声一起惩罚，最优点可能偏离贝尔曼方程的解。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ================= 11.5 ================= -->
+    <h2><span class="sec-no">11.5</span>出路一 · 梯度 TD：换一个可学习的目标</h2>
+
+    <p>上一节说 BE 不可学。但不是所有"贝尔曼系"的目标都不可学——换一个：<span class="term">均方投影贝尔曼误差</span>（MSPBE）：</p>
+
+    <div class="formula">MSPBE = ‖ Π B v̂ ‖²<sub>μ</sub></div>
+
+    <p>读法：先对 v̂ 做 Bellman 期望更新 B，再把结果<strong>投影</strong> Π 回可表示的函数空间，量这个"投影后的期望更新"有多大。关键性质：它可以从数据一致地估计——可学习。</p>
+
+    <p><span class="term">TDC</span>（TD with Gradient Correction）对 MSPBE 求<strong>真梯度</strong>，推出双变量更新：</p>
+
+    <div class="formula">w ← w + α ρ [ δ x − γ x′ (x<sup>⊤</sup> v) ]</div>
+    <div class="formula">v ← v + β ρ (δ − x<sup>⊤</sup> v) x</div>
+
+    <p>v 是辅助向量（估计投影修正项的方向），用第二个步长 β 学习，β 通常远大于 α 或与之同量级——这叫<strong>双时标</strong>（two-timescale）。因为它是一个定义良好目标上的真梯度下降，<strong>线性 + 离策略也保证收敛</strong>（标准步长条件下）。</p>
+
+    <h3>实测：TDC 在 Baird 反例上</h3>
+    <p>取 α = 0.005、β = 0.05，模拟实测 v̂ 的变化：</p>
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>t</th><th>0</th><th>100000</th><th>500000</th><th>1000000</th><th>3000000</th></tr>
+        <tr><td>v̂</td><td>≈3.0</td><td>2.969</td><td>2.832</td><td>2.669</td><td>2.103</td></tr>
+      </table>
+    </div>
+    <p>单调、稳定地逼近真值 0——不再发散。但对照 11.3 对照②的 MC（2 万步收敛），TDC 用了三百万步还在半路。<strong>稳定是买来的，价格是慢。</strong></p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>半梯度 TD 相当于"只走真梯度的一半路"——丢掉了投影带来的修正项。TDC 用辅助向量 v 把丢掉的另一半（−γx′(xᵀv)）补回来。补上了，它就真的在下一个可学习目标的坡，离策略也塌不了。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>以为 TDC 是"免费的修复"。代价明明白白：参数多一倍（v 与 w 同维）、两个步长要调（β/α 的比例直接影响收敛速度）、实测收敛极慢。理论保证与工程效率在这里是明牌交换。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 11.5-1</div>
+              <div class="q-text">TDC 的 w 更新比半梯度 TD 多了哪一项？这一项是什么？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              多了 −γx′(xᵀv)：投影算子带来的梯度修正项。v 是辅助向量，用第二个步长 β 学习（双时标）。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 11.5-2</div>
+              <div class="q-text">TDC 凭什么在线性离策略下保证收敛？代价是什么？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              它是对可学习目标 MSPBE 的真梯度下降。代价：参数翻倍、双时标调参、实测收敛非常慢（Baird 上三百万步量级）。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ================= 11.6 ================= -->
+    <h2><span class="sec-no">11.6</span>出路二 · Emphatic TD：不改目标改权重</h2>
+
+    <p>TDC 改的是目标函数。另一条路完全反过来：<strong>目标不动</strong>（还是半梯度那套），改<strong>更新分布</strong>——把行为分布扭向目标策略重视的状态。这就是 Emphatic TD。三个量：</p>
+
+    <div class="formula">F<sub>t</sub> = γ ρ<sub>t−1</sub> F<sub>t−1</sub> + I<sub>t</sub> &nbsp;（F<sub>−1</sub> = 0）</div>
+    <div class="formula">M<sub>t</sub> = ρ<sub>t</sub> F<sub>t</sub>，&nbsp;&nbsp; w ← w + α M<sub>t</sub> δ<sub>t</sub> x(S<sub>t</sub>)</div>
+
+    <p><span class="term">兴趣</span>（Interest）I<sub>t</sub> 表示我们多在乎状态 S<sub>t</sub>（常取 1）；<span class="term">追随量</span>（Followon）F<sub>t</sub> 沿轨迹累积"目标策略走到这里来的程度"（不断乘 γρ）；<span class="term">强调</span>（Emphasis）M<sub>t</sub> 是本步更新的放大倍数。思想：半梯度离策略发散，根源是关键矩阵在行为分布下不正定；把更新权重换成"目标策略下的加权占用"，矩阵重新正定，收敛恢复。</p>
+
+    <h3>实测：Emphatic TD(0) 在 Baird 反例上</h3>
+    <p>目标策略 = 必 solid、行为策略 50/50、I ≡ 1、α = 0.01。模拟实测：t = 1000 时 v̂(1) ≈ 0.175，已在回落；t = 10000 起 v̂(1..6) = 0.000、v̂(7) = 0.000，<strong>收敛到真值</strong>；稳态 M ≈ 2.0。对照 11.2：同一个问题、同一个 α，普通半梯度 TD 在 t≈9038 发散，Emphatic 在一万步收敛。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>一句话：让"目标策略关心的状态"在更新里嗓门更大，而不是让行为策略的访问频率说了算。F 负责记账（目标策略到这里有多顺），M 负责放大（这一步更新喊多响）。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>以为 Emphatic 是"既保收敛又没副作用"。代价：强调 M<sub>t</sub> 沿轨迹连乘 ρ，方差很大——学习曲线忽快忽慢、瞬态噪声明显。这是它换来"线性离策略收敛保证"的价码；用 Emphatic 就要接受高方差。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 11.6-1</div>
+              <div class="q-text">写出 F<sub>t</sub> 与 M<sub>t</sub> 的递推定义，并说清各自的角色。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              F<sub>t</sub> = γρ<sub>t−1</sub>F<sub>t−1</sub> + I<sub>t</sub>（追随：目标策略到达当前状态的折扣权重）；M<sub>t</sub> = ρ<sub>t</sub>F<sub>t</sub>（强调：本步更新的放大倍数）。更新 w ← w + αM<sub>t</sub>δ<sub>t</sub>x(S<sub>t</sub>)。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 11.6-2</div>
+              <div class="q-text">Emphatic TD 与 TDC 的修复思路有何根本不同？各自代价？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              TDC 换目标（对 MSPBE 做真梯度，代价是双时标与慢）；Emphatic 不换目标，改更新权重使关键矩阵正定，代价是 M 连乘 ρ 带来的高方差。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ================= 11.7 ================= -->
+    <h2><span class="sec-no">11.7</span>错误直觉："半梯度是个 bug"</h2>
+
+    <p>看完 11.2 的发散，最容易得出的结论是："半梯度 TD 少算了 γ∇v̂(S′) 那一项，是个实现 bug，补上就好了。"这个直觉是错的，值得专门一节说清楚。</p>
+    <ul>
+      <li>半梯度是<strong>故意丢掉</strong> γ∇v̂(S′) 的取舍：因为真梯度对应的贝尔曼误差目标<strong>不可学习</strong>（11.4 已证）——不是算不出来，是从数据里估计不出来。</li>
+      <li>半梯度在在策略下<strong>恰好稳定</strong>：第 9 章的收敛证明正是建立在"更新分布 = d<sup>π</sup>、与转移结构匹配"上。</li>
+      <li>它到离策略下发散，不是"实现写错"，而是<strong>目标函数的地基问题</strong>：在策略下隐含的收缩性不再成立。</li>
+      <li>所以出路只有两类：<strong>换目标</strong>（11.5 梯度 TD）或<strong>换权重</strong>（11.6 Emphatic）。不存在"把梯度补全"的第三条路。</li>
+    </ul>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>半梯度 TD 是在"可学习"与"忠实于贝尔曼方程"之间的工程妥协：宁可目标歪一点（只要求 TD 不动点），也要保证目标能由数据驱动。它在在策略下歪打正着地稳定；离策略只是把这笔账翻了出来。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>另一个对称的错误直觉："离策略 + 经验回放，就是把数据存起来再学，能直接用。"错——回放正是离策略的一种（数据由旧策略产生），致命三角照样在。DQN 能跑靠的是目标网络、巨量数据这些额外稳定器，不是回放本身无害。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 11.7-1</div>
+              <div class="q-text">为什么"把半梯度补成真梯度"不是出路？（用 11.4 的结论回答）</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              真梯度对应的目标是贝尔曼误差，而贝尔曼误差不可从数据学习（两个 MRP 反例）。所以不是不想补，是补了也没法用数据驱动。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 11.7-2</div>
+              <div class="q-text">半梯度 TD 为什么偏偏在在策略下稳定？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              更新分布恰好是 d<sup>π</sup>，与转移结构匹配，关键矩阵正定，更新成为收缩。离策略破坏的正是这个匹配。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ================= 概念卡 ================= -->
+    <h2><span class="sec-no">🃏</span>概念卡：本章概念的一分钟画像</h2>
+    <p>翻面前先自问：这个概念我能用一句话讲清楚吗？</p>
+    <div class="flip-grid">
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 1</div>
+            <div class="q-text">重要性采样比 ρ（Importance Sampling Ratio）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">ρ<sub>t</sub> = π(A<sub>t</sub>|S<sub>t</sub>) / b(A<sub>t</sub>|S<sub>t</sub>)，两策略在同状态选同动作的概率之比。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">数据来自 b 却想评估 π——用 ρ 把经验折算到目标策略口径。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">汇率：π 下稀罕的动作按倍计入，π 不做的动作汇率为零。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为它解决离策略的一切问题——只修期望方向，不修稳定性，连乘方差还大。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">一切离策略校正：本章、Ch12 的离策略资格迹、策略梯度。</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 2</div>
+            <div class="q-text">致命三角（The Deadly Triad）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">函数逼近 × 自举 × 离策略三者同时具备时，半梯度 TD 可发散的现象。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">不是工具而是警报：画清价值学习在什么条件下失去稳定性保证。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">参数共享（串扰）+ 目标自喂（放大）+ 分布错位（收缩失效）= 地基塌。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为三选一就有害——任意两两组合都安全，必须三者凑齐。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">设计任何"逼近 + TD + 回放/演示数据"系统前的自查清单（DQN、离线 RL）。</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 3</div>
+            <div class="q-text">Baird 反例（Baird's Counterexample）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">7 状态星形 MRP + 8 维线性特征，γ=0.99、奖励全 0；离策略半梯度期望更新权重发散。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">用最简单的线性系统证明：发散不是噪声，是动力系统不稳定（特征值 +0.0222、+0.2393）。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">中心状态被目标策略独宠，更新分布却把权重平摊给边缘——错位产生放大。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为调小步长能救——矩阵有正特征值时任何 α&gt;0 都炸，只是慢。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">检验新离策略算法的试金石（TDC、Emphatic 都在它上面验证）。</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 4</div>
+            <div class="q-text">贝尔曼误差不可学习（Bellman Error is Not Learnable）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">MSBE 依赖 MDP 内部结构：存在两个数据分布完全相同但 MSBE 不同的 MRP（0.125 vs 0.25）。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">回答"为什么不直接最小化贝尔曼误差"——因为它从数据里估不出来。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">贝尔曼误差看得见状态的内部墙，数据只看得见奖励流。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">把 E[δ²] 当 MSBE 最小化——差一个 Var[δ]，最优点可能错。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">理解半梯度为何是取舍、为何需要 MSPBE 这类可学习替代目标。</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 5</div>
+            <div class="q-text">梯度 TD / TDC（Gradient-TD）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">对可学习目标 MSPBE 做真梯度下降；TDC 用辅助向量 v 与双时标（α, β）实现。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">线性 + 离策略 + 自举下的收敛保证。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">把半梯度丢掉的"投影修正项"用 v 补回来，真正下 MSPBE 的坡。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为是免费修复——参数翻倍、两个步长要调、实测慢一到两个数量级。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">需要理论保证的离策略预测；GTD2、GQ 等同族算法。</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 6</div>
+            <div class="q-text">Emphatic TD（强调式 TD）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">w ← w + αM<sub>t</sub>δ<sub>t</sub>x<sub>t</sub>，M<sub>t</sub>=ρ<sub>t</sub>F<sub>t</sub>，F<sub>t</sub>=γρ<sub>t−1</sub>F<sub>t−1</sub>+I<sub>t</sub>；不改目标，改更新权重。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">把更新分布从行为分布扭向"目标策略重视的状态"，让关键矩阵重新正定。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">让目标策略关心的状态在更新里嗓门更大。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为它方差小——M 沿轨迹连乘 ρ，学习忽快忽慢，这是收敛保证的价码。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">兴趣 I 可定制的离策略预测；与资格迹结合（呼应 Ch12）。</span></div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- ================= 分层习题 ================= -->
+    <h2><span class="sec-no">📝</span>分层习题</h2>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>致命三角的三要素各是什么？为什么说"任意缺一个就安全"？</div>
+      <details>
+        <summary>提示</summary>
+        <p>回忆 11.3 的三个对照实验：每个实验拆掉的分别是哪一角，结果各自收敛到什么。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p>三要素：<strong>函数逼近、自举、离策略</strong>。缺任意一个，就重新获得收缩映射或可学习目标：</p>
+          <ul>
+            <li>缺逼近（表格）：Bellman 算子是 γ-收缩，逐格不串扰——对照③收敛到 0；</li>
+            <li>缺自举（MC 目标）：目标是真实回报，误差自喂的回路断开——对照②收敛到真值；</li>
+            <li>缺离策略（在策略）：更新分布 = d<sup>π</sup> 与转移结构匹配，关键矩阵正定——对照①收敛到 0。</li>
+          </ul>
+          <p>易错点：把"三要素各自有害"当成结论。单个要素都无害（本书前 10 章全在用），危险的是三者叠加。</p>
+        </div>
+      </details>
+    </div>
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>E[δ²] 与 (E[δ])² 差在哪？哪一个才是贝尔曼误差？</div>
+      <details>
+        <summary>提示</summary>
+        <p>用方差恒等式：E[X²] = (E[X])² + Var[X]。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p>E[δ²] = (E[δ])² + Var[δ]，两者差一个方差项。<strong>(E[δ])² 的 μ 加权和才是贝尔曼误差 MSBE</strong>。E[δ²] 多出 Var[δ]：转移与奖励的随机噪声也被惩罚，即使期望误差已为 0。因此最小化 E[δ²]（残差梯度法）的最优点可能与最小化 MSBE 的点系统性不同。易错点：把"样本 TD 误差的平方和"直接当作贝尔曼误差来优化。</p>
+        </div>
+      </details>
+    </div>
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>w→2w 例子改参数：γ = 0.95、ε = 0.2。求放大因子、w₃（从 w₀ = 1 起），并推导一般发散条件。</div>
+      <details>
+        <summary>提示</summary>
+        <p>先写 w<sub>k+1</sub> = 2γ(1−ε)·w<sub>k</sub>，再逐级代入；发散条件 = 放大因子与 1 比大小。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p>第一步，放大因子 = 2γ(1−ε) = 2 × 0.95 × (1−0.2) = 2 × 0.95 × 0.8 = <strong>1.52</strong>。</p>
+          <p>第二步，逐级迭代：w₁ = 1.52；w₂ = 1.52² = 2.3104；w₃ = 1.52³ = 1.52 × 2.3104 = <strong>3.511808 ≈ 3.512</strong>。1.52 &gt; 1，发散。</p>
+          <p>第三步，一般条件：发散 ⟺ 2γ(1−ε) &gt; 1 ⟺ <strong>γ(1−ε) &gt; 1/2</strong>。反过来给定 γ 可解临界 ε：γ = 0.95 时 ε 的临界值 = 1 − 1/(2×0.95) = 1 − 0.5263 ≈ 0.474——ε 小于它就发散。</p>
+        </div>
+      </details>
+    </div>
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>Baird 反例期望更新的第一步手算：w₀ = (1,…,1)，按 1/7 均匀加权求 Δw 的各分量。</div>
+      <details>
+        <summary>提示</summary>
+        <p>先算每个状态的估值与 Bellman 目标（π 恒走 solid，下一步必是状态 7），再按特征把 δ 摊到 w 的各分量。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p>第一步，初始估值：i ≤ 6 时 v̂(i) = 2w<sub>i</sub>+w₈ = 2×1+1 = 3；v̂(7) = w₇+2w₈ = 1+2 = 3。处处为 3。</p>
+          <p>第二步，Bellman 目标：π 恒选 solid ⇒ 下一状态恒为 7，奖励 0，故 T = γ·v̂(7) = 0.99 × 3 = <strong>2.97</strong>。</p>
+          <p>第三步，TD 误差：δ(s) = 2.97 − 3 = <strong>−0.03</strong>，七个状态相同。</p>
+          <p>第四步，按 1/7 均匀加权摊到特征（Δw = (1/7)∑<sub>s</sub> δ(s)·x(s)）：</p>
+          <ul>
+            <li>j ≤ 6：w<sub>j</sub> 只出现在 x(j) 中，系数 2 ⇒ Δw<sub>j</sub> = (2/7)(2.97−3) = (2/7)(−0.03) = <strong>−0.00857</strong>；</li>
+            <li>w₇ 只出现在 x(7) 中，系数 1 ⇒ Δw₇ = (1/7)(−0.03) ≈ −0.00429；</li>
+            <li>w₈ 出现在全部 7 个特征中（i≤6 系数 1、状态 7 系数 2）⇒ Δw₈ = (1/7)[6×(−0.03) + 2×(−0.03)] = (1/7)(−0.24) = <strong>−0.0343</strong>。</li>
+          </ul>
+          <p>第五步，解读：第一步方向是"温和下调"，看起来完全正常。但期望更新矩阵含正特征值 <strong>+0.2393</strong>——这个方向里藏着的不稳定模式每步放大 1.24 倍，sweep 20 左右开始主导（v̂ 已到 −34/−41），到 sweep 69 超过 10⁶。方向正确不等于稳定。</p>
+        </div>
+      </details>
+    </div>
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l3">L3 建模应用</span>场景：用十万车辆的历史驾驶日志（人类司机行为各异、状态覆盖不均），训练一个线性特征的车载状态估值器，评估"新自动驾驶策略 π 下各状态的安全价值"。指出致命三角三要素各自在哪里，预测直接上半梯度 TD 会发生什么，并在 TDC 与 Emphatic TD 之间做选择、说明代价。</div>
+      <details>
+        <summary>提示</summary>
+        <p>问自己三个问题：能不能为每种路况建表？目标里有没有用到自己的估值？数据是谁的策略产生的？</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p><strong>三要素定位</strong>：①函数逼近——路况连续，不可能建表，只能线性/深度特征；②自举——事故罕见，等完整回报（MC）方差太大等不起，TD 用 R+γv̂(S′) 当目标；③离策略——日志由人类司机（行为策略 b）产生，与 π 的占用分布不同，且覆盖不均：危险状态在日志里本就稀少，b 小则 ρ 巨大。</p>
+          <p><strong>预测</strong>：直接上半梯度 TD 会缓慢发散——权重沿不稳定模式漂移，估值先"看起来在收敛"（对照 Baird 前 10 次扫掠还在降），随后爆炸；覆盖差的方向 ρ 巨大，进一步加速失稳。</p>
+          <p><strong>选择</strong>：离线批量评估、对速度不敏感 ⇒ 选 <strong>TDC</strong>：拿到 MSPBE 真梯度的收敛保证，代价是参数翻倍、双时标（β/α）调参、收敛慢（Baird 上要百万步量级）。若必须在线流式学习、且想用兴趣 I 显式标记高风险状态重点学习 ⇒ 选 <strong>Emphatic TD</strong>，代价是 M 沿轨迹连乘 ρ 带来的高方差、学习曲线忽快忽慢。两害相权：本场景是离线评估，TDC 更稳。</p>
+        </div>
+      </details>
+    </div>
+
+    <!-- ================= 自测 ================= -->
+    <h2><span class="sec-no">✍️</span>本章自测</h2>
+    <p class="quiz-hint">点击选项判分，答错会给出原因。</p>
+
+    <div class="quiz-block" data-answer="a">
+      <div class="q-no">自测 1</div>
+      <div class="q-stem">重要性采样比 ρ 在离策略半梯度 TD 中的作用是：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 修正更新方向的期望，但不解决稳定性问题</li>
+        <li data-opt="b">B. 保证线性离策略收敛</li>
+        <li data-opt="c">C. 把 TD 目标的方差降到 0</li>
+        <li data-opt="d">D. 使贝尔曼误差变得可以学习</li>
+      </ul>
+      <div class="quiz-explain">选 A。ρ 按目标策略稀缺度折算更新权重，修的是均值。B 错：11.2 的 Baird 反例正是带 ρ 的半梯度 TD 发散——方向对了照样炸；C 错：ρ 沿轨迹连乘反而放大方差；D 错：贝尔曼误差不可学习是数据层面的限制（11.4），与 ρ 无关。</div>
+    </div>
+    <div class="quiz-block" data-answer="d">
+      <div class="q-no">自测 2</div>
+      <div class="q-stem">下列哪种组合可能发散？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 表格 + 自举 + 离策略</li>
+        <li data-opt="b">B. 函数逼近 + 蒙特卡洛目标 + 离策略</li>
+        <li data-opt="c">C. 函数逼近 + 自举 + 在策略</li>
+        <li data-opt="d">D. 函数逼近 + 自举 + 离策略</li>
+      </ul>
+      <div class="quiz-explain">选 D。致命三角必须三者凑齐。A 是表格 TD，Bellman 算子 γ-收缩（对照③）；B 去了自举，MC 目标是真实回报，不自喂（对照②）；C 是在策略半梯度，更新分布与转移匹配（Ch9–10 有证明，对照①）。三个对照实验各证一角。</div>
+    </div>
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 3</div>
+      <div class="q-stem">两个 MRP 产生完全相同的数据（每回合奖励 0 或 1 各半），但 v̂≡0 时 MSBE 分别为 0.125 与 0.25。这说明：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 数据不足以估计奖励的均值</li>
+        <li data-opt="b">B. 贝尔曼误差依赖 MDP 的内部结构，不能仅从数据估计</li>
+        <li data-opt="c">C. 两个 MRP 的最优 v̂ 相同</li>
+        <li data-opt="d">D. μ 加权的方式写错了</li>
+      </ul>
+      <div class="quiz-explain">选 B。数据分布相同而 BE 不同 ⇒ 任何只看数据的估计量都无法同时等于两者 ⇒ BE 不可学习。A 错：奖励均值 0.5 完全可以从数据估计；C 与题意无关且事实相反（结构不同）；D 错：差异来自 MRP 内部状态划分，不是权重写错。</div>
+    </div>
+    <div class="quiz-block" data-answer="c">
+      <div class="q-no">自测 4</div>
+      <div class="q-stem">TDC 在线性离策略下保证收敛，根本原因是：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 它把步长取得足够小</li>
+        <li data-opt="b">B. 它用重要性采样比修正了更新均值</li>
+        <li data-opt="c">C. 它对可学习目标 MSPBE 做真正的梯度下降</li>
+        <li data-opt="d">D. 它冻结了目标网络</li>
+      </ul>
+      <div class="quiz-explain">选 C。MSPBE 可从数据一致估计，真梯度下降有标准收敛理论支撑，与在/离策略无关。A 错：小步长救不了半梯度——矩阵有正特征值时任何 α&gt;0 都发散；B 错：ρ 只修均值不修稳定性；D 错：目标网络是 DQN 的工程稳定器，与 TDC 的理论保证无关。</div>
+    </div>
+    <div class="quiz-block" data-answer="c">
+      <div class="q-no">自测 5</div>
+      <div class="q-stem">Emphatic TD 的主要代价是：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 需要双时标步长</li>
+        <li data-opt="b">B. 目标函数不可学习</li>
+        <li data-opt="c">C. M<sub>t</sub> 沿轨迹连乘 ρ，更新方差大、学习忽快忽慢</li>
+        <li data-opt="d">D. 不能在 Baird 反例上收敛</li>
+      </ul>
+      <div class="quiz-explain">选 C。强调 M<sub>t</sub> = ρ<sub>t</sub>F<sub>t</sub>，F 沿轨迹不断乘 γρ，连乘使方差放大——这是收敛保证的价码。A 是 TDC 的代价（双时标）；B 错：Emphatic 不换目标，谈不上目标可学性；D 错：实测 t=10000 起 v̂ 收敛到真值 0。</div>
+    </div>
+
+    <!-- ================= 复述 ================= -->
+    <div class="retell">
+      <h3>🗣️ 用自己的话，三句话讲完本章</h3>
+      <p class="retell-sub">对着空气（或室友）说出这三句。说卡壳的那句，回去重读对应小节。</p>
+      <details>
+        <summary>句1：这章解决什么问题？——</summary>
+        <div class="retell-answer">参考答案：离策略 + 函数逼近时，第 9–10 章赖以生存的半梯度 TD 会发散。本章回答两件事：为什么会（给出反例与根因），以及怎么救（两条出路）。</div>
+      </details>
+      <details>
+        <summary>句2：核心机制是什么？——</summary>
+        <div class="retell-answer">参考答案：致命三角——函数逼近（误差串扰）× 自举（误差自喂）× 离策略（分布错位、收缩失效）使关键矩阵出现正特征值，更新指数发散。两条出路：换目标（梯度 TD，对可学习的 MSPBE 做真梯度，代价是双时标与慢）；换权重（Emphatic TD，把更新分布扭向目标策略，代价是高方差）。</div>
+      </details>
+      <details>
+        <summary>句3：它和前后章怎么分工？——</summary>
+        <div class="retell-answer">参考答案：Ch9–10 证明在策略 + 函数逼近可行；本章画清这条路的地基边界——离策略是陷阱也是刚需；Ch12–13 的资格迹与策略梯度都在这块地基上继续盖楼，DQN 式工程稳定器是对三角的绕行而非豁免。</div>
+      </details>
+    </div>
+
+    <!-- ================= 复习计划 ================= -->
+    <div class="review-plan">
+      <h3>🔁 间隔复习计划</h3>
+      <p>回忆本身比重读有效 10 倍。到点只做一件事：翻卡 + 重做标记题。</p>
+      <table>
+        <tr><th>时间点</th><th>复习内容</th><th>预计用时</th></tr>
+        <tr><td>第 1 天</td><td>概念卡 1–6 全部 + 回忆 11.2-1、11.3-1</td><td>10 分钟</td></tr>
+        <tr><td>第 3 天</td><td>概念卡 2、3、4 + 重做 L2 两题 + 自测错题</td><td>10 分钟</td></tr>
+        <tr><td>第 7 天</td><td>三句话复述 + 手推 11.4 两个 MRP 的 MSBE（0.125 vs 0.25）</td><td>12 分钟</td></tr>
+        <tr><td>第 15 天</td><td>只做合上书挑战；卡在哪条就重读对应小节</td><td>15 分钟</td></tr>
+      </table>
+    </div>
+
+    <!-- 合上书挑战 -->
+    <div class="final-challenge">
+      <h3>📕 合上书挑战</h3>
+      <p class="fc-sub">现在关掉这个页面，拿一张纸，凭记忆完成以下任务。全部做完再回来核对——这是本章真正的毕业考试。</p>
+      <ol id="ch11-challenge-list">
+        <li><span class="fc-check"></span>写出 ρ<sub>t</sub> 的定义与离策略半梯度 TD 更新式，并重算 11.1 的算例（w：0.3 → 0.44）</li>
+        <li><span class="fc-check"></span>写出 w→2w 的放大因子公式，算出 γ=0.9、ε=0.1 时的 1.62，并给出一般发散条件 γ(1−ε)&gt;1/2</li>
+        <li><span class="fc-check"></span>画出 Baird 反例的星形结构（特征、两个动作、目标/行为策略），并说出实测发散的关键数字（sweep 20、69）</li>
+        <li><span class="fc-check"></span>背出致命三角三要素，以及三个对照实验各自的结论</li>
+        <li><span class="fc-check"></span>用两个 MRP 解释贝尔曼误差不可学习，写出 E[δ²] = (E[δ])² + Var[δ]</li>
+        <li><span class="fc-check"></span>写出 TDC 与 Emphatic TD 的更新骨架，各说一句收敛依据与代价</li>
+        <li><span class="fc-check"></span>一句话回答本章主线问题：为什么函数逼近 + 自举 + 离策略会发散，两条出路各是什么？</li>
+      </ol>
+    </div>
+
+    <div class="complete-zone">
+      <button class="btn-complete" id="ch11-btn-complete" onclick="markDone()">✓ 我已完成本章（含合上书挑战）</button>
+    </div>
+
+    <div class="chapter-nav">
+      <a href="chapter-10.html"><span class="nav-dir">← 上一章</span>第10章 带近似的在策略控制</a>
+      <a href="chapter-12.html" class="next"><span class="nav-dir">下一章 →</span>第12章 资格迹</a>
+    </div>
+
+  </div>
+</div>
+
+<footer class="footer">
+  <div class="wrap">第11章 离策略与函数逼近的致命三角 · 强化学习互动讲义 · 基于 Sutton &amp; Barto (2018, 2nd ed)</div>
+</footer>
+
+<script src="assets/mermaid.min.js"></script>
+<script>
+mermaid.initialize({
+  startOnLoad: true,
+  theme: "base",
+  themeVariables: {
+    primaryColor: "#e3edf7",
+    primaryBorderColor: "#1d5f9e",
+    primaryTextColor: "#1d5f9e",
+    lineColor: "#5c554b",
+    secondaryColor: "#fbeedd",
+    tertiaryColor: "#f5f1e8",
+    fontFamily: "-apple-system, PingFang SC, sans-serif",
+    fontSize: "14px"
+  },
+  flowchart: { curve: "linear", htmlLabels: false }
+});
+</script>
+<script>
+// 自测题判分
+document.querySelectorAll(".quiz-block").forEach(block => {
+  const answer = block.dataset.answer;
+  const explain = block.querySelector(".quiz-explain");
+  block.querySelectorAll(".quiz-opts li").forEach(li => {
+    li.addEventListener("click", () => {
+      const opts = block.querySelectorAll(".quiz-opts li");
+      opts.forEach(o => o.classList.add("disabled"));
+      if (li.dataset.opt === answer) {
+        li.classList.add("correct");
+      } else {
+        li.classList.add("wrong");
+        block.querySelector(`[data-opt="${answer}"]`).classList.add("correct");
+      }
+      explain.classList.add("show");
+    });
+  });
+});
+
+// 合上书清单打勾
+document.querySelectorAll("#ch11-challenge-list li").forEach(li => {
+  li.addEventListener("click", () => li.classList.toggle("checked"));
+});
+
+// 完成标记 → localStorage（第11章）
+const KEY = "rl_progress_v1";
+function loadProgress() {
+  try { return JSON.parse(localStorage.getItem(KEY)) || {}; } catch (e) { return {}; }
+}
+const progress = loadProgress();
+const btn = document.getElementById("ch11-btn-complete");
+if (progress["11"] && progress["11"].done) {
+  btn.textContent = "✓ 已完成 · 再次点击重置";
+  btn.classList.add("done");
+}
+function markDone() {
+  const p = loadProgress();
+  if (p["11"] && p["11"].done) {
+    delete p["11"];
+    btn.textContent = "✓ 我已完成本章（含合上书挑战）";
+    btn.classList.remove("done");
+  } else {
+    p["11"] = { done: true, completedAt: Date.now(), reviewsDone: 0 };
+    btn.textContent = "✓ 已完成 · 复习提醒已开启";
+    btn.classList.add("done");
+  }
+  localStorage.setItem(KEY, JSON.stringify(p));
+}
+</script>
+
+</body>
+</html>

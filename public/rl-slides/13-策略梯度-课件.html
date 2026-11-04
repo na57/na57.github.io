@@ -1,0 +1,606 @@
+<!DOCTYPE html>
+<!--
+  ======================================================================
+  强化学习课件 · 第13章 策略梯度（全书终章）
+  依据 assets/deck-template.html + assets/课件制作规范.md 制作
+  讲义来源：强化学习讲义/chapter-13.html（只读）
+  ======================================================================
+-->
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第13章 策略梯度 · 强化学习课件</title>
+<script>
+window.MathJax = {
+  tex: {
+    inlineMath: [['$', '$'], ['\\(', '\\)']],
+    displayMath: [['$$', '$$'], ['\\[', '\\]']],
+    processEscapes: true,
+    tags: 'none'
+  },
+  svg: { fontCache: 'global', scale: 1.05 },
+  options: { skipHtmlTags: ['script','noscript','style','textarea','pre','code'] }
+};
+</script>
+<!-- MathJax 本地引用（tex-svg 单文件全量组件，约2MB，自带字体数据），file:// 与断网均可用 -->
+<script src="assets/tex-svg.js" async></script>
+<style>
+  :root{
+    --primary:#1a365d; --accent:#2b6cb0; --accent-light:#ebf8ff; --accent-border:#bee3f8;
+    --text:#2d3748; --muted:#718096; --border:#e2e8f0; --bg-light:#f7fafc;
+    --success:#38a169; --danger:#e53e3e; --warning:#dd6b20; --warn-bg:#fffaf0;
+  }
+  *{margin:0;padding:0;box-sizing:border-box;}
+  html,body{width:100%;height:100%;overflow:hidden;background:#0f172a;}
+  body{
+    font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Hiragino Sans GB","Microsoft YaHei","WenQuanYi Micro Hei",sans-serif;
+    color:var(--text);
+  }
+  #stage{
+    position:absolute; left:50%; top:50%;
+    width:1280px; height:720px;
+    transform:translate(-50%,-50%) scale(1);
+    transform-origin:center center;
+    background:#ffffff;
+    box-shadow:0 0 40px rgba(0,0,0,.4);
+    overflow:hidden;
+  }
+  .slide{
+    position:absolute; inset:0;
+    padding:36px 60px 52px;
+    display:none;
+    flex-direction:column;
+    background:#ffffff;
+    opacity:0;
+    transition:opacity .35s ease;
+  }
+  .slide.active{ display:flex; opacity:1; }
+
+  #progress{ position:absolute; top:0; left:0; height:6px; background:var(--accent); width:0; z-index:50; transition:width .35s; }
+
+  /* 封面 / 结束页 */
+  .slide-cover{ justify-content:center; align-items:center; text-align:center; }
+  .slide-cover{ background:linear-gradient(135deg,#1a365d 0%,#2b6cb0 100%); color:#fff; }
+  .slide-cover .kicker{ font-size:22px; letter-spacing:6px; opacity:.85; margin-bottom:18px;}
+  .slide-cover h1{ font-size:64px; font-weight:800; line-height:1.2; margin-bottom:22px; letter-spacing:2px;}
+  .slide-cover .sub{ font-size:26px; opacity:.92; margin-bottom:36px;}
+  .slide-cover .meta{ font-size:19px; opacity:.85; line-height:2;}
+  .slide-cover .divider{ width:160px;height:5px;background:#fff;opacity:.6;margin:0 auto 30px;border-radius:3px;}
+  .slide-cover .question{ font-size:24px; background:rgba(255,255,255,.12); border:1px solid rgba(255,255,255,.35); border-radius:12px; padding:12px 28px; margin-bottom:30px;}
+
+  /* 页头：结论式标题 */
+  .slide-head{ display:flex; align-items:baseline; gap:16px; border-bottom:3px solid var(--accent); padding-bottom:9px; margin-bottom:12px;}
+  .slide-head .sec{ font-size:17px; color:var(--accent); font-weight:700; background:var(--accent-light); padding:3px 11px; border-radius:6px; white-space:nowrap;}
+  .slide-head h3{ font-size:29px; color:var(--primary); font-weight:700;}
+  .slide-body{ flex:1; display:flex; flex-direction:column; justify-content:center; min-height:0; }
+
+  p{ font-size:21px; line-height:1.65; margin-bottom:8px;}
+  .lead{ font-size:23px; color:#374151; line-height:1.75;}
+  ul,ol{ margin:0 0 8px 26px; font-size:21px; line-height:1.7;}
+  li{ margin-bottom:5px;}
+  strong{ color:var(--primary); }
+
+  /* 公式块 */
+  .formula{ background:var(--accent-light); border-left:5px solid var(--accent); border-radius:0 10px 10px 0; padding:9px 22px; margin:9px 0; text-align:center; font-size:23px;}
+  .formula-concl{ background:#fffaf0; border-left:5px solid var(--warning);}
+  .MathJax{ font-size:1.05em !important; }
+  mjx-container[display="true"]{ margin:6px 0 !important; }
+
+  /* 表格 */
+  table{ width:100%; border-collapse:collapse; margin:10px 0; font-size:20px;}
+  th{ background:var(--accent); color:#fff; padding:8px 12px; text-align:center; font-weight:600;}
+  td{ padding:7px 12px; border:1px solid var(--border); text-align:center; vertical-align:middle;}
+  tr:nth-child(even) td{ background:var(--bg-light);}
+  td.l{ text-align:left; }
+  table.small{ font-size:18px; }
+  table.small td, table.small th{ padding:6px 10px; }
+
+  /* 组件 */
+  .card{ background:var(--accent-light); border:1px solid var(--accent-border); border-radius:12px; padding:12px 20px; margin:10px 0;}
+  .tip{ background:#ebf8ff; border-left:5px solid var(--accent); border-radius:0 10px 10px 0; padding:10px 20px; margin:10px 0; font-size:20px; color:#2c5282;}
+  .deep{ background:#f0fff4; border-left:5px solid var(--success); border-radius:0 10px 10px 0; padding:10px 20px; margin:10px 0; font-size:20px; color:#22543d;}
+  .warn{ background:var(--warn-bg); border-left:5px solid var(--warning); border-radius:0 10px 10px 0; padding:10px 20px; margin:10px 0; font-size:20px; color:#744210;}
+  .trap{ background:#fef2f2; border-left:5px solid var(--danger); border-radius:0 10px 10px 0; padding:10px 20px; margin:10px 0; font-size:20px; color:#7f1d1d;}
+
+  .pause{
+    background:var(--warn-bg); border:2px dashed var(--warning); border-radius:14px;
+    padding:10px 22px; margin:10px 0; display:flex; align-items:center; gap:16px;
+  }
+  .pause .icon{ font-size:36px; line-height:1; }
+  .pause .txt b{ color:var(--warning); font-size:21px; }
+  .pause .txt p{ font-size:18px; color:#744210; margin:3px 0 0; }
+
+  .cols{ display:flex; gap:28px; align-items:stretch; }
+  .col{ flex:1; min-width:0; }
+
+  /* 推导分步：仅互动模式隐藏，截图(autohide)模式全部可见——此规则不可删 */
+  .step{ opacity:0; transform:translateY(8px); transition:opacity .3s ease, transform .3s ease; }
+  .step.on{ opacity:1; transform:none; }
+  body.autohide .step{ opacity:1 !important; transform:none !important; }
+  .step-hint{ font-size:14px; color:var(--muted); margin-top:4px;}
+  body.autohide .step-hint{ display:none; }
+
+  /* 因果链 */
+  .chain{ margin:6px 0; }
+  .chain .link{ display:flex; align-items:center; gap:14px; margin:6px 0;}
+  .chain .no{ width:34px; height:34px; border-radius:50%; background:var(--accent); color:#fff; font-size:18px; font-weight:700; display:flex; align-items:center; justify-content:center; flex-shrink:0;}
+  .chain .txt{ font-size:21px; line-height:1.5;}
+  .chain .txt strong{ color:var(--primary); }
+
+  /* mermaid 容器：高度封顶，防止溢出 720px 舞台 */
+  .mmd{ background:var(--bg-light); border:1px solid var(--border); border-radius:12px; padding:10px 14px; display:flex; justify-content:center; align-items:center; margin:8px 0;}
+  .mmd .mermaid{ display:flex; justify-content:center; width:100%; visibility:hidden; }
+  .mmd .mermaid[data-done]{ visibility:visible; }
+  .mmd .mermaid svg{ max-width:100%; height:auto; max-height:230px; }
+  .mmd.mmd-tall .mermaid svg{ max-height:330px; }
+  .mmd.mmd-map .mermaid svg{ max-height:450px; }
+  .mmd.mmd-sm svg{ max-height:150px; }
+  .mmd-row{ display:flex; gap:18px; }
+  .mmd-row .mmd{ flex:1; flex-direction:column; }
+  .mmd .cap{ font-size:17px; color:var(--muted); margin-top:6px; text-align:center;}
+  .mmd .cap b{ color:var(--text); }
+
+  #footer{ position:absolute; bottom:0; left:0; right:0; height:40px; display:flex; align-items:center; justify-content:space-between; padding:0 30px; font-size:15px; color:#94a3b8; background:rgba(247,250,252,.85); border-top:1px solid var(--border); z-index:40;}
+  #footer .brand{ font-weight:600; color:var(--accent); }
+
+  .nav{ position:absolute; bottom:48px; right:40px; display:flex; gap:12px; z-index:45;}
+  .nav button{ width:54px; height:54px; border-radius:50%; border:none; background:var(--accent); color:#fff; font-size:24px; cursor:pointer; box-shadow:0 3px 10px rgba(43,108,176,.4); display:flex; align-items:center; justify-content:center;}
+  .nav button:hover{ background:var(--primary); }
+  .nav button:disabled{ background:#cbd5d0; cursor:default; box-shadow:none;}
+
+  #hint{ position:absolute; bottom:48px; left:40px; font-size:14px; color:#94a3b8; z-index:45;}
+
+  body.autohide #progress, body.autohide #footer, body.autohide .nav, body.autohide #hint{ display:none !important; }
+</style>
+</head>
+<body>
+<div id="stage">
+
+  <div id="progress"></div>
+
+  <!-- ★ 1 封面 -->
+  <section class="slide slide-cover active" data-narration="大家好，欢迎来到强化学习第十三讲，也是全书最后一讲。前十一讲所有方法共享一个套路：先学一个值函数，再用 argmax 或 ε 贪心把值翻译成动作。本章发现这台翻译器在三处断裂：连续动作取不了最大值，随机最优给不出确定性策略，逼近下 Q 的微小抖动会让 argmax 跳变。于是换一个活法：把策略本身参数化，沿着回报的梯度直接向上爬。策略梯度定理是地基，REINFORCE 是第一家住户，基线和 actor-critic 是降方差装修。学完你要能手算一步 REINFORCE 更新，说清基线为什么不改方向，还要答出全书的毕业三问。我们开始收口。">
+    <div class="kicker">强化学习 · 第 13 章 · 全书终章</div>
+    <h1>策略梯度方法</h1>
+    <div class="sub">Policy Gradient Methods —— 不再先估值再取 max，直接对策略本身求梯度</div>
+    <div class="question">本章要回答：能不能不经过值函数的 argmax，直接优化策略这个对象本身？</div>
+    <div class="meta">
+      配套讲义：《强化学习互动讲义》第13章 · 基于 Sutton &amp; Barto (2018, 2nd ed)<br>
+      ← → 或空格翻页 · 推导页逐步显示
+    </div>
+  </section>
+
+  <!-- ★ 2 全书位置 -->
+  <section class="slide" data-narration="先看本章在地图上的位置，这是最后一块。一到四章定义问题与理想解，五到八章用采样代替模型，九到十一章用参数代替查表，十二章把信用沿时间缝合。到本章为止，所有方法仍有一条隐藏的脐带：策略是从值函数里用 argmax 导出来的。本章剪断这条脐带：策略本身就是参数化对象，目标是起始状态价值 J，梯度由策略梯度定理给出，μ 的梯度被定理吸收，于是无模型可估。全书主线预测、控制、逼近、策略，在此闭环。后面你会看到，值函数并没有消失，它降级为梯度的降噪器——这是分工，不是替代。">
+    <div class="slide-head"><span class="sec">定位</span><h3>全书收口：剪断「值函数 + argmax」的脐带，策略成为参数本身</h3></div>
+    <div class="slide-body">
+      <div class="mmd mmd-sm">
+        <div class="mermaid">
+flowchart LR
+  A["Ch1-4 表格法基础<br>MDP 与动态规划"] --> B["Ch5-8 表格型无模型<br>采样代替模型"]
+  B --> C["Ch9-11 函数逼近<br>参数代替查表"]
+  C --> D["Ch12 资格迹<br>时间维信用缝合"]
+  D --> E["Ch13 策略梯度<br>策略本身是参数"]:::here
+  classDef here fill:#2b6cb0,color:#ffffff,stroke:#1a365d,stroke-width:3px
+        </div>
+      </div>
+      <p style="text-align:center; margin-top:10px;">前 12 章的策略都藏在 argmax 里；本章让 <strong>策略本身成为可微的优化对象</strong>，主线闭环。</p>
+    </div>
+  </section>
+
+  <!-- ★ 3 本章主线 -->
+  <section class="slide" data-narration="本章链条六步。第一环，断裂：连续动作、随机最优、逼近突变，三处场景让 argmax 翻译器失效，逼出直接参数化策略。第二环，地基：策略梯度定理把往哪调变成无模型可估的期望，μ 的梯度被定理吸收。第三环，第一个算法：REINFORCE 用采样回报顶替 q，无偏但方差大。第四环，降方差：基线只依赖状态，期望不变、方差大降，玩具例里从六点二五降到零。第五环，会师：actor-critic 学一个 V 当基线，δ 一步自举，值函数与策略梯度合流。第六环，代价：非凸局部最优、步长敏感，通向自然梯度、信赖域、PPO。看清这条链就知道，本章是一部纯粹的降方差编年史。">
+    <div class="slide-head"><span class="sec">主线</span><h3>六步链：断裂 → 定理 → REINFORCE → 基线 → Actor-Critic → 代价</h3></div>
+    <div class="slide-body">
+      <div class="chain">
+        <div class="link"><span class="no">1</span><span class="txt"><strong>断裂</strong>：连续动作 / 随机最优 / 逼近突变——argmax 翻译器三处失效。</span></div>
+        <div class="link"><span class="no">2</span><span class="txt"><strong>定理</strong>：$\nabla J \propto E[\nabla\ln\pi \cdot q_\pi]$，$\mu(s)$ 的梯度被吸收 ⇒ 无模型可估。</span></div>
+        <div class="link"><span class="no">3</span><span class="txt"><strong>REINFORCE</strong>：用采样回报 $G_t$ 顶替 $q$——无偏，但方差大。</span></div>
+        <div class="link"><span class="no">4</span><span class="txt"><strong>基线</strong>：减 $b(s)$，期望不变、方差大降（玩具例 $6.25 \to 0$）。</span></div>
+        <div class="link"><span class="no">5</span><span class="txt"><strong>Actor-Critic</strong>：学 $V$ 当基线，$\delta$ 一步自举——值函数与策略会师。</span></div>
+        <div class="link"><span class="no">6</span><span class="txt"><strong>代价</strong>：非凸、步长敏感 ⇒ 自然梯度 / 信赖域 / PPO 等前沿。</span></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 4 三处断裂 -->
+  <section class="slide" data-narration="为什么非要绕过值函数？因为值函数加 argmax 这台翻译器在三种场景下会断。第一处，连续动作：机械臂的力矩、方向盘的转角是实数，动作无穷多，对 Q 取最大值本身变成一个非凸优化问题，每一步都要现场求解，工程上不可行。第二处，随机最优：石头剪刀布、部分可观测的牌局，最优策略本身必须是随机的，而 argmax 只能吐出确定性策略，结构上就给不出答案。第三处，逼近突变：函数逼近下 Q 的微小变化可能让 argmax 的结果整个跳变，策略不随参数光滑变化，连改进方向都无法保证。三处断裂指向同一个对策：别翻译了，直接写策略 π，让参数 θ 成为优化对象。">
+    <div class="slide-head"><span class="sec">动机</span><h3>argmax 翻译器的三处断裂：连续、随机、跳变</h3></div>
+    <div class="slide-body">
+      <table>
+        <tr><th>断裂点</th><th>场景</th><th>为什么 argmax 救不了</th></tr>
+        <tr><td><strong>连续动作</strong></td><td class="l">机械臂力矩、方向盘转角 $\in\mathbb{R}$</td><td class="l">无穷多动作，$\max_a Q(s,a)$ 是每步要现场解的非凸优化</td></tr>
+        <tr><td><strong>随机最优</strong></td><td class="l">石头剪刀布、部分可观测牌局</td><td class="l">最优策略本身必须随机；argmax 只给确定性策略</td></tr>
+        <tr><td><strong>逼近突变</strong></td><td class="l">函数逼近下的 Q</td><td class="l">Q 微小变化使 argmax 跳变，策略不随参数光滑变化</td></tr>
+      </table>
+      <div class="card"><strong>对策</strong>：策略近似——直接写 $\pi(a|s,\boldsymbol{\theta})$，让 $\boldsymbol{\theta}$ 成为优化对象。离散动作用 softmax，连续动作用高斯。</div>
+    </div>
+  </section>
+
+  <!-- 5 策略近似与目标 J -->
+  <section class="slide" data-narration="把对策写具体。离散动作用 softmax：给每个状态动作对一个偏好值 h，动作概率正比于 e 的 h 次方，除以所有动作的指数和。优化目标定义为起始状态的价值 J 等于 v π s 零。问题来了：J 对 θ 的梯度怎么算？梯度里藏着两层依赖。第一层好办，动作概率依赖 θ，我们有解析式。第二层要命：状态分布 μ 也依赖 θ——策略改了，你会走到哪里就跟着改；对 μ 求导需要环境的转移模型，而我们没有。这个死结如果解不开，直接优化策略就是一句空话。下一页的策略梯度定理，正是把这个需要模型的项消掉的那把钥匙。">
+    <div class="slide-head"><span class="sec">设定</span><h3>softmax 参数化 + 目标 J：梯度难在状态分布那层依赖</h3></div>
+    <div class="slide-body">
+      <div class="formula">$$\pi(a|s,\boldsymbol{\theta}) = \frac{e^{h(s,a,\boldsymbol{\theta})}}{\sum_b e^{h(s,b,\boldsymbol{\theta})}},\qquad J(\boldsymbol{\theta}) = v_{\pi_{\boldsymbol{\theta}}}(s_0)$$</div>
+      <div class="cols">
+        <div class="col"><div class="deep">✅ <strong>第一层依赖（好办）</strong>：动作概率 $\pi$ 依赖 $\boldsymbol{\theta}$——有解析式，可直接求导。</div></div>
+        <div class="col"><div class="trap">🚫 <strong>第二层依赖（要命）</strong>：状态分布 $\mu(s)$ 也依赖 $\boldsymbol{\theta}$；对 $\mu$ 求导需要环境转移模型——我们没有。</div></div>
+      </div>
+      <p style="text-align:center;">死结：$\nabla J$ 里藏着 $\nabla\mu$。下一页的定理让这项<strong>自行消失</strong>。</p>
+    </div>
+  </section>
+
+  <!-- ★ 6 策略梯度定理四步推导（推导页） -->
+  <section class="slide" data-narration="策略梯度定理四步走完。第一步展开定义：v 的梯度等于对所有动作的 π 乘 q 求和的梯度。第二步乘积法则：拆成梯度 π 乘 q 加 π 乘梯度 q。第三步展开梯度 q：奖励和转移概率与 θ 无关导数为零，只剩 γ 乘下一状态梯度 v 的期望——梯度 v 又出现在右边，这是递归，沿时间展开。第四步收成期望：所有到达概率加总正是折扣状态分布 μ，梯度 μ 被吸收；再用对数导数技巧，梯度 π 等于 π 乘梯度 ln π。终式：梯度 J 正比于期望，梯度 ln π 乘 q。">
+    <div class="slide-head"><span class="sec">定理</span><h3>策略梯度定理：四步推导，∇μ 在期望中被吸收</h3></div>
+    <div class="slide-body">
+      <div class="step">
+        <p><strong>第 1-2 步</strong>：展开定义 + 乘积法则：</p>
+        <div class="formula">$$\nabla v_\pi(s) = \nabla \sum_a \pi(a|s)\, q_\pi(s,a) = \sum_a \big[ \nabla\pi(a|s)\, q_\pi(s,a) + \pi(a|s)\, \nabla q_\pi(s,a) \big]$$</div>
+      </div>
+      <div class="step">
+        <p><strong>第 3 步</strong>：展开 $\nabla q$（$\nabla r = 0$、$\nabla p = 0$），递归出现：</p>
+        <div class="formula">$$\nabla q_\pi(s,a) = \gamma \sum_{s'} p(s'|s,a)\, \nabla v_\pi(s')$$</div>
+      </div>
+      <div class="step">
+        <p><strong>第 4 步</strong>：到达概率收敛为 $\mu(s)$，$\nabla\mu$ 被期望吸收；再用 $\nabla\pi = \pi\,\nabla\ln\pi$：</p>
+        <div class="formula formula-concl">$$\nabla J(\boldsymbol{\theta}) \;\propto\; \sum_s \mu(s)\sum_a \nabla\pi(a|s,\boldsymbol{\theta})\, q_\pi(s,a) \;=\; E_\pi\big[\, \nabla\ln\pi(A|S,\boldsymbol{\theta})\cdot q_\pi(S,A) \,\big]$$</div>
+        <div class="step-hint">按 → 逐步展开推导</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 7 定理的礼物 -->
+  <section class="slide" data-narration="这份定理的礼物是什么？拆开终式看三项：梯度 ln π 只涉及策略自身，我们有解析式，随时可算；q π 是未知的，但可以从采样估计，下一节就动手；μ 根本不需要出现。合起来：整个梯度可以在不知道环境模型的前提下用样本估计。这就是策略梯度无模型三个字的真正来源——不是假设了模型，而是模型项被定理消掉了。两个提醒。第一，正比号不是等号：梯度 J 等于一个与 θ 无关的正常数乘这个期望，方向无偏、可用于上升，但写理论推导时不能随手把正比写成等于。第二，q 仍是未知量，怎么估它是后面三节的全部故事：采样回报、减基线、学一个 critic，一条纯粹的降方差之路。">
+    <div class="slide-head"><span class="sec">解读</span><h3>定理的礼物：无模型不是假设，是模型项被消掉了</h3></div>
+    <div class="slide-body">
+      <div class="chain">
+        <div class="link"><span class="no">1</span><span class="txt">$\nabla\ln\pi$ 只涉及<strong>策略自身</strong>——有解析式，随时可算。</span></div>
+        <div class="link"><span class="no">2</span><span class="txt">$q_\pi(S,A)$ 未知——但可<strong>从采样估计</strong>（13.3 起三节的主题）。</span></div>
+        <div class="link"><span class="no">3</span><span class="txt">$\mu(s)$ <strong>根本不出现</strong>——整个梯度无模型可估。</span></div>
+      </div>
+      <div class="warn">⚠️ 常见误区：把 $\propto$ 当 $=$。常数与 $\boldsymbol{\theta}$ 无关 ⇒ 梯度<strong>方向</strong>无偏、可上升；但理论书写时二者不能混。</div>
+    </div>
+  </section>
+
+  <!-- 8 REINFORCE 更新式 -->
+  <section class="slide" data-narration="定理里还剩 q 未知，最简单的估计器就在眼前：用本轨迹上 t 时刻之后的实际回报 G 顶替它。G 是 q 的无偏采样，代入不改变梯度期望，于是得到 REINFORCE，也叫蒙特卡洛策略梯度：θ 沿 α 乘 G 乘梯度 ln π 的方向更新。直觉：回报高就沿提高该动作对数概率的方向走，低就反着走——MC 哲学搬进策略空间，等整局才知好坏。优点是简单无偏；代价马上会算：方差大，且回报全正时所有被采动作都被推高，信号不干净。">
+    <div class="slide-head"><span class="sec">算法</span><h3>REINFORCE：用采样回报 G 顶替 q，无偏但方差大</h3></div>
+    <div class="slide-body">
+      <div class="formula">$$\boldsymbol{\theta} \leftarrow \boldsymbol{\theta} + \alpha\, G_t\, \nabla\ln\pi(A_t|S_t,\boldsymbol{\theta})$$</div>
+      <div class="cols">
+        <div class="col"><div class="deep">✅ <strong>为何仍无偏</strong>：$E[G_t|S_t,A_t] = q_\pi(S_t,A_t)$——$G_t$ 是 $q_\pi$ 的无偏采样，代入期望形式不改变梯度期望。</div></div>
+        <div class="col"><div class="tip">💡 <strong>直觉</strong>：回报高 ⇒ 推高该动作的对数概率；回报低 ⇒ 压。MC 哲学搬进策略空间：等整局才知好坏。</div></div>
+      </div>
+      <div class="warn">⚠️ 隐患预告：MC 回报方差大；且若回报全为正，所有被采动作都被推高——信号不干净。基线正是为此而来。</div>
+    </div>
+  </section>
+
+  <!-- ★ 9 REINFORCE 手算（含唯一「推出来了吗？」） -->
+  <section class="slide" data-narration="手算一步 REINFORCE，全数字。单状态两动作，softmax 的偏好值就是参数。初始两参数为零，两动作概率各二分之一。采样到右，回报一。关键量是对数概率梯度：对右参数是一减 π 右等于零点五；对左是零减 π 左等于负零点五——选中动作梯度是一减自己概率，没选的是负的对方概率。付账：步长零点一，右参数更新正零点零五，左参数负零点零五。先停在这，自己推一遍，推出来了吗？下一页看新概率——不会跳太多，因为概率天然饱和。">
+    <div class="slide-head"><span class="sec">推导</span><h3>手算 REINFORCE：一次正回报，Δθ 一正一负各 0.05</h3></div>
+    <div class="slide-body">
+      <div class="step">
+        <p>单状态、两动作 $L/R$；$h = \theta_L, \theta_R$，初始 $\theta_L=\theta_R=0$，$\alpha=0.1$；采样到 $R$，$G=1$。</p>
+        <table class="small">
+          <tr><th>量</th><th>算式</th><th>值</th></tr>
+          <tr><td>$\pi(R|\boldsymbol{\theta})$</td><td>$e^0/(e^0+e^0)$</td><td>$0.5$</td></tr>
+          <tr><td>$\nabla_{\theta_R}\ln\pi(R)$</td><td>$1-\pi(R)$</td><td>$0.5$</td></tr>
+          <tr><td>$\nabla_{\theta_L}\ln\pi(R)$</td><td>$0-\pi(L)$</td><td>$-0.5$</td></tr>
+        </table>
+      </div>
+      <div class="step">
+        <div class="pause"><span class="icon">✋</span><div class="txt"><b>推出来了吗？</b><p>$\Delta\theta_R = 0.1\times1\times0.5$、$\Delta\theta_L = 0.1\times1\times(-0.5)$——先心算，再翻下一步核对。</p></div></div>
+      </div>
+      <div class="step">
+        <div class="formula">$$\Delta\theta_R = \mathbf{+0.05},\qquad \Delta\theta_L = \mathbf{-0.05} \;\Rightarrow\; \theta_R = 0.05,\ \theta_L = -0.05$$</div>
+        <div class="step-hint">按 → 逐步展开推导</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 10 新概率 0.525 与饱和 -->
+  <section class="slide" data-narration="更新后新概率多少？e 的零点零五次方约一点零五一三，e 的负零点零五次方约零点九五一二，π 右约零点五二五。一次正回报把右的概率从零点五推到零点五二五。推动力来自梯度 ln π 自带的一减 π 因子：已高概率的动作推得更少——概率天然饱和，不会一步登天，策略随参数光滑变化，正回应开头的突变断裂。但低效也在这：回报全正时左右都被推高，幅度不同——绝对标准不存在，只有相对优劣产生干净信号。下一节配方：减掉基线。">
+    <div class="slide-head"><span class="sec">核对</span><h3>新概率 0.500 → 0.525：1−π 因子让概率天然饱和</h3></div>
+    <div class="slide-body">
+      <div class="formula">$$\pi(R) = \frac{e^{0.05}}{e^{0.05}+e^{-0.05}} = \frac{1.0513}{1.0513+0.9512} \approx \mathbf{0.525}$$</div>
+      <div class="cols">
+        <div class="col"><div class="deep">✅ <strong>饱和机制</strong>：$\nabla\ln\pi$ 自带 $1-\pi$ 因子——已高概率的动作推得更少，策略随参数光滑变化（回应「逼近突变」断裂）。</div></div>
+        <div class="col"><div class="trap">🚫 <strong>低效之处</strong>：回报全为正时，所有被采动作都被推高（幅度不同）——没有绝对标准，只有相对信号才干净。</div></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 11 REINFORCE 的方差问题 -->
+  <section class="slide" data-narration="给 REINFORCE 把个脉。它的病根两条，都出在 G 身上。第一，G 是蒙特卡洛回报，方差大：同一个状态，两条轨迹的 G 可能差好几倍，参数被噪声来回拉扯，训练曲线抖成锯齿。第二，更隐蔽：如果环境里回报全为正，比如活着就有分，那么无论动作好坏，被采到的动作概率都被推高，只是幅度不同；真正该被压下去的差动作也在涨。问题本质：没有一个基准告诉算法什么是预期之内。治病思路也随之清晰：从 G 里减掉一个只依赖状态的基线 b，让更新的驱动力从绝对回报变成超出预期的部分。问题是：这样乱减会不会把梯度方向带歪？下一页一行推导给你定心丸。">
+    <div class="slide-head"><span class="sec">病灶</span><h3>REINFORCE 的两条病根：方差大，且全正回报推高一切</h3></div>
+    <div class="slide-body">
+      <div class="chain">
+        <div class="link"><span class="no">1</span><span class="txt"><strong>方差大</strong>：$G_t$ 是 MC 回报，同状态两条轨迹可差数倍，参数被噪声来回拉扯。</span></div>
+        <div class="link"><span class="no">2</span><span class="txt"><strong>全正回报</strong>：好坏动作都被推高，只是幅度不同——缺一个「预期之内」的基准。</span></div>
+        <div class="link"><span class="no">3</span><span class="txt"><strong>处方</strong>：更新改用 $G_t - b(S_t)$，驱动力变成「比预期好多少」。</span></div>
+      </div>
+      <div class="warn">⚠️ 待证：减掉 $b(s)$ 会不会把梯度方向带歪？——下一页一行推导给答案。</div>
+    </div>
+  </section>
+
+  <!-- 12 基线一行推导 -->
+  <section class="slide" data-narration="定心丸只有一行。对任意固定的状态 s，看基线贡献的那一项：对所有动作求和，b 乘梯度 π。因为 b 不依赖动作，可以提到求和号外，变成 b 乘梯度、所有动作概率之和。概率和恒等于一，常数的梯度是零，所以这一项恒等于零。基线在期望中自动消失——它只能改方差，不能改方向。直觉也漂亮：基线回答的不是这个动作好不好，而是这个结果比预期好多少。G 减 b 大于零才推概率，小于零就压概率。没有基线时，好的绝对标准不存在；有了基线，相对标准给出干净信号。那 b 取多少最赚？玩具数字下一页算给你看：方差从六点二五降到零。">
+    <div class="slide-head"><span class="sec">基线</span><h3>一行推导：基线在期望中自动消失，只改方差不改方向</h3></div>
+    <div class="slide-body">
+      <div class="formula">$$\theta \leftarrow \theta + \alpha\,\big(G_t - b(S_t)\big)\, \nabla\ln\pi(A_t|S_t,\theta)$$</div>
+      <div class="formula formula-concl">$$\sum_a b(s)\, \nabla\pi(a|s,\theta) = b(s)\, \nabla \underbrace{\sum_a \pi(a|s,\theta)}_{=\,1} = b(s)\, \nabla 1 = \mathbf{0}$$</div>
+      <div class="tip">💡 直觉：基线不问「这个动作好不好」，只问「比预期好多少」。$G-b&gt;0$ 推概率，$&lt;0$ 压概率——相对标准才产生干净信号。</div>
+    </div>
+  </section>
+
+  <!-- 13 方差玩具 6.25→0 -->
+  <section class="slide" data-narration="用玩具数字验证方差降多少。单状态，左右各半概率，只看右参数梯度系数：采左负零点五，采右正零点五。回报只依赖动作：左六右四，基线取五。无基线：左贡献负三，右正二，期望负零点五，二阶矩六点五，方差六点二五。有基线：左变一乘负零点五，右变负一乘零点五，都是负零点五，期望不变，方差直接归零。期望不变验证无偏，六点二五到零展示机制。归零是玩具特例；普遍结论是基线越接近该状态的期望回报，剩余波动越小——而那正是 V，critic 登场的理由。">
+    <div class="slide-head"><span class="sec">验证</span><h3>玩具实测：期望不变 −0.5，方差 6.25 → 0</h3></div>
+    <div class="slide-body">
+      <table class="small">
+        <tr><th></th><th>采到 L（p=0.5）</th><th>采到 R（p=0.5）</th><th>$E$</th><th>$E[\cdot^2]$</th><th>$\mathrm{Var}$</th></tr>
+        <tr><td>无基线 $G\cdot g$</td><td>$6\times(-0.5)=-3$</td><td>$4\times0.5=+2$</td><td>$-0.5$</td><td>$0.5{\times}9+0.5{\times}4=6.5$</td><td>$6.5-0.25=\mathbf{6.25}$</td></tr>
+        <tr><td>有基线 $(G-5)\cdot g$</td><td>$1\times(-0.5)=-0.5$</td><td>$(-1)\times0.5=-0.5$</td><td>$-0.5$</td><td>$0.25$</td><td>$0.25-0.25=\mathbf{0}$</td></tr>
+      </table>
+      <div class="cols">
+        <div class="col"><div class="deep">✅ 期望同为 $-0.5$：方向不变（更差的 R 被相对压下）。归零是玩具特例，机制普遍。</div></div>
+        <div class="col"><div class="tip">💡 基线越接近「该状态的期望回报」，残差越小——而那正是 $V(s)$：<strong>critic 登场的理由</strong>。</div></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 14 Actor-Critic 结构 -->
+  <section class="slide" data-narration="最优基线是 V，可 V 也不知道——那就学一个。这就是行动者评论家：同时维护两套参数，actor 是策略 θ，critic 是价值 w，学 V、产出基线和 δ。更新信号用一步 TD 误差 δ 代替 G 减 b：δ 等于奖励加 γ 乘下一状态估值减当前估值。为什么 δ 约等于 G 减 V？对奖励加 γ 乘后继估值取期望正好是 q，所以 δ 是 q 减 V 的单样本版，正是比预期好多少。两套更新并排：θ 加 α θ 乘 δ 乘梯度 ln π；w 加 α w 乘 δ 乘 V 的梯度。值函数从策略的来源降级为梯度的降噪器——在此会师。">
+    <div class="slide-head"><span class="sec">会师</span><h3>Actor-Critic：学一个 V 当基线，δ 是唯一的沟通语言</h3></div>
+    <div class="slide-body">
+      <div class="formula">$$\delta_t = R_{t+1} + \gamma V(S_{t+1};\boldsymbol{w}) - V(S_t;\boldsymbol{w})$$</div>
+      <div class="formula">$$\boldsymbol{\theta} \leftarrow \boldsymbol{\theta} + \alpha^{\theta}\, \delta_t\, \nabla\ln\pi(A_t|S_t,\boldsymbol{\theta}),\qquad \boldsymbol{w} \leftarrow \boldsymbol{w} + \alpha^{w}\, \delta_t\, \nabla_{\boldsymbol{w}} V(S_t;\boldsymbol{w})$$</div>
+      <div class="cols">
+        <div class="col"><div class="card"><strong>Actor（演员）</strong>：策略 $\boldsymbol{\theta}$，按 $\delta$ 的褒贬调整对数概率。</div></div>
+        <div class="col"><div class="card"><strong>Critic（评论家）</strong>：价值 $\boldsymbol{w}$，学 $V$、产出基线与 $\delta$。</div></div>
+      </div>
+      <p style="text-align:center;">$E[R+\gamma V(S')|S,A] = q(s,a)$ ⇒ δ 是 $q - V$ 的单样本版 = 「比预期好多少」。</p>
+    </div>
+  </section>
+
+  <!-- ★ 15 AC 手算（推导页） -->
+  <section class="slide" data-narration="手算一步 actor-critic。设 critic 已学到 V 等于零点五，本步奖励一、下一状态终止，γ 一、两步长都零点一。先算 δ：一加零减零点五，得零点五。actor 更新：零点一乘零点五乘一减零点五，正零点零二五——对照纯 REINFORCE 的正零点零五刚好减半，因为 critic 预见了半数回报，惊喜只剩一半。critic 更新：V 涨到零点五五。精彩在下一步：同样转移再来一次，δ 变一减零点五五等于零点四五，更新进一步缩小。回报被逐步消化进 V，驱动信号自动衰减——自举换来在线性：每步立即可用。">
+    <div class="slide-head"><span class="sec">推导</span><h3>手算 Actor-Critic：δ=0.5，Δθ 减半，回报被 V 逐步消化</h3></div>
+    <div class="slide-body">
+      <div class="step">
+        <p>承接 13.3（$\pi(R)=0.5$）；critic 已学 $V(s)=0.5$；本步 $R=1$、$S'$ 终止；$\gamma=1$、$\alpha^\theta=\alpha^w=0.1$：</p>
+        <div class="formula">$$\delta = 1 + 1\times 0 - 0.5 = \mathbf{0.5}$$</div>
+      </div>
+      <div class="step">
+        <table class="small">
+          <tr><th>谁</th><th>更新</th><th>结果</th></tr>
+          <tr><td>Actor</td><td>$\Delta\theta_R = 0.1\times0.5\times(1-0.5)$</td><td>$\mathbf{+0.025}$（REINFORCE 是 $+0.05$：惊喜减半）</td></tr>
+          <tr><td>Critic</td><td>$V(s) \leftarrow 0.5 + 0.1\times0.5$</td><td>$\mathbf{0.55}$</td></tr>
+          <tr><td>再来一次</td><td>$\delta = 1 - 0.55$</td><td>$\mathbf{0.45}$：驱动信号自动衰减</td></tr>
+        </table>
+        <div class="deep">回报被逐步「消化」进 $V$ —— 自举换来在线性：每步可更新，不等回合结束。</div>
+        <div class="step-hint">按 → 逐步展开推导</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 16 偏差换方差 + 两时间尺度 -->
+  <section class="slide" data-narration="给 actor-critic 诚实评价。一步 δ 有偏，因为里面的 V 是未学准的估计；但方差远低于蒙特卡洛的 G，且不等回合结束——TD 哲学搬进策略空间，自举不是妥协，是在线性的来源。两个工程提醒。第一，两个时间尺度：critic 要学得快，它供应基线，错一点 actor 就被带偏，实践上 critic 步长通常大于 actor。第二，偏差会传染：两者看同一行为策略的数据，critic 的系统性偏差直接变成 actor 的错推，与十一章的分布错位一脉相承。降方差之路走完三段：采样回报、减基线、学 critic。还剩连续动作。">
+    <div class="slide-head"><span class="sec">评价</span><h3>偏差换方差：δ 有偏但在线、低方差；critic 必须学得快</h3></div>
+    <div class="slide-body">
+      <div class="cols">
+        <div class="col"><div class="deep">✅ <strong>换到了什么</strong>：方差远低于 MC 的 $G$；每步在线更新——TD 哲学搬进策略空间。</div></div>
+        <div class="col"><div class="warn">⚠️ <strong>付出了什么</strong>：$\delta$ 里的 $V(S')$ 是未收敛估计 ⇒ 有偏；这是主动选择的交易。</div></div>
+      </div>
+      <div class="chain">
+        <div class="link"><span class="no">1</span><span class="txt"><strong>两个时间尺度</strong>：通常 $\alpha^w &gt; \alpha^\theta$——critic 供基线，错一点 actor 就偏。</span></div>
+        <div class="link"><span class="no">2</span><span class="txt"><strong>偏差传染</strong>：两者共享同一行为策略的数据，critic 的偏差直接变成 actor 的系统性错推。</span></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 17 高斯策略 -->
+  <section class="slide" data-narration="最后一块拼图：连续动作。连续动作空间不能枚举、不能 argmax，但策略梯度根本不需要枚举——它只要求策略能采样、能算对数概率的梯度。标准选择是高斯策略：均值由参数决定，方差固定或者也学。它对数概率的梯度形态极其干净：动作减均值，除以方差，再乘均值对参数的梯度。读法：采样动作比均值大，梯度就指向把均值调大；方差越大，同样的偏离给出的梯度越小；均值对参数的敏感度决定调节力度。σ 同时是探索旋钮：σ 大采样分散、梯度噪声大；σ 也可以参数化让算法自己学。下一页手算一步，顺便看看离散化替代方案有多荒唐。">
+    <div class="slide-head"><span class="sec">连续</span><h3>高斯策略：不需枚举动作，只需能采样、能算 ∇lnπ</h3></div>
+    <div class="slide-body">
+      <div class="formula">$$a \sim \mathcal{N}\big(\mu(s;\boldsymbol{\theta}),\, \sigma^2\big),\qquad \nabla_{\boldsymbol{\theta}}\ln\pi(a|s,\boldsymbol{\theta}) = \frac{a - \mu(s;\boldsymbol{\theta})}{\sigma^2}\, \nabla_{\boldsymbol{\theta}}\mu(s;\boldsymbol{\theta})$$</div>
+      <div class="chain">
+        <div class="link"><span class="no">1</span><span class="txt">$a - \mu$：采样偏离均值的<strong>方向</strong>（比均值大 ⇒ 把均值往上推）。</span></div>
+        <div class="link"><span class="no">2</span><span class="txt">$\sigma^2$：<strong>缩放</strong>——方差大则梯度小；σ 也是探索旋钮（可参数化自学）。</span></div>
+        <div class="link"><span class="no">3</span><span class="txt">$\nabla\mu$：均值对参数的<strong>敏感度</strong>。</span></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 18 高斯手算 + 离散化批判 -->
+  <section class="slide" data-narration="手算一步高斯策略。一维线性均值 μ 就等于 θ，σ 一，当前 θ 一点零。采样动作一点六，δ 零点五，步长零点一。对数概率梯度是一点六减一点零，除以一再乘一，等于零点六——动作比均值大，梯度指向调大均值。Δθ 等于零点一乘零点五乘零点六，正零点零三，新均值一点零三。若采到零点七，梯度负零点三，均值往回拉——方向永远指向让采样向高 δ 动作集中。对照离散化：七关节各二十档，二十的七次方约十二点八亿——维度灾难搬进动作维。高斯用两个参数覆盖整条实数轴。">
+    <div class="slide-head"><span class="sec">推导</span><h3>手算高斯策略：∇lnπ=0.6，Δθ=+0.03，μ → 1.03</h3></div>
+    <div class="slide-body">
+      <table class="small">
+        <tr><th>量</th><th>算式</th><th>值</th></tr>
+        <tr><td>$\nabla_\theta\ln\pi$</td><td>$(1.6-1.0)/1 \times 1$</td><td>$\mathbf{0.6}$（$a&gt;\mu$ ⇒ 均值调大）</td></tr>
+        <tr><td>$\Delta\theta$</td><td>$0.1\times0.5\times0.6$</td><td>$\mathbf{+0.03}$ → 新 $\mu = \mathbf{1.03}$</td></tr>
+        <tr><td>若 $a=0.7$（δ 仍正）</td><td>$(0.7-1.0)$</td><td>$-0.3$：均值往回拉</td></tr>
+      </table>
+      <div class="trap">🚫 离散化替代方案的代价：7 关节 × 20 档 $= 20^7 \approx$ <strong>12.8 亿</strong>个动作——维度灾难搬进动作维。高斯策略用两个参数覆盖整个实数轴。</div>
+    </div>
+  </section>
+
+  <!-- 19 误区专场 -->
+  <section class="slide" data-narration="最容易被带走的一句话：策略梯度摆脱了值函数。逐条拆。第一，不需要值函数？错，定理里的 q 就是值函数，摆脱的只是 argmax 翻译层。第二，收敛到全局最优？错，J 一般非凸，只保证局部最优。第三，基线引入偏差？错，基线项期望恒为零，只改方差；有偏的是自举的 δ，那是拿偏差换方差和在线性的主动选择。第四，样本效率天然高？错，恰好相反：MC 版方差大，值方法的离策略加回放常常更强。一句话校正：不是取代是分工——策略管怎么动，值函数管比预期好多少。">
+    <div class="slide-head"><span class="sec">误区</span><h3>「策略梯度不需要值函数」：摆脱的是 argmax，不是值函数</h3></div>
+    <div class="slide-body">
+      <table class="small">
+        <tr><th style="width:28%">说法</th><th style="width:10%">判定</th><th>准确的说法</th></tr>
+        <tr><td class="l">「策略梯度不需要值函数」</td><td><strong>错</strong></td><td class="l">定理里的 $q_\pi$ 就是值函数；摆脱的只是「argmax 翻译层」</td></tr>
+        <tr><td class="l">「策略梯度收敛到全局最优」</td><td><strong>错</strong></td><td class="l">$J(\theta)$ 一般非凸，只保证局部最优</td></tr>
+        <tr><td class="l">「基线引入偏差」</td><td><strong>错</strong></td><td class="l">基线期望恒为 0，只改方差；有偏的是自举的 δ（主动交易）</td></tr>
+        <tr><td class="l">「策略梯度样本效率天然高」</td><td><strong>错</strong></td><td class="l">恰好相反：MC 版方差大；值方法的离策略 + 回放常常更强</td></tr>
+      </table>
+      <div class="tip">💡 一句话校正：策略管「怎么动」（可随机、可连续），值函数管「比预期好多少」——actor-critic 里会师，谁也不可缺席。</div>
+    </div>
+  </section>
+
+  <!-- 20 全书地图 -->
+  <section class="slide" data-narration="十三章走完，回看整张地图。全书只回答一条链上的问题：智能体如何从原始交互经验逼近会做事的策略。四段不是四本书，是一条因果链。一到四章定义目标与理想解；因为拿不到环境模型，所以必须从采样估计价值，进入五到八章；因为状态空间指数爆炸，所以必须函数逼近做泛化，进入九到十一章；因为逼近下信用断裂、argmax 走不进连续动作，所以必须缝信用、直接优化策略，进入十二、十三章。每条边都是一个因为所以必须——每段都在为下一段制造非答不可的问题。">
+    <div class="slide-head"><span class="sec">地图</span><h3>全书地图：四段因果链，每条边都是「因为……所以必须……」</h3></div>
+    <div class="slide-body">
+      <div class="mmd mmd-map">
+        <div class="mermaid">
+flowchart TB
+  S1["Ch1-4 表格法基础<br>MDP·贝尔曼方程·动态规划"] -->|"因为拿不到环境模型<br>所以必须从采样估计价值"| S2["Ch5-8 表格型无模型<br>MC·TD·Sarsa·Q-learning"]
+  S2 -->|"因为状态空间指数爆炸<br>所以必须函数逼近做泛化"| S3["Ch9-11 函数逼近<br>半梯度·离策略稳定性"]
+  S3 -->|"因为信用断裂+argmax 瓶颈<br>所以必须缝信用、直接优化策略"| S4["Ch12-13 策略与前沿<br>资格迹·策略梯度·Actor-Critic"]
+  classDef hot fill:#2b6cb0,color:#ffffff,stroke:#1a365d,stroke-width:3px
+  class S4 hot
+        </div>
+        <div class="cap">每条边是一个「因为……所以必须……」：<b>每段都在为下一段制造必须回答的问题</b></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 21 小结 + 毕业赠言 -->
+  <section class="slide" data-narration="三句话收本章也收全书。第一，解决什么：argmax 三处断裂，于是策略本身参数化，用策略梯度定理直接上升。第二，核心机制：定理把梯度写成梯度 ln π 乘 q 的期望，μ 被消掉；REINFORCE 用 G 估 q 无偏但方差大；基线只改方差，玩具例六点二五到零；actor-critic 学 V 当基线，Δθ 从零点零五降到零点零二五；高斯策略打开连续动作。第三，毕业赠言：这本书教的不是几个算法，而是拆解问题的语法——目标、结构、估计、泛化、行动。最后一页，毕业三问。">
+    <div class="slide-head"><span class="sec">小结</span><h3>定理消掉 μ，基线压方差，critic 供基准——策略与值会师</h3></div>
+    <div class="slide-body">
+      <div class="chain">
+        <div class="link"><span class="no">1</span><span class="txt"><strong>解决什么</strong>：argmax 三处断裂 ⇒ 策略本身参数化，沿 $\nabla J$ 直接上升。</span></div>
+        <div class="link"><span class="no">2</span><span class="txt"><strong>核心机制</strong>：$\nabla J \propto E[\nabla\ln\pi \cdot q]$；REINFORCE → 基线（$6.25\to0$）→ Actor-Critic（$\delta$ 自举）；高斯策略开连续动作。</span></div>
+        <div class="link"><span class="no">3</span><span class="txt"><strong>毕业赠言</strong>：全书是一套拆解语法——目标 → 结构 → 估计 → 泛化 → 行动。</span></div>
+      </div>
+      <div class="formula formula-concl">$$\boldsymbol{\theta} \leftarrow \boldsymbol{\theta} + \alpha\, \delta_t\, \nabla\ln\pi(A_t|S_t,\boldsymbol{\theta}) \quad\text{——合上书也要能默写}$$</div>
+    </div>
+  </section>
+
+  <!-- ★ 22 毕业三问（最后一页） -->
+  <section class="slide" data-narration="最后一页，毕业三问，用自己的话答。第一问，预测与控制如何统一？统一在广义策略迭代：评估与改善交替、互为对方目标，MC、TD、actor-critic 只是评估颗粒度不同的实例。第二问，表格法为什么崩？两层：规模崩，状态爆炸无泛化；收敛崩，逼近加自举加离策略构成致命三角——表格法在自己世界里收敛得很好。第三问，值方法与策略方法怎么取舍？不取舍：值方法高效但策略被 argmax 绑架；策略方法可随机可连续但方差大。actor-critic 让两家合流。三问答完，你毕业了。">
+    <div class="slide-head"><span class="sec">毕业</span><h3>毕业三问：答完这三问，全书毕业</h3></div>
+    <div class="slide-body">
+      <div class="card"><strong>第一问 · 预测与控制如何统一？</strong><br>统一在<strong>广义策略迭代</strong>：评估与改善交替、互为对方目标。值方法的改善靠 argmax，策略梯度靠沿 $\nabla J$ 上升——MC / TD / AC 只是评估颗粒度不同的实例。</div>
+      <div class="card"><strong>第二问 · 表格法为什么「崩」？</strong><br>两层：<strong>规模崩</strong>（状态指数爆炸、无泛化）与<strong>收敛崩</strong>（逼近 + 自举 + 离策略 = 致命三角）。表格法在自己的世界里收敛得很好，「崩」是被推出自己世界的代价。</div>
+      <div class="card"><strong>第三问 · 值方法与策略方法怎么取舍？</strong><br><strong>不取舍</strong>：值方法高效但策略被 argmax 绑架；策略方法可随机可连续但方差大、易局部最优。Actor-Critic 让值函数当 critic 降噪、参数化策略当 actor 行动——两家合流。</div>
+    </div>
+  </section>
+
+  <!-- 页脚 -->
+  <div id="footer">
+    <span class="brand">第13章 策略梯度 · 强化学习课件</span>
+    <span id="pagenum">1 / 22</span>
+  </div>
+
+  <!-- 导航 -->
+  <div class="nav">
+    <button id="prev" title="上一页 (←)">‹</button>
+    <button id="next" title="下一页 (→ / 空格)">›</button>
+  </div>
+  <div id="hint">← → 翻页 · 空格下一页 · 推导页逐步显示 · 点击左右半屏翻页</div>
+
+</div>
+
+<!-- mermaid 本地引用，保证离线可用；初始化参数全套课件统一，勿改 -->
+<script src="assets/mermaid.min.js"></script>
+<script>
+mermaid.initialize({
+  startOnLoad: false,   // 必须为 false：display:none 的隐藏页渲染会得到 0 宽高的退化 SVG，
+                        // 改为页面激活时懒渲染（见 renderMermaid）
+  theme: "base",
+  themeVariables: {
+    primaryColor: "#ebf8ff",
+    primaryBorderColor: "#2b6cb0",
+    primaryTextColor: "#1a365d",
+    lineColor: "#718096",
+    fontFamily: "-apple-system, PingFang SC, sans-serif",
+    fontSize: "15px"
+  },
+  flowchart: { curve: "linear", htmlLabels: false }
+});
+</script>
+<script>
+(function(){
+  const slides = Array.from(document.querySelectorAll('.slide'));
+  const total = slides.length;
+  let idx = 0;
+
+  const params = new URLSearchParams(location.search);
+  const startSlide = parseInt(params.get('slide'), 10);
+  if (params.get('autohide') === '1') document.body.classList.add('autohide');
+  if (!isNaN(startSlide) && startSlide >= 1 && startSlide <= total) idx = startSlide - 1;
+
+  const progress = document.getElementById('progress');
+  const pagenum = document.getElementById('pagenum');
+  const prevBtn = document.getElementById('prev');
+  const nextBtn = document.getElementById('next');
+
+  // 推导分步：每页记住已展开的步数；autohide（截图）模式下 CSS 强制全显
+  const stepState = new Map();
+  function stepsOf(i){ return Array.from(slides[i].querySelectorAll('.step')); }
+  function applySteps(){
+    stepsOf(idx).forEach((el, k)=> el.classList.toggle('on', k < (stepState.get(idx) || 0)));
+  }
+  // 前进一步：先展开本页下一步，全部展开后才翻页
+  function forward(){
+    const steps = stepsOf(idx);
+    const shown = stepState.get(idx) || 0;
+    if (shown < steps.length){ stepState.set(idx, shown + 1); applySteps(); return; }
+    go(idx + 1);
+  }
+  // 后退一步：先收起本页最后一步，收完才回上一页
+  function backward(){
+    const steps = stepsOf(idx);
+    const shown = stepState.get(idx) || 0;
+    if (shown > 0){ stepState.set(idx, shown - 1); applySteps(); return; }
+    go(idx - 1);
+  }
+
+  // mermaid 懒渲染：只在页面激活（有真实宽高）时渲染该页的图，渲染后打 data-done 防重复
+  function renderMermaid(slide){
+    if (typeof mermaid === 'undefined') return;
+    const nodes = Array.from(slide.querySelectorAll('.mermaid:not([data-done])'));
+    if (!nodes.length) return;
+    nodes.forEach(n => n.setAttribute('data-done', ''));
+    mermaid.run({ nodes }).catch(err => {
+      nodes.forEach(n => n.removeAttribute('data-done'));
+      console.error('mermaid 渲染失败：', err);
+    });
+  }
+
+  function render(){
+    slides.forEach((s,i)=> s.classList.toggle('active', i===idx));
+    progress.style.width = ((idx+1)/total*100) + '%';
+    pagenum.textContent = (idx+1) + ' / ' + total;
+    prevBtn.disabled = (idx===0);
+    nextBtn.disabled = (idx===total-1);
+    applySteps();
+    renderMermaid(slides[idx]);
+  }
+  function go(n){ idx = Math.max(0, Math.min(total-1, n)); render(); }
+
+  prevBtn.addEventListener('click', e=>{ e.stopPropagation(); backward(); });
+  nextBtn.addEventListener('click', e=>{ e.stopPropagation(); forward(); });
+
+  document.addEventListener('keydown', e=>{
+    if(e.key==='ArrowRight'||e.key===' '||e.key==='PageDown'){ e.preventDefault(); forward(); }
+    else if(e.key==='ArrowLeft'||e.key==='PageUp'){ e.preventDefault(); backward(); }
+    else if(e.key==='Home'){ stepState.set(idx, 0); go(0); }
+    else if(e.key==='End'){ go(total-1); }
+  });
+
+  document.getElementById('stage').addEventListener('click', e=>{
+    if(e.target.closest('.nav')) return;
+    const x = e.clientX;
+    if(x < window.innerWidth*0.5) backward(); else forward();
+  });
+
+  function fit(){
+    const s = Math.min(window.innerWidth/1280, window.innerHeight/720);
+    document.getElementById('stage').style.transform = 'translate(-50%,-50%) scale(' + s + ')';
+  }
+  window.addEventListener('resize', fit);
+  fit();
+  render();
+})();
+</script>
+</body>
+</html>

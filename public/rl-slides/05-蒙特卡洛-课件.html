@@ -1,0 +1,585 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第5章 蒙特卡洛方法 · 强化学习课件</title>
+<script>
+window.MathJax = {
+  tex: {
+    inlineMath: [['$', '$'], ['\\(', '\\)']],
+    displayMath: [['$$', '$$'], ['\\[', '\\]']],
+    processEscapes: true,
+    tags: 'none'
+  },
+  svg: { fontCache: 'global', scale: 1.05 },
+  options: { skipHtmlTags: ['script','noscript','style','textarea','pre','code'] }
+};
+</script>
+<!-- MathJax 本地引用（tex-svg 单文件全量组件，约2MB，自带字体数据），file:// 与断网均可用 -->
+<script src="assets/tex-svg.js" async></script>
+<style>
+  :root{
+    --primary:#1a365d; --accent:#2b6cb0; --accent-light:#ebf8ff; --accent-border:#bee3f8;
+    --text:#2d3748; --muted:#718096; --border:#e2e8f0; --bg-light:#f7fafc;
+    --success:#38a169; --danger:#e53e3e; --warning:#dd6b20; --warn-bg:#fffaf0;
+  }
+  *{margin:0;padding:0;box-sizing:border-box;}
+  html,body{width:100%;height:100%;overflow:hidden;background:#0f172a;}
+  body{
+    font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Hiragino Sans GB","Microsoft YaHei","WenQuanYi Micro Hei",sans-serif;
+    color:var(--text);
+  }
+  #stage{
+    position:absolute; left:50%; top:50%;
+    width:1280px; height:720px;
+    transform:translate(-50%,-50%) scale(1);
+    transform-origin:center center;
+    background:#ffffff;
+    box-shadow:0 0 40px rgba(0,0,0,.4);
+    overflow:hidden;
+  }
+  .slide{
+    position:absolute; inset:0;
+    padding:36px 60px 52px;
+    display:none;
+    flex-direction:column;
+    background:#ffffff;
+    opacity:0;
+    transition:opacity .35s ease;
+  }
+  .slide.active{ display:flex; opacity:1; }
+
+  #progress{ position:absolute; top:0; left:0; height:6px; background:var(--accent); width:0; z-index:50; transition:width .35s; }
+
+  /* 封面 / 结束页 */
+  .slide-cover{ justify-content:center; align-items:center; text-align:center; }
+  .slide-cover{ background:linear-gradient(135deg,#1a365d 0%,#2b6cb0 100%); color:#fff; }
+  .slide-cover .kicker{ font-size:22px; letter-spacing:6px; opacity:.85; margin-bottom:18px;}
+  .slide-cover h1{ font-size:64px; font-weight:800; line-height:1.2; margin-bottom:22px; letter-spacing:2px;}
+  .slide-cover .sub{ font-size:26px; opacity:.92; margin-bottom:36px;}
+  .slide-cover .meta{ font-size:19px; opacity:.85; line-height:2;}
+  .slide-cover .divider{ width:160px;height:5px;background:#fff;opacity:.6;margin:0 auto 30px;border-radius:3px;}
+  .slide-cover .question{ font-size:24px; background:rgba(255,255,255,.12); border:1px solid rgba(255,255,255,.35); border-radius:12px; padding:12px 28px; margin-bottom:30px;}
+
+  /* 页头：结论式标题 */
+  .slide-head{ display:flex; align-items:baseline; gap:16px; border-bottom:3px solid var(--accent); padding-bottom:9px; margin-bottom:12px;}
+  .slide-head .sec{ font-size:17px; color:var(--accent); font-weight:700; background:var(--accent-light); padding:3px 11px; border-radius:6px; white-space:nowrap;}
+  .slide-head h3{ font-size:29px; color:var(--primary); font-weight:700;}
+  .slide-body{ flex:1; display:flex; flex-direction:column; justify-content:center; min-height:0; }
+
+  p{ font-size:21px; line-height:1.65; margin-bottom:8px;}
+  .lead{ font-size:23px; color:#374151; line-height:1.75;}
+  ul,ol{ margin:0 0 8px 26px; font-size:21px; line-height:1.7;}
+  li{ margin-bottom:5px;}
+  strong{ color:var(--primary); }
+
+  /* 公式块 */
+  .formula{ background:var(--accent-light); border-left:5px solid var(--accent); border-radius:0 10px 10px 0; padding:9px 22px; margin:9px 0; text-align:center; font-size:23px;}
+  .formula-concl{ background:#fffaf0; border-left:5px solid var(--warning);}
+  .MathJax{ font-size:1.05em !important; }
+  mjx-container[display="true"]{ margin:6px 0 !important; }
+
+  /* 表格 */
+  table{ width:100%; border-collapse:collapse; margin:10px 0; font-size:20px;}
+  th{ background:var(--accent); color:#fff; padding:8px 12px; text-align:center; font-weight:600;}
+  td{ padding:7px 12px; border:1px solid var(--border); text-align:center; vertical-align:middle;}
+  tr:nth-child(even) td{ background:var(--bg-light);}
+  td.l{ text-align:left; }
+  table.small{ font-size:18px; }
+  table.small td, table.small th{ padding:6px 10px; }
+
+  /* 组件 */
+  .card{ background:var(--accent-light); border:1px solid var(--accent-border); border-radius:12px; padding:12px 20px; margin:10px 0;}
+  .tip{ background:#ebf8ff; border-left:5px solid var(--accent); border-radius:0 10px 10px 0; padding:10px 20px; margin:10px 0; font-size:20px; color:#2c5282;}
+  .deep{ background:#f0fff4; border-left:5px solid var(--success); border-radius:0 10px 10px 0; padding:10px 20px; margin:10px 0; font-size:20px; color:#22543d;}
+  .warn{ background:var(--warn-bg); border-left:5px solid var(--warning); border-radius:0 10px 10px 0; padding:10px 20px; margin:10px 0; font-size:20px; color:#744210;}
+  .trap{ background:#fef2f2; border-left:5px solid var(--danger); border-radius:0 10px 10px 0; padding:10px 20px; margin:10px 0; font-size:20px; color:#7f1d1d;}
+
+  .pause{
+    background:var(--warn-bg); border:2px dashed var(--warning); border-radius:14px;
+    padding:10px 22px; margin:10px 0; display:flex; align-items:center; gap:16px;
+  }
+  .pause .icon{ font-size:36px; line-height:1; }
+  .pause .txt b{ color:var(--warning); font-size:21px; }
+  .pause .txt p{ font-size:18px; color:#744210; margin:3px 0 0; }
+
+  .cols{ display:flex; gap:28px; align-items:stretch; }
+  .col{ flex:1; min-width:0; }
+
+  /* 推导分步：仅互动模式隐藏，截图(autohide)模式全部可见——此规则不可删 */
+  .step{ opacity:0; transform:translateY(8px); transition:opacity .3s ease, transform .3s ease; }
+  .step.on{ opacity:1; transform:none; }
+  body.autohide .step{ opacity:1 !important; transform:none !important; }
+  .step-hint{ font-size:14px; color:var(--muted); margin-top:4px;}
+  body.autohide .step-hint{ display:none; }
+
+  /* 因果链 */
+  .chain{ margin:6px 0; }
+  .chain .link{ display:flex; align-items:center; gap:14px; margin:6px 0;}
+  .chain .no{ width:34px; height:34px; border-radius:50%; background:var(--accent); color:#fff; font-size:18px; font-weight:700; display:flex; align-items:center; justify-content:center; flex-shrink:0;}
+  .chain .txt{ font-size:21px; line-height:1.5;}
+  .chain .txt strong{ color:var(--primary); }
+
+  /* mermaid 容器：高度封顶，防止溢出 720px 舞台 */
+  .mmd{ background:var(--bg-light); border:1px solid var(--border); border-radius:12px; padding:10px 14px; display:flex; justify-content:center; align-items:center; margin:8px 0;}
+  .mmd .mermaid{ display:flex; justify-content:center; width:100%; visibility:hidden; }
+  .mmd .mermaid[data-done]{ visibility:visible; }
+  .mmd .mermaid svg{ max-width:100%; height:auto; max-height:230px; }
+  .mmd.mmd-tall .mermaid svg{ max-height:330px; }
+  .mmd.mmd-sm svg{ max-height:150px; }
+  .mmd-row{ display:flex; gap:18px; }
+  .mmd-row .mmd{ flex:1; flex-direction:column; }
+  .mmd .cap{ font-size:17px; color:var(--muted); margin-top:6px; text-align:center;}
+  .mmd .cap b{ color:var(--text); }
+
+  #footer{ position:absolute; bottom:0; left:0; right:0; height:40px; display:flex; align-items:center; justify-content:space-between; padding:0 30px; font-size:15px; color:#94a3b8; background:rgba(247,250,252,.85); border-top:1px solid var(--border); z-index:40;}
+  #footer .brand{ font-weight:600; color:var(--accent); }
+
+  .nav{ position:absolute; bottom:48px; right:40px; display:flex; gap:12px; z-index:45;}
+  .nav button{ width:54px; height:54px; border-radius:50%; border:none; background:var(--accent); color:#fff; font-size:24px; cursor:pointer; box-shadow:0 3px 10px rgba(43,108,176,.4); display:flex; align-items:center; justify-content:center;}
+  .nav button:hover{ background:var(--primary); }
+  .nav button:disabled{ background:#cbd5d0; cursor:default; box-shadow:none;}
+
+  #hint{ position:absolute; bottom:48px; left:40px; font-size:14px; color:#94a3b8; z-index:45;}
+
+  body.autohide #progress, body.autohide #footer, body.autohide .nav, body.autohide #hint{ display:none !important; }
+</style>
+</head>
+<body>
+<div id="stage">
+
+  <div id="progress"></div>
+
+  <!-- ★ 1 封面 -->
+  <section class="slide slide-cover active" data-narration="大家好，欢迎来到强化学习第五章，蒙特卡洛方法。上一章的动态规划看起来很完美：策略评估、策略改进、价值迭代，一套流程收敛到最优，但它有一个要命的前提——你必须知道环境的完备模型。可现实是，玩扑克你不知道对手的牌路，控制机器人你写不出关节的转移函数。这一章我们就回答一个问题：手里只有一条一条真实经历的回合，怎么估计价值、怎么改进策略？学完这一章，你会掌握三件事：回报怎么从终点倒推出来、平均怎么用增量方式做、别人的数据怎么用重要性采样拿过来纠偏。">
+    <div class="kicker">强化学习 · 第 5 章 · 表格型无模型方法</div>
+    <h1>蒙特卡洛方法</h1>
+    <div class="sub">Monte Carlo Methods —— 没有模型，就拿经验平均当价值</div>
+    <div class="question">本章要回答：环境模型完全未知、只能一条一条经历回合时，如何估计价值并改进策略？</div>
+    <div class="meta">
+      配套讲义：《强化学习互动讲义》第5章 · 基于 Sutton &amp; Barto (2018)<br>
+      ← → 或空格翻页 · 推导页逐步显示
+    </div>
+  </section>
+
+  <!-- ★ 2 全书位置 -->
+  <section class="slide" data-narration="先定位。前面一到四章搭好了马尔可夫决策过程和动态规划的框架，但留下一笔账：动态规划要求你写出每个状态动作对的转移概率，这个前提太奢侈，本章来还这笔账——蒙特卡洛用完整回合的平均回报替代模型。但本章也会留下新账：必须等回合结束才能更新，而且方差大。这笔账由第六章时序差分来还，它做到边经历边更新；第七章在两者之间折中；第八章把规划拉进来做统一。所以本章是个枢纽：它是从有模型走向无模型的第一步，后面三章都在修补它留下的两个代价。">
+    <div class="slide-head"><span class="sec">定位</span><h3>第4章留下「需要模型」的账，本章用「经验平均」还掉</h3></div>
+    <div class="slide-body">
+      <div class="mmd mmd-sm">
+        <div class="mermaid">
+flowchart LR
+  A["Ch1–4 表格法基础<br>DP 需要模型"] --> B["Ch5 蒙特卡洛<br>经验平均"]:::here
+  B --> C["Ch6 时序差分<br>边经历边更新"] --> D["Ch7 n步自举"]
+  D --> E["Ch8 统一与规划"] --> F["Ch9+ 函数逼近"]
+  classDef here fill:#2b6cb0,color:#ffffff,stroke:#1a365d,stroke-width:3px
+        </div>
+      </div>
+      <p style="text-align:center; margin-top:10px;">本章解决「<strong>没有模型怎么估计价值</strong>」——代价是<strong>等回合结束、方差大</strong>，留给第6章。</p>
+    </div>
+  </section>
+
+  <!-- ★ 3 本章主线 -->
+  <section class="slide" data-narration="本章主线是一条五环的链。第一环，动态规划要模型，现实只有经验，矛盾逼出新方法。第二环，让智能体跑完整条回合，从终点倒推出回报。第三环，把多条回合的回报平均起来估计价值，用增量均值省掉存储。第四环，要改进策略就得估计动作价值，还得保证每个动作都被试过，这就是探索问题。第五环，数据如果是别的策略跑出来的，就用重要性采样比重新加权纠偏。请记住这条链的末端：这一切的代价是必须等回合结束、而且方差大，这就是留给第六章的账。">
+    <div class="slide-head"><span class="sec">主线</span><h3>没有模型 → 跑回合拿回报 → 平均 → 探索 → 纠偏</h3></div>
+    <div class="slide-body">
+      <div class="chain">
+        <div class="link"><span class="no">1</span><span class="txt"><strong>矛盾</strong>：DP 要完备模型，现实只有一条条回合</span></div>
+        <div class="link"><span class="no">2</span><span class="txt"><strong>样本</strong>：跑完整回合，从终点倒推出回报 $G_t$</span></div>
+        <div class="link"><span class="no">3</span><span class="txt"><strong>估计</strong>：平均多条回合逼近 $v_\pi$，增量均值省存储</span></div>
+        <div class="link"><span class="no">4</span><span class="txt"><strong>控制</strong>：改进要靠 $q(s,a)$，探索保证每个动作被试到</span></div>
+        <div class="link"><span class="no">5</span><span class="txt"><strong>纠偏</strong>：数据来自行为策略，用重要性采样比 $\rho$ 加权</span></div>
+      </div>
+      <div class="tip">这条链就是本章目录：5.1 矛盾 → 5.2 回报与均值 → 5.4 控制与探索 → 5.5 离策略纠偏。</div>
+    </div>
+  </section>
+
+  <!-- 4 动机页 -->
+  <section class="slide" data-narration="先看旧方法为什么不行。动态规划做策略评估，每一步都要对模型求期望，就是屏幕上这个式子：对每个动作、每个后继状态和奖励，都要乘上转移概率再求和。问题是，这张概率表现实里几乎从来不给你。打扑克，你不知道对手的发牌分布；机器人走路，你写不出力矩到下一姿态的转移函数。你唯一能做的，是让智能体真的去环境里跑，跑出一条状态、动作、奖励交替的序列，这就叫回合。蒙特卡洛的思想朴素到近乎笨拙：价值本来就是期望回报，期望算不出来，那就抽样，然后平均。">
+    <div class="slide-head"><span class="sec">动机</span><h3>DP 的软肋：每一次更新都要对模型求期望</h3></div>
+    <div class="slide-body">
+      <div class="formula">$$v_\pi(s)=\sum_a \pi(a\mid s)\sum_{s',r} p(s',r\mid s,a)\,\big[\,r+\gamma\, v_\pi(s')\,\big]\;\;\text{——\,$p(s',r\mid s,a)$ 从哪来？}$$</div>
+      <div class="cols">
+        <div class="col"><div class="card">🃏 <strong>打扑克</strong><br>你不知道对手的发牌与出牌分布，模型无从写起</div></div>
+        <div class="col"><div class="card">🤖 <strong>机器人行走</strong><br>写不出「关节力矩 → 下一姿态」的转移函数</div></div>
+      </div>
+      <div class="tip">💡 本章方案：看着地图规划行不通，就<strong>亲自走几趟再下结论</strong>——跑出完整回合，拿回报平均。</div>
+    </div>
+  </section>
+
+  <!-- ★ 5 核心定义页 -->
+  <section class="slide" data-narration="所以蒙特卡洛不是一种具体算法，而是一种估计哲学，由两个部件组成。第一个部件是完整回合：从起点一路跑到终止，拿到状态、动作、奖励的整条序列，只有跑完，这条轨迹值多少才算得出来。第二个部件是样本平均：价值的定义是期望回报，期望算不出来时，统计学的第一反应永远是抽样然后平均，大数定律保证样本均值收敛到真值。屏幕上这个橙色公式是全章的根：状态价值约等于 n 条回合回报的算术平均。注意，这天生只适合回合制任务，任务永不终止，回报就永远算不完。">
+    <div class="slide-head"><span class="sec">定义</span><h3>蒙特卡洛 = 完整回合 ＋ 样本平均，不是新算法而是估计哲学</h3></div>
+    <div class="slide-body">
+      <div class="cols">
+        <div class="col"><div class="card">🎬 <strong>部件一：完整回合</strong><br>$S_0,A_0,R_1,S_1,A_1,R_2,\dots,S_{T-1},A_{T-1},R_T$<br>必须跑到终止，才知道这条轨迹值多少</div></div>
+        <div class="col"><div class="card">📊 <strong>部件二：样本平均</strong><br>期望算不出来 → 抽样取平均<br>大数定律保证样本均值收敛到期望</div></div>
+      </div>
+      <div class="formula formula-concl">$$\boldsymbol{v_\pi(s)=\mathrm{E}_\pi[\,G_t \mid S_t=s\,]\;\approx\;\frac{1}{n}\sum_{i=1}^{n} G^{(i)}(s)}$$</div>
+      <div class="deep">读法：价值的定义是「期望回报」；期望算不出来，就跑 n 条回合，把回报平均。</div>
+    </div>
+  </section>
+
+  <!-- 6 例子设定 -->
+  <section class="slide" data-narration="把思想落成数字，先认识本章的实验台：五乘五格子世界。二十五个格子，起点在左上角，终点在右下角；每走一步奖励负一，走进终点奖励正十并且回合结束；折扣因子零点九。我们评估一个傻瓜策略：先一路向右走到头，再一路向下走到终点。这条轨迹是固定的，一共八步，前七步各得负一，最后一步得正十。右边这张图就是路线图：先横向四步，再纵向四步。下一页我们从终点往回倒推，把这八个时刻的回报一个一个算出来。">
+    <div class="slide-head"><span class="sec">例子</span><h3>5×5 gridworld：一条固定轨迹，8 步，前 7 步各 −1、末步 +10</h3></div>
+    <div class="slide-body">
+      <div class="cols">
+        <div class="col">
+          <table class="small">
+            <thead><tr><th>设定项</th><th>取值</th></tr></thead>
+            <tbody>
+              <tr><td class="l">起点 / 终点</td><td class="l">(1,1) / (5,5)</td></tr>
+              <tr><td class="l">每步奖励</td><td class="l">−1（进终点 +10 结束）</td></tr>
+              <tr><td class="l">折扣因子</td><td class="l">$\gamma = 0.9$</td></tr>
+              <tr><td class="l">被评估策略</td><td class="l">先一路向右，再一路向下</td></tr>
+            </tbody>
+          </table>
+          <div class="tip">前四章用 4×4 便于手推 Bellman；第 5–7 章改用 Sutton 原书的 5×5，数字与原文对齐。</div>
+        </div>
+        <div class="col">
+          <div class="mmd mmd-tall">
+            <div class="mermaid">
+flowchart LR
+  A["(1,1) 起点"] -->|"4 步 · 各 −1"| B["(1,5) 右转"]
+  B -->|"4 步 · 末步 +10"| C["(5,5) 终点"]
+            </div>
+          </div>
+          <p style="text-align:center; font-size:18px; color:var(--muted);">傻瓜策略的固定轨迹：共 8 步，回报从终点倒推</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ★ 7 推导页 -->
+  <section class="slide" data-narration="好，开始倒推，工具只有一个，回报的递推式：G t 等于下一刻奖励加折扣乘以后一个回报，终止之后回报为零。第一步，最后一格：第七时刻走进终点得正十，所以 G 七等于十。第二步，往前挪一格：G 六等于负一加零点九乘十，等于八；再往前，G 五等于负一加零点九乘八，等于六点二。第三步，照这个节奏一路倒回起点：G 四等于四点五八，G 三等于三点一二二，最后 G 零约等于负零点四三四。注意每一步只需一次乘加，从后往前把平方级的计算量压成了线性。">
+    <div class="slide-head"><span class="sec">推导</span><h3>回报从终点往回倒推：每一步只做一次乘加</h3></div>
+    <div class="slide-body">
+      <div class="step">
+        <p><strong>① 工具：回报递推式</strong>（终止后 $G_T = 0$）</p>
+        <div class="formula">$$G_t = R_{t+1} + \gamma\, G_{t+1}$$</div>
+      </div>
+      <div class="step">
+        <p><strong>② 从终点开始：</strong>$G_7 = 10$，$G_6 = -1 + 0.9 \times 10 = 8$，$G_5 = -1 + 0.9 \times 8 = 6.2$</p>
+      </div>
+      <div class="step">
+        <p><strong>③ 一路倒回起点：</strong>$G_4 = 4.58$，$G_3 = 3.122$，$G_2 = 1.8098$，$G_1 = 0.62882$</p>
+        <div class="formula formula-concl">$$\boldsymbol{G_0 = -1 + 0.9 \times 0.62882 = -0.434062 \approx -0.434}$$</div>
+      </div>
+      <p class="step-hint">按空格 / → 逐步展开推导</p>
+    </div>
+  </section>
+
+  <!-- 8 回报序列表 -->
+  <section class="slide" data-narration="这是完整的回报序列，从终点到起点排成一行：十、八、六点二、四点五八、三点一二二、一点八零九八、零点六二九、负零点四三四。请盯着的不是数字本身，而是它的长相：每个数字都是负一加零点九乘以后一个数字，回报像波浪一样从终点向起点传播，每传一步就打一个九折。这条序列给起点提供了一个样本：G 零约等于负零点四三四。这个环境是确定的，每条回合一模一样，平均就是它自己；但只要策略或环境带一点随机性，不同回合给出不同回报，平均才真正上场。">
+    <div class="slide-head"><span class="sec">数字</span><h3>回报从 10 传播回起点，每传一步打一个 0.9 折</h3></div>
+    <div class="slide-body">
+      <table>
+        <thead><tr><th>时刻 t</th><th>7</th><th>6</th><th>5</th><th>4</th></tr></thead>
+        <tbody>
+          <tr><td class="l"><strong>$G_t$</strong></td><td>$10$</td><td>$8$</td><td>$6.2$</td><td>$4.58$</td></tr>
+        </tbody>
+      </table>
+      <table>
+        <thead><tr><th>时刻 t</th><th>3</th><th>2</th><th>1</th><th>0</th></tr></thead>
+        <tbody>
+          <tr><td class="l"><strong>$G_t$</strong></td><td>$3.122$</td><td>$1.8098$</td><td>$0.62882$</td><td>$\boldsymbol{-0.434}$</td></tr>
+        </tbody>
+      </table>
+      <div class="deep">每个数都满足「$-1 + 0.9 \times$ 后一个数」——确定性环境下每条回合相同；一旦有随机性，不同回合给出不同 $G$，「平均」才真正上场。</div>
+    </div>
+  </section>
+
+  <!-- 9 增量均值 -->
+  <section class="slide" data-narration="平均怎么做才省力气？直接平均要把历史回报全存下来，每来一条新回合就重算总和。增量均值把第 n 个样本并入旧均值：新估计等于旧估计加 n 分之一乘以括号新回报减旧估计。手算一遍：第一条回合给出负零点四三四，第二条回合走了条稍好的路，给出二点二，那么新估计等于负零点四三四加二分之一乘以二点六三四，等于零点八八三。请死死记住这个结构：新估计等于旧估计加步长乘以括号目标减旧估计。从本章到后面的时序差分、Q 学习，所有更新都长这个样子，区别只在目标是什么。另外记住：n 分之一只适合平稳环境，策略一直在变的控制问题里要换常数步长，用永不收敛换永远跟踪。">
+    <div class="slide-head"><span class="sec">估计</span><h3>增量均值：新估计 = 旧估计 ＋ 步长 ×（目标 − 旧估计）</h3></div>
+    <div class="slide-body">
+      <div class="formula formula-concl">$$\boldsymbol{V_n = V_{n-1} + \frac{1}{n}\,\big(\,G_n - V_{n-1}\,\big)}$$</div>
+      <div class="formula">$$\text{手算：}\;V_2 = -0.434 + \tfrac{1}{2}\times\big(2.2-(-0.434)\big) = -0.434 + 1.317 = \boldsymbol{0.883}$$</div>
+      <div class="warn">$\alpha=\frac{1}{n}$ 只适用平稳环境；控制问题里策略一直在变（移动靶），换常数 $\alpha$（如 0.1）——用「永不收敛」换「永远跟踪」。</div>
+    </div>
+  </section>
+
+  <!-- 10 首次/每次访问 定义 -->
+  <section class="slide" data-narration="前面每个状态只出现一次，但随机策略下，一条轨迹完全可能两次经过同一个状态，这一回合就贡献了两个回报样本，用哪个？两种答案。首次访问蒙特卡洛，只用第一次到达之后的那段尾迹回报；每次访问蒙特卡洛，每次到达后的回报都算一个独立样本。看右边这条最小轨迹：从 A 出发到 B，兜回 A，再到 C 终止，奖励依次是负一、负一、负一、正十，折扣零点九。状态 A 在这一回合里被访问了两次。下一页我们做一道小题，看两种方法对 A 的价值给出怎样不同的数字。">
+    <div class="slide-head"><span class="sec">定义</span><h3>同一状态两次相遇：只取第一次，还是每次都算？</h3></div>
+    <div class="slide-body">
+      <div class="cols">
+        <div class="col">
+          <div class="card">1️⃣ <strong>首次访问 MC（First-Visit）</strong><br>只用第一次到达 $s$ 之后的回报<br>样本定义干净，理论证明都以它为对象</div>
+          <div class="card">🔁 <strong>每次访问 MC（Every-Visit）</strong><br>每次到达 $s$ 后的回报都计入<br>样本重叠相关，但有时更易实现</div>
+        </div>
+        <div class="col">
+          <div class="mmd mmd-tall">
+            <div class="mermaid">
+flowchart LR
+  A1["A (t=0)"] --> B1["B (t=1)"] --> A2["A (t=2)"] --> C1["C (t=3)"] --> T["终止"]
+            </div>
+            <div class="cap">奖励序列 $-1,-1,-1,+10$，$\gamma=0.9$<br><b>状态 A 一回合内被访问两次</b></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ★ 11 手算互动页（推出来了吗？） -->
+  <section class="slide" data-narration="先别看我算。轨迹是 A、B、A、C、终止，奖励负一、负一、负一、正十，折扣零点九。请你拿出纸，从终点往回倒推出每个时刻的回报，再分别给出首次访问和每次访问对 A 的估计。先暂停视频，自己推一遍。推出来了吗？好，对答案。倒推：G 三等于十；A 的第二次访问，G 二等于负一加零点九乘十，等于八；B 的 G 一等于负一加零点九乘八，等于六点二；A 的第一次访问，G 零等于负一加零点九乘六点二，等于四点五八。首次访问只用四点五八；每次访问把四点五八和八取平均，得六点二九。两个数不一样，因为八嵌在四点五八里面，两个样本统计上相关。">
+    <div class="slide-head"><span class="sec">演练</span><h3>同一条回合，两种方法给出 4.58 与 6.29 两个估计</h3></div>
+    <div class="slide-body">
+      <div class="step"><p>① 倒推：$G_3 = 10$；A 第二次访问 $G_2 = -1 + 0.9\times 10 = 8$</p></div>
+      <div class="step"><p>② 继续：$G_1 = -1 + 0.9\times 8 = 6.2$；A 第一次访问 $G_0 = -1 + 0.9\times 6.2 = 4.58$</p></div>
+      <div class="step">
+        <div class="formula formula-concl">$$\text{首次访问：}\;V(A)=4.58 \qquad \text{每次访问：}\;V(A)=\frac{4.58+8}{2}=\boldsymbol{6.29}$$</div>
+      </div>
+      <div class="pause"><div class="icon">✍️</div><div class="txt"><b>暂停推导</b><p>合上答案，自己在纸上倒推这条回合，交付物：四个回报 + 两个 V(A) 估计</p></div></div>
+      <p class="step-hint">按空格 / → 逐步揭示答案</p>
+    </div>
+  </section>
+
+  <!-- 12 MC 控制 -->
+  <section class="slide" data-narration="会估计价值还不够，目标是找最优策略。照抄动态规划的广义策略迭代框架：评估当前策略，贪心改进，再评估，再改进，转圈收敛。但这里有个动态规划没有的麻烦：贪心改进要比较在状态 s 选各个动作的后果，有模型时可以拿转移概率做一步前瞻，现在没有模型，前瞻算不出来，只能直接估计动作价值 q，也就是在 s 做动作 a 然后跟随当前策略值多少，然后取最大值对应的动作。这就是为什么蒙特卡洛控制偏爱 q 而不是 v。可估计 q 的前提是每个状态动作对都被试过，贪心策略永远只选一个动作，其他动作永远没有样本，这就是下一页的探索问题。">
+    <div class="slide-head"><span class="sec">控制</span><h3>没有模型做不了前瞻，贪心改进只能直接估计 q(s,a)</h3></div>
+    <div class="slide-body">
+      <div class="cols">
+        <div class="col">
+          <p>沿用 GPI 框架，但改进一步没有模型可用：</p>
+          <div class="formula formula-concl">$$\boldsymbol{\pi'(s) = \arg\max_a\, q(s,a)}$$</div>
+          <div class="deep">有模型：用 $v$ 和 $p(s',r\mid s,a)$ 算一步前瞻；无模型：只能直接估计每个动作的 $q(s,a)$ 再取 $\arg\max$。</div>
+        </div>
+        <div class="col">
+          <div class="mmd mmd-tall">
+            <div class="mermaid">
+flowchart LR
+  E["评估当前策略<br>估计 q"] --> I["贪心改进<br>得到新策略"] --> E
+            </div>
+            <div class="cap"><b>MC 版 GPI</b>：评估与改进转圈，直到收敛</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 13 探索 -->
+  <section class="slide" data-narration="探索是绕不开的门票，三条出路。第一条，探索性开端：强制每条回合从随机的状态动作对出发，保证所有对都有非零采样概率。简单干脆，但很多任务做不到，你没法命令机器人从半空中某个姿态开始。第二条，ε 贪心策略：以大概率选当前最优，以小概率均匀随机，评估和改进的就是这个带噪声的策略本身，这叫同策略；让 ε 随时间衰减到零，也就是 GLIE 条件，就能保证收敛到最优。第三条，离策略：干脆让跑数据的策略和要学的策略分家，下一页专门讲。记住一句话：蒙特卡洛控制的死穴不在平均，在覆盖——有没有数据是存在性问题。">
+    <div class="slide-head"><span class="sec">探索</span><h3>估计 q 的前提是每个 (s,a) 都被试过——三条出路</h3></div>
+    <div class="slide-body">
+      <ul>
+        <li><strong>探索性开端（Exploring Starts）</strong>：每条回合从随机 $(s,a)$ 出发——简单，但很多任务做不到</li>
+        <li><strong>ε-贪心（on-policy）</strong>：$1-\varepsilon$ 选最优、$\varepsilon$ 随机；让 $\varepsilon \to 0$ 即 <strong>GLIE</strong>，收敛到最优</li>
+        <li><strong>离策略（off-policy）</strong>：跑数据的策略与要学的策略分家——下一页的主题</li>
+      </ul>
+      <div class="deep">💡 MC 控制的死穴不在「平均」，而在「覆盖」：估计准不准是统计问题，<strong>有没有数据是存在性问题</strong>。</div>
+    </div>
+  </section>
+
+  <!-- 14 离策略与重要性采样比 -->
+  <section class="slide" data-narration="离策略把两个角色拆开。目标策略 π，是我们要学、要评估的策略，通常是纯贪心的；行为策略 b，是实际在环境里跑、产生数据的策略，通常更随机，保证覆盖——只要 π 可能做的动作，b 也必须可能做。问题是，数据按 b 的口味采的，直接平均得到的是 b 的价值而不是 π 的。纠偏工具是重要性采样：一条轨迹在 π 下的相对可能性，等于逐动作概率比的连乘，就是这个橙色公式，ρ 等于从 t 到回合末每步 π 概率除以 b 概率的连乘积。最关键的一点：环境的转移概率同时出现在分子分母里，被约掉了，所以离策略依然不需要模型，只需要知道两个策略各自的概率。">
+    <div class="slide-head"><span class="sec">离策略</span><h3>用别人的数据学自己的策略：逐动作概率比连乘纠偏</h3></div>
+    <div class="slide-body">
+      <div class="cols">
+        <div class="col"><div class="card">🎯 <strong>目标策略 $\pi$</strong><br>要学、要评估的策略（通常贪心）</div></div>
+        <div class="col"><div class="card">🏃 <strong>行为策略 $b$</strong><br>实际跑数据的策略（更随机，保证覆盖）</div></div>
+      </div>
+      <div class="formula formula-concl">$$\boldsymbol{\rho_{t:T-1} = \prod_{k=t}^{T-1} \frac{\pi(A_k \mid S_k)}{b(A_k \mid S_k)}}$$</div>
+      <div class="deep">环境转移概率在分子分母中一模一样，<strong>全部约掉</strong>——这就是离策略「免模型」的关键。</div>
+    </div>
+  </section>
+
+  <!-- 15 普通 vs 加权 IS 手算 -->
+  <section class="slide" data-narration="来手算。设定：某状态有两个动作，目标策略是确定性的，选 a 一的概率是一；行为策略均匀，各零点五。收集到两条回合：第一条，前两步都恰好选了 a 一，比率 ρ 等于一除以零点五再乘一除以零点五，等于四，回报是十；第二条，第一步就选了 a 二，目标策略下这根本不可能发生，ρ 等于零，回报是负六。普通重要性采样对 ρ 乘回报直接平均：四乘十加零乘负六，除以二，等于二十。注意，二十比实际见过的任何回报都大！加权重要性采样改用权重和做分母：四乘十除以四加零，等于十，落在已见范围之内。下一页说说这两个数背后的脾气。">
+    <div class="slide-head"><span class="sec">推导</span><h3>一个比率、两种估计：普通 IS 得 20，加权 IS 得 10</h3></div>
+    <div class="slide-body">
+      <div class="step">
+        <p><strong>① 算比率</strong>：$\pi$ 确定选 $a_1$，$b$ 各半。两步都选 $a_1$：$\rho = \frac{1}{0.5}\times\frac{1}{0.5} = 4$；一步选 $a_2$：$\rho = 0$</p>
+      </div>
+      <div class="step">
+        <p><strong>② 普通 IS</strong>（分母 = 样本条数）：$\dfrac{4\times 10 + 0\times(-6)}{2} = \dfrac{40}{2} = \boldsymbol{20}$ —— 超出已见回报范围！</p>
+      </div>
+      <div class="step">
+        <p><strong>③ 加权 IS</strong>（分母 = 权重和）：</p>
+        <div class="formula formula-concl">$$\boldsymbol{V(s) = \frac{4\times 10 + 0\times(-6)}{4 + 0} = \frac{40}{4} = 10}$$</div>
+      </div>
+      <p class="step-hint">按空格 / → 逐步展开推导</p>
+    </div>
+  </section>
+
+  <!-- 16 深挖：无偏≠好用 -->
+  <section class="slide" data-narration="普通重要性采样给出二十，这不是 bug，是定义使然。它在数学上严格无偏，期望恰好是目标策略的价值，但方差可以非常夸张，单次估计能飞出合理范围，你要真拿二十去指导决策，方差会要了你的命。加权重要性采样有偏，因为分母里的权重和本身也是随机的，但这个偏差随样本量增大而消失，方差却小得多，所以实践中几乎总是首选。记住，评价估计量的标准是均方误差，等于偏差平方加方差，不是只看偏差那一项。还有一个更根本的隐患：比率是连乘，轨迹越长越容易爆炸，长回合是离策略蒙特卡洛的阿喀琉斯之踵。">
+    <div class="slide-head"><span class="sec">难点</span><h3>20 不是 bug：无偏 ≠ 好用，好坏看均方误差</h3></div>
+    <div class="slide-body">
+      <div class="cols">
+        <div class="col"><div class="card">📏 <strong>普通 IS</strong><br>无偏，期望恰为 $v_\pi$；但方差可爆炸，单次估计飞出已见范围（如 20）</div></div>
+        <div class="col"><div class="card">🧭 <strong>加权 IS</strong><br>有偏（分母随机），偏差随样本消失，方差小得多——实践几乎总是首选</div></div>
+      </div>
+      <div class="formula">$$\text{均方误差} = \text{偏差}^2 + \text{方差}\;\;\text{——别只盯偏差那一项}$$</div>
+      <div class="warn">$\rho$ 是连乘积：轨迹越长越容易爆炸，<strong>长回合是离策略 MC 的阿喀琉斯之踵</strong>。</div>
+    </div>
+  </section>
+
+  <!-- ★ 17 误区页 -->
+  <section class="slide" data-narration="扫三个雷。第一个：蒙特卡洛是一种新算法。错，它是一种估计哲学，用样本平均替代期望，可以套在预测上，也可以套在控制上，后面几章都在这件事上做折中。第二个：无偏估计一定更好。错，普通重要性采样严格无偏，却给出二十这种飞出范围的估计，好坏要看均方误差，等于偏差平方加方差。第三个：重要性采样比里应该有环境的转移概率。错，轨迹似然里环境项在分子分母一模一样，全部约掉，只剩策略之比，这正是离策略免模型的关键，也是它脆弱的地方——行为策略的概率写错一点，连乘之后就会系统性失真。">
+    <div class="slide-head"><span class="sec">避坑</span><h3>三个最容易带走的错误直觉</h3></div>
+    <div class="slide-body">
+      <div class="trap">❌ <strong>「蒙特卡洛是一种新算法」</strong><br>✅ 它是估计哲学：用样本平均替代期望。预测、控制都能套，第 6、7 章都在它上面做时间维度的折中。</div>
+      <div class="trap">❌ <strong>「无偏，所以普通 IS 一定更好」</strong><br>✅ 好坏看均方误差 = 偏差² + 方差；普通 IS 无偏但方差爆炸（估计 20 飞出范围），加权 IS 几乎总是首选。</div>
+      <div class="trap">❌ <strong>「重要性采样比里有环境转移概率」</strong><br>✅ 环境项在分子分母中完全相同、全部约去，只剩策略之比——免模型的关键，也是对策略概率极敏感的软肋。</div>
+    </div>
+  </section>
+
+  <!-- 18 接口页 -->
+  <section class="slide" data-narration="本章和下一章怎么分工？看这张对比表。更新时机上，蒙特卡洛必须等回合结束，时序差分每走一步就更新。更新目标上，蒙特卡洛用真实回报 G，时序差分用一步奖励加下一状态的估计值，也就是自举。统计性质上，蒙特卡洛无偏但方差大，时序差分引入偏差但方差小。适用范围上，蒙特卡洛天生只适合回合制任务，时序差分可以处理永不终止的持续任务。钩子是：能不能不等回合结束就更新？答案是可以，代价是引入自举——用一个还没收敛的估计去更新另一个估计。这笔交易划不划算，下一章见分晓。">
+    <div class="slide-head"><span class="sec">接口</span><h3>MC 用「等到底」换无偏，TD 用「自举」换不等</h3></div>
+    <div class="slide-body">
+      <table>
+        <thead><tr><th></th><th>本章 · 蒙特卡洛</th><th>下一章 · 时序差分</th></tr></thead>
+        <tbody>
+          <tr><td class="l"><strong>更新时机</strong></td><td class="l">等回合结束</td><td class="l">每走一步就更新</td></tr>
+          <tr><td class="l"><strong>更新目标</strong></td><td class="l">真实回报 $G_t$</td><td class="l">一步奖励 + 后继估计（自举）</td></tr>
+          <tr><td class="l"><strong>偏差 / 方差</strong></td><td class="l">无偏、方差大</td><td class="l">有偏、方差小</td></tr>
+          <tr><td class="l"><strong>适用任务</strong></td><td class="l">仅回合制</td><td class="l">持续性任务也行</td></tr>
+        </tbody>
+      </table>
+      <div class="tip">钩子：能不能不等回合结束就更新？可以——代价是自举，这笔交易第 6 章算给你看。</div>
+    </div>
+  </section>
+
+  <!-- ★ 19 小结页 -->
+  <section class="slide" data-narration="三句话讲完第五章。第一，解决什么：动态规划需要环境的完备模型才能算期望，现实中我们只有一条条真实经历的回合，本章解决没有模型时如何估计价值并改进策略。第二，核心机制：跑完整回合、倒推出回报、用增量平均逼近期望；控制上靠探索机制保证覆盖；数据来自别的策略，就用重要性采样比重新加权纠偏。第三，承上启下：本章证明经验平均可以替代模型，代价是必须等回合结束、方差大，这笔账由第六章时序差分用自举来还。合上书也要能默写屏幕上这个更新式：V 等于 V 加阿尔法乘以括号 G 减 V。">
+    <div class="slide-head"><span class="sec">小结</span><h3>三句话讲完第5章</h3></div>
+    <div class="slide-body">
+      <div class="chain">
+        <div class="link"><span class="no">1</span><span class="txt"><strong>解决什么</strong>：没有环境模型时，用完整回合的经验估计价值并改进策略</span></div>
+        <div class="link"><span class="no">2</span><span class="txt"><strong>核心机制</strong>：跑回合 → 倒推回报 → 增量平均；控制靠探索，离策略靠重要性采样</span></div>
+        <div class="link"><span class="no">3</span><span class="txt"><strong>承上启下</strong>：经验平均替代了模型，代价是等回合结束、方差大——第 6 章用自举还这笔账</span></div>
+      </div>
+      <div class="formula formula-concl">$$\boldsymbol{V(S_t) \leftarrow V(S_t) + \alpha\,\big[\,G_t - V(S_t)\,\big]} \quad\text{——合上书也要能默写}$$</div>
+    </div>
+  </section>
+
+  <!-- ★ 20 结束页 -->
+  <section class="slide slide-cover" data-narration="本章毕业挑战，合上书拿一张纸，四条。一，写出回报递推式，并在五乘五格子世界的八步回合上倒推出全部回报，从十到负零点四三四。二，写出增量均值公式，说清 n 分之一和常数阿尔法的本质区别。三，在 A、B、A、C 那条兜圈轨迹上，算出首次访问四点五八、每次访问六点二九。四，用 ρ 等于四回报十、ρ 等于零回报负六这两条样本，算出普通重要性采样二十、加权重要性采样十，并解释为什么前者会超出已见回报范围。下一章，时序差分学习：不用等回合结束，每走一步就更新一次，看看自举这笔交易怎么做成。">
+    <div class="kicker">本 章 结 束</div>
+    <h1>期望算不出来，就抽样平均</h1>
+    <div class="sub">毕业挑战：合上书，拿一张纸</div>
+    <div class="divider"></div>
+    <div class="meta">
+      ☑ 倒推 5×5 回合的 8 个回报（10 → −0.434）　　☑ 默写增量均值并说清两种步长<br>
+      ☑ 兜圈轨迹算首次 4.58 / 每次 6.29　　☑ 手算普通 IS = 20、加权 IS = 10<br><br>
+      下一章 · 第6章 时序差分学习：不等回合结束，每走一步就更新
+    </div>
+  </section>
+
+  <div id="footer">
+    <span class="brand">第5章 蒙特卡洛方法 · 强化学习课件</span>
+    <span id="pagenum">1 / 20</span>
+  </div>
+
+  <div class="nav">
+    <button id="prev" title="上一页 (←)">‹</button>
+    <button id="next" title="下一页 (→ / 空格)">›</button>
+  </div>
+  <div id="hint">← → 翻页 · 空格下一页 · 推导页逐步显示 · 点击左右半屏翻页</div>
+
+</div>
+
+<!-- mermaid 本地引用，保证离线可用；初始化参数全套课件统一，勿改 -->
+<script src="assets/mermaid.min.js"></script>
+<script>
+mermaid.initialize({
+  startOnLoad: false,
+  theme: "base",
+  themeVariables: {
+    primaryColor: "#ebf8ff",
+    primaryBorderColor: "#2b6cb0",
+    primaryTextColor: "#1a365d",
+    lineColor: "#718096",
+    fontFamily: "-apple-system, PingFang SC, sans-serif",
+    fontSize: "15px"
+  },
+  flowchart: { curve: "linear", htmlLabels: false }
+});
+</script>
+<script>
+(function(){
+  const slides = Array.from(document.querySelectorAll('.slide'));
+  const total = slides.length;
+  let idx = 0;
+
+  const params = new URLSearchParams(location.search);
+  const startSlide = parseInt(params.get('slide'), 10);
+  if (params.get('autohide') === '1') document.body.classList.add('autohide');
+  if (!isNaN(startSlide) && startSlide >= 1 && startSlide <= total) idx = startSlide - 1;
+
+  const progress = document.getElementById('progress');
+  const pagenum = document.getElementById('pagenum');
+  const prevBtn = document.getElementById('prev');
+  const nextBtn = document.getElementById('next');
+
+  const stepState = new Map();
+  function stepsOf(i){ return Array.from(slides[i].querySelectorAll('.step')); }
+  function applySteps(){
+    stepsOf(idx).forEach((el, k)=> el.classList.toggle('on', k < (stepState.get(idx) || 0)));
+  }
+  function forward(){
+    const steps = stepsOf(idx);
+    const shown = stepState.get(idx) || 0;
+    if (shown < steps.length){ stepState.set(idx, shown + 1); applySteps(); return; }
+    go(idx + 1);
+  }
+  function backward(){
+    const steps = stepsOf(idx);
+    const shown = stepState.get(idx) || 0;
+    if (shown > 0){ stepState.set(idx, shown - 1); applySteps(); return; }
+    go(idx - 1);
+  }
+
+  function renderMermaid(slide){
+    if (typeof mermaid === 'undefined') return;
+    const nodes = Array.from(slide.querySelectorAll('.mermaid:not([data-done])'));
+    if (!nodes.length) return;
+    nodes.forEach(n => n.setAttribute('data-done', ''));
+    mermaid.run({ nodes }).catch(err => {
+      nodes.forEach(n => n.removeAttribute('data-done'));
+      console.error('mermaid 渲染失败：', err);
+    });
+  }
+
+  function render(){
+    slides.forEach((s,i)=> s.classList.toggle('active', i===idx));
+    progress.style.width = ((idx+1)/total*100) + '%';
+    pagenum.textContent = (idx+1) + ' / ' + total;
+    prevBtn.disabled = (idx===0);
+    nextBtn.disabled = (idx===total-1);
+    applySteps();
+    renderMermaid(slides[idx]);
+  }
+  function go(n){ idx = Math.max(0, Math.min(total-1, n)); render(); }
+
+  prevBtn.addEventListener('click', e=>{ e.stopPropagation(); backward(); });
+  nextBtn.addEventListener('click', e=>{ e.stopPropagation(); forward(); });
+
+  document.addEventListener('keydown', e=>{
+    if(e.key==='ArrowRight'||e.key===' '||e.key==='PageDown'){ e.preventDefault(); forward(); }
+    else if(e.key==='ArrowLeft'||e.key==='PageUp'){ e.preventDefault(); backward(); }
+    else if(e.key==='Home'){ stepState.set(idx, 0); go(0); }
+    else if(e.key==='End'){ go(total-1); }
+  });
+
+  document.getElementById('stage').addEventListener('click', e=>{
+    if(e.target.closest('.nav')) return;
+    const x = e.clientX;
+    if(x < window.innerWidth*0.5) backward(); else forward();
+  });
+
+  function fit(){
+    const s = Math.min(window.innerWidth/1280, window.innerHeight/720);
+    document.getElementById('stage').style.transform = 'translate(-50%,-50%) scale(' + s + ')';
+  }
+  window.addEventListener('resize', fit);
+  fit();
+  render();
+})();
+</script>
+</body>
+</html>

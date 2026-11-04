@@ -1,0 +1,811 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第6章 图的基本算法 · 算法导论互动讲义</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+<nav class="topbar">
+  <div class="topbar-inner">
+    <span class="brand"><a href="index.html" style="color:inherit">← 学习地图</a></span>
+    <span class="crumb">阶段③ · 图算法 / 第6章</span>
+  </div>
+</nav>
+<div class="wrap">
+  <div class="lecture-head">
+    <span class="ch-label">CHAPTER 06 · 图算法</span>
+    <h1>图的基本算法</h1>
+    <p class="lead">图怎么存、怎么走遍，以及"走一遍"能顺手算出哪些结构：最少边数、拓扑序、强连通分量。</p>
+  </div>
+  <div class="position-bar">
+    <strong>本章在主线上的位置：</strong>阶段②处理的是"只有大小关系"的数据；现实中的关系往往是一张任意的网（网页链接、课程先修、软件依赖），本章给出存图（6.1）、遍历图（6.2 / 6.3）、以及从遍历中读出拓扑序（6.4）与强连通分量（6.5）的方法 → 第7章在此框架上加"权"求最短路。<br>
+    第6章回答主线上的第6个问题：<strong>数据的关系是一张网（图）时，怎么存它、怎么系统地走遍它、走一遍还能算出哪些结构？</strong>
+    <div class="map-inline">
+      <span class="node">① 分析基础<br>Ch1 增长率 · Ch2 分治递归</span><span class="arrow">→</span>
+      <span class="node">② 排序与检索<br>Ch3 排序 · Ch4 哈希表 · Ch5 红黑树</span><span class="arrow">→</span>
+      <span class="node here">③ 图算法<br><strong>Ch6 图基本算法</strong> · Ch7 最短路</span><span class="arrow">→</span>
+      <span class="node">④ 设计范式<br>Ch8 动规 · Ch9 贪心 · Ch10 NP完全</span>
+    </div>
+  </div>
+  <div class="objectives">
+    <h4>🎯 学完本章，合上书你应该能：</h4>
+    <ol>
+      <li>说出邻接表与邻接矩阵在空间、单点查边、遍历邻居三项上的代价，并对给定的 |V|、|E| 选出合适表示；</li>
+      <li>在给定有向图上从源点手算 BFS：写出每一步的队列、各顶点的 d 与 π，并说出 d 的含义；</li>
+      <li>在给定有向图上手算 DFS：写出全部 2|V| 个时间戳，逐条边分类为树边/回边/前向边/横向边，并用回边判环；</li>
+      <li>在 DAG 上用"完成时间逆序"手算一个合法拓扑序，并逐边验证 f[u] 大于 f[v]；</li>
+      <li>用两遍 DFS 手算有向图的强连通分量：写出第一遍 f 值、G^T 的邻接关系与第二遍的每棵树；</li>
+      <li>解释 BFS 与 DFS 的时间复杂度都是 Θ(V+E) 的理由。</li>
+    </ol>
+  </div>
+  <div class="lecture">
+    <div class="figure">
+      <div class="mermaid">
+flowchart TB
+  A["现实关系是图：网页 课程 依赖"] --> B["怎么存：邻接表 vs 矩阵的账"]
+  B --> C["需要系统地走遍全图"]
+  C --> D["BFS：按层推进 得最少边数"]
+  C --> E["DFS：一路到底 留下时间戳"]
+  E --> F["完成时间逆序 = 拓扑序"]
+  E --> G["两遍 DFS = 强连通分量"]
+  D --> H["代价：边无权 只回答结构问题"]
+  F --> H
+  G --> H
+  H --> I["第7章：带权图的最短路"]
+  classDef hot fill:#fbeedd,stroke:#c4651f,stroke-width:2.5px,color:#c4651f;
+  classDef danger fill:#fae9e7,stroke:#b03a2e,stroke-width:2.5px,color:#b03a2e;
+  class H danger;
+  class I hot;
+      </div>
+      <div class="caption">本章推导主线：每一步都回答"为什么需要下一步"，最终落到代价（边无权），指向第7章。</div>
+    </div>
+    <h2><span class="sec-no">6.1</span>图怎么存：邻接表与邻接矩阵的三笔账</h2>
+    <p>第5章的红黑树其实是一种特殊的图——每个节点至多两个孩子的有根树。本章把"关系"推广到最一般的形式：<span class="term">图</span>（Graph）G = (V, E)，V 是顶点集，E 是边集；边有方向叫有向图，无方向叫无向图。要算任何图算法，第一步是把图放进内存——怎么放，直接决定后面所有算法的速度。</p>
+    <p>全章用一个贯穿例子：6 个顶点的有向图 G，顶点 {s, a, b, c, d, e}，共 9 条边：s→a、s→b、s→c、a→c、b→c、b→d、c→a、d→e、e→d。它故意含两个环（a→c→a 与 d→e→d），后面 DFS 边分类要用。</p>
+    <div class="figure">
+      <div class="mermaid">
+flowchart LR
+  S["s"] --> A["a"]
+  S --> B["b"]
+  S --> C["c"]
+  A --> C
+  B --> C
+  B --> D["d"]
+  C --> A
+  D --> E["e"]
+  E --> D
+      </div>
+      <div class="caption">图 6.1 贯穿例子 G：6 顶点 9 条有向边，含环 a→c→a 与 d↔e。</div>
+    </div>
+    <h3>两种存法</h3>
+    <p><span class="term">邻接表</span>（Adjacency List）：一个长度为 |V| 的数组 Adj，Adj[u] 是一条链表（或数组），装 u 的所有出边终点。G 的完整邻接表如下，总共 Θ(V+E) 项：</p>
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>顶点 u</th><th>Adj[u]（按字母序）</th><th>出度</th></tr>
+        <tr><td>s</td><td>a, b, c</td><td>3</td></tr>
+        <tr><td>a</td><td>c</td><td>1</td></tr>
+        <tr><td>b</td><td>c, d</td><td>2</td></tr>
+        <tr><td>c</td><td>a</td><td>1</td></tr>
+        <tr><td>d</td><td>e</td><td>1</td></tr>
+        <tr><td>e</td><td>d</td><td>1</td></tr>
+      </table>
+    </div>
+    <p><span class="term">邻接矩阵</span>（Adjacency Matrix）：|V|×|V| 的 0-1 矩阵 M，M[u][v] = 1 当且仅当边 (u, v) ∈ E。G 的矩阵如下（行是 u，列是 v）：</p>
+    <div class="tbl-wrap">
+      <table>
+        <tr><th></th><th>s</th><th>a</th><th>b</th><th>c</th><th>d</th><th>e</th></tr>
+        <tr><th>s</th><td>0</td><td>1</td><td>1</td><td>1</td><td>0</td><td>0</td></tr>
+        <tr><th>a</th><td>0</td><td>0</td><td>0</td><td>1</td><td>0</td><td>0</td></tr>
+        <tr><th>b</th><td>0</td><td>0</td><td>0</td><td>1</td><td>1</td><td>0</td></tr>
+        <tr><th>c</th><td>0</td><td>1</td><td>0</td><td>0</td><td>0</td><td>0</td></tr>
+        <tr><th>d</th><td>0</td><td>0</td><td>0</td><td>0</td><td>0</td><td>1</td></tr>
+        <tr><th>e</th><td>0</td><td>0</td><td>0</td><td>0</td><td>1</td><td>0</td></tr>
+      </table>
+    </div>
+    <h3>三笔账（以 |V|=1000、|E|=5000 的稀疏图为例）</h3>
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>代价项</th><th>邻接矩阵</th><th>邻接表</th></tr>
+        <tr><td>空间</td><td>Θ(V²)：1000×1000 = 10⁶ 项，每项 1 字节 ≈ 1MB</td><td>Θ(V+E)：约 6000 项，省两个数量级</td></tr>
+        <tr><td>查一条边 (u, v)</td><td>O(1)：直接读 M[u][v]</td><td>O(deg(u))：扫 u 的整条链，平均 deg = E/V = 5</td></tr>
+        <tr><td>遍历 u 的全部邻居</td><td>O(V)：扫整行 1000 项，哪怕只有 5 个是 1</td><td>O(deg(u))：链上有几个看几个，平均 5</td></tr>
+        <tr><td>无向图的额外账</td><td>矩阵对称，浪费一半</td><td>每条边存两份，共 2|E| 项，总量仍 Θ(E)</td></tr>
+      </table>
+    </div>
+    <div class="formula">邻接表空间 Θ(<span class="var">V</span> + <span class="var">E</span>)，邻接矩阵空间 Θ(<span class="var">V</span>²)</div>
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>邻接表是"按人存的通讯录"——只记真正存在的联系；邻接矩阵是"全班两两打勾的点名册"——查谁都快，但绝大多数格子是 0。稀疏图（|E| 远小于 |V|²）用表；稠密图（|E| 接近 |V|²）或要频繁回答"u、v 之间有没有边"时用矩阵。</p>
+    </div>
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>"矩阵查边 O(1)，所以矩阵总是更好"——错。BFS/DFS 的主循环是"遍历每个顶点的邻居"，矩阵把这一步从 O(deg) 拖成 O(V)，整体验复杂度从 Θ(V+E) 恶化为 Θ(V²)。|V|=10⁵ 时，10¹⁰ 次操作根本跑不完。</p>
+    </div>
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 6.1-1</div><div class="q-text">邻接表具体存了什么？|V|=1000、|E|=5000 的有向图，邻接表和矩阵各约多少项？</div><span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back"><div class="a-tag">参考答案</div>Adj[u] 存 u 的所有出边终点。邻接表 Θ(V+E) ≈ 6000 项；矩阵 V² = 10⁶ 项，每项 1 字节约 1MB。</div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 6.1-2</div><div class="q-text">什么情况下邻接矩阵反而比邻接表好？</div><span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back"><div class="a-tag">参考答案</div>两种：图稠密（|E| 接近 |V|²，表不再省空间）；或需要 O(1) 回答"任意 u、v 之间有没有边"。</div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <h2><span class="sec-no">6.2</span>BFS：按层推进，顺手算出最少边数</h2>
+    <p>上一节把图存进了内存，带出的第一个问题是：从某个源点出发，能到达哪些顶点？最少走几条边？<span class="term">广度优先搜索</span>（Breadth-First Search, BFS）回答它：从源点 s 出发，先访问距离 1 的所有顶点，再访问距离 2 的……按层向外扩张，像水面的涟漪。</p>
+    <p>机制就三样：每个顶点带颜色（白=未发现，灰=已发现未处理完，黑=已处理完）；一个先进先出队列；每个顶点记两个值——d（从 s 出发的边数）和 <span class="term">前驱</span>（Predecessor）π（被谁发现）。规则：每次从队首取出一个顶点 u，扫描 Adj[u]，遇到白色邻居 v 就涂灰、记 d[v] = d[u]+1、π[v] = u、入队；u 扫完涂黑。</p>
+    <p>在贯穿例子 G（有向图，沿边方向走）上从 s 出发，完整手算如下：</p>
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>步</th><th>出队</th><th>扫描邻接表</th><th>新发现（d, π）</th><th>操作后队列</th></tr>
+        <tr><td>0</td><td>—</td><td>—</td><td>s（0, —）</td><td>[s]</td></tr>
+        <tr><td>1</td><td>s</td><td>a, b, c</td><td>a（1, s），b（1, s），c（1, s）</td><td>[a, b, c]</td></tr>
+        <tr><td>2</td><td>a</td><td>c</td><td>—（c 已是灰色，跳过）</td><td>[b, c]</td></tr>
+        <tr><td>3</td><td>b</td><td>c, d</td><td>d（2, b）</td><td>[c, d]</td></tr>
+        <tr><td>4</td><td>c</td><td>a</td><td>—（a 已是黑色，跳过）</td><td>[d]</td></tr>
+        <tr><td>5</td><td>d</td><td>e</td><td>e（3, d）</td><td>[e]</td></tr>
+        <tr><td>6</td><td>e</td><td>d</td><td>—（d 已是黑色，跳过）</td><td>[]</td></tr>
+      </table>
+    </div>
+    <p>最终结果：d[s]=0，d[a]=d[b]=d[c]=1，d[d]=2，d[e]=3；π[a]=π[b]=π[c]=s，π[d]=b，π[e]=d。注意一个对照：c 在 BFS 里是第 1 层（边 s→c 直达），而下一节 DFS 会从 s→a→c 走，把 c 放到深度 2——同一幅图，两种走法给出不同的"层级"。</p>
+    <div class="figure">
+      <div class="mermaid">
+flowchart TB
+  S["s · d=0"] --> A["a · d=1"]
+  S --> B["b · d=1"]
+  S --> C["c · d=1"]
+  B --> D["d · d=2"]
+  D --> E["e · d=3"]
+      </div>
+      <div class="caption">图 6.2 BFS 树：只画 5 条"发现边"（π 边），顶点按层排列。非树边（a→c、b→c 等）一律不进入树。</div>
+    </div>
+    <div class="formula">d[<span class="var">v</span>] = 从 s 到 v 的最少边数（无权图的<span class="term">最短路径</span>，Shortest Path）</div>
+    <div class="box insight">
+      <span class="box-tag">✅ 判定规则</span>
+      <p>为什么第一次发现 v 时 d[v] 就一定最少？队列里任意时刻至多跨两层，第 k 层顶点一定先于第 k+1 层出队；所以 v 第一次被发现时，走的边数已经是所有可能里最小的。这是 BFS 一切结论的地基。</p>
+    </div>
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>"BFS 求的是最短路，所以带权图也能用"——错。本章边无权，d 是<strong>边数</strong>不是权重和。边带权时"层数少"不等于"代价小"，需要第7章的 Dijkstra。</p>
+    </div>
+    <p>时间复杂度：每个顶点入队、出队各一次，共 Θ(V)；每条边在邻接表里被检查恰好一次（有向图）或两次（无向图），共 Θ(E)。合计：</p>
+    <div class="formula">BFS 时间 Θ(<span class="var">V</span> + <span class="var">E</span>)（邻接表表示下）</div>
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 6.2-1</div><div class="q-text">BFS 凭什么保证第一次发现 v 时 d[v] 就是最少边数？</div><span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back"><div class="a-tag">参考答案</div>队列按层单调：任意时刻至多跨两层，第 k 层先于第 k+1 层出队，所以 v 首次被发现时边数已最小。</div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 6.2-2</div><div class="q-text">BFS 的 Θ(V+E) 从哪来？无向图的边被检查几次？</div><span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back"><div class="a-tag">参考答案</div>每顶点入/出队各一次 → Θ(V)；每条边被检查一次（有向）或两次（无向，两端各扫到一回）→ Θ(E)。</div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <h2><span class="sec-no">6.3</span>DFS 与边分类：时间戳是图结构的 X 光</h2>
+    <p>BFS 横向铺开，另一条完全相反的路是纵向钻到底：<span class="term">深度优先搜索</span>（Depth-First Search, DFS）。它沿一条边走到没路可走才回溯。DFS 真正值钱的产物不是访问顺序，而是给每个顶点打的两个<span class="term">时间戳</span>（Timestamp）：发现时刻 d 与完成时刻 f（全局时钟从 1 起，每发生一次"发现"或"完成"就 +1，n 个顶点共 2n 个时刻）。</p>
+    <p>在 G 上跑 DFS：从 s 开始，邻接表按字母序扫描，主循环也按字母序。完整轨迹（时刻 1 到 12）：</p>
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>时刻</th><th>事件</th><th>说明</th></tr>
+        <tr><td>1</td><td>发现 s</td><td>主循环起点</td></tr>
+        <tr><td>2</td><td>发现 a</td><td>沿树边 s→a</td></tr>
+        <tr><td>3</td><td>发现 c</td><td>沿树边 a→c</td></tr>
+        <tr><td>—</td><td>c→a 检查</td><td>a 是灰色祖先 ⇒ 回边（环 a→c→a）</td></tr>
+        <tr><td>4</td><td>完成 c</td><td>c 的邻接表扫完</td></tr>
+        <tr><td>5</td><td>完成 a</td><td>回溯到 s</td></tr>
+        <tr><td>6</td><td>发现 b</td><td>沿树边 s→b</td></tr>
+        <tr><td>—</td><td>b→c 检查</td><td>c 黑色且 d[c]=3 小于 d[b]=6 ⇒ 横向边</td></tr>
+        <tr><td>7</td><td>发现 d</td><td>沿树边 b→d</td></tr>
+        <tr><td>8</td><td>发现 e</td><td>沿树边 d→e</td></tr>
+        <tr><td>—</td><td>e→d 检查</td><td>d 是灰色祖先 ⇒ 回边（环 d→e→d）</td></tr>
+        <tr><td>9</td><td>完成 e</td><td></td></tr>
+        <tr><td>10</td><td>完成 d</td><td></td></tr>
+        <tr><td>11</td><td>完成 b</td><td>回溯到 s</td></tr>
+        <tr><td>—</td><td>s→c 检查</td><td>c 黑色且 d[c]=3 大于 d[s]=1，c 是 s 的后代 ⇒ 前向边</td></tr>
+        <tr><td>12</td><td>完成 s</td><td>主循环确认全部访问，结束</td></tr>
+      </table>
+    </div>
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>顶点</th><th>d（发现）</th><th>f（完成）</th><th>π（前驱）</th></tr>
+        <tr><td>s</td><td>1</td><td>12</td><td>—</td></tr>
+        <tr><td>a</td><td>2</td><td>5</td><td>s</td></tr>
+        <tr><td>c</td><td>3</td><td>4</td><td>a</td></tr>
+        <tr><td>b</td><td>6</td><td>11</td><td>s</td></tr>
+        <tr><td>d</td><td>7</td><td>10</td><td>b</td></tr>
+        <tr><td>e</td><td>8</td><td>9</td><td>d</td></tr>
+      </table>
+    </div>
+    <h3>把每条边分进四个桶</h3>
+    <p>DFS 把图的边分成四类：<span class="term">树边</span>（Tree Edge）、<span class="term">回边</span>（Back Edge）、<span class="term">前向边</span>（Forward Edge）、<span class="term">横向边</span>（Cross Edge）。判定只看遍历时终点 v 的颜色和两个 d 值：</p>
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>类型</th><th>判定（遍历 u→v 的瞬间）</th><th>含义</th></tr>
+        <tr><td>树边</td><td>v 白色</td><td>首次发现 v，进入 DFS 树</td></tr>
+        <tr><td>回边</td><td>v 灰色</td><td>v 是 u 的祖先 ⇒ 存在环</td></tr>
+        <tr><td>前向边</td><td>v 黑色，且 d[v] 大于 d[u]</td><td>v 是 u 的后代（非树边）</td></tr>
+        <tr><td>横向边</td><td>v 黑色，且 d[v] 小于 d[u]</td><td>v 在另一棵子树或另一棵树</td></tr>
+      </table>
+    </div>
+    <p>G 的 9 条边逐条分类：</p>
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>边</th><th>类型</th><th>判定依据</th></tr>
+        <tr><td>s→a</td><td>树边</td><td>时刻 2 首次发现 a</td></tr>
+        <tr><td>a→c</td><td>树边</td><td>时刻 3 首次发现 c</td></tr>
+        <tr><td>c→a</td><td>回边</td><td>a 灰色祖先 ⇒ 环 a→c→a</td></tr>
+        <tr><td>s→b</td><td>树边</td><td>时刻 6 首次发现 b</td></tr>
+        <tr><td>b→c</td><td>横向边</td><td>c 黑色，d[c]=3 小于 d[b]=6，且 c 不是 b 的后代</td></tr>
+        <tr><td>b→d</td><td>树边</td><td>时刻 7 首次发现 d</td></tr>
+        <tr><td>d→e</td><td>树边</td><td>时刻 8 首次发现 e</td></tr>
+        <tr><td>e→d</td><td>回边</td><td>d 灰色祖先 ⇒ 环 d→e→d</td></tr>
+        <tr><td>s→c</td><td>前向边</td><td>c 黑色，d[c]=3 大于 d[s]=1，c 是 s 经 a 的后代</td></tr>
+      </table>
+    </div>
+    <div class="figure">
+      <div class="mermaid">
+flowchart TB
+  S["s 1/12"] -->|"树边"| A["a 2/5"]
+  A -->|"树边"| C["c 3/4"]
+  C -.->|"回边"| A
+  S -->|"树边"| B["b 6/11"]
+  B -.->|"横向边"| C
+  B -->|"树边"| D["d 7/10"]
+  D -->|"树边"| E["e 8/9"]
+  E -.->|"回边"| D
+  S -.->|"前向边"| C
+      </div>
+      <div class="caption">图 6.3 G 的 DFS 树（实线=树边）与三类非树边（虚线）。顶点标注 d/f；两条回边对应两个环。</div>
+    </div>
+    <div class="box insight">
+      <span class="box-tag">✅ 判定规则</span>
+      <p><span class="term">括号化定理</span>（Parenthesis Theorem）：任意两顶点 u、v 的区间 [d, f] 要么完全不相交，要么一个完全包含另一个，且包含者恰是祖先。看时间戳区间就知道祖孙关系——这就是上面边分类规则的来源。<strong>回边 ⟺ 有向图有环</strong>：发现指向灰色祖先的边，则祖先到当前顶点的树路径加上这条边即成环；反之，环上最早被发现的顶点必被环上前驱以回边指到。</p>
+    </div>
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>"四种边到处都有"——错。<strong>无向图的 DFS 只有树边和回边</strong>，没有前向边和横向边（无向边双向可达，任何非树边都会指向祖先）。四分类只对<strong>有向图</strong>完整成立。</p>
+    </div>
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 6.3-1</div><div class="q-text">四种边的判定规则（按遍历时 v 的颜色与 d 值）？</div><span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back"><div class="a-tag">参考答案</div>v 白 → 树边；v 灰 → 回边；v 黑且 d[v] 大于 d[u] → 前向边；v 黑且 d[v] 小于 d[u] → 横向边。</div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 6.3-2</div><div class="q-text">怎么用 DFS 判定有向图有没有环？为什么成立？</div><span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back"><div class="a-tag">参考答案</div>找回边：发现指向灰色祖先的边即有环（树路径+回边成环）；反之环上最早被发现的顶点必收到回边。两者互为充要。</div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <h2><span class="sec-no">6.4</span>拓扑排序：完成时间逆序，一行排程</h2>
+    <p>上一节留下的时间戳，第一个大用处是排程。现实里大量问题长这样：任务之间有先后约束（先修课、编译依赖、工序），要排成一个不违反任何约束的线性顺序。约束图必须是无环的——<span class="term">有向无环图</span>（Directed Acyclic Graph, DAG）；所求的叫<span class="term">拓扑排序</span>（Topological Sort）：一个顶点线性序，使每条边 u→v 都有 u 排在 v 前面。</p>
+    <p>例子：6 门课的先修关系——CS101→CS201→CS301，CS101→CS150，MATH→CS201，MATH→STAT。边 u→v 表示"先修 u 才能修 v"。</p>
+    <div class="figure">
+      <div class="mermaid">
+flowchart LR
+  M["MATH"] --> C2["CS201"]
+  M --> ST["STAT"]
+  C1["CS101"] --> C2
+  C1 --> C15["CS150"]
+  C2 --> C3["CS301"]
+      </div>
+      <div class="caption">图 6.4 课程先修 DAG：两个"源头"课程 MATH 与 CS101。</div>
+    </div>
+    <p>算法一句话：跑 DFS，把顶点按完成时间 f 逆序排列。手算（主循环按字母序 CS101、CS150、CS201、CS301、MATH、STAT；邻接表内也按字母序）：</p>
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>顶点</th><th>d</th><th>f</th><th>轨迹备注</th></tr>
+        <tr><td>CS101</td><td>1</td><td>8</td><td>主循环起点</td></tr>
+        <tr><td>CS150</td><td>2</td><td>3</td><td>无出边，立即完成</td></tr>
+        <tr><td>CS201</td><td>4</td><td>7</td><td>CS101 的第二个邻居</td></tr>
+        <tr><td>CS301</td><td>5</td><td>6</td><td>链尾</td></tr>
+        <tr><td>MATH</td><td>9</td><td>12</td><td>主循环捡起的第二个源头</td></tr>
+        <tr><td>STAT</td><td>10</td><td>11</td><td>MATH→CS201 已黑，走 MATH→STAT</td></tr>
+      </table>
+    </div>
+    <p>按 f 从大到小排：<strong>MATH(12) → STAT(11) → CS101(8) → CS201(7) → CS301(6) → CS150(3)</strong>。逐边验证：MATH→CS201（12 大于 7 ✓）、MATH→STAT（12 大于 11 ✓）、CS101→CS201（8 大于 7 ✓）、CS101→CS150（8 大于 3 ✓）、CS201→CS301（7 大于 6 ✓）——全部满足先修在后修之前。这就是一个合法修读顺序。</p>
+    <div class="box insight">
+      <span class="box-tag">✅ 判定规则</span>
+      <p>正确性一句话：DAG 中任何边 u→v 都不可能是回边（回边 ⟺ 环），只能是树边、前向边或横向边，而三种都满足 f[u] 大于 f[v]——所以 f 逆序保证 u 在 v 前。</p>
+    </div>
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>两个：① 拓扑序<strong>不唯一</strong>——MATH、CS101、CS150、STAT、CS201、CS301 也合法（多个"入度 0"的源头可互换）；② 有环图不存在拓扑序——环上顶点互相要求"排在我前面"，矛盾。所以算法前若有疑，先用 DFS 查回边。</p>
+    </div>
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 6.4-1</div><div class="q-text">为什么把顶点按完成时间 f 逆序排就是合法拓扑序？</div><span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back"><div class="a-tag">参考答案</div>DAG 无回边，任意边 u→v 只能是树/前向/横向边，三种都满足 f[u] 大于 f[v]，故 f 逆序保证 u 在 v 前。</div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 6.4-2</div><div class="q-text">拓扑序唯一吗？为什么前提必须是 DAG？</div><span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back"><div class="a-tag">参考答案</div>不唯一（多个入度 0 顶点可互换）。有环时环上顶点互相要求排前，矛盾无解，所以前提是 DAG。</div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <h2><span class="sec-no">6.5</span>强连通分量：两遍 DFS 把任意有向图缩成 DAG</h2>
+    <p>拓扑排序在环面前失效。那"环"本身值得研究：有向图里哪些顶点互相可达？互相可达的极大顶点集叫<span class="term">强连通分量</span>（Strongly Connected Components, SCC）。把每个分量捏成一个点，得到的<span class="term">分量图</span>（Component Graph）一定是 DAG——任意有向图因此可以被"分层"处理。</p>
+    <p>算法（Kosaraju）只用 DFS，做两遍：① 在 G 上跑 DFS，记录每个顶点的完成时间 f；② 构造<span class="term">转置图</span>（Transpose Graph）G^T（把所有边反向），在 G^T 上按 f 从大到小的顺序做 DFS，得到的每一棵树就是一个强连通分量。</p>
+    <p>换一个例图 H：顶点 {a, b, c, d, e, f}，8 条边：a→b、b→c、c→a（环）、a→d、d→e、e→d（环）、c→f、e→f。肉眼看分量是 {a,b,c}、{d,e}、{f}——用算法验证。</p>
+    <div class="figure">
+      <div class="mermaid">
+flowchart LR
+  A["a"] --> B["b"]
+  B --> C["c"]
+  C --> A
+  A --> D["d"]
+  D --> E["e"]
+  E --> D
+  C --> F["f"]
+  E --> F
+      </div>
+      <div class="caption">图 6.5 SCC 例图 H：两个环 {a,b,c}、{d,e}，加上孤立汇 f。</div>
+    </div>
+    <p>第一遍：在 H 上从 a 开始（主循环字母序，邻接表字母序）跑 DFS。a(1) → b(2) → c(3)；c→a 回边；c→f 发现 f(4)，f 无出边完成于 5；c 完成 6，b 完成 7；a→d 发现 d(8)；d→e 发现 e(9)；e→d 回边、e→f 已黑；e 完成 10，d 完成 11，a 完成 12。</p>
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>顶点</th><th>d</th><th>f</th><th>按 f 逆序</th></tr>
+        <tr><td>a</td><td>1</td><td>12</td><td>第 1 位</td></tr>
+        <tr><td>d</td><td>8</td><td>11</td><td>第 2 位</td></tr>
+        <tr><td>e</td><td>9</td><td>10</td><td>第 3 位</td></tr>
+        <tr><td>b</td><td>2</td><td>7</td><td>第 4 位</td></tr>
+        <tr><td>c</td><td>3</td><td>6</td><td>第 5 位</td></tr>
+        <tr><td>f</td><td>4</td><td>5</td><td>第 6 位</td></tr>
+      </table>
+    </div>
+    <p>第二遍之前先写出 G^T 的邻接关系（每条边反向）：</p>
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>顶点</th><th>G^T 中的邻居</th><th>由哪些原边反向而来</th></tr>
+        <tr><td>a</td><td>c</td><td>c→a</td></tr>
+        <tr><td>b</td><td>a</td><td>a→b</td></tr>
+        <tr><td>c</td><td>b</td><td>b→c</td></tr>
+        <tr><td>d</td><td>a, e</td><td>a→d、e→d</td></tr>
+        <tr><td>e</td><td>d</td><td>d→e</td></tr>
+        <tr><td>f</td><td>c, e</td><td>c→f、e→f</td></tr>
+      </table>
+    </div>
+    <p>在 G^T 上按 f 逆序（a, d, e, b, c, f）做主循环 DFS：</p>
+    <ul>
+      <li>第 1 棵树：从 a 出发，a→c→b（b→a 指回灰色根），收齐 <strong>{a, b, c}</strong>；</li>
+      <li>第 2 棵树：顺序中下一个未访问的是 d，从 d 出发，d→a 已黑（别的树）、d→e 发现 e（e→d 回指），收齐 <strong>{d, e}</strong>；</li>
+      <li>第 3 棵树：e、b、c 都已访问，下一个是 f，f→c、f→e 都是黑色出边，单点成树 <strong>{f}</strong>。</li>
+    </ul>
+    <p>三棵树恰好对应肉眼找出的三个分量。把它们捏成点看连接：{a,b,c}→{d,e}（边 a→d）、{a,b,c}→{f}（边 c→f）、{d,e}→{f}（边 e→f）——分量图如下图，是 DAG：</p>
+    <div class="figure">
+      <div class="mermaid">
+flowchart LR
+  K1["SCC1 ｛a b c｝"] --> K2["SCC2 ｛d e｝"]
+  K1 --> K3["SCC3 ｛f｝"]
+  K2 --> K3
+      </div>
+      <div class="caption">图 6.6 H 的分量图：一定是 DAG，否则两个分量会互相可达、本应合并。</div>
+    </div>
+    <div class="box insight">
+      <span class="box-tag">✅ 判定规则</span>
+      <p>为什么按 f 逆序在 G^T 上 DFS 不会漏、也不会并？<strong>不会漏</strong>：分量内部强连通，从任一点出发的 DFS 必收齐整组。<strong>不会并</strong>：若从当前分量 C 在 G^T 里能走到某个未访问分量 C′，说明原图有边 C′→C，则第一遍 DFS 会给出 f(C′) 大于 f(C)，与"按 f 逆序先处理 C"矛盾。直观地说：f 逆序 = 在分量图上从"汇"往"源"处理，而 G^T 把边全反了，当前分量的出边只指向已收编的分量，DFS 被关在自己的分量里。</p>
+    </div>
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 6.5-1</div><div class="q-text">SCC 算法的两遍 DFS 各做什么？</div><span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back"><div class="a-tag">参考答案</div>第一遍在 G 上跑 DFS 记录完成时间 f；第二遍在 G^T 上按 f 逆序逐棵 DFS，每棵树恰是一个强连通分量。</div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 6.5-2</div><div class="q-text">为什么第二遍 DFS 不会把两个分量并成一棵树？</div><span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back"><div class="a-tag">参考答案</div>若 G^T 中能从 C 走到未访问的 C′，则原图有 C′→C，第一遍得 f(C′) 大于 f(C)，与逆序先处理 C 矛盾。</div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <h2><span class="sec-no">🃏</span>概念卡：本章概念的一分钟画像</h2>
+    <p>翻面前先自问：这个概念我能用一句话讲清楚吗？</p>
+    <div class="flip-grid">
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 1</div><div class="q-text">邻接表（Adjacency List）</div><span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">每个顶点挂一条出边链表，列出所有邻居。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">稀疏图的空间浪费——矩阵 Θ(V²) 里绝大多数是 0。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">按人存通讯录，而不是两两打勾的点名册。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为查边也是 O(1)——查 (u,v) 要扫链，O(deg(u))。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">本章 BFS/DFS 的默认输入；第7章所有带权算法。</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 2</div><div class="q-text">广度优先搜索（BFS）</div><span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">从源点按层扩张，用队列保证"先发现先处理"。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">无权图的可达性与最少边数路径。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">水面涟漪，一圈一圈向外扩。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为 d 是带权最短路——边无权，d 只是边数。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">无权最短路、分层；第7章 Dijkstra 是它的带权推广。</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 3</div><div class="q-text">深度优先搜索（DFS）</div><span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">沿一条路钻到底再回溯，并打发现/完成时间戳。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">把图的骨架压成森林加时间戳，供结构分析。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">走迷宫：贴墙走到死路才回头。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为只能判可达——时间戳才是本体。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">边分类、拓扑排序、SCC 的公共引擎。</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 4</div><div class="q-text">括号化定理（Parenthesis Theorem）</div><span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">任意两顶点的 [d,f] 区间要么不相交，要么一个含另一个。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">给"祖先/后代/无关"一个数值判定标准。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">DFS 把图压成一串配对良好的括号。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为区间可以部分重叠——不可能，只含或分离。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">证明边分类规则与拓扑排序正确性。</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 5</div><div class="q-text">回边（Back Edge）</div><span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">DFS 中指向灰色祖先的边。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">判环：有回边 ⟺ 有向图有环。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">族谱里后代回指祖先，必成圈。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为无向图也有四种边——无向只有树边和回边。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">死锁检测、依赖环检查（见 L3 习题）。</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 6</div><div class="q-text">拓扑排序（Topological Sort）</div><span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">DAG 上的线性序，每条边 u→v 都有 u 在 v 前。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">有先后约束的任务排程：课程、编译、安装。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">把所有约束箭头掰成"从左指向右"的排队。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为序唯一；以及有环也想排——有环则无解。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">任务调度；第8章 DAG 上动规的遍历序。</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 7</div><div class="q-text">强连通分量（SCC）</div><span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">有向图中互相可达的极大顶点集。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">把任意有向图缩成 DAG（分量图），分层处理。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">把"互为因果"的一团捏成一个点。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为要枚举所有环——两遍 DFS 即 Θ(V+E)。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">循环依赖分析、编译器优化、2-SAT 判定。</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <h2><span class="sec-no">📝</span>分层习题</h2>
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>判断对错，并说理由：① 无向图的邻接表共 Θ(E) 项（每条边存两次，所以是 2E 项）；② 邻接矩阵查一条边要 O(deg(u))；③ |V|=1000、|E|=5000 的图用邻接矩阵跑 BFS，时间仍是 Θ(V+E)。</div>
+      <details>
+        <summary>提示</summary>
+        <p>① 注意 Θ 记号吸收常数；② 回想矩阵怎么查边；③ 回想矩阵表示下"遍历邻居"这一步的代价。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p>① <strong>对</strong>。无向邻接表每条边存两份，共 2|E| 项；2|E| = Θ(E)，常数被 Θ 吸收。易错点是把"2E 项"说成"Θ(E²)"——项数与边数成正比，不是平方。</p>
+          <p>② <strong>错</strong>。矩阵查边直接读 M[u][v]，O(1)；O(deg(u)) 是邻接表查边的代价。两者张冠李戴是本节最常见的错。</p>
+          <p>③ <strong>错</strong>。Θ(V+E) 是邻接表表示下的复杂度。矩阵表示下，每个顶点"遍历邻居"要扫整行 O(V)，总时间 Θ(V²) = 10⁶，而不是 Θ(6000)。稠密时差别消失，稀疏时致命。</p>
+        </div>
+      </details>
+    </div>
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>关于 DFS 边分类，哪个说法正确？A. 无向图 DFS 也有四种边；B. 有向图中"存在回边"与"存在环"等价；C. 前向边指向祖先；D. 横向边只在无向图出现。</div>
+      <details>
+        <summary>提示</summary>
+        <p>回忆无向图的边为什么不可能横着走；回边定义里的"灰色祖先"和环的关系。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p><strong>选 B</strong>。回边指向灰色祖先，树路径加这条边即成环；反过来环上最早被发现的顶点必收到回边——两者等价，这就是"DFS 判环"的全部依据。</p>
+          <p>A 错：无向图每条非树边都指向祖先，只有树边和回边两类。C 错：前向边指向<strong>后代</strong>（指向祖先的是回边）。D 错：横向边只在<strong>有向</strong>图出现（如本章 G 中的 b→c）。</p>
+        </div>
+      </details>
+    </div>
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>新图 J：顶点 {u, v, w, x, y}，边 u→v、u→x、v→w、w→v、x→w、x→y、y→x。从 u 开始跑 DFS（邻接表与主循环均按字母序），写出每个顶点的 d/f，并把 7 条边逐条分类。</div>
+      <details>
+        <summary>提示</summary>
+        <p>先写邻接表：u: [v, x]，v: [w]，w: [v]，x: [w, y]，y: [x]。再按"发现时刻从 1 起，发现与完成都走时钟"推进。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p>轨迹：时刻 1 发现 u；u→v，时刻 2 发现 v；v→w，时刻 3 发现 w；w→v，v 灰色 ⇒ 回边；w 完成于 4；v 完成于 5；u→x，时刻 6 发现 x；x→w，w 黑色且 d[w]=3 小于 d[x]=6 ⇒ 横向边；x→y，时刻 7 发现 y；y→x，x 灰色 ⇒ 回边；y 完成于 8；x 完成于 9；u 完成于 10。主循环中 v、w、x、y 均已访问，结束。</p>
+          <p>时间戳：u 1/10，v 2/5，w 3/4，x 6/9，y 7/8。</p>
+          <p>边分类：u→v 树边；v→w 树边；w→v 回边（环 v↔w）；u→x 树边；x→w 横向边；x→y 树边；y→x 回边（环 x↔y）。</p>
+          <p>附带结论：J 有两个环，对应 SCC {v, w} 与 {x, y}；u 单独成第三点。</p>
+        </div>
+      </details>
+    </div>
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>图 K：顶点 {p, q, r, m, n}，边 p→q、q→r、r→p、r→m、m→n、n→m。用两遍 DFS（Kosaraju）手算全部强连通分量：写出第一遍的 f 值表、G^T 的邻接关系、第二遍的每棵树。</div>
+      <details>
+        <summary>提示</summary>
+        <p>第一遍主循环按字母序从 p 开始；第二遍在 G^T 上按 f 从大到小开始。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p>第一遍（G 上）：时刻 1 发现 p；p→q，时刻 2 发现 q；q→r，时刻 3 发现 r；r→p，p 灰色 ⇒ 回边；r→m，时刻 4 发现 m；m→n，时刻 5 发现 n；n→m，m 灰色 ⇒ 回边；n 完成于 6；m 完成于 7；r 完成于 8；q 完成于 9；p 完成于 10。</p>
+          <p>f 值：p=10，q=9，r=8，m=7，n=6。f 逆序：p, q, r, m, n。</p>
+          <p>G^T 邻接关系：p: [r]（来自 r→p）；q: [p]（来自 p→q）；r: [q]（来自 q→r）；m: [r, n]（来自 r→m、n→m）；n: [m]（来自 m→n）。</p>
+          <p>第二遍（G^T 上，按 p, q, r, m, n 顺序）：</p>
+          <p>第 1 棵树从 p：p→r 发现 r，r→q 发现 q，q→p 回指灰色根——收齐 {p, q, r}。</p>
+          <p>第 2 棵树：顺序中 q、r 已访问，下一个是 m。m→r 已黑（跨树边，不并），m→n 发现 n，n→m 回指——收齐 {m, n}。</p>
+          <p>结论：两个强连通分量 {p, q, r} 与 {m, n}；分量图只有一条边 {p,q,r}→{m,n}，是 DAG。</p>
+        </div>
+      </details>
+    </div>
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l3">L3 建模应用</span>软件包安装：7 个包 app、ui、net、db、log、json、ssl，前置关系为——json 是 ui 和 net 的前置；ssl 是 net 的前置；log 是 db 的前置；ui、net、db 是 app 的前置。① 把问题建模成图；② 判断能否全部安装（会不会死锁）；③ 给出一个合法安装顺序；④ 若新增"app 是 ssl 的前置"，会怎样？</div>
+      <details>
+        <summary>提示</summary>
+        <p>顶点=包，边 u→v 表示"u 必须先于 v 安装"。能否安装 = 有没有环；安装顺序 = 拓扑序。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p>① 建模：顶点 = 7 个包；边 u→v 表示"先装 u 才能装 v"。共 7 条边：json→ui、json→net、ssl→net、log→db、ui→app、net→app、db→app。这是 DAG 建模的关键一步：边的方向必须和"先装"同向，否则拓扑序会恰好反过来。</p>
+          <p>② 判环：DFS 边分类，逐边检查无回边（源头 json、ssl、log 均无入边，链式指向 app），无环 ⇒ 可以全部安装。</p>
+          <p>③ 跑 DFS（主循环字母序 app, db, json, log, net, ssl, ui）：app 完成于 2（无出边）；db 完成于 4（db→app 已黑）；json 5 起，json→net 发现 net(6)，net→app 已黑，net 完成 7，json→ui 发现 ui(8)，ui→app 已黑，ui 完成 9，json 完成 10；log 11 起，log→db 已黑，log 完成 12；ssl 13 起，ssl→net 已黑，ssl 完成 14。</p>
+          <p>f 逆序：ssl(14) → log(12) → json(10) → ui(9) → net(7) → db(4) → app(2)。验证：json 先于 ui、net ✓；ssl 先于 net ✓；log 先于 db ✓；ui、net、db 先于 app ✓。合法。</p>
+          <p>④ 新增 app→ssl 后出现环 ssl→net→app→ssl：SCC {ssl, net, app} 缩成一个点，三者互相要求"先装我"，死锁。工程上必须打破循环依赖——抽公共接口、拆分模块，让分量图重新变成 DAG。</p>
+        </div>
+      </details>
+    </div>
+    <h2><span class="sec-no">✍️</span>本章自测</h2>
+    <p class="quiz-hint">点击选项判分，答错会给出原因。</p>
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 1</div>
+      <div class="q-stem">|V|=1000、|E|≈500000（稠密，接近 V²/2），且要频繁回答"任意两点间有没有边"，选哪种表示？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 邻接表，因为它永远更省空间</li>
+        <li data-opt="b">B. 邻接矩阵，空间可接受且查边 O(1)</li>
+        <li data-opt="c">C. 邻接表，因为 BFS 在表上更快</li>
+        <li data-opt="d">D. 两种各存一份</li>
+      </ul>
+      <div class="quiz-explain">解析：B 对——稠密时矩阵的 Θ(V²) 不再浪费（一半格子是 1），还换来 O(1) 查边。A 错：稠密图邻接表也要存约 50 万项外加指针开销，不比 1MB 矩阵省。C 错：稠密时 E≈V²，两种表示下 BFS 都是 Θ(V²)，"表更快"的优势消失。D 错：双倍空间没有任何算法收益。</div>
+    </div>
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 2</div>
+      <div class="q-stem">无权图上从 s 跑 BFS，d[v] 的确切含义是？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. s 到 v 的某一条路径的长度</li>
+        <li data-opt="b">B. s 到 v 的最少边数</li>
+        <li data-opt="c">C. v 被发现的时刻</li>
+        <li data-opt="d">D. s 到 v 的路径条数</li>
+      </ul>
+      <div class="quiz-explain">解析：B 对——BFS 按层扩张，首次发现即最少边数。A 错："某一条"可以是任意长的绕路，BFS 树路径是特别的（最短的）那一条。C 错：那是 DFS 时间戳 d，同名不同义，注意区分语境。D 错：d 是长度不是计数。</div>
+    </div>
+    <div class="quiz-block" data-answer="c">
+      <div class="q-no">自测 3</div>
+      <div class="q-stem">DFS 遍历到有向边 u→v 时，v 是黑色且 d[v] 大于 d[u]，这条边属于？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 回边</li>
+        <li data-opt="b">B. 横向边</li>
+        <li data-opt="c">C. 前向边</li>
+        <li data-opt="d">D. 树边</li>
+      </ul>
+      <div class="quiz-explain">解析：C 对——v 黑色（已完成）却比 u 晚发现，说明 v 是 u 的后代，且边不来自首次发现，故为前向边（本章 G 中的 s→c）。A 错：回边要求 v 是灰色祖先。B 错：横向边要求 d[v] 小于 d[u]（如 G 中的 b→c）。D 错：树边要求 v 是白色（首次发现）。</div>
+    </div>
+    <div class="quiz-block" data-answer="c">
+      <div class="q-no">自测 4</div>
+      <div class="q-stem">关于拓扑排序，哪个说法正确？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 任何有向图都有拓扑序</li>
+        <li data-opt="b">B. 拓扑序若存在则唯一</li>
+        <li data-opt="c">C. 把顶点按 DFS 完成时间 f 逆序排列，即得一个合法拓扑序</li>
+        <li data-opt="d">D. 拓扑排序的时间复杂度是 Θ(V²)</li>
+      </ul>
+      <div class="quiz-explain">解析：C 对——DAG 中无回边，任意边 u→v 满足 f[u] 大于 f[v]。A 错：有环时环上顶点互相要求排前，矛盾无解（先查回边）。B 错：多个入度 0 的源头可互换，本章课程 DAG 就有多个合法序。D 错：基于 DFS 是 Θ(V+E)，与 BFS 同阶。</div>
+    </div>
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 5</div>
+      <div class="q-stem">SCC 算法第二遍为什么必须"在 G^T 上、按第一遍 f 逆序"做 DFS？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 为了把时间复杂度降到 O(V)</li>
+        <li data-opt="b">B. 保证每棵 DFS 树恰好收编一个分量：不漏也不并</li>
+        <li data-opt="c">C. 因为 G^T 的边比 G 少</li>
+        <li data-opt="d">D. 随便什么顺序结果都一样，这只是约定</li>
+      </ul>
+      <div class="quiz-explain">解析：B 对——不漏靠分量内强连通；不并靠逆序：若 G^T 中能从当前分量 C 走到未访问分量 C′，则原图有 C′→C，第一遍 f(C′) 必大于 f(C)，与逆序先处理 C 矛盾。A 错：两遍都是 Θ(V+E)，顺序不改变复杂度。C 错：转置只改方向，边数完全相同。D 错：顺序错了会把多个分量并成一棵树，算法直接失效。</div>
+    </div>
+    <div class="retell">
+      <h3>🗣️ 用自己的话，三句话讲完本章</h3>
+      <p>对着空气（或室友）说出这三句。说卡壳的那句，回去重读对应小节。</p>
+      <details>
+        <summary>句1：这章解决什么问题？——</summary>
+        <div class="retell-answer">参考答案：关系型数据（任意的"谁连谁"）怎么存进内存、怎么系统地走遍，以及"走一遍"能顺带算出哪些结构：可达性与最少边数、有没有环、拓扑序、强连通分量。</div>
+      </details>
+      <details>
+        <summary>句2：核心机制是什么？——</summary>
+        <div class="retell-answer">参考答案：两种互补的遍历。BFS 用队列按层扩张，顺手得到无权最少边数；DFS 递归到底，给每个顶点打发现/完成时间戳——边分类、拓扑排序、SCC 全都是从时间戳里读出来的。两者都是 Θ(V+E)。</div>
+      </details>
+      <details>
+        <summary>句3：它和前后章怎么分工？——</summary>
+        <div class="retell-answer">参考答案：第5章及之前处理"有大小关系"的元素集合；本章处理任意关系网，但边无权，只回答结构问题；第7章在本章的表示与遍历框架上加边权，求带权最短路和最小生成树。</div>
+      </details>
+    </div>
+    <div class="review-plan">
+      <h3>🔁 间隔复习计划</h3>
+      <p>回忆本身比重读有效 10 倍。到点只做一件事：翻卡 + 重做标记题。</p>
+      <table>
+        <tr><th>时间点</th><th>复习内容</th><th>预计用时</th></tr>
+        <tr><td>第 1 天</td><td>概念卡 1–7 全翻一遍 + 回忆卡 6.1-1 至 6.5-2</td><td>10 分钟</td></tr>
+        <tr><td>第 3 天</td><td>概念卡 2、3、5、7（BFS/DFS/回边/SCC）+ 重做 L2 两题</td><td>10 分钟</td></tr>
+        <tr><td>第 7 天</td><td>三句话复述 + 自测错题 + 纸上默画 G 并默写邻接表</td><td>10 分钟</td></tr>
+        <tr><td>第 15 天</td><td>只做合上书挑战；能全过就毕业</td><td>15 分钟</td></tr>
+      </table>
+    </div>
+    <div class="final-challenge">
+      <h3>📕 合上书挑战</h3>
+      <p class="fc-sub">现在关掉这个页面，拿一张纸，凭记忆完成以下任务。全部做完再回来核对——这是本章真正的毕业考试。</p>
+      <ol id="challenge-list">
+        <li><span class="fc-check"></span>默写贯穿例子 G 的邻接表，并说出邻接表与矩阵在空间、查边、遍历邻居上的三笔账</li>
+        <li><span class="fc-check"></span>从 s 手算 BFS：写出每步队列变化，以及最终的 d 与 π</li>
+        <li><span class="fc-check"></span>手算 G 的 DFS：写出 6 个顶点的 d/f（时刻 1 到 12），并把 9 条边逐条分类</li>
+        <li><span class="fc-check"></span>手算课程 DAG 的一个拓扑序，逐边验证 f[u] 大于 f[v]</li>
+        <li><span class="fc-check"></span>手算 SCC 例图 H：第一遍 f 值、G^T 邻接、第二遍三棵树</li>
+        <li><span class="fc-check"></span>口头解释：为什么回边 ⟺ 有环？为什么拓扑序按 f 逆序？为什么 SCC 第二遍不会漏不会并？</li>
+        <li><span class="fc-check"></span>一句话回答本章的主线问题：图怎么存、怎么走遍、走一遍能算出哪些结构？</li>
+      </ol>
+    </div>
+    <div class="complete-zone">
+      <button class="btn-complete" id="btn-complete" onclick="markDone()">✓ 我已完成本章（含合上书挑战）</button>
+    </div>
+    <div class="chapter-nav">
+      <a href="chapter-05.html"><span class="nav-dir">← 上一章</span>第5章 二叉搜索树与红黑树</a>
+      <a href="chapter-07.html" class="next"><span class="nav-dir">下一章 →</span>第7章 最小生成树与单源最短路</a>
+    </div>
+  </div>
+</div>
+<footer class="footer">
+  <div class="wrap">第6章 图的基本算法 · 算法导论互动讲义 · 基于 CLRS《算法导论》</div>
+</footer>
+<script src="assets/mermaid.min.js"></script>
+<script>
+mermaid.initialize({
+  startOnLoad: true,
+  theme: "base",
+  themeVariables: {
+    primaryColor: "#e3edf7",
+    primaryBorderColor: "#1d5f9e",
+    primaryTextColor: "#1d5f9e",
+    lineColor: "#5c554b",
+    secondaryColor: "#fbeedd",
+    tertiaryColor: "#f5f1e8",
+    fontFamily: "-apple-system, PingFang SC, sans-serif",
+    fontSize: "14px"
+  },
+  flowchart: { curve: "linear", htmlLabels: false }
+});
+</script>
+<script>
+// 自测题判分（原样复用，勿改）
+document.querySelectorAll(".quiz-block").forEach(block => {
+  const answer = block.dataset.answer;
+  const explain = block.querySelector(".quiz-explain");
+  block.querySelectorAll(".quiz-opts li").forEach(li => {
+    li.addEventListener("click", () => {
+      const opts = block.querySelectorAll(".quiz-opts li");
+      opts.forEach(o => o.classList.add("disabled"));
+      if (li.dataset.opt === answer) {
+        li.classList.add("correct");
+      } else {
+        li.classList.add("wrong");
+        block.querySelector(`[data-opt="${answer}"]`).classList.add("correct");
+      }
+      explain.classList.add("show");
+    });
+  });
+});
+// 合上书清单打勾（原样复用，勿改）
+document.querySelectorAll("#challenge-list li").forEach(li => {
+  li.addEventListener("click", () => li.classList.toggle("checked"));
+});
+// 完成标记 → localStorage（章号 "6"）
+const KEY = "algo_progress_v1";
+function loadProgress() {
+  try { return JSON.parse(localStorage.getItem(KEY)) || {}; } catch (e) { return {}; }
+}
+const progress = loadProgress();
+const btn = document.getElementById("btn-complete");
+if (progress["6"] && progress["6"].done) {
+  btn.textContent = "✓ 已完成 · 再次点击重置";
+  btn.classList.add("done");
+}
+function markDone() {
+  const p = loadProgress();
+  if (p["6"] && p["6"].done) {
+    delete p["6"];
+    btn.textContent = "✓ 我已完成本章（含合上书挑战）";
+    btn.classList.remove("done");
+  } else {
+    p["6"] = { done: true, completedAt: Date.now(), reviewsDone: 0 };
+    btn.textContent = "✓ 已完成 · 复习提醒已开启";
+    btn.classList.add("done");
+  }
+  localStorage.setItem(KEY, JSON.stringify(p));
+}
+</script>
+</body>
+</html>

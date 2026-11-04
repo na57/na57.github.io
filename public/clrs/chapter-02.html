@@ -1,0 +1,809 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第2章 分治与递归式 · CLRS 算法导论互动讲义</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+<nav class="topbar">
+  <div class="topbar-inner">
+    <span class="brand"><a href="index.html" style="color:inherit">← 学习地图</a></span>
+    <span class="crumb">阶段① · 分析基础 / 第2章</span>
+  </div>
+</nav>
+
+<div class="wrap">
+
+  <div class="lecture-head">
+    <span class="ch-label">CHAPTER 2 · 阶段① 分析基础</span>
+    <h1>分治与递归式</h1>
+    <p class="lead">一句话副标题：第1章给了 Θ/O/Ω 这把尺子，本章回答"分治算法的运行时间怎么求"——把算法写成递归式，再用代入法、递归树法、主定理三件工具把它解出来。</p>
+  </div>
+
+  <!-- ===== 章首四件套之 1：全书定位 ===== -->
+  <div class="position-bar">
+    <strong>本章在主线上的位置：</strong>第1章给了渐近记号（怎么描述时间）→ <u>本章用递归式求出时间</u> → 第3章排序算法因此能被精确比较优劣。<br>
+    第2章回答主线上的第2个问题：<strong>分治算法的运行时间怎么求？</strong>
+    <div class="map-inline">
+      <span class="node"><strong>① 分析基础</strong></span><span class="arrow"></span>
+      <span class="node">Ch1 算法分析与增长率</span><span class="arrow">→</span>
+      <span class="node here">Ch2 分治与递归式</span><span class="arrow">→</span>
+      <span class="node"><strong>② 排序与检索</strong></span><span class="arrow"></span>
+      <span class="node">Ch3 排序算法</span><span class="arrow">→</span>
+      <span class="node">Ch4 哈希表</span><span class="arrow">→</span>
+      <span class="node">Ch5 二叉搜索树与红黑树</span><span class="arrow">→</span>
+      <span class="node"><strong>③ 图算法</strong></span><span class="arrow"></span>
+      <span class="node">Ch6 图的基本算法</span><span class="arrow">→</span>
+      <span class="node">Ch7 最小生成树与单源最短路</span><span class="arrow">→</span>
+      <span class="node"><strong>④ 设计范式与难解性</strong></span><span class="arrow"></span>
+      <span class="node">Ch8 动态规划</span><span class="arrow">→</span>
+      <span class="node">Ch9 贪心与摊还分析</span><span class="arrow">→</span>
+      <span class="node">Ch10 NP 完全与近似算法</span>
+    </div>
+  </div>
+
+  <!-- ===== 章首四件套之 2：学习目标 ===== -->
+  <div class="objectives">
+    <h4>🎯 学完本章，合上书你应该能：</h4>
+    <ol>
+      <li>说出分治三段式（分解/解决/合并）在归并排序里各对应哪一步；</li>
+      <li>写出归并排序的递归式 T(n) = 2T(n/2) + Θ(n)，并画出 n=8 的递归树逐层求和得到 Θ(n lg n)；</li>
+      <li>用代入法完整证明 T(n) = 2T(⌊n/2⌋) + n = O(n lg n)，并说明基例为什么要从 n=1 换成 n=2；</li>
+      <li>用递归树法把 T(n) = 3T(⌊n/4⌋) + cn² 的逐层代价加成几何级数，得出 O(n²)；</li>
+      <li>背出主定理三情形的条件，对给定递归式在 30 秒内判定属于哪一情形并给出 Θ；</li>
+      <li>解释 T(n) = 2T(n/2) + n lg n 为什么落在主定理的缝隙里，并用递归树求出它的真实答案 Θ(n lg² n)。</li>
+    </ol>
+  </div>
+
+  <div class="lecture">
+
+    <!-- ===== 章首四件套之 3：推导主线图 ===== -->
+    <div class="figure">
+      <div class="mermaid">
+flowchart TB
+  A["Ch1 只给了渐近记号 没说怎么求出 T n"] --> B["分治算法天然写成递归式 T n 等于 aT n/b 加 f n"]
+  B --> C["代入法 先猜后用归纳证 可猜从哪来"]
+  B --> D["递归树法 逐层展开求和 猜就是从这里来"]
+  D --> E["主定理 把常见模式做成查表 秒出答案"]
+  C --> E
+  E --> F["代价 主定理有覆盖不到的缝隙 边界条件常被忽视 子问题重叠时分治浪费 通 Ch8 动态规划"]
+  classDef danger fill:#fae9e7,stroke:#b03a2e,stroke-width:2.5px,color:#b03a2e;
+  class F danger;
+      </div>
+      <div class="caption">本章推导主线：每一步都回答"为什么需要下一步"——记号有了但不会求 → 写成递归式 → 三种解法 → 主定理的缝隙是代价。</div>
+    </div>
+
+    <h2><span class="sec-no">2.1</span>为什么时间会变成"递归式"：分治三段式与归并排序</h2>
+
+    <p>第1章给了我们 Θ、O、Ω 这套描述增长的记号，但它只解决了"怎么描述"，没解决"怎么求出"。面对一个循环嵌套的算法，我们可以一层层数；可面对<strong>自己调用自己</strong>的算法，时间的表达式里会再次出现 T 自己——这就是本章要驯服的对象：<span class="term">递归式</span>（Recurrence），即用更小输入上的函数值来定义自身的等式（或不等式）。</p>
+
+    <p>递归式从哪来？从<span class="term">分治</span>（Divide and Conquer）的设计范式来。分治每个递归层做三件事，称为<strong>分治三段式</strong>：</p>
+    <ol>
+      <li><strong>分解（Divide）</strong>：把原问题切成若干同构的更小子问题；</li>
+      <li><strong>解决（Conquer）</strong>：递归地解子问题；子问题足够小时直接解；</li>
+      <li><strong>合并（Combine）</strong>：把子问题的解拼成原问题的解。</li>
+    </ol>
+
+    <p>以归并排序（Merge Sort）为例，对 n 个数排序：</p>
+    <ul>
+      <li>分解：把数组从中间切成两半，各 n/2 个元素，耗时 Θ(1)（只算下标）；</li>
+      <li>解决：递归排序两个子数组，耗时 2·T(n/2)；</li>
+      <li>合并：MERGE 过程用两个指针扫过两个已序子数组，每个元素恰好被比较并写回一次，耗时 Θ(n)。</li>
+    </ul>
+
+    <p>三段相加，得到归并排序的递归式（忽略向下取整的边界细节）：</p>
+
+    <div class="formula"><span class="var">T</span>(<span class="var">n</span>) = 2<span class="var">T</span>(<span class="var">n</span>/2) + Θ(<span class="var">n</span>)，&nbsp;&nbsp;<span class="var">T</span>(1) = Θ(1)</div>
+
+    <p>这个式子本身不是答案——右边还有 T。怎么"解"它？最直接的暴力办法：把递归一层层展开成一棵树，把每一层的代价加起来。这就是下一节正式介绍的<span class="term">递归树</span>（Recursion Tree）的雏形，这里先用具体数字走一遍。</p>
+
+    <p><strong>完整手算例 1：n = 8 的归并排序递归树。</strong>设 MERGE 的合并代价为每层每个元素 c（常数），即规模为 m 的节点合并代价是 c·m。</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>层号</th><th>节点数</th><th>每个节点规模</th><th>单点合并代价</th><th>本层总代价</th></tr>
+        <tr><td>第 0 层（根）</td><td>1</td><td>8</td><td>8c</td><td>1 × 8c = 8c</td></tr>
+        <tr><td>第 1 层</td><td>2</td><td>4</td><td>4c</td><td>2 × 4c = 8c</td></tr>
+        <tr><td>第 2 层</td><td>4</td><td>2</td><td>2c</td><td>4 × 2c = 8c</td></tr>
+        <tr><td>第 3 层（叶）</td><td>8</td><td>1</td><td>c（直接返回）</td><td>8 × c = 8c</td></tr>
+      </table>
+    </div>
+
+    <p>逐层相加：8c + 8c + 8c + 8c = 32c。注意两个关键观察：</p>
+    <ul>
+      <li><strong>每层代价恒为 cn</strong>：不管切到多细，节点数翻倍的同时单点规模减半，乘积不变，每层永远是 8c = cn；</li>
+      <li><strong>层数 = lg n + 1</strong>：规模从 8 每次减半到 1，要除 3 次（8→4→2→1），共 4 = lg 8 + 1 层。</li>
+    </ul>
+    <p>所以总代价 = cn·(lg n + 1)。一般化为 <span class="var">T</span>(<span class="var">n</span>) = cn·lg n + cn，低阶项 cn 被 cn·lg n 吸收，得 <span class="var">T</span>(<span class="var">n</span>) = Θ(n lg n)。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>递归式不是答案，是"问题的另一种写法"。解递归式 = 把隐式的自我引用展开成显式的求和。归并排序的直觉一句话：<strong>每层干 n 的活，共 lg n 层</strong>，所以 n lg n。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>"分治 = 递归"。错。分治是一种设计范式（分解/解决/合并），递归只是它最常用的实现手段；分治也可以迭代实现（如自底向上的归并排序）。反过来递归也不一定是分治——如斐波那契的朴素递归，子问题不是"独立切分"而是大量重叠，这正是 Ch8 动态规划要修理的对象。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 2.1-1</div>
+              <div class="q-text">分治三段式是哪三步？归并排序里每一步的渐近代价各是多少？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              分解（Divide）Θ(1)、解决（Conquer）2T(n/2)、合并（Combine）Θ(n)。相加得 T(n) = 2T(n/2) + Θ(n)。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 2.1-2</div>
+              <div class="q-text">归并排序递归树里，为什么说"每层代价都是 cn"？一共有几层？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              节点数每下一层翻倍、单点规模减半，乘积（节点数 × 单点代价）恒为 cn；规模从 n 减半到 1 共 lg n 次，所以 lg n + 1 层，总代价 cn(lg n + 1) = Θ(n lg n)。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <h2><span class="sec-no">2.2</span>有了猜测怎么证明：代入法</h2>
+
+    <p>上一节的递归树让我们"看出"归并排序是 Θ(n lg n)，但"看出"不等于"证明"。<span class="term">代入法</span>（Substitution Method）负责把猜测变成铁证：<strong>先猜一个界，再用数学归纳法验证它</strong>。名字里的"代入"指的是：把猜测的界代入归纳步骤的右边，看能不能推出左边。</p>
+
+    <p><strong>完整手算例 2：证明 T(n) = 2T(⌊n/2⌋) + n = O(n lg n)。</strong></p>
+    <p>第 1 步，猜：T(n) ≤ c·n·lg n，c 是待定正常数。注意我们猜的是带常数 c 的具体形式，不是符号 O 本身。</p>
+    <p>第 2 步，归纳假设：对所有比 n 小的正整数 m，假设 T(m) ≤ c·m·lg m 成立，特别地对 m = ⌊n/2⌋ 成立。</p>
+    <p>第 3 步，归纳步骤，把假设代入递归式右边：</p>
+
+    <div class="formula">
+      <span class="var">T</span>(<span class="var">n</span>) ≤ 2·(c·⌊<span class="var">n</span>/2⌋·lg⌊<span class="var">n</span>/2⌋) + <span class="var">n</span><br>
+      ≤ c·<span class="var">n</span>·lg(<span class="var">n</span>/2) + <span class="var">n</span>&nbsp;&nbsp;（⌊n/2⌋ ≤ n/2，lg 单调增）<br>
+      = c·<span class="var">n</span>·(lg <span class="var">n</span> − lg 2) + <span class="var">n</span><br>
+      = c·<span class="var">n</span>·lg <span class="var">n</span> − c·<span class="var">n</span> + <span class="var">n</span><br>
+      ≤ c·<span class="var">n</span>·lg <span class="var">n</span>&nbsp;&nbsp;（只要 c ≥ 1，−cn + n ≤ 0）
+    </div>
+
+    <p>归纳步骤走通了：只要取 c ≥ 1，就有 T(n) ≤ c·n·lg n。但证明<strong>还没完</strong>——归纳法还需要基例，而基例正是代入法最常翻车的暗礁。</p>
+
+    <p><strong>边界条件陷阱。</strong>递归的基是 T(1) = 1（规模为 1 直接返回，代价常数 1）。但把 n = 1 代入猜测界：c·1·lg 1 = c·1·0 = 0，而 T(1) = 1 &gt; 0，<strong>基例不成立</strong>！证明卡死在起点。解法不是换猜测，而是换基例：利用渐近记号只要求"n 足够大以后成立"这一点，把归纳基例从 n = 1 挪到 n = 2：</p>
+    <ul>
+      <li>T(2) = 2·T(⌊2/2⌋) + 2 = 2·T(1) + 2 = 2·1 + 2 = 4；</li>
+      <li>要 4 ≤ c·2·lg 2 = 2c，即 c ≥ 2。</li>
+    </ul>
+    <p>取 c = 2（同时满足归纳步骤要求的 c ≥ 1），基例 n = 2 成立，归纳步骤对一切 n ≥ 3 成立，证明完成：T(n) = O(n lg n)。为什么换基例合法？因为 O 记号只约束渐近行为，有限个小的 n（这里是 n = 1）不影响结论；而归纳步骤里用到的最小值 ⌊n/2⌋ 在 n ≥ 3 时是 ⌊3/2⌋ = 1——咦，用到了 T(1)？没关系：T(1) 是<strong>递归定义给的已知值</strong>（= 1），不需要它满足猜测界；需要满足猜测界的只是归纳链条的起点 n = 2 和 n = 3（T(3) = 2T(1)+3 = 5 ≤ 2·3·lg 3 ≈ 9.5，也成立）。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>代入法 = "先射箭后画靶"的合法版：靶（猜测）随便画，但箭（归纳证明）必须真的射中。它的软肋是那个"猜"字——猜错了就证不动。猜从哪来？下一节的递归树就是猜测的生产车间。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>在归纳步骤里写出"T(n) ≤ 2·O(⌊n/2⌋·lg⌊n/2⌋) + n = O(n lg n)"——这是循环论证：O 记号是对"整类函数"的陈述，不能当作归纳假设里的具体不等式来代入。归纳假设必须是带显式常数的 T(m) ≤ c·m·lg m。另一个高频翻车点：忘记验证基例，或基例不成立时误以为"猜测错了"，其实往往只是基例要后移。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 2.2-1</div>
+              <div class="q-text">代入法的两步分别是什么？为什么不能直接用 O 记号做归纳假设？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              ① 猜一个带显式常数 c 的界；② 数学归纳法验证（含基例）。O 记号是渐近陈述、不含具体常数，代入归纳步骤会循环论证，必须假设 T(m) ≤ c·m·lg m 这种具体形式。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 2.2-2</div>
+              <div class="q-text">证 T(n) = 2T(⌊n/2⌋) + n = O(n lg n) 时，基例 n = 1 为什么失败？怎么补救？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              c·1·lg 1 = 0 而 T(1) = 1，猜测界在 n = 1 处不成立。补救：基例后移到 n = 2，T(2) = 4 ≤ 2c·lg 2 要求 c ≥ 2；渐近记号不管有限个小 n，合法。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <h2><span class="sec-no">2.3</span>猜测从哪来：递归树法</h2>
+
+    <p>代入法证明漂亮，但它假设你手里已经有一个猜测。<span class="term">递归树法</span>（Recursion Tree）就是生产猜测的机器：把递归式的每次展开画成一棵树，节点记该层的非递归代价，<strong>总代价 = 所有节点代价之和 = ∑（逐层代价）</strong>。2.1 节 n = 8 的例子就是一棵具体递归树；现在把它用到新的递归式上，并学会处理"层代价不相等"的情形。</p>
+
+    <p><strong>完整手算例 3：T(n) = 3T(⌊n/4⌋) + cn²。</strong>每个节点分裂成 3 个规模缩为 1/4 的子节点，本节点合并代价 cn²（n 为该节点规模）。忽略取整，逐层算：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>层号 i</th><th>节点数 3<sup>i</sup></th><th>单点规模 n/4<sup>i</sup></th><th>单点代价 c(n/4<sup>i</sup>)²</th><th>本层总代价</th></tr>
+        <tr><td>i = 0</td><td>1</td><td>n</td><td>cn²</td><td>cn²</td></tr>
+        <tr><td>i = 1</td><td>3</td><td>n/4</td><td>cn²/16</td><td>(3/16)cn²</td></tr>
+        <tr><td>i = 2</td><td>9</td><td>n/16</td><td>cn²/256</td><td>(3/16)²cn²</td></tr>
+        <tr><td>i</td><td>3<sup>i</sup></td><td>n/4<sup>i</sup></td><td>cn²/16<sup>i</sup></td><td>(3/16)<sup>i</sup>cn²</td></tr>
+      </table>
+    </div>
+
+    <p>通用式：第 i 层总代价 = 3<sup>i</sup> · c(n/4<sup>i</sup>)² = 3<sup>i</sup> · cn²/16<sup>i</sup> = (3/16)<sup>i</sup>·cn²。<strong>层代价按公比 3/16 递减</strong>——这是一棵"上重下轻"的树，根节点一层就占了近一半。</p>
+
+    <p>树有多高？规模 n/4<sup>i</sup> 缩到 1 时 i = log₄n，即叶在第 log₄n 层。叶子数是 3<sup>log₄n</sup>。用对数换底恒等式化简：3<sup>log₄n</sup> = n<sup>log₄3</sup> ≈ n<sup>0.79</sup>。每个叶子代价 Θ(1)，故叶子总代价 Θ(n<sup>log₄3</sup>) ≈ Θ(n<sup>0.79</sup>)。</p>
+
+    <p>内部节点逐层求和，是一个几何级数：</p>
+
+    <div class="formula">
+      <span class="var">T</span>(<span class="var">n</span>) = ∑<sub>i=0…∞</sub> (3/16)<sup>i</sup>·cn² + Θ(n<sup>log₄3</sup>) &lt; cn² · <span class="frac"><span class="num-part">1</span><span class="den-part">1 − 3/16</span></span> + Θ(n<sup>log₄3</sup>) = <span class="frac"><span class="num-part">16</span><span class="den-part">13</span></span>·cn² + Θ(n<sup>log₄3</sup>) = O(<span class="var">n</span>²)
+    </div>
+
+    <p>两个求和细节：① 无穷级数放大法——实际只有 log₄n 项，但公比 3/16 &lt; 1，补成无穷几何级数只会更大，用作上界合法且干净；② 叶子项 Θ(n<sup>0.79</sup>) 被 (16/13)cn² 主导（0.79 &lt; 2），所以整棵树的代价被根主导，答案是 O(n²)。要得到 Θ(n²) 只需补一句：T(n) ≥ cn²（光根节点就有 cn²），所以 T(n) = Θ(n²)。得到猜测后，严格证明交给代入法即可。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>递归树求和只有三种剧情：<strong>层代价不变</strong>（归并排序：每层 cn，共 lg n 层 → n lg n）、<strong>几何递减</strong>（本例：根主导 → 看根）、<strong>几何递增</strong>（叶子主导 → 看叶子数）。下一节的主定理，就是把这三种剧情提炼成的查表公式。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>忘记数叶子。很多人加完内部各层就交卷，漏掉 Θ(叶子数) 这一项——在"几何递增"的树里（如 T(n) = 2T(n/2) + 1，叶子 2<sup>lg n</sup> = n 个），叶子恰恰是主角。规矩：任何递归树求和，内部层和叶子层分开算，再比大小。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 2.3-1</div>
+              <div class="q-text">T(n) = 3T(⌊n/4⌋) + cn² 的递归树，第 i 层总代价的通项是什么？公比是多少？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              第 i 层 3<sup>i</sup> 个节点 × c(n/4<sup>i</sup>)² = (3/16)<sup>i</sup>cn²，公比 3/16。几何递减、根主导，总和 &lt; 16/13·cn² = O(n²)。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 2.3-2</div>
+              <div class="q-text">3<sup>log₄n</sup> 为什么等于 n<sup>log₄3</sup>？这个量在递归树里代表什么？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              换底恒等式 a<sup>log_b n</sup> = n<sup>log_b a</sup>（两边取 lg 立即可验）。它代表叶子个数 ≈ n<sup>0.79</sup>，对应叶子总代价 Θ(n<sup>log₄3</sup>)。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <h2><span class="sec-no">2.4</span>把三种剧情做成查表：主定理</h2>
+
+    <p>上一节的"三种剧情"每次都要重新画树、重新求和，太费。<span class="term">主定理</span>（Master Theorem）把递归树分析一劳永逸地封装成公式：对形如 T(n) = aT(n/b) + f(n) 的递归式（a ≥ 1 个子问题，每个规模缩为 1/b，b &gt; 1，f(n) 是分解合并代价），答案由 f(n) 与分水岭函数 n<sup>log<sub>b</sub>a</sup> 的对比决定。n<sup>log<sub>b</sub>a</sup> 不是凭空来的——它正是上一节算过的<strong>叶子个数</strong>：树高 log<sub>b</sub>n，叶子 a<sup>log<sub>b</sub>n</sup> = n<sup>log<sub>b</sub>a</sup> 个。所以三情形比的就是"根侧的合并代价 f(n)"和"叶侧的规模 n<sup>log<sub>b</sub>a</sup>"谁主导。</p>
+
+    <div class="box insight">
+      <span class="box-tag">✅ 主定理（三情形）</span>
+      <p>设 a ≥ 1，b &gt; 1，f(n) 渐近正，T(n) = aT(n/b) + f(n)：</p>
+      <ol>
+        <li><strong>情形 1（叶主导）</strong>：若 f(n) = O(n<sup>log<sub>b</sub>a − ε</sup>)，某 ε &gt; 0，即 f 多项式地小于叶子，则 T(n) = Θ(n<sup>log<sub>b</sub>a</sup>)；</li>
+        <li><strong>情形 2（均衡）</strong>：若 f(n) = Θ(n<sup>log<sub>b</sub>a</sup>)，每层一样多，则 T(n) = Θ(n<sup>log<sub>b</sub>a</sup>·lg n)；</li>
+        <li><strong>情形 3（根主导）</strong>：若 f(n) = Ω(n<sup>log<sub>b</sub>a + ε</sup>)，某 ε &gt; 0，且满足<span class="term">正则条件</span>（Regularity Condition）a·f(n/b) ≤ c·f(n)（某 c &lt; 1、n 足够大），则 T(n) = Θ(f(n))。</li>
+      </ol>
+    </div>
+
+    <p>注意情形 1 和 3 里的 ε：f 与叶子的差距必须是<strong>多项式级</strong>（差 n<sup>ε</sup> 倍），只差一点对数因子不算——这是 2.5 节缝隙的来源。正则条件则保证"几何递减"在每层都成立，防止 f 锯齿形抖动破坏根主导。</p>
+
+    <p><strong>数值例 A：T(n) = 9T(n/3) + n。</strong>a = 9，b = 3，分水岭 n<sup>log₃9</sup> = n²（log₃9 = 2）。f(n) = n = O(n<sup>2−1</sup>)，取 ε = 1，多项式地小于 n² → 情形 1 → <strong>T(n) = Θ(n²)</strong>。直觉：9 个儿子只缩 1/3，叶子 n² 个淹没一切。</p>
+
+    <p><strong>数值例 B：T(n) = T(2n/3) + 1。</strong>a = 1，b = 3/2，分水岭 n<sup>log<sub>3/2</sub>1</sup> = n⁰ = 1（任何数的 log 为 0）。f(n) = 1 = Θ(1) → 情形 2 → <strong>T(n) = Θ(lg n)</strong>。这就是"每层 1 份活、共 log<sub>3/2</sub>n 层"——二分查找型递归的模样。</p>
+
+    <p><strong>数值例 C：T(n) = 3T(n/4) + n·lg n。</strong>a = 3，b = 4，分水岭 n<sup>log₄3</sup> ≈ n<sup>0.79</sup>。f(n) = n·lg n 比 n<sup>0.79</sup> 大，且 n·lg n = Ω(n<sup>0.79+ε</sup>)（如 ε = 0.1，n·lg n 增长快过 n<sup>0.89</sup>）→ 候选情形 3。还必须验正则条件：3·f(n/4) = 3·(n/4)·lg(n/4) = (3/4)n·(lg n − 2) ≤ (3/4)·n·lg n，取 c = 3/4 &lt; 1 成立 → 情形 3 → <strong>T(n) = Θ(n lg n)</strong>。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>主定理使用的三步口诀：① 读出 a、b、f(n)；② 算分水岭 n<sup>log<sub>b</sub>a</sup>；③ 比大小定情形。比的时候先问"是不是差了一个 n<sup>ε</sup>"，再（情形 3）补验正则条件。熟练后 30 秒一题。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>① 情形 3 忘记验正则条件就下结论——存在 f 满足 Ω 条件但正则条件失败的反例（见 2.5）；② 把"渐近更大"当"多项式更大"：f(n) = n·lg n 渐近大于 n，但比值只是 lg n 而非 n<sup>ε</sup>，此时主定理情形 3 <strong>不可用</strong>；③ 看错 b：T(n) = T(2n/3) 的 b 是 3/2 不是 2/3，b 必须 &gt; 1。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 2.4-1</div>
+              <div class="q-text">背出主定理三情形的条件与结论。分水岭 n<sup>log<sub>b</sub>a</sup> 在递归树里是什么？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              情形1：f = O(n<sup>log<sub>b</sub>a−ε</sup>) → Θ(n<sup>log<sub>b</sub>a</sup>)；情形2：f = Θ(n<sup>log<sub>b</sub>a</sup>) → Θ(n<sup>log<sub>b</sub>a</sup> lg n)；情形3：f = Ω(n<sup>log<sub>b</sub>a+ε</sup>) 且 a·f(n/b) ≤ c·f(n) → Θ(f)。分水岭 = 叶子个数。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 2.4-2</div>
+              <div class="q-text">T(n) = 9T(n/3) + n、T(n) = T(2n/3) + 1、T(n) = 3T(n/4) + n lg n 各属哪一情形？答案？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              ① n² vs n：情形1 → Θ(n²)；② n⁰ = 1 vs 1：情形2 → Θ(lg n)；③ n<sup>0.79</sup> vs n lg n，正则条件 3(n/4)lg(n/4) ≤ (3/4)n lg n 成立：情形3 → Θ(n lg n)。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <h2><span class="sec-no">2.5</span>查表查不到的时候：主定理的缝隙</h2>
+
+    <p>主定理好用，但它是一张"留了空白的地图"：情形之间、条件之外都有缝隙。本节给出一个掉进缝隙的经典递归式，并展示没有主定理时怎么办——退回递归树，一切照旧。</p>
+
+    <p><strong>反例：T(n) = 2T(n/2) + n·lg n。</strong>按口诀走：a = 2，b = 2，分水岭 n<sup>log₂2</sup> = n。f(n) = n·lg n 与 n 比：</p>
+    <ul>
+      <li>情形 1？f 比 n <strong>大</strong>，不是小，排除；</li>
+      <li>情形 2？f 不是 Θ(n)，多了个 lg n 因子，排除；</li>
+      <li>情形 3？f 渐近大于 n，但 f/n = lg n 不是多项式因子 n<sup>ε</sup>：对任何 ε &gt; 0，lg n 最终都长不过 n<sup>ε</sup>，所以 f(n) ≠ Ω(n<sup>1+ε</sup>)，<strong>排除</strong>。</li>
+    </ul>
+    <p>三扇门全关——它落在情形 2 与情形 3 之间的缝隙里，主定理<strong>不适用</strong>。</p>
+
+    <p>退回递归树手算。每个节点 2 个儿子、规模减半、本节点合并代价为"该点规模 × lg 该点规模"。第 i 层：2<sup>i</sup> 个节点，单点规模 n/2<sup>i</sup>，单点代价 (n/2<sup>i</sup>)·lg(n/2<sup>i</sup>)：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>层号 i</th><th>节点数</th><th>单点规模</th><th>本层总代价</th></tr>
+        <tr><td>i = 0</td><td>1</td><td>n</td><td>n·lg n</td></tr>
+        <tr><td>i = 1</td><td>2</td><td>n/2</td><td>n·(lg n − 1)</td></tr>
+        <tr><td>i = 2</td><td>4</td><td>n/4</td><td>n·(lg n − 2)</td></tr>
+        <tr><td>i</td><td>2<sup>i</sup></td><td>n/2<sup>i</sup></td><td>n·(lg n − i)</td></tr>
+        <tr><td>lg n − 1</td><td>n/2</td><td>2</td><td>n·1</td></tr>
+      </table>
+    </div>
+
+    <p>通用式：2<sup>i</sup>·(n/2<sup>i</sup>)·lg(n/2<sup>i</sup>) = n·(lg n − i)。树高 lg n（叶层规模 1，n 个叶子，叶子代价 Θ(n)）。内部各层相加：</p>
+
+    <div class="formula">
+      ∑<sub>i=0…lg n−1</sub> n·(lg <span class="var">n</span> − <span class="var">i</span>) = <span class="var">n</span>·∑<sub>k=1…lg n</sub> <span class="var">k</span> = <span class="var">n</span> · <span class="frac"><span class="num-part">lg <span class="var">n</span>·(lg <span class="var">n</span> + 1)</span><span class="den-part">2</span></span> = Θ(<span class="var">n</span>·lg² <span class="var">n</span>)
+    </div>
+
+    <p>（换元 k = lg n − i，等差数列 1+2+…+lg n = lg n·(lg n+1)/2。）叶子 Θ(n) 被吸收，答案 <strong>T(n) = Θ(n·lg² n)</strong>。直观看：层代价从 n·lg n 缓慢降到 n，既不递增也不几何递减，而是"每层都差不多 n·lg n 量级、共 lg n 层"，比情形 2 多出一个 lg n 因子。</p>
+
+    <p>另一类缝隙是<strong>正则条件失败</strong>：如 T(n) = 2T(n/2) + n·sin n 这类 f 周期性摆动的递归式，f 既不渐近正、也不满足 af(n/b) ≤ cf(n)，主定理同样沉默。记住教训：查表前先验条件，条件不成立就回递归树——递归树是永远可用的兜底方法。</p>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>看到 f 渐近大于分水岭就套情形 3。T(n) = 2T(n/2) + n·lg n 正是为此准备的考题：n·lg n 渐近大于 n，但差距 lg n 不是多项式，情形 3 够不着。判定口诀：先算比值 f(n)/n<sup>log<sub>b</sub>a</sup>，再问"这个比值是 n<sup>ε</sup> 吗？"——是常数走情形 2，是 n<sup>ε</sup> 走情形 1 或 3，是 lg n 之类的对数因子→掉进缝隙，回递归树。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 2.5-1</div>
+              <div class="q-text">T(n) = 2T(n/2) + n·lg n 为什么三个情形都套不上？真实答案是多少？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              f/n = lg n 不是多项式因子 n<sup>ε</sup>，落在情形 2 与 3 的缝隙。递归树第 i 层代价 n(lg n − i)，求和得 Θ(n·lg² n)。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 2.5-2</div>
+              <div class="q-text">主定理不适用时的标准应对流程是什么？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              退回递归树：逐层写出"节点数 × 单点代价"的通项，内部层与叶子层分开求和（几何级数或等差数列），得到猜测后再用代入法严格证明。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <h2><span class="sec-no">🃏</span>概念卡：本章概念的一分钟画像</h2>
+    <p>翻面前先自问：这个概念我能用一句话讲清楚吗？</p>
+    <div class="flip-grid">
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 1</div>
+            <div class="q-text">分治三段式（Divide-Conquer-Combine）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">分解原问题为同类子问题 → 递归解决 → 合并子解，三步构成一个递归层。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">把大问题变小，小到能直接解；很多 n² 蛮力因此降到 n lg n。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">分而治之：一群人分头干活，最后汇总。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为分治 = 递归；也以为分得越多越快——子问题重叠时（斐波那契）纯分治反而指数级浪费。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">Ch3 归并/快排、Ch8 动态规划（修重叠子问题）、Ch10 分治式近似。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 2</div>
+            <div class="q-text">递归式（Recurrence）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">用更小输入上的自身值定义函数的等式/不等式，如 T(n) = 2T(⌊n/2⌋) + n，并带基例 T(1) = Θ(1)。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">分治算法的运行时间无法用循环计数直接数出，必须先翻译成递归式再求解。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">时间的"自我描述"：我的耗时 = 孩子们的耗时 + 我干的活。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">把递归式当答案——右边还含 T，必须解成封闭形式才算完；忽略基例与取整细节。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">凡分析递归算法皆用：Ch3 快排、Ch6 图递归、Ch8 状态转移。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 3</div>
+            <div class="q-text">代入法（Substitution Method）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">先猜一个带显式常数的界，再用数学归纳法代入验证（含基例）。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">把"看出来的"界变成"证明了的"界；验证猜测的最终法庭。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">先射箭后画靶的合法版：靶随便画，箭必须真的射中。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">用 O 记号做归纳假设（循环论证）；忘验基例；基例失败时不知可以后移（如 n=1 换 n=2）。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">递归树猜出界之后；主定理管不到的非标准递归式。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 4</div>
+            <div class="q-text">递归树法（Recursion Tree）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">把递归展开成树：节点记非递归代价，总代价 = 内部各层之和 + 叶子之和。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">给代入法生产猜测；也是主定理失灵时的兜底武器。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">把"自我引用"摊平成一张账单，逐层加总。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">只加内部层忘记数叶子；层代价通项写错（节点数 × 单点代价，二者都要随层变）。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">一切 T(n) = aT(n/b) + f(n)；主定理缝隙例 T(n) = 2T(n/2) + n lg n。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 5</div>
+            <div class="q-text">主定理（Master Theorem）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">对 T(n) = aT(n/b) + f(n)，比较 f 与分水岭 n<sup>log<sub>b</sub>a</sup>：多项式小→Θ(分水岭)；同级→Θ(分水岭·lg n)；多项式大且正则→Θ(f)。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">把递归树的三种剧情固化成查表，30 秒出答案。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">分水岭 n<sup>log<sub>b</sub>a</sup> 就是叶子个数：比的是"根的活"和"叶子的活"谁大。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">把渐近大当多项式大；情形 3 漏验正则条件 af(n/b) ≤ cf(n)；b ≤ 1 也敢套。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">Ch3 快排期望分析、一切标准分治递归式的快速估算。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 6</div>
+            <div class="q-text">主定理的缝隙（Gaps of the Master Theorem）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">f 与分水岭只差对数因子（如 f = n lg n vs n），或正则条件/渐近正失败时，三情形全不适用。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">提醒你主定理不是万能的；识别缝隙是考试与面试的高频考点。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">查表地图上的空白地带：差得"不多不少"，表里没有。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">硬套情形 3 得 Θ(n lg n)——真实答案是 Θ(n lg² n)，差一个 lg n 因子。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">遇到 f/分水岭 = lg n 之类比值时；此时退回递归树 + 代入法。</span></div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+    <h2><span class="sec-no">📝</span>分层习题</h2>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>递归式 T(n) = 2T(n/2) + n 与普通函数 f(n) = 2f(n/2) + n 在"求解"上有何本质区别？为什么说"递归式本身不是答案"？</div>
+      <details>
+        <summary>提示</summary>
+        <p>想一想：把 n 代入 f 和代入 T，得到的分别是什么？哪种表达式里"答案已经写在右边"，哪种还藏着未知数？</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p>普通函数 f(n) = 2f(n/2) + n 若真这样定义，同样是递归定义；这里的关键区别在<strong>我们如何对待它</strong>：递归式右边仍含 T 自身，代入一个 n 得到的不是数，而是"更小输入上的 T 值 + 已知项"，必须展开到基例或解成封闭形式（closed form，右边不再含 T）才有渐近结论。说"递归式不是答案"，是指它是<strong>问题的另一种表述</strong>：T(n) = 2T(n/2) + n 与 T(n) = Θ(n lg n) 描述同一算法，但前者不能直接和别的算法比快慢，后者能。本章三件工具（代入法/递归树/主定理）做的都是同一件事：把递归式翻译成封闭形式。易错点：把 T(n) = 2T(n/2) + n 当成"已经是 O(n lg n)"——式子里一个 Θ 都没有，谈不上结论。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>判断正误并说明理由：① "T(n) = 2T(n/2) + n·lg n 中 f(n) 渐近大于 n<sup>log₂2</sup> = n，所以按主定理情形 3，T(n) = Θ(n·lg n)"。② "代入法证明中基例 n = 1 不满足猜测界，说明猜测错了，要重新猜。"</div>
+      <details>
+        <summary>提示</summary>
+        <p>① 情形 3 对 f 的要求是 Ω(n<sup>log<sub>b</sub>a + ε</sup>)——"渐近大"和"多项式地大"一样吗？② 渐近记号管不管有限个小 n？</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p>① <strong>错</strong>。情形 3 要求 f(n) = Ω(n<sup>log<sub>b</sub>a + ε</sup>)，即差距必须是多项式因子 n<sup>ε</sup>。这里 f/分水岭 = lg n，而对任何 ε &gt; 0 都有 lg n = o(n<sup>ε</sup>)，条件不成立，主定理不适用（缝隙）。真实答案是 Θ(n·lg² n)（见 2.5 节递归树）。该选项把"渐近更大"误当"多项式更大"，还多送了情形 3 一个它配不上的结论。② <strong>错</strong>。基例失败首先应尝试<strong>基例后移</strong>：O 记号只约束 n 足够大之后的行为，改用 n = 2 作基例（T(2) = 4 ≤ 2c，c ≥ 2）即可修复，猜测本身是对的。只有当后移基例、加强归纳假设（如减去低阶项）都救不回来时，才说明猜测错了。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>用递归树求 T(n) = T(n/3) + T(2n/3) + cn 的渐近上界（忽略取整，子问题规模不必相同）。</div>
+      <details>
+        <summary>提示</summary>
+        <p>两个儿子规模不同，树是"歪"的：左边每步 ÷3，右边每步 ÷(3/2)。先问哪条路径最长（决定树高），再看每一层的总代价是多少——试着把第 0、1、2 层全加出来找规律。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p><strong>第 1 步，逐层代价。</strong>第 0 层：cn。第 1 层：c·(n/3) + c·(2n/3) = cn。第 2 层：c·(n/9) + c·(2n/9) + c·(2n/9) + c·(4n/9) = cn·(1/9+2/9+2/9+4/9) = cn。规律：只要一层上的节点都还"活着"（规模 ≥ 1），该层所有节点的规模之和恰为 n，故<strong>每个完整层的代价都是 cn</strong>。</p>
+          <p><strong>第 2 步，树高。</strong>最浅路径走 ÷3：n/3<sup>i</sup> = 1 → i = log₃n；最深路径走 ÷(3/2)：n/(3/2)<sup>i</sup> = 1 → i = log<sub>3/2</sub>n。树高由最深路径定为 log<sub>3/2</sub>n（log₃n &lt; log<sub>3/2</sub>n）。</p>
+          <p><strong>第 3 步，上界求和。</strong>层数 ≤ log<sub>3/2</sub>n，每层代价 ≤ cn（靠底部的残缺层不足 cn），故 T(n) ≤ cn·log<sub>3/2</sub>n = cn·lg n / lg(3/2) ≈ 1.71·cn·lg n = <strong>O(n lg n)</strong>。配合下界：至少 log₃n 个完整层各贡献 cn，T(n) ≥ cn·log₃n = Ω(n lg n)，合起来 Θ(n lg n)。</p>
+          <p>注：这棵树正是 Ch3 快速排序"最坏 1/3-2/3 划分"的模型——即使划分歪成这样，代价仍只有 Θ(n lg n)，这就是快排对划分比例鲁棒的原因。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>用代入法证明 T(n) = 2T(⌊n/2⌋) + n = Ω(n lg n)。（与 2.2 节的上界合起来即得 Θ(n lg n)。）</div>
+      <details>
+        <summary>提示</summary>
+        <p>Ω 方向要猜 T(n) ≥ c·n·lg n（c &gt; 0）。归纳步骤里注意 ⌊n/2⌋ ≥ (n−1)/2 ≥ n/3（n 足够大时）这类放缩；也试试更省事的：对 2 的幂次 n，⌊n/2⌋ = n/2 精确成立。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p><strong>猜</strong>：T(n) ≥ c·n·lg n，c &gt; 0 待定。<strong>归纳假设</strong>：T(⌊n/2⌋) ≥ c·⌊n/2⌋·lg⌊n/2⌋。<strong>归纳步骤</strong>（n 为 2 的幂时最干净，⌊n/2⌋ = n/2）：</p>
+          <p>T(n) = 2T(n/2) + n ≥ 2·c·(n/2)·lg(n/2) + n = c·n·(lg n − 1) + n = c·n·lg n − c·n + n ≥ c·n·lg n，最后一步成立当且仅当 −cn + n ≥ 0，即 <strong>c ≤ 1</strong>。</p>
+          <p><strong>基例</strong>：n = 2，T(2) = 2T(1) + 2 = 4 ≥ c·2·lg 2 = 2c，c ≤ 2，与 c ≤ 1 兼容，取 c = 1。<strong>结论</strong>：T(n) ≥ n·lg n（n ≥ 2），即 T(n) = Ω(n lg n)。合并 2.2 节的 O(n lg n)，得 T(n) = Θ(n lg n)。</p>
+          <p>对一般 n（非 2 的幂）：用 ⌊n/2⌋ ≥ n/3（n ≥ 3 时成立，因为 ⌊n/2⌋ ≥ (n−1)/2 ≥ n/3 ⟺ 3n−3 ≥ 2n ⟺ n ≥ 3），代入得 T(n) ≥ 2c(n/3)lg(n/3) + n = (2c/3)n·lg n − (2c/3)n·lg 3 + n，lg 3 ≈ 1.58 是常数，取 c 足够小（如 c = 1/2）后 −(2c/3)·1.58·n + n ≥ 0.47n &gt; 0，结论不变。渐近分析里取整只影响常数，不影响阶。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l3">L3 建模应用</span>有序数组上的二分查找：每次与中间元素比较，不相等则递归查左半或右半。① 写出运行时间递归式；② 用主定理求解；③ 若把问题改成"最大子数组"的分治解法（答案要么全在左半、要么全在右半、要么跨越中点，跨中点情形需 Θ(n) 扫描），写出递归式并求解。</div>
+      <details>
+        <summary>提示</summary>
+        <p>二分查找：每次只进<strong>一个</strong>子问题（a = 1），规模减半，本层只做 O(1) 比较。最大子数组：两个子问题 + Θ(n) 的跨界合并——和归并排序同一个模板。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p>① 二分查找：分解 Θ(1)，解决 T(n/2)，合并 Θ(1)，得 <strong>T(n) = T(n/2) + Θ(1)</strong>，基例 T(1) = Θ(1)。② 主定理：a = 1，b = 2，分水岭 n<sup>log₂1</sup> = n⁰ = 1，f(n) = Θ(1) 与分水岭同级 → 情形 2 → <strong>T(n) = Θ(lg n)</strong>。直观验证：每次砍掉一半，最多砍 lg n 次。</p>
+          <p>③ 最大子数组分治：分解 Θ(1)，解决 2T(n/2)，合并（跨中点向左向右各扫一遍）Θ(n)，得 <strong>T(n) = 2T(n/2) + Θ(n)</strong>——与归并排序完全同型。主定理：a = 2，b = 2，分水岭 n<sup>log₂2</sup> = n，f(n) = Θ(n) 同级 → 情形 2 → <strong>T(n) = Θ(n lg n)</strong>。对比：蛮力枚举所有子数组 O(n²)，分治降到 n lg n；预告：Ch8 动态规划（Kadane 算法）还能把它压到 Θ(n)。</p>
+          <p>本题的要害是<strong>识别结构</strong>：a（几个子问题）、b（规模缩小比例）、f(n)（本层干多少活）三个数读完，递归式自动成形，剩下的交给主定理。</p>
+        </div>
+      </details>
+    </div>
+    <h2><span class="sec-no">✍️</span>本章自测</h2>
+    <p class="quiz-hint">点击选项判分，答错会给出原因。</p>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 1</div>
+      <div class="q-stem">用主定理解 T(n) = 9T(n/3) + n，结论是什么？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. Θ(n lg n)</li>
+        <li data-opt="b">B. Θ(n²)</li>
+        <li data-opt="c">C. Θ(n)</li>
+        <li data-opt="d">D. 主定理不适用</li>
+      </ul>
+      <div class="quiz-explain">解析：分水岭 n<sup>log₃9</sup> = n²，f(n) = n = O(n²⁻¹) 多项式地小 → 情形 1 → Θ(n²)，B 对。A 错：那是情形 2 的形状，但 f 与分水岭不同级（n vs n²）。C 错：f = n 是被主导方，答案由叶子 n² 决定而非 f。D 错：三条件齐全，差距是多项式级 n¹，主定理完全适用。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="c">
+      <div class="q-no">自测 2</div>
+      <div class="q-stem">用代入法证 T(n) = 2T(⌊n/2⌋) + n = O(n lg n) 时，下列哪个归纳假设是合法的？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 假设 T(⌊n/2⌋) = O(⌊n/2⌋·lg⌊n/2⌋)</li>
+        <li data-opt="b">B. 假设 T(n) = O(n lg n)（结论本身）</li>
+        <li data-opt="c">C. 假设对 m &lt; n 有 T(m) ≤ c·m·lg m（c 为待定显式常数）</li>
+        <li data-opt="d">D. 假设 T(n) ≤ n²（放一个更大的界保险）</li>
+      </ul>
+      <div class="quiz-explain">解析：C 对——归纳假设必须是带显式常数 c 的具体不等式，且作用于严格更小的 m。A 错：O 记号不含具体常数，代入后常数在递归中"漂移"，构成循环论证。B 错：把待证结论当假设，是教科书级的循环论证。D 错：假设更弱的界证不出更强的目标，归纳步骤推不出 T(n) ≤ cn lg n。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="a">
+      <div class="q-no">自测 3</div>
+      <div class="q-stem">归并排序 n = 16 的递归树，层数和每层合并代价（设单元素代价 c）分别是？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 5 层，每层 16c</li>
+        <li data-opt="b">B. 4 层，每层 16c</li>
+        <li data-opt="c">C. 5 层，每层 8c</li>
+        <li data-opt="d">D. 16 层，每层 c</li>
+      </ul>
+      <div class="quiz-explain">解析：A 对。规模 16→8→4→2→1 除 4 次到 1，含根共 lg 16 + 1 = 5 层；每层节点数 × 单点规模恒等于 16，代价 16c，总计 80c = 16c(lg 16 + 1)。B 错：漏数了叶子层（第 4 层，16 个规模为 1 的节点）。C 错：层数对但每层代价被砍半，违背了"节点数翻倍、规模减半、乘积不变"的规律。D 错：把"元素个数"当成了"层数"。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="d">
+      <div class="q-no">自测 4</div>
+      <div class="q-stem">对 T(n) = 2T(n/2) + n·lg n，下列判断正确的是？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. f(n) 渐近大于分水岭 n，属情形 3，T(n) = Θ(n lg n)</li>
+        <li data-opt="b">B. 属情形 2，T(n) = Θ(n lg n)</li>
+        <li data-opt="c">C. 属情形 1，T(n) = Θ(n)</li>
+        <li data-opt="d">D. 三情形都不适用；递归树求和得 T(n) = Θ(n lg² n)</li>
+      </ul>
+      <div class="quiz-explain">解析：D 对。f/分水岭 = lg n 不是多项式因子 n<sup>ε</sup>，卡在情形 2 与 3 之间的缝隙；递归树第 i 层代价 n(lg n − i)，求和 n·lg n·(lg n+1)/2 = Θ(n lg² n)。A 错：情形 3 要求 Ω(n<sup>1+ε</sup>)，"渐近大"不等于"多项式大"。B 错：情形 2 要求 f = Θ(n)，多个 lg n 因子就不算同级。C 错：f 比分水岭大而非小，方向都反了。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 5</div>
+      <div class="q-stem">T(n) = T(2n/3) + 1 用主定理解，结果是？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. Θ(1)</li>
+        <li data-opt="b">B. Θ(lg n)</li>
+        <li data-opt="c">C. Θ(n)</li>
+        <li data-opt="d">D. 主定理不适用，因为 b 必须是整数</li>
+      </ul>
+      <div class="quiz-explain">解析：B 对。a = 1，b = 3/2，分水岭 n<sup>log<sub>3/2</sub>1</sup> = n⁰ = 1，f = 1 = Θ(1) 同级 → 情形 2 → Θ(lg n)，即二分查找型。A 错：Θ(1) 只是每层的代价，忘了乘层数 log<sub>3/2</sub>n。C 错：叶子只有 1 个（a = 1），不存在 n 个叶子来主导。D 错：主定理只要求 b &gt; 1，3/2 完全合法。</div>
+    </div>
+
+    <div class="retell">
+      <h3>🗣️ 用自己的话，三句话讲完本章</h3>
+      <p>对着空气（或室友）说出这三句。说卡壳的那句，回去重读对应小节。</p>
+      <details>
+        <summary>句1：这章解决什么问题？——</summary>
+        <div class="retell-answer">参考答案：分治算法把时间写成了"自己引用自己"的递归式（如 T(n) = 2T(n/2) + Θ(n)），第1章的渐近记号只够描述、不够求解，本章解决"怎么把递归式解成封闭形式"。</div>
+      </details>
+      <details>
+        <summary>句2：核心机制是什么？——</summary>
+        <div class="retell-answer">参考答案：三件工具一条流水线——递归树法把递归摊成树逐层求和（生产猜测）；代入法用数学归纳法把猜测证成定理（含基例后移等修补术）；主定理把"比较 f(n) 与分水岭 n^{log_b a}"的三种剧情固化成查表，但要对数因子级差距和正则条件失败等缝隙保持警觉，缝隙处退回递归树。</div>
+      </details>
+      <details>
+        <summary>句3：它和前后章怎么分工？——</summary>
+        <div class="retell-answer">参考答案：Ch1 给记号（怎么描述时间），本章给求解器（怎么求出时间）；Ch3 排序算法（归并/快排）的分析直接套用本章工具，快排的 1/3-2/3 歪树就是本章 L2 习题；Ch8 动态规划接手本章暴露的"子问题重叠时分治浪费"这一代价。</div>
+      </details>
+    </div>
+
+    <div class="review-plan">
+      <h3>🔁 间隔复习计划</h3>
+      <p>回忆本身比重读有效 10 倍。到点只做一件事：翻卡 + 重做标记题。</p>
+      <table>
+        <tr><th>时间点</th><th>复习内容</th><th>预计用时</th></tr>
+        <tr><td>第 1 天</td><td>概念卡 1-6 全部 + 回忆卡 2.1-1、2.2-1、2.4-1；重做自测错题</td><td>10 分钟</td></tr>
+        <tr><td>第 3 天</td><td>概念卡 3、5、6（代入法/主定理/缝隙）+ 回忆卡 2.4-2、2.5-1；重做 L2 第一题（歪树求界）</td><td>10 分钟</td></tr>
+        <tr><td>第 7 天</td><td>三句话复述 + 纸笔重证 2.2 节代入法全例（含基例 n=2）；重做 L2 第二题</td><td>15 分钟</td></tr>
+        <tr><td>第 15 天</td><td>只做合上书挑战 6 条；能全过就毕业，卡哪条回哪节</td><td>15 分钟</td></tr>
+      </table>
+    </div>
+
+    <div class="final-challenge">
+      <h3>📕 合上书挑战</h3>
+      <p class="fc-sub">现在关掉这个页面，拿一张纸，凭记忆完成以下任务。全部做完再回来核对——这是本章真正的毕业考试。</p>
+      <ol id="challenge-list">
+        <li><span class="fc-check"></span>写出归并排序的递归式 T(n) = 2T(n/2) + Θ(n)，并画出 n = 8 的递归树（标每层节点数、单点代价、层总代价），求和到 Θ(n lg n)</li>
+        <li><span class="fc-check"></span>用代入法完整证明 T(n) = 2T(⌊n/2⌋) + n = O(n lg n)，写全归纳步骤四行推导，并说明基例为什么用 n = 2 而非 n = 1</li>
+        <li><span class="fc-check"></span>用递归树求 T(n) = 3T(⌊n/4⌋) + cn²：写出第 i 层通项 (3/16)<sup>i</sup>cn²、树高 log₄n、叶子数 n<sup>log₄3</sup>，几何级数求和到 O(n²)</li>
+        <li><span class="fc-check"></span>默写主定理三情形（条件 + 结论 + 情形 3 的正则条件），并现场判定 T(n) = 9T(n/3) + n 与 T(n) = T(2n/3) + 1</li>
+        <li><span class="fc-check"></span>解释 T(n) = 2T(n/2) + n·lg n 为什么主定理不适用，并用递归树推出 Θ(n lg² n)</li>
+        <li><span class="fc-check"></span>一句话回答本章的主线问题：分治算法的运行时间怎么求？</li>
+      </ol>
+    </div>
+
+    <div class="complete-zone">
+      <button class="btn-complete" id="btn-complete" onclick="markDone()">✓ 我已完成本章（含合上书挑战）</button>
+    </div>
+
+    <div class="chapter-nav">
+      <a href="chapter-01.html"><span class="nav-dir">← 上一章</span>第1章 算法分析与增长率</a>
+      <a href="chapter-03.html" class="next"><span class="nav-dir">下一章 →</span>第3章 排序算法</a>
+    </div>
+  </div>
+</div>
+
+<footer class="footer">
+  <div class="wrap">第2章 分治与递归式 · CLRS 算法导论互动讲义 · 基于 Cormen, Leiserson, Rivest &amp; Stein《算法导论》(第3版)</div>
+</footer>
+
+<script src="assets/mermaid.min.js"></script>
+<script>
+mermaid.initialize({
+  startOnLoad: true,
+  theme: "base",
+  themeVariables: {
+    primaryColor: "#e3edf7",
+    primaryBorderColor: "#1d5f9e",
+    primaryTextColor: "#1d5f9e",
+    lineColor: "#5c554b",
+    secondaryColor: "#fbeedd",
+    tertiaryColor: "#f5f1e8",
+    fontFamily: "-apple-system, PingFang SC, sans-serif",
+    fontSize: "14px"
+  },
+  flowchart: { curve: "linear", htmlLabels: false }
+});
+</script>
+<script>
+// 自测题判分（原样复用，勿改）
+document.querySelectorAll(".quiz-block").forEach(block => {
+  const answer = block.dataset.answer;
+  const explain = block.querySelector(".quiz-explain");
+  block.querySelectorAll(".quiz-opts li").forEach(li => {
+    li.addEventListener("click", () => {
+      const opts = block.querySelectorAll(".quiz-opts li");
+      opts.forEach(o => o.classList.add("disabled"));
+      if (li.dataset.opt === answer) {
+        li.classList.add("correct");
+      } else {
+        li.classList.add("wrong");
+        block.querySelector(`[data-opt="${answer}"]`).classList.add("correct");
+      }
+      explain.classList.add("show");
+    });
+  });
+});
+
+// 合上书清单打勾（原样复用，勿改）
+document.querySelectorAll("#challenge-list li").forEach(li => {
+  li.addEventListener("click", () => li.classList.toggle("checked"));
+});
+
+// 完成标记 → localStorage
+const KEY = "algo_progress_v1";
+function loadProgress() {
+  try { return JSON.parse(localStorage.getItem(KEY)) || {}; } catch (e) { return {}; }
+}
+const progress = loadProgress();
+const btn = document.getElementById("btn-complete");
+if (progress["2"] && progress["2"].done) {
+  btn.textContent = "✓ 已完成 · 再次点击重置";
+  btn.classList.add("done");
+}
+function markDone() {
+  const p = loadProgress();
+  if (p["2"] && p["2"].done) {
+    delete p["2"];
+    btn.textContent = "✓ 我已完成本章（含合上书挑战）";
+    btn.classList.remove("done");
+  } else {
+    p["2"] = { done: true, completedAt: Date.now(), reviewsDone: 0 };
+    btn.textContent = "✓ 已完成 · 复习提醒已开启";
+    btn.classList.add("done");
+  }
+  localStorage.setItem(KEY, JSON.stringify(p));
+}
+</script>
+
+</body>
+</html>

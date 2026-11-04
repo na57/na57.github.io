@@ -10,9 +10,9 @@ export interface Project {
 
 export const projects: Project[] = [
   {
-    name: '概率图模型讲义',
-    url: 'https://nagu.cc/pgm/',
-    desc: '23 章 HTML 学习讲义：概念卡 + 分层习题 + 复习计划，可离线阅读',
+    name: '互动讲义',
+    url: 'https://nagu.cc/lectures/',
+    desc: '73 章互动讲义：概念卡 + 分层习题 + 复习计划，配套可离线播放的 HTML 课件',
   },
   {
     name: '音乐常识',

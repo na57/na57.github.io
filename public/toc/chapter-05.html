@@ -1,0 +1,769 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第5章 归约 · 计算理论互动讲义</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+<nav class="topbar">
+  <div class="topbar-inner">
+    <span class="brand"><a href="index.html" style="color:inherit">← 学习地图</a></span>
+    <span class="crumb">阶段二 · 可计算性 / 第5章</span>
+  </div>
+</nav>
+
+<div class="wrap">
+
+  <div class="lecture-head">
+    <span class="ch-label">CHAPTER 05 · 可计算性</span>
+    <h1>归约</h1>
+    <p class="lead">不可判定性是一种传染病——本章给你一台"批量证明不可判定"的机器。</p>
+  </div>
+
+  <!-- ===== 章首四件套之 1：全书定位 ===== -->
+  <div class="position-bar">
+    <strong>本章在主线上的位置：</strong>第4章用对角线法证出 A<sub>TM</sub> 与 HALT<sub>TM</sub> 不可判定 → <u>本章把"证明不可判定"工业化：做一次对角线法，受用终身</u> → 第6章用它区分"可判定"与"可识别"。<br>
+    第5章回答主线上的第二个问题：<strong>如何证明一个新问题是不可判定的——难道每个都要重做一次对角线法？</strong>
+    <div class="map-inline">
+      <span class="node">Ch1–3 语言与自动机</span><span class="arrow">→</span>
+      <span class="node">Ch4 丘奇-图灵论题（对角线法）</span><span class="arrow">→</span>
+      <span class="node here">Ch5 归约</span><span class="arrow">→</span>
+      <span class="node">Ch6 可计算性进阶（可识别 vs 可判定）</span><span class="arrow">→</span>
+      <span class="node">Ch7–8 复杂度</span><span class="arrow">→</span>
+      <span class="node">Ch9–10 难解性与前沿</span>
+    </div>
+  </div>
+
+  <!-- ===== 章首四件套之 2：学习目标 ===== -->
+  <div class="objectives">
+    <h4>🎯 学完本章，合上书你应该能：</h4>
+    <ol>
+      <li>说出归约的直觉含义，并用"修水管/修暖气"式类比解释"不可判定性会传染"</li>
+      <li>写出映射归约 A ≤<sub>m</sub> B 的形式定义，说出可计算函数在其中扮演的角色</li>
+      <li>面对"证明 B 不可判定"的任务，能立即判断该把谁归约到谁，并说出方向反了为什么就失败</li>
+      <li>完整复现 A<sub>TM</sub> ≤<sub>m</sub> HALT<sub>TM</sub> 的证明：f 的构造、可计算性论证、双向蕴含两个方向</li>
+      <li>模仿范例，为 E<sub>TM</sub>、EQ<sub>TM</sub> 这类新语言写出归约证明的骨架</li>
+      <li>识别并驳斥关于归约的三条典型错误直觉</li>
+    </ol>
+  </div>
+
+  <div class="lecture">
+
+    <!-- ===== 章首四件套之 3：推导主线图 ===== -->
+    <div class="figure">
+      <div class="mermaid">
+flowchart LR
+  A["第4章只证出两个问题不可判定"] --> B["每个新问题都重做对角线法吗"]
+  B --> C["归约 把已知难问题搬进新问题"]
+  C --> D["映射归约 A 归约到 B"]
+  D --> E["A 不可判定就传染给 B"]
+  E --> F["批量证明 HALT ETM EQ"]
+  F --> G["代价 只能证否定结论 方向极易搞反"]
+  classDef danger fill:#fae9e7,stroke:#b03a2e,stroke-width:2.5px,color:#b03a2e;
+  class G danger;
+      </div>
+      <div class="caption">本章推导主线：归约是对角线法的"复用装置"，代价是它只会说"不"，且方向一错全盘皆输。</div>
+    </div>
+
+    <!-- ============ 5.1 ============ -->
+    <h2><span class="sec-no">5.1</span>为什么需要归约：不可判定性会"传染"</h2>
+
+    <p>第4章给了我们两颗硕果：A<sub>TM</sub>（"图灵机 M 接受串 w 吗"）不可判定，HALT<sub>TM</sub>（"M 在 w 上会停机吗"）不可判定。两个证明都用的是<strong>对角线法</strong>——精心造一台"专门跟自己作对"的机器，逼出矛盾。</p>
+
+    <p>但问题来了：关于程序性质的问题成千上万——"这台机器的语言是空集吗"、"两台机器等价吗"、"这台机器接受所有串吗"……<strong>难道每个都要从头设计一次对角线？</strong>对角线法巧则巧矣，却是一件定制武器：每次都要重新发明那台"作对的机器"。理论需要一台<strong>批量生产不可判定性证明的流水线</strong>。</p>
+
+    <p>这台流水线就是<span class="term">归约</span>（reduction）。它的直觉一句话：<strong>把已知难的问题 A 转化成目标问题 B——如果 B 能被解决，A 就能被解决；所以 A 解决不了，B 也解决不了</strong>。用符号说：要证 B 不可判定，只需展示"假设 B 可判定 ⟹ A 可判定"，再引用"A 不可判定"这个已知事实，矛盾即得。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 生活类比</span>
+      <p>假设你<strong>不会修水管</strong>（已知事实）。某天你发现一条转化规律：任何修水管的问题都能改装成一个修暖气的问题——也就是说"会修暖气 ⟹ 会修水管"。那么立刻可以断言：<strong>你也不会修暖气</strong>。否则你就会修水管了，矛盾。注意你从头到尾没有碰过一次水管——你只是建立了两个问题之间的"转化管道"，难度就顺着管道传染了过去。</p>
+    </div>
+
+    <p>所以归约证明的固定配方是三步：<strong>① 选一个已证不可判定的 A；② 构造从 A 到 B 的转化；③ 宣布"B 可判定 ⟹ A 可判定"，矛盾</strong>。第4章的对角线法只需要做一次（证出第一批 A），之后所有不可判定性都靠归约"传染"出来。本章余下的全部内容，就是把这三步配方形式化、然后反复操练到肌肉记忆。</p>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <p class="recall-hint">不要直接点开。先在心里或纸上说出答案，再翻面核对。</p>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 5.1-1</div>
+              <div class="q-text">为什么第4章的对角线法不足以支撑整个不可判定性理论？归约解决了什么？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              对角线法是定制武器，每个新问题都要重新构造"作对的机器"，无法批量生产。归约把"已知难"转化为"新难"：做一次对角线法得到种子结论后，其余不可判定性全部由归约传染而来。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 5.1-2</div>
+              <div class="q-text">用归约证明"B 不可判定"的三步固定配方是什么？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              ① 选一个已证不可判定的问题 A；② 构造转化：任何 A 的实例都能变成 B 的实例且答案一致；③ 论证：若 B 可判定则 A 可判定，与已知矛盾，故 B 不可判定。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 5.2 ============ -->
+    <h2><span class="sec-no">5.2</span>映射归约的形式定义</h2>
+
+    <p>上一节的"转化管道"要变成数学，需要两个零件。第一个零件是<span class="term">可计算函数</span>（computable function）：一个函数 f : Σ* → Σ* 称为可计算的，如果存在一台图灵机，对任何输入 w 都<strong>必然停机</strong>，且停机时带子上恰好写着 f(w)。注意这个要求很朴素——它就是"普通程序员能写出来的字符串变换程序"，没有任何超能力。</p>
+
+    <p>第二个零件是本节的定义。语言 A <span class="term">映射归约</span>（mapping reduction，也叫 many-one 归约）到语言 B，记作 A ≤<sub>m</sub> B，当且仅当存在一个可计算函数 f，使得对一切串 w：</p>
+
+    <div class="formula">w ∈ A ⟺ f(w) ∈ B</div>
+
+    <p>读法：<strong>f 把 A 的"是实例"精确地搬到 B 的"是实例"上，把"非实例"搬到"非实例"上</strong>。f 本身不做任何判定——它只是个翻译器；判定动作留给 B 的判定器（如果存在的话）。</p>
+
+    <div class="figure">
+      <div class="mermaid">
+flowchart LR
+  W["实例 w"] --> F["可计算函数 f"]
+  F --> FW["实例 f w"]
+  FW --> DB["问 B 的判定器"]
+  DB --> DA["答案照搬给 A"]
+  classDef hot fill:#fbeedd,stroke:#c4651f,stroke-width:2.5px,color:#c4651f;
+  class F hot;
+      </div>
+      <div class="caption">图 5.1 映射归约的工作流：w 属于 A 当且仅当 f(w) 属于 B，所以 B 的判定器答案可以直接搬回给 A。该看的重点是：f 只负责翻译，判定的力气活全在 B 那边。</div>
+    </div>
+
+    <div class="box insight">
+      <span class="box-tag">✅ 本章唯一的定理（及其逆否）</span>
+      <p><strong>定理：</strong>若 A ≤<sub>m</sub> B 且 B 可判定，则 A 可判定。<strong>证明：</strong>A 的判定器 = "输入 w，计算 f(w)，运行 B 的判定器，照搬它的答案"；由 w ∈ A ⟺ f(w) ∈ B 知其正确。<br>
+      <strong>逆否命题（真正的武器）：</strong>若 A ≤<sub>m</sub> B 且 A 不可判定，则 B 不可判定。以后每证一个不可判定性，都是这个逆否命题的一次调用。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 方向！方向！方向！</span>
+      <p>要证 <strong>B</strong> 不可判定，必须把<strong>已知不可判定的 A</strong> 归约到 B，即建立 A ≤<sub>m</sub> B。方向反了——去证 B ≤<sub>m</sub> A——什么都得不出：那只能说明"B 不比 A 难"，而 A 很难并不妨碍 B 很简单。口诀：<strong>难从已知流向未知，箭头指向要证明的对象</strong>。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 5.2-1</div>
+              <div class="q-text">不看讲义，写出 A ≤<sub>m</sub> B 的完整定义（含对 f 的要求）。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              存在可计算函数 f : Σ* → Σ*（有台图灵机对任何输入都停机并产出 f(w)），使得对一切串 w：w ∈ A ⟺ f(w) ∈ B。f 只翻译、不判定。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 5.2-2</div>
+              <div class="q-text">要证 HALT<sub>TM</sub> 不可判定，归约箭头应该怎么指？为什么反过来不行？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              应建立 A<sub>TM</sub> ≤<sub>m</sub> HALT<sub>TM</sub>（已证不可判定者 A<sub>TM</sub> 指向目标 HALT<sub>TM</sub>）。若 HALT<sub>TM</sub> 可判定，逆命题给出 A<sub>TM</sub> 可判定，矛盾。反过来 HALT<sub>TM</sub> ≤<sub>m</sub> A<sub>TM</sub> 只说"HALT 不比 A<sub>TM</sub> 难"，传不出不可判定性。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 5.3 ============ -->
+    <h2><span class="sec-no">5.3</span>完整例子：A<sub>TM</sub> ≤<sub>m</sub> HALT<sub>TM</sub></h2>
+
+    <p>第4章已用对角线法证过 HALT<sub>TM</sub> 不可判定。现在用归约重证一遍——这不是多此一举，而是<strong>演示标准做法的范本</strong>：此后每个证明都长这个样子。目标：由第4章已证的"A<sub>TM</sub> 不可判定"，推出 HALT<sub>TM</sub> 不可判定。</p>
+
+    <h3>第一步：构造归约函数 f</h3>
+    <p>f 的输入是一个编码 ⟨M,w⟩（M 是图灵机，w 是串），输出是 ⟨M′,w⟩，其中 M′ 是这样一台机器：</p>
+    <div class="box idea">
+      <span class="box-tag">💡 M′ 的行为说明书</span>
+      <p>M′ = "在输入 x 上：<br>　1. 运行 M 于 x；<br>　2. 若 M 接受，则<strong>接受</strong>；<br>　3. 若 M 拒绝，则<strong>进入死循环</strong>。"</p>
+    </div>
+    <p>一句话诀窍：<strong>把 M 的"拒绝"统统改造成"不停机"</strong>——因为目标问题 HALT<sub>TM</sub> 只关心"停不停机"，不关心"接受还是拒绝"。接受 = 停机的一种，拒绝 = 停机的另一种；改造之后，"M 不接受 w"（无论拒绝还是循环）就统一表现为"M′ 不停机"。</p>
+
+    <h3>第二步：验证 f 可计算</h3>
+    <p>这一步常被初学者跳过，但它是证明的承重墙。f 做的事情是：读入 ⟨M,w⟩ 的编码，<strong>机械地改写 M 的描述</strong>——把每个拒绝状态都重新接线到一段新增的"原地打转"死循环上，输出新编码。这纯粹是字符串层面的编辑工作，<strong>完全不需要真的运行 M</strong>。任何能编译程序的工具链都能做这种改写，所以存在一台对任何输入都停机的图灵机实现 f。✓</p>
+
+    <h3>第三步：双向蕴含（两个方向都要写）</h3>
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>方向</th><th>假设</th><th>M′ 在 w 上的行为</th><th>结论</th></tr>
+        <tr><td>⟹</td><td>⟨M,w⟩ ∈ A<sub>TM</sub>，即 M 接受 w</td><td>走到分支 2，接受并停机</td><td>⟨M′,w⟩ ∈ HALT<sub>TM</sub></td></tr>
+        <tr><td>⟸（分两种情形）</td><td>⟨M,w⟩ ∉ A<sub>TM</sub>：情形一 M 拒绝 w</td><td>走到分支 3，进入死循环，不停机</td><td>⟨M′,w⟩ ∉ HALT<sub>TM</sub></td></tr>
+        <tr><td></td><td>情形二 M 在 w 上循环</td><td>第 1 步就永远跑不完，不停机</td><td>⟨M′,w⟩ ∉ HALT<sub>TM</sub></td></tr>
+      </table>
+    </div>
+    <p>两种情形合起来覆盖了"M 不接受 w"的全部可能，故 ⟸ 方向成立。于是 w ∈ A<sub>TM</sub> 侧的成员关系与 f(w) ∈ HALT<sub>TM</sub> 侧完全一致，A<sub>TM</sub> ≤<sub>m</sub> HALT<sub>TM</sub> 成立。</p>
+
+    <h3>第四步：收网</h3>
+    <div class="box insight">
+      <span class="box-tag">✅ 结论</span>
+      <p>A<sub>TM</sub> 不可判定（第4章已证）＋ A<sub>TM</sub> ≤<sub>m</sub> HALT<sub>TM</sub>（本节刚证）＋ 5.2 的逆否定理 ⟹ <strong>HALT<sub>TM</sub> 不可判定</strong>。∎ 注意整个证明没有再碰一次对角线法——种子结论借归约完成了传染。</p>
+    </div>
+
+    <p><strong>关于反方向的一句补充。</strong>HALT<sub>TM</sub> ≤<sub>m</sub> A<sub>TM</sub> 其实也成立：f 把 ⟨M,w⟩ 映到 ⟨M″,w⟩，其中 M″ = "运行 M 于 w，只要停机（无论接受拒绝）就接受"。M 在 w 上停机 ⟺ M″ 接受 w，双向显然。但这个方向对"证 HALT<sub>TM</sub> 不可判定"<strong>毫无用处</strong>——它只能说明 HALT<sub>TM</sub> 不比 A<sub>TM</sub> 难。用哪个方向，永远由"谁已经被证不可判定"决定：箭头必须从未知难度的目标身上指出……不，是<strong>指向</strong>目标：已知难的 A 在左，要证的 B 在右。</p>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 5.3-1</div>
+              <div class="q-text">默写 M′ 的行为说明书，并说明为什么这样改造正好对上 HALT<sub>TM</sub> 的胃口。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              M′ = "输入 x：运行 M 于 x；M 接受则接受；M 拒绝则死循环"。HALT<sub>TM</sub> 只分辨停/不停，不分辨接受/拒绝；把"拒绝"改造成"不停机"后，"M 不接受 w"的两种形态（拒绝、循环）统一变成"M′ 不停机"，成员关系严丝合缝。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 5.3-2</div>
+              <div class="q-text">"验证 f 可计算"这一步在论证什么？为什么不能省掉？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              论证 f 只是对 M 的编码做机械改写（把拒绝状态接线到死循环），有台图灵机对任何输入都停机并输出 ⟨M′,w⟩——不需要运行 M。若 f 不可计算，≤<sub>m</sub> 的定义根本不满足，整条归约作废。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 5.4 ============ -->
+    <h2><span class="sec-no">5.4</span>更多归约实战：E<sub>TM</sub> 与 EQ<sub>TM</sub></h2>
+
+    <p>上一节的四步配方（构造 f → 验证可计算 → 双向蕴含 → 收网）是万能模具。这一节连续压铸两个新结论，让你看清哪些零件换、哪些零件不变。</p>
+
+    <h3>实战一：E<sub>TM</sub> = {⟨M⟩ | L(M) = ∅} 不可判定</h3>
+    <p>"这台机器什么串都不接受吗？"——空性问题。归约源头仍选 A<sub>TM</sub>，但这次要归到 E<sub>TM</sub> 的<strong>补</strong>上（理由马上揭晓）。</p>
+    <p><strong>构造 f：</strong>输入 ⟨M,w⟩，输出 ⟨M₁⟩，其中 M₁ = "在输入 x 上：若 x ≠ w，拒绝；若 x = w，运行 M 于 w，M 接受则接受"。f 仍是机械改写描述，可计算 ✓。</p>
+    <p><strong>双向蕴含：</strong></p>
+    <ul>
+      <li>若 ⟨M,w⟩ ∈ A<sub>TM</sub>（M 接受 w）：M₁ 恰好接受串 w，L(M₁) = {w} ≠ ∅，故 ⟨M₁⟩ ∉ E<sub>TM</sub>。</li>
+      <li>若 ⟨M,w⟩ ∉ A<sub>TM</sub>（M 拒绝或循环）：x = w 时 M₁ 要么拒绝要么永不停机，其余 x 全拒绝，故 L(M₁) = ∅，⟨M₁⟩ ∈ E<sub>TM</sub>。</li>
+    </ul>
+    <p>合起来：⟨M,w⟩ ∈ A<sub>TM</sub> ⟺ ⟨M₁⟩ ∉ E<sub>TM</sub>，即 <strong>A<sub>TM</sub> ≤<sub>m</sub> E<sub>TM</sub> 的补</strong>。<strong>收网：</strong>若 E<sub>TM</sub> 可判定，则其补也可判定（把判定器答案取反即可），于是 A<sub>TM</sub> 可判定——矛盾。故 E<sub>TM</sub> 不可判定。∎ 归到补集同样有效，因为"可判定"对取补封闭；这在 Sipser 书里是标准手法。</p>
+
+    <h3>实战二：EQ<sub>TM</sub> = {⟨M₁,M₂⟩ | L(M₁) = L(M₂)} 不可判定</h3>
+    <p>"两台机器等价吗？"这次源头换成刚出炉的 E<sub>TM</sub>——<strong>归约可以接力，上一站的结论就是下一站的弹药</strong>。</p>
+    <p><strong>构造骨架：</strong>f 把 ⟨M⟩ 映到 ⟨M, M<sub>∅</sub>⟩，其中 M<sub>∅</sub> 是一台固定的"拒绝一切输入"的机器（它的编码是常量，直接写死在 f 里）。可计算 ✓。</p>
+    <p><strong>双向蕴含关键句：</strong>⟨M⟩ ∈ E<sub>TM</sub> ⟺ L(M) = ∅ ⟺ L(M) = L(M<sub>∅</sub>) ⟺ ⟨M, M<sub>∅</sub>⟩ ∈ EQ<sub>TM</sub>。</p>
+    <p>故 E<sub>TM</sub> ≤<sub>m</sub> EQ<sub>TM</sub>，由 E<sub>TM</sub> 不可判定得 EQ<sub>TM</sub> 不可判定。∎ 直觉：<strong>"等价"至少和"为空"一样难——为空只是"与空机器等价"的特例</strong>。特例都难，一般情形更难。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 归约的边际还在扩大</span>
+      <p>把归约的源头换成 "A<sub>TM</sub> 的补"这类连可识别都不是的语言，映射归约还能证明某些问题<strong>连"可识别"都不是</strong>（例如 EQ<sub>TM</sub> 就不可识别）。"可判定 vs 可识别"这条更深的分界线，正是第6章的主题——本章只管把"不可判定"传染出去。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 5.4-1</div>
+              <div class="q-text">E<sub>TM</sub> 的证明里，M₁ 为什么只在 x = w 时模拟 M？这个设计对应双向蕴含的哪两半？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              M₁ 拒绝一切非 w 输入，使 L(M₁) 只剩两种可能：M 接受 w 时 L(M₁) = {w}（非空，落在 E<sub>TM</sub> 外）；M 不接受 w 时 L(M₁) = ∅（落在 E<sub>TM</sub> 内）。前者支撑 ⟹ 方向，后者支撑 ⟸ 方向——"只在一个串上表态"是让语言非空当且仅当 M 接受 w 的最简设计。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 5.4-2</div>
+              <div class="q-text">EQ<sub>TM</sub> 的归约里，M<sub>∅</sub> 是什么？为什么说"为空是等价的特例"？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              M<sub>∅</sub> 是拒绝一切输入的固定机器，编码作为常量写死在 f 中。L(M) = ∅ 等价于 L(M) = L(M<sub>∅</sub>)，即"与空机器等价"——所以判定等价性至少和判定空性一样难，E<sub>TM</sub> ≤<sub>m</sub> EQ<sub>TM</sub> 一步即成。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 5.5 ============ -->
+    <h2><span class="sec-no">5.5</span>承上启下：递归定理与逻辑一瞥</h2>
+
+    <p>本章的归约都是"拿别人的编码做文章"；第6章要更进一步，让机器<strong>拿自己的编码做文章</strong>。<span class="term">递归定理</span>（recursion theorem）说的正是这件事：任何图灵机都可以通过一段固定的机械过程，在运行时获得自己的完整编码 ⟨M⟩ 并加以使用——自指不再需要对角线法那样的巧劲，而是一项免费的基本能力。第6章将用它做出干净的自指构造，把本章某些"改写描述"的手法升级成"机器引用自身"。</p>
+
+    <p>另一扇门通向逻辑。把"句子 φ 能从公理系统推出"看成一个语言的成员问题：它是<strong>可识别</strong>的（枚举一切证明即可），但"φ 为真"一般<strong>不可判定</strong>——用本章的手法，可以从 HALT<sub>TM</sub> 归约过去。第6章"可计算性与逻辑"会正式展开这条线索：证明论意义上的可证性，与模型论意义上的真，被可计算性理论精确地劈成两半。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 本章与第6章的分工</span>
+      <p>本章造的是"证明否定"的流水线：归约把不可判定性批量传染。第6章换用这台流水线的副产品看结构：可判定 ⊂ 可识别，中间隔着一整层只能"认出是、认不出非"的语言——而递归定理和逻辑是探查这层结构的两盏灯。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 5.5-1</div>
+              <div class="q-text">递归定理一句话说了什么？它解放了哪种构造？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              任何图灵机都能在运行时通过固定机械过程获得并使用自己的编码 ⟨M⟩。它把"自指"从对角线式的巧劲变成免费能力，第6章的自指构造因此干净利落。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 5.5-2</div>
+              <div class="q-text">"φ 可证"与"φ 为真"在可计算性上分别落在哪一层？这与本章何干？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              "可证"可识别（枚举所有证明即可撞上），"为真"一般不可判定（可从 HALT<sub>TM</sub> 归约）。这是本章归约手法在逻辑领域的直接应用，细节留给第6章。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 5.6 ============ -->
+    <h2><span class="sec-no">5.6</span>错误直觉：三条最常犯的</h2>
+
+    <p>归约的符号很少，坑却很多。以下三条直觉几乎人人中招，逐条驳斥。</p>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 误区一：归约方向无所谓</span>
+      <p><strong>错。</strong>A ≤<sub>m</sub> B 是单向断言："B 至少和 A 一样难"。它只能让难度<strong>从 A 传染到 B</strong>。要证 B 不可判定，箭头必须指向 B（已知不可判定的 A 放左边）。方向反了，就像"会修水管 ⟹ 会修暖气"推不出"不会修暖气"——传染链断了，什么都证不了。方向不是技术细节，是证明的生死线。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 误区二：归约 = 用 B 的算法解 A，所以 f 可以随便调用 B 无穷多次</span>
+      <p><strong>错。</strong>映射归约里的 f 必须是一个<strong>普通可计算函数</strong>：一台对任何输入都停机的图灵机，做着字符串改写的老实工作。它<strong>根本接触不到 B 的判定器</strong>——B 可不可判定恰恰是待证的。若允许 f 内部调用 B 的"神谕"或做超计算，5.2 的定理立刻失效，整个框架崩塌。（允许调用神谕的更强归约确实存在，叫图灵归约，但那是后话，且结论要相应弱化。）</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 误区三：证出 B 不可判定后，B 的每个实例都无解</span>
+      <p><strong>错。</strong>不可判定说的是"<strong>不存在一个对所有实例都正确的算法</strong>"，而不是"每个具体实例都答不出"。HALT<sub>TM</sub> 不可判定，但"这台机器在空串上三步内停机吗"这类具体实例随手可答；甚至有能对无穷多实例给出正确答案的启发式程序。不可判定是全称量词层面的否定：任何算法都有它栽跟头的某个输入。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 5.6-1</div>
+              <div class="q-text">为什么不能允许归约函数 f 内部调用 B 的判定器？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              映射归约要求 f 是普通可计算函数（必停机的字符串变换）。B 是否可判定正是待证对象，让 f 调用 B 的神谕等于循环论证，且会使"A ≤<sub>m</sub> B 且 B 可判定 ⟹ A 可判定"的证明结构失效。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 5.6-2</div>
+              <div class="q-text">"B 不可判定"的精确含义是什么？它和"某个实例无答案"差在哪一层量词上？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              精确含义：不存在对所有实例都正确的判定算法——对每个算法都存在让它出错的输入（∀算法 ∃输入）。具体实例完全可能有答案，甚至有算法能答对无穷多实例；不可判定否定的是"万能算法"的存在性，不是个别实例的可答性。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===== 章末五件套之 1：概念卡 ===== -->
+    <h2><span class="sec-no">🃏</span>概念卡：本章概念的一分钟画像</h2>
+    <p>翻面前先自问：这个概念我能用一句话讲清楚吗？</p>
+    <div class="flip-grid">
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 1</div>
+            <div class="q-text">归约（Reduction）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">把问题 A 的实例转化为问题 B 的实例且保持答案，从而用 B 的解法解 A 的总称。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">让"难度"可以比较和传染：证一次不可判定，惠及所有归约目标。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">修水管与修暖气之间的转化管道——会那头就会这头，不会这头就不会那头。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为归约是对称关系；其实它单向，方向决定难度往哪传染。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">本章证不可判定；第7–8章换成多项式时间归约证 NP 完全性。</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 2</div>
+            <div class="q-text">可计算函数（Computable Function）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">存在一台图灵机，对任何输入 w 都停机且带子上恰为 f(w) 的函数 f : Σ* → Σ*。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">给"机械翻译"划出精确边界：归约里允许用的转换器就是它。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">一个普通程序：编辑、拼接、改写字符串，保证跑完，不许问神谕。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为它"功能弱所以没用"——机械改写机器编码恰是不可判定性证明的全部引擎。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">每个 ≤<sub>m</sub> 证明里"验证 f 可计算"那一步；第7章加上"多项式时间"限制再战。</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 3</div>
+            <div class="q-text">映射归约（Mapping Reduction）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">A ≤<sub>m</sub> B：存在可计算函数 f 使对一切 w，w ∈ A ⟺ f(w) ∈ B。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">把"证明 B 不可判定"压缩为"构造一个 f"，是最锋利的不可判定性工具。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">一台只翻译不判定的复印机：A 的是/否原样复印成 B 的是/否。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">方向搞反（证 B ≤<sub>m</sub> A 想推出 B 难）；或让 f 偷偷调用 B 的判定器。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">5.3、5.4 全部证明；第6章证"不可识别"时继续服役。</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 4</div>
+            <div class="q-text">A<sub>TM</sub>（接受问题）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">{⟨M,w⟩ | M 是图灵机且 M 接受 w}。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">第一个被对角线法证出的不可判定语言，是一切归约传染的"零号病人"。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">"这个程序会对这个输入说 yes 吗"——万能模拟器也答不了全称版。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为它和 HALT<sub>TM</sub> 是一回事；接受是停机的一种，不停机不算拒绝。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">归约证明的首选源头（5.3、5.4 都从它出发）；可识别但不可判定的样板。</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 5</div>
+            <div class="q-text">E<sub>TM</sub>（空性问题）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">{⟨M⟩ | L(M) = ∅}，即"这台机器什么串都不接受吗"。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">展示"语言的语义性质"普遍不可判定，是 Rice 定理气质的第一例证。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">问程序"你会不会有任何反应"——只能跑遍所有输入才知道，而输入无穷多。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">忘记 5.4 的归约是落到 E<sub>TM</sub> 的补：M 接受 w 对应 L(M₁) 非空，方向感要盯紧。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">5.4 实战一；作为 EQ<sub>TM</sub> 证明的接力源头；习题 L3 的建模参照。</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 6</div>
+            <div class="q-text">递归定理（Recursion Theorem）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">任何图灵机都能在运行时以固定机械方式获得并使用自己的编码 ⟨M⟩。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">把"自指"从对角线巧劲变成免费能力，自指构造因此可以工业化。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">每份程序出厂就附带一本自己的说明书，随取随用。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为它违反"机器不能预知自己"——它不需要预知，编码是运行时现算的常量。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">第6章的自指构造与不动点论证；本章只需记住它的存在与一句话含义。</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===== 章末五件套之 2：分层习题 ===== -->
+    <h2><span class="sec-no">📝</span>分层习题</h2>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>"若 A ≤<sub>m</sub> B 且 A 可判定，则 B 可判定。"这个命题成立吗？说明理由或给出反例。</div>
+      <details>
+        <summary>提示</summary>
+        <p>5.2 的定理是哪个方向的？找一个"容易 A 归约到难 B"的具体例子。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">不成立。定理的方向是"B 可判定 ⟹ A 可判定"（容易的跟着难的沾光），反过来没有保障。反例：取 A = {0}（显然可判定），任取 B = HALT<sub>TM</sub>，令 f(0) = 某个固定的停机实例、其余串映到某个固定的循环实例——f 可计算且 w ∈ A ⟺ f(w) ∈ B，故 A ≤<sub>m</sub> B，但 B 不可判定。易错点：把 ≤<sub>m</sub> 当成对称的"等价难度"，其实它只断言"B 不比比 A 容易"。</div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>"若 A ≤<sub>m</sub> B，则 A 的补 ≤<sub>m</sub> B 的补。"成立吗？</div>
+      <details>
+        <summary>提示</summary>
+        <p>同一个 f 还能用吗？把 w ∈ A ⟺ f(w) ∈ B 两边同时取反看看。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">成立，且<strong>同一个 f 就是证据</strong>：w ∈ A 的补 ⟺ w ∉ A ⟺ f(w) ∉ B ⟺ f(w) ∈ B 的补。f 的可计算性原样保留。这正是 5.4 实战一里"A<sub>TM</sub> ≤<sub>m</sub> E<sub>TM</sub> 的补"能成立的底层原因——归约天然对取补兼容。易错点：以为归约补集需要重新构造函数，其实双条件 ⟺ 取反后仍是双条件。</div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>补全 5.3 证明中被压缩的一步：当 "M 拒绝 w" 时，逐分支写出 M′ 在输入 w 上的行为，并指出 ⟨M′,w⟩ 与 HALT<sub>TM</sub> 的成员关系。</div>
+      <details>
+        <summary>提示</summary>
+        <p>把 M′ 说明书的三条分支逐条对号入座：M 在 w 上的结局会触发哪一条？</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">输入固定为 w。分支 1：M′ 运行 M 于 w——由假设 M 在有限步内拒绝 w，模拟正常结束，进入分支判断。分支 2 的条件"M 接受"不成立，跳过。落入分支 3：M′ 进入死循环，永不停机。因此 M′ 在 w 上不停机，⟨M′,w⟩ ∉ HALT<sub>TM</sub>。这一半与"M 循环"那一半（分支 1 本身就跑不完）合起来，才构成 ⟸ 方向的完整覆盖——漏掉任何一种情形，双条件 ⟺ 就断了。</div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>证明映射归约具有传递性：若 A ≤<sub>m</sub> B（经 f）且 B ≤<sub>m</sub> C（经 g），则 A ≤<sub>m</sub> C。写出复合函数的完整论证。</div>
+      <details>
+        <summary>提示</summary>
+        <p>候选归约函数是 h(w) = g(f(w))。要证两件事：h 可计算；w ∈ A ⟺ h(w) ∈ C。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">令 h(w) = g(f(w))。<br><strong>h 可计算：</strong>设 M<sub>f</sub>、M<sub>g</sub> 分别计算 f、g 且必停机。构造机器：输入 w，先模拟 M<sub>f</sub> 得 f(w)（停机），再以此输出为输入模拟 M<sub>g</sub> 得 g(f(w))（停机）。两台必停机机器的串联仍必停机，故 h 是可计算函数。<br><strong>双条件：</strong>w ∈ A ⟺ f(w) ∈ B（f 是归约）⟺ g(f(w)) ∈ C（把 g 的归约性质作用于串 f(w)，即 h(w) ∈ C）。<br>故 A ≤<sub>m</sub> C。∎ 推论：归约可以任意接力——5.4 用 E<sub>TM</sub> 证 EQ<sub>TM</sub>，相当于把 A<sub>TM</sub> 的不可判定性经两站传到了 EQ<sub>TM</sub>。</div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l3">L3 建模应用</span>场景：某杀毒软件的"检测器" D 是一个程序，输入一个可疑文件（编码为串），输出"报警"或"放行"。产品经理问：能不能写个工具，自动判断"给定检测器 D，是否存在至少一个文件会让 D 报警"？① 把这个问题建模为某个语言的成员问题；② 指出它与 E<sub>TM</sub> 的关系；③ 说明要证它不可判定，该往哪个方向归约。</div>
+      <details>
+        <summary>提示</summary>
+        <p>"存在至少一个文件让 D 报警"用 L(D) 怎么写？它和 L(D) = ∅ 是什么关系？</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">① 把检测器看作图灵机，报警 = 接受。所问问题 = 语言 NONEMPTY<sub>TM</sub> = {⟨D⟩ | L(D) ≠ ∅} 的成员判定。<br>② NONEMPTY<sub>TM</sub> 正是 E<sub>TM</sub> 的补：L(D) ≠ ∅ ⟺ ⟨D⟩ ∉ E<sub>TM</sub>。<br>③ 方向：必须让<strong>已证不可判定者指向它</strong>。两条等价路线——(a) 建立 A<sub>TM</sub> ≤<sub>m</sub> NONEMPTY<sub>TM</sub>：直接复用 5.4 的 M₁ 构造，M 接受 w ⟺ L(M₁) = {w} ≠ ∅；(b) 由习题 L1-2，A<sub>TM</sub> ≤<sub>m</sub> E<sub>TM</sub> 的补与 5.4 已证的归约是同一枚硬币。无论哪条，箭头都从 A<sub>TM</sub> 出发、落在目标上。常见错误：试图构造 NONEMPTY<sub>TM</sub> ≤<sub>m</sub> A<sub>TM</sub>——那只能说明它不比 A<sub>TM</sub> 难，证不出不可判定。</div>
+      </details>
+    </div>
+
+    <!-- ===== 章末五件套之 3：本章自测 ===== -->
+    <h2><span class="sec-no">✍️</span>本章自测</h2>
+    <p class="quiz-hint">不看上面的内容，独立作答。点击选项判分，答错会给出原因。</p>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 1 · 归约方向（必考题）</div>
+      <div class="q-stem">要证明新问题 B 不可判定，下列哪种做法是正确的？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 构造 B ≤<sub>m</sub> A<sub>TM</sub>，因为 A<sub>TM</sub> 不可判定</li>
+        <li data-opt="b">B. 构造 A<sub>TM</sub> ≤<sub>m</sub> B，把 A<sub>TM</sub> 的实例翻译成 B 的实例</li>
+        <li data-opt="c">C. 构造 B ≤<sub>m</sub> HALT<sub>TM</sub>，因为 HALT<sub>TM</sub> 更经典</li>
+        <li data-opt="d">D. 对 B 重新做一次对角线法，归约帮不上忙</li>
+      </ul>
+      <div class="quiz-explain">答案 B。不可判定性沿 ≤<sub>m</sub> 箭头顺流：已知难的 A<sub>TM</sub> 在左，要证的 B 在右；若 B 可判定则 A<sub>TM</sub> 可判定，矛盾。A 和 C 错在同一处——箭头指反了：B ≤<sub>m</sub> A<sub>TM</sub> 只说明"B 不比 A<sub>TM</sub> 难"，一个不可判定的目标完全可以比它容易。D 错在低估归约：本章全部内容就是让你免于重做对角线法。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="c">
+      <div class="q-no">自测 2 · 定理方向</div>
+      <div class="q-stem">已知 A ≤<sub>m</sub> B。以下哪个推论是有效的？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 若 A 可判定，则 B 可判定</li>
+        <li data-opt="b">B. 若 A 不可判定，则 B 可判定</li>
+        <li data-opt="c">C. 若 B 可判定，则 A 可判定</li>
+        <li data-opt="d">D. 若 B 不可判定，则 A 不可判定</li>
+      </ul>
+      <div class="quiz-explain">答案 C。判定器构造：算 f(w)，问 B，照搬答案。A 错：A 容易不约束 B（B 可以更难，见习题 L1-1 的反例）。B 自相矛盾且方向混乱。D 是最隐蔽的错：B 难不代表 A 难——容易的问题也能归约进难的问题里（任何可判定语言都能 ≤<sub>m</sub> 到 HALT<sub>TM</sub>），难度只向上传染，不向下传染。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="a">
+      <div class="q-no">自测 3 · 5.3 的构造</div>
+      <div class="q-stem">在 A<sub>TM</sub> ≤<sub>m</sub> HALT<sub>TM</sub> 的证明中，当 M 在 w 上<strong>循环</strong>时，M′ 在输入 w 上的行为是：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 在第 1 步模拟 M 时永不停机</li>
+        <li data-opt="b">B. 进入分支 3 的死循环</li>
+        <li data-opt="c">C. 接受 w 并停机</li>
+        <li data-opt="d">D. 拒绝 w 并停机</li>
+      </ul>
+      <div class="quiz-explain">答案 A。M 循环意味着分支 1"运行 M 于 x"这一步本身就跑不完，M′ 根本到不了分支判断——不停机，⟨M′,w⟩ ∉ HALT<sub>TM</sub>。B 是"M 拒绝 w"时的行为，张冠李戴。C、D 都声称 M′ 停机，与构造直接冲突。这一题考的是 ⟸ 方向必须覆盖"拒绝"与"循环"两种情形，漏一个证明就断。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="d">
+      <div class="q-no">自测 4 · E<sub>TM</sub> 的归约</div>
+      <div class="q-stem">5.4 证明 E<sub>TM</sub> 不可判定时，构造的 M₁ 满足：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. M 接受 w 时 L(M₁) = ∅</li>
+        <li data-opt="b">B. M 拒绝 w 时 L(M₁) = {w}</li>
+        <li data-opt="c">C. L(M₁) 总是等于 Σ*</li>
+        <li data-opt="d">D. M 接受 w 时 L(M₁) = {w}，否则 L(M₁) = ∅</li>
+      </ul>
+      <div class="quiz-explain">答案 D。M₁ 只在自己输入恰为 w 时模拟 M：M 接受 w ⟹ 恰好接受 w 这一个串，语言非空；M 拒绝或循环 ⟹ 连 w 也不接受，语言为空。A、B 把两个方向各自说反；C 完全偏离构造。这个"二值开关"设计让 ⟨M,w⟩ ∈ A<sub>TM</sub> ⟺ ⟨M₁⟩ ∉ E<sub>TM</sub>，即归到 E<sub>TM</sub> 的补——注意到补上落点，是看懂这个证明的关键。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 5 · 不可判定的含义</div>
+      <div class="q-stem">"HALT<sub>TM</sub> 不可判定"的准确含义是：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 对每台机器 M 和串 w，人类都无法判断 M 在 w 上是否停机</li>
+        <li data-opt="b">B. 不存在一个算法，能对所有 ⟨M,w⟩ 都正确判断是否停机</li>
+        <li data-opt="c">C. 任何程序在任何输入上都无法被证明停机</li>
+        <li data-opt="d">D. 停机问题只有有限个实例能被回答</li>
+      </ul>
+      <div class="quiz-explain">答案 B。不可判定否定的是"全称正确算法"的存在性：∀算法 ∃输入让它出错。A、C 错在全称用错了地方——大量具体实例（如"空串上三步停机"）随手可判，具体机器也常有停机性证明。D 错得更远：能被正确回答的实例可以有无穷多个（例如所有"第一步就停机"的机器），难的是不存在通吃一切的算法。</div>
+    </div>
+
+    <!-- ===== 章末五件套之 4：三句话复述 ===== -->
+    <div class="retell">
+      <h3>🗣️ 用自己的话，三句话讲完本章</h3>
+      <p>对着空气（或室友）说出这三句。说卡壳的那句，回去重读对应小节。</p>
+      <details>
+        <summary>句1：这章解决什么问题？——</summary>
+        <div class="retell-answer">参考答案：第4章的对角线法一次只能证一个不可判定性，理论需要批量生产能力；本章用"归约"把已知的不可判定性像传染病一样传播到任意新问题上，一次对角线、终身受用。</div>
+      </details>
+      <details>
+        <summary>句2：核心机制是什么？——</summary>
+        <div class="retell-answer">参考答案：映射归约 A ≤<sub>m</sub> B——存在一个可计算函数 f 使 w ∈ A ⟺ f(w) ∈ B。配定理"B 可判定 ⟹ A 可判定"及其逆否"A 不可判定 ⟹ B 不可判定"；用法永远是从已证不可判定的 A 出发指向目标 B，构造 f、验证可计算、写全双向蕴含，如 A<sub>TM</sub> ≤<sub>m</sub> HALT<sub>TM</sub>、A<sub>TM</sub> ≤<sub>m</sub> E<sub>TM</sub> 的补、E<sub>TM</sub> ≤<sub>m</sub> EQ<sub>TM</sub>。</div>
+      </details>
+      <details>
+        <summary>句3：它和前后章怎么分工？——</summary>
+        <div class="retell-answer">参考答案：第4章用对角线法造出"零号病人"A<sub>TM</sub> 与 HALT<sub>TM</sub>；本章负责传染，批量产出不可判定结论；第6章借同一把归约之刀切出更深的分层——可判定 ⊂ 可识别，并用递归定理和逻辑继续下探。</div>
+      </details>
+    </div>
+
+    <!-- ===== 章末五件套之 5：间隔复习计划 ===== -->
+    <div class="review-plan">
+      <h3>🔁 间隔复习计划</h3>
+      <p>回忆本身比重读有效 10 倍。到点只做一件事：翻卡 + 重做标记题。</p>
+      <table>
+        <tr><th>时间点</th><th>复习内容</th><th>预计用时</th></tr>
+        <tr><td>第 1 天</td><td>概念卡 1–6 + 回忆 5.2-1、5.2-2（默写定义与方向口诀）</td><td>10 分钟</td></tr>
+        <tr><td>第 3 天</td><td>回忆 5.3-1、5.3-2（默写 M′ 说明书）+ 重做自测 1、3 + 习题 L2 第一题</td><td>12 分钟</td></tr>
+        <tr><td>第 7 天</td><td>三句话复述 + 回忆 5.4-1、5.4-2、5.6-1、5.6-2 + 重做习题 L2 传递性证明</td><td>12 分钟</td></tr>
+        <tr><td>第 15 天</td><td>只重做合上书挑战 + 概念卡 3、5（映射归约、E<sub>TM</sub>）；能全过就毕业</td><td>15 分钟</td></tr>
+      </table>
+    </div>
+
+    <!-- 合上书挑战 -->
+    <div class="final-challenge">
+      <h3>📕 合上书挑战</h3>
+      <p class="fc-sub">现在关掉这个页面，拿一张纸，凭记忆完成以下任务。全部做完再回来核对——这是本章真正的毕业考试。</p>
+      <ol id="ch05-challenge-list">
+        <li><span class="fc-check"></span>写出映射归约 A ≤<sub>m</sub> B 的定义，含对可计算函数 f 的完整要求</li>
+        <li><span class="fc-check"></span>默写 A<sub>TM</sub> ≤<sub>m</sub> HALT<sub>TM</sub> 证明的四个步骤，特别是 M′ 的说明书与 ⟸ 方向的两种情形</li>
+        <li><span class="fc-check"></span>默写 E<sub>TM</sub> 不可判定的证明骨架：M₁ 的构造、双向蕴含、为什么归到补集</li>
+        <li><span class="fc-check"></span>解释为什么"B ≤<sub>m</sub> A<sub>TM</sub> 且 A<sub>TM</sub> 不可判定"推不出"B 不可判定"，并举一个反例</li>
+        <li><span class="fc-check"></span>证明 ≤<sub>m</sub> 的传递性（复合函数 h = g∘f 的两个论证要点）</li>
+        <li><span class="fc-check"></span>驳斥"归约函数 f 可以随便调用 B 的判定器"这条直觉，说明框架为何不容许</li>
+        <li><span class="fc-check"></span>一句话回答本章的主线问题：如何不用对角线法就证明一个新问题不可判定？</li>
+      </ol>
+    </div>
+
+    <div class="complete-zone">
+      <button class="btn-complete" id="ch05-btn-complete" onclick="markDone()">✓ 我已完成本章（含合上书挑战）</button>
+    </div>
+
+    <div class="chapter-nav">
+      <a href="chapter-04.html"><span class="nav-dir">← 上一章</span>第4章 丘奇-图灵论题</a>
+      <a href="chapter-06.html" class="next"><span class="nav-dir">下一章 →</span>第6章 可计算性进阶</a>
+    </div>
+
+  </div>
+</div>
+
+<footer class="footer">
+  <div class="wrap">第5章 归约 · 计算理论互动讲义 · 基于 Sipser《Introduction to the Theory of Computation》(3rd ed)</div>
+</footer>
+
+<script src="assets/mermaid.min.js"></script>
+<script>
+mermaid.initialize({
+  startOnLoad: true,
+  theme: "base",
+  themeVariables: {
+    primaryColor: "#e3edf7",
+    primaryBorderColor: "#1d5f9e",
+    primaryTextColor: "#1d5f9e",
+    lineColor: "#5c554b",
+    secondaryColor: "#fbeedd",
+    tertiaryColor: "#f5f1e8",
+    fontFamily: "-apple-system, PingFang SC, sans-serif",
+    fontSize: "14px"
+  },
+  flowchart: { curve: "linear", htmlLabels: false }
+});
+</script>
+<script>
+// 自测题判分（原样复用，勿改）
+document.querySelectorAll(".quiz-block").forEach(block => {
+  const answer = block.dataset.answer;
+  const explain = block.querySelector(".quiz-explain");
+  block.querySelectorAll(".quiz-opts li").forEach(li => {
+    li.addEventListener("click", () => {
+      const opts = block.querySelectorAll(".quiz-opts li");
+      opts.forEach(o => o.classList.add("disabled"));
+      if (li.dataset.opt === answer) {
+        li.classList.add("correct");
+      } else {
+        li.classList.add("wrong");
+        block.querySelector(`[data-opt="${answer}"]`).classList.add("correct");
+      }
+      explain.classList.add("show");
+    });
+  });
+});
+
+// 合上书清单打勾（原样复用，仅列表 id 换成本章）
+document.querySelectorAll("#ch05-challenge-list li").forEach(li => {
+  li.addEventListener("click", () => li.classList.toggle("checked"));
+});
+
+// 完成标记 → localStorage
+const KEY = "ct_progress_v1";
+function loadProgress() {
+  try { return JSON.parse(localStorage.getItem(KEY)) || {}; } catch (e) { return {}; }
+}
+const progress = loadProgress();
+const btn = document.getElementById("ch05-btn-complete");
+if (progress[5] && progress[5].done) {
+  btn.textContent = "✓ 已完成 · 再次点击重置";
+  btn.classList.add("done");
+}
+function markDone() {
+  const p = loadProgress();
+  if (p[5] && p[5].done) {
+    delete p[5];
+    btn.textContent = "✓ 我已完成本章（含合上书挑战）";
+    btn.classList.remove("done");
+  } else {
+    p[5] = { done: true, completedAt: Date.now(), reviewsDone: 0 };
+    btn.textContent = "✓ 已完成 · 复习提醒已开启";
+    btn.classList.add("done");
+  }
+  localStorage.setItem(KEY, JSON.stringify(p));
+}
+</script>
+
+</body>
+</html>

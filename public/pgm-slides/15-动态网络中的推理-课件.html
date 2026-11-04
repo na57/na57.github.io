@@ -1,0 +1,612 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第15章 动态网络中的推理 · PGM 课件</title>
+<script>
+window.MathJax = {
+  tex: {
+    inlineMath: [['$', '$'], ['\\(', '\\)']],
+    displayMath: [['$$', '$$'], ['\\[', '\\]']],
+    processEscapes: true,
+    tags: 'none'
+  },
+  svg: { fontCache: 'global', scale: 1.05 },
+  options: { skipHtmlTags: ['script','noscript','style','textarea','pre','code'] }
+};
+</script>
+<!-- MathJax 本地引用（tex-svg 单文件全量组件，约2MB，自带字体数据），file:// 与断网均可用 -->
+<script src="assets/tex-svg.js" async></script>
+<style>
+  :root{
+    --primary:#1a365d; --accent:#2b6cb0; --accent-light:#ebf8ff; --accent-border:#bee3f8;
+    --text:#2d3748; --muted:#718096; --border:#e2e8f0; --bg-light:#f7fafc;
+    --success:#38a169; --danger:#e53e3e; --warning:#dd6b20; --warn-bg:#fffaf0;
+  }
+  *{margin:0;padding:0;box-sizing:border-box;}
+  html,body{width:100%;height:100%;overflow:hidden;background:#0f172a;}
+  body{
+    font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Hiragino Sans GB","Microsoft YaHei","WenQuanYi Micro Hei",sans-serif;
+    color:var(--text);
+  }
+  #stage{
+    position:absolute; left:50%; top:50%;
+    width:1280px; height:720px;
+    transform:translate(-50%,-50%) scale(1);
+    transform-origin:center center;
+    background:#ffffff;
+    box-shadow:0 0 40px rgba(0,0,0,.4);
+    overflow:hidden;
+  }
+  .slide{
+    position:absolute; inset:0;
+    padding:36px 60px 52px;
+    display:none;
+    flex-direction:column;
+    background:#ffffff;
+    opacity:0;
+    transition:opacity .35s ease;
+  }
+  .slide.active{ display:flex; opacity:1; }
+
+  #progress{ position:absolute; top:0; left:0; height:6px; background:var(--accent); width:0; z-index:50; transition:width .35s; }
+
+  /* 封面 / 结束页 */
+  .slide-cover{ justify-content:center; align-items:center; text-align:center; }
+  .slide-cover{ background:linear-gradient(135deg,#1a365d 0%,#2b6cb0 100%); color:#fff; }
+  .slide-cover .kicker{ font-size:22px; letter-spacing:6px; opacity:.85; margin-bottom:18px;}
+  .slide-cover h1{ font-size:64px; font-weight:800; line-height:1.2; margin-bottom:22px; letter-spacing:2px;}
+  .slide-cover .sub{ font-size:26px; opacity:.92; margin-bottom:36px;}
+  .slide-cover .meta{ font-size:19px; opacity:.85; line-height:2;}
+  .slide-cover .divider{ width:160px;height:5px;background:#fff;opacity:.6;margin:0 auto 30px;border-radius:3px;}
+  .slide-cover .question{ font-size:24px; background:rgba(255,255,255,.12); border:1px solid rgba(255,255,255,.35); border-radius:12px; padding:12px 28px; margin-bottom:30px;}
+
+  /* 页头：结论式标题 */
+  .slide-head{ display:flex; align-items:baseline; gap:16px; border-bottom:3px solid var(--accent); padding-bottom:9px; margin-bottom:12px;}
+  .slide-head .sec{ font-size:17px; color:var(--accent); font-weight:700; background:var(--accent-light); padding:3px 11px; border-radius:6px; white-space:nowrap;}
+  .slide-head h3{ font-size:29px; color:var(--primary); font-weight:700;}
+  .slide-body{ flex:1; display:flex; flex-direction:column; justify-content:center; min-height:0; }
+
+  p{ font-size:21px; line-height:1.65; margin-bottom:8px;}
+  .lead{ font-size:23px; color:#374151; line-height:1.75;}
+  ul,ol{ margin:0 0 8px 26px; font-size:21px; line-height:1.7;}
+  li{ margin-bottom:5px;}
+  strong{ color:var(--primary); }
+
+  /* 公式块 */
+  .formula{ background:var(--accent-light); border-left:5px solid var(--accent); border-radius:0 10px 10px 0; padding:9px 22px; margin:9px 0; text-align:center; font-size:23px;}
+  .formula-concl{ background:#fffaf0; border-left:5px solid var(--warning);}
+  .MathJax{ font-size:1.05em !important; }
+  mjx-container[display="true"]{ margin:6px 0 !important; }
+
+  /* 表格 */
+  table{ width:100%; border-collapse:collapse; margin:10px 0; font-size:20px;}
+  th{ background:var(--accent); color:#fff; padding:8px 12px; text-align:center; font-weight:600;}
+  td{ padding:7px 12px; border:1px solid var(--border); text-align:center; vertical-align:middle;}
+  tr:nth-child(even) td{ background:var(--bg-light);}
+  td.l{ text-align:left; }
+  table.small{ font-size:18px; }
+  table.small td, table.small th{ padding:6px 10px; }
+
+  /* 组件 */
+  .card{ background:var(--accent-light); border:1px solid var(--accent-border); border-radius:12px; padding:12px 20px; margin:10px 0;}
+  .tip{ background:#ebf8ff; border-left:5px solid var(--accent); border-radius:0 10px 10px 0; padding:10px 20px; margin:10px 0; font-size:20px; color:#2c5282;}
+  .deep{ background:#f0fff4; border-left:5px solid var(--success); border-radius:0 10px 10px 0; padding:10px 20px; margin:10px 0; font-size:20px; color:#22543d;}
+  .warn{ background:var(--warn-bg); border-left:5px solid var(--warning); border-radius:0 10px 10px 0; padding:10px 20px; margin:10px 0; font-size:20px; color:#744210;}
+  .trap{ background:#fef2f2; border-left:5px solid var(--danger); border-radius:0 10px 10px 0; padding:10px 20px; margin:10px 0; font-size:20px; color:#7f1d1d;}
+
+  .pause{
+    background:var(--warn-bg); border:2px dashed var(--warning); border-radius:14px;
+    padding:10px 22px; margin:10px 0; display:flex; align-items:center; gap:16px;
+  }
+  .pause .icon{ font-size:36px; line-height:1; }
+  .pause .txt b{ color:var(--warning); font-size:21px; }
+  .pause .txt p{ font-size:18px; color:#744210; margin:3px 0 0; }
+
+  .cols{ display:flex; gap:28px; align-items:stretch; }
+  .col{ flex:1; min-width:0; }
+
+  /* 推导分步：仅互动模式隐藏，截图(autohide)模式全部可见——此规则不可删 */
+  .step{ opacity:0; transform:translateY(8px); transition:opacity .3s ease, transform .3s ease; }
+  .step.on{ opacity:1; transform:none; }
+  body.autohide .step{ opacity:1 !important; transform:none !important; }
+  .step-hint{ font-size:14px; color:var(--muted); margin-top:4px;}
+  body.autohide .step-hint{ display:none; }
+
+  /* 因果链 */
+  .chain{ margin:6px 0; }
+  .chain .link{ display:flex; align-items:center; gap:14px; margin:6px 0;}
+  .chain .no{ width:34px; height:34px; border-radius:50%; background:var(--accent); color:#fff; font-size:18px; font-weight:700; display:flex; align-items:center; justify-content:center; flex-shrink:0;}
+  .chain .txt{ font-size:21px; line-height:1.5;}
+  .chain .txt strong{ color:var(--primary); }
+
+  /* mermaid 容器：高度封顶，防止溢出 720px 舞台 */
+  .mmd{ background:var(--bg-light); border:1px solid var(--border); border-radius:12px; padding:10px 14px; display:flex; justify-content:center; align-items:center; margin:8px 0;}
+  .mmd .mermaid{ display:flex; justify-content:center; width:100%; visibility:hidden; }
+  .mmd .mermaid[data-done]{ visibility:visible; }
+  .mmd .mermaid svg{ max-width:100%; height:auto; max-height:230px; }
+  .mmd.mmd-tall .mermaid svg{ max-height:330px; }
+  .mmd.mmd-sm svg{ max-height:150px; }
+  .mmd-row{ display:flex; gap:18px; }
+  .mmd-row .mmd{ flex:1; flex-direction:column; }
+  .mmd .cap{ font-size:17px; color:var(--muted); margin-top:6px; text-align:center;}
+  .mmd .cap b{ color:var(--text); }
+
+  #footer{ position:absolute; bottom:0; left:0; right:0; height:40px; display:flex; align-items:center; justify-content:space-between; padding:0 30px; font-size:15px; color:#94a3b8; background:rgba(247,250,252,.85); border-top:1px solid var(--border); z-index:40;}
+  #footer .brand{ font-weight:600; color:var(--accent); }
+
+  .nav{ position:absolute; bottom:48px; right:40px; display:flex; gap:12px; z-index:45;}
+  .nav button{ width:54px; height:54px; border-radius:50%; border:none; background:var(--accent); color:#fff; font-size:24px; cursor:pointer; box-shadow:0 3px 10px rgba(43,108,176,.4); display:flex; align-items:center; justify-content:center;}
+  .nav button:hover{ background:var(--primary); }
+  .nav button:disabled{ background:#cbd5d0; cursor:default; box-shadow:none;}
+
+  #hint{ position:absolute; bottom:48px; left:40px; font-size:14px; color:#94a3b8; z-index:45;}
+
+  body.autohide #progress, body.autohide #footer, body.autohide .nav, body.autohide #hint{ display:none !important; }
+</style>
+</head>
+<body>
+<div id="stage">
+
+  <div id="progress"></div>
+
+  <!-- 1 封面 -->
+  <section class="slide slide-cover active" data-narration="同学们好，欢迎来到第十五章，动态网络中的推理。第六章我们学会了用模板表示随时间演化的系统，可模板只是表示，真正要算概率还得靠推理。本章要回答的问题很尖锐：序列一条时间步一条时间步地长下去，轨迹可以无限长，难道要对整条轨迹建一个无限大的网络吗？答案当然是否定的。马尔可夫性会把全部历史压缩成一个对象——当前状态的信念。学完这章，你要能在隐马尔可夫模型上手算滤波和平滑，能跑一遍维特比算法找最可能序列，还要说清卡尔曼滤波是怎么回事。推导页比较多，请备好纸笔。">
+    <div class="kicker">概率图模型 · 第 15 章 · 推理收官</div>
+    <h1>动态网络中的推理</h1>
+    <div class="sub">Inference in Dynamic Networks —— 时间无限长，信念只有一个</div>
+    <div class="question">本章要回答：序列一条时间步一条时间步地长，如何避免对整条轨迹建一个无限大的网络？</div>
+    <div class="meta">
+      配套讲义：《PGM 互动讲义》第15章 · 基于 Koller &amp; Friedman (2009)<br>
+      ← → 或空格翻页 · 推导页逐步显示
+    </div>
+  </section>
+
+  <!-- 2 全书位置 -->
+  <section class="slide" data-narration="先看本章在全书的位置。第六章给出动态贝叶斯网络的模板表示，特别是两时间片模板；本章接过这个表示，专门解决它上面的推理问题：滤波、预测、平滑、最可能序列。往旁边看，第十三章的最大乘积算法是本章维特比算法的直接来源，它就是链上最大乘积的特例；往后看，第十九章学隐马尔可夫模型参数的 Baum-Welch 算法，E 步正是本章的前向后向。还要记住一个大节点：推理部分到本章收官，从第十六章开始，全书转入学习，回答模型参数从哪来。">
+    <div class="slide-head"><span class="sec">定位</span><h3>推理部分到此收官：模板表示进来，学习问题出去</h3></div>
+    <div class="slide-body">
+      <div class="mmd mmd-sm">
+        <div class="mermaid">
+flowchart LR
+  A["Ch6 模板表示<br>2TBN 定义"] --> B["Ch15 动态网络推理<br>滤波·平滑·Viterbi"]:::here
+  B --> C["Ch13 MAP<br>Viterbi=链上 max-product"]
+  C --> D["Ch19 EM<br>Baum-Welch 学参数"]
+  classDef here fill:#2b6cb0,color:#ffffff,stroke:#1a365d,stroke-width:3px
+        </div>
+      </div>
+      <p style="text-align:center; margin-top:10px;">本章是推理篇的<strong>最后一章</strong>——从 Ch16 起转入「学习」：参数从数据怎么来</p>
+    </div>
+  </section>
+
+  <!-- 3 本章主线 -->
+  <section class="slide" data-narration="本章逻辑只有一条链。第一环，时间无限长，把整条轨迹展开成大网络，内存和计算都撑不住。第二环，两时间片模板加马尔可夫假设：给定现在，未来与过去独立，于是全部历史压缩成当前信念这一个对象。第三环，推理变成沿链滚动的递推：前向消息做滤波和预测，后向消息倒流回来做平滑。第四环，把求和换成取最大，再加一根回溯指针，就得到求最可能序列的维特比算法。第五环，状态连续时，线性高斯让递推闭式化，这就是卡尔曼滤波。接下来逐环展开。">
+    <div class="slide-head"><span class="sec">主线</span><h3>时间无限长，但马尔可夫性把状态压成一个信念</h3></div>
+    <div class="slide-body">
+      <div class="chain">
+        <div class="link"><span class="no">1</span><span class="txt">序列无限长 → 展开成大网络，<strong>内存与计算都撑不住</strong></span></div>
+        <div class="link"><span class="no">2</span><span class="txt">2TBN ＋ 马尔可夫假设：给定现在，未来 ⊥ 过去 → 历史压成<strong>当前信念</strong></span></div>
+        <div class="link"><span class="no">3</span><span class="txt">推理 = 沿链滚动的递推：<strong>前向</strong>做滤波/预测，<strong>后向</strong>倒流做平滑</span></div>
+        <div class="link"><span class="no">4</span><span class="txt">求和换<strong>取最大</strong> ＋ 回溯指针 → 最可能序列（Viterbi）</span></div>
+        <div class="link"><span class="no">5</span><span class="txt">连续状态：线性高斯让递推闭式化 → <strong>卡尔曼滤波</strong></span></div>
+      </div>
+      <div class="tip">这条链就是本章目录：动机 → 2TBN → rollup → 四个任务 → 三组手算 → 卡尔曼</div>
+    </div>
+  </section>
+
+  <!-- 4 动机：为什么不能建一条大 BN -->
+  <section class="slide" data-narration="先说清楚，为什么不能老老实实把轨迹展开成一个大贝叶斯网络，再用第九章的消去算法。两个硬理由。第一，内存爆炸：T 步展开有两倍 T 个节点，机器人定位、行情监控这种在线场景里 T 无限增长，内存必须跟着涨，不可接受——我们要的是空间复杂度与 T 无关的算法。第二，浪费结构：展开网每一片完全相同，参数是共享的，可通用消去看不见这个对称性，会把同样的计算重复 T 遍，消去顺序稍差，诱导宽度还随 T 膨胀。出路是马尔可夫假设：给定当前状态，未来与过去独立，推理坍缩成固定大小的递推，每步只做一次预测加更新。">
+    <div class="slide-head"><span class="sec">动机</span><h3>不建一条大 BN 的两个硬理由：内存爆炸 ＋ 浪费结构</h3></div>
+    <div class="slide-body">
+      <div class="cols">
+        <div class="col"><div class="card">💥 <strong>理由一：内存随 T 无限增长</strong><br>T 步展开 = $2T$ 个节点；在线场景（机器人定位、行情监控）T 无限长，内存跟着涨——<strong>不可接受</strong>。我们要空间复杂度与 T 无关的算法</div></div>
+        <div class="col"><div class="card">🔁 <strong>理由二：通用消去看不见参数共享</strong><br>展开网每一片完全相同，但消去算法看不见对称性：同样的计算<strong>重复 T 遍</strong>，消去顺序稍差，<strong>诱导宽度随 T 膨胀</strong></div></div>
+      </div>
+      <div class="deep">💡 出路：马尔可夫假设让推理坍缩为<strong>固定大小的递推</strong>——每步只做一次「预测 ＋ 更新」，旧时刻全部扔掉</div>
+    </div>
+  </section>
+
+  <!-- 5 定义：2TBN 与展开 -->
+  <section class="slide" data-narration="正式定义。动态贝叶斯网络由两块模板组成。第一块是先验模板，描述零时刻状态的分布。第二块是两时间片贝叶斯网络，英文 two-slice temporal Bayesian network，描述从时刻 t 到 t 加一的转移：片内有状态到观测的发射边，跨片有状态到状态的转移边。推理前把模板沿时间复制，这叫展开，unrolling，得到一条链：X 零到 X 一到 X 二，每个状态下挂自己的观测。关键点：无论序列多长，参数只有模板里那一份，与序列长度无关。最简单的特例就是隐马尔可夫模型，一个隐状态加一个观测。">
+    <div class="slide-head"><span class="sec">定义</span><h3>DBN = 先验模板 ＋ 两时间片模板，参数只有一份</h3></div>
+    <div class="slide-body">
+      <div class="mmd-row">
+        <div class="mmd">
+          <div class="mermaid">
+flowchart LR
+  Xt["Xᵗ"] --> Xt1["Xᵗ⁺¹"]
+  Xt --> Ot["Oᵗ"]
+  Xt1 --> Ot1["Oᵗ⁺¹"]
+  style Xt fill:#fbeedd,stroke:#c4651f,stroke-width:2.5px
+  style Xt1 fill:#fbeedd,stroke:#c4651f,stroke-width:2.5px
+          </div>
+          <div class="cap"><b>2TBN 模板</b>（t → t+1）<br>转移边 X→X′ ＋ 发射边 X→O</div>
+        </div>
+        <div class="mmd">
+          <div class="mermaid">
+flowchart LR
+  X0["X⁰"] --> X1["X¹"] --> X2["X²"]
+  X1 --> O1["O¹"]
+  X2 --> O2["O²"]
+  style X0 fill:#ebf8ff,stroke:#2b6cb0,stroke-width:2.5px
+          </div>
+          <div class="cap"><b>展开（Unrolling）</b><br>模板沿时间复制，参数全部共享</div>
+        </div>
+      </div>
+      <div class="formula formula-concl">$$\boldsymbol{P(X^{0..T},O^{1..T}) = P(X^0)\prod_{t} P(X^{t+1}\mid X^t)\,P(O^t\mid X^t)} \quad\text{（参数一份，与 T 无关）}$$</div>
+      <div class="deep">最简单的特例：隐马尔可夫模型（Hidden Markov Model, HMM）——一个隐状态 ＋ 每时刻一个观测</div>
+    </div>
+  </section>
+
+  <!-- 6 机制：rollup -->
+  <section class="slide" data-narration="马尔可夫性是本章全部魔法的来源，这页看它的机制。两时间片模板的语义是：给定 X t，未来和过去条件独立。所以无论历史多长，过去对未来的全部影响，都浓缩在当前状态的后验这一个对象里。看这张图：旧的观测和旧的状态不断被消掉，只有一个信念状态沿时间滚动。每个时刻做两件事：先预测，用转移模型把信念前推一步；再更新，用新观测修正。每一时刻只保存 d 个数，d 是状态数，每步计算量是 d 的平方量级，内存与时间步总数无关。这就是 rollup，折叠：永远只保留接口变量 X t。记住这个画面，后面所有算法都是它的化身。">
+    <div class="slide-head"><span class="sec">机制</span><h3>rollup：永远只维护接口变量 Xᵗ 的一个信念</h3></div>
+    <div class="slide-body">
+      <div class="mmd">
+        <div class="mermaid">
+flowchart LR
+  A["历史 O¹…ᵗ<br>全部压缩"] --> B["信念 σᵗ<br>P(Xᵗ | O¹…ᵗ)"]:::hot
+  B -->|① 预测：转移前推| C["预测信念"]
+  D["新观测 Oᵗ⁺¹"] --> E["② 更新"]
+  C --> E
+  E --> F["信念 σᵗ⁺¹"]:::hot
+  classDef hot fill:#fbeedd,stroke:#c4651f,stroke-width:2.5px,color:#7b341e
+        </div>
+      </div>
+      <div class="formula">$$\text{每步成本 } O(d^2)，\text{内存 } O(d)，\text{都与序列长度 } T \text{ 无关} \quad（d = \text{状态数}）$$</div>
+      <div class="tip">马尔可夫性 = 接口变量：过去对未来的全部影响，浓缩在「当前状态的后验」这一个对象里</div>
+    </div>
+  </section>
+
+  <!-- 7 四个任务一张表 -->
+  <section class="slide" data-narration="动态网络上的查询有四种标准口味，区别只在用哪些观测、问哪个时刻。滤波，给定到 t 为止的观测问当前状态，边看边猜现在，是在线任务的主力。预测，用当前证据推未来第 t 加 k 步。平滑，给定全部观测回看历史某个时刻，事后重建，用的证据最多，所以通常最准。最可能序列，问的是整条轨迹的联合最优解释，语音识别解码要的就是它。提醒一句：这四个任务算法不同、答案也不同，千万别混用——要边缘用前向后向，要路径用维特比。接下来我们用一个例子，把前三个和第四个全算一遍。">
+    <div class="slide-head"><span class="sec">任务</span><h3>四个任务一张表：区别只在「用哪些观测，问哪个时刻」</h3></div>
+    <div class="slide-body">
+      <table>
+        <thead><tr><th>任务</th><th>数学形式</th><th>直觉</th><th>典型算法</th></tr></thead>
+        <tbody>
+          <tr><td><strong>滤波</strong>（Filtering）</td><td>$P(X^t \mid O^{1..t})$</td><td>边看边猜现在</td><td>前向递推 / 卡尔曼滤波</td></tr>
+          <tr><td><strong>预测</strong>（Prediction）</td><td>$P(X^{t+k} \mid O^{1..t})$</td><td>用现在推未来</td><td>滤波 ＋ 转移前推 k 步</td></tr>
+          <tr><td><strong>平滑</strong>（Smoothing）</td><td>$P(X^t \mid O^{1..T}),\ t&lt;T$</td><td>事后回看，修正历史</td><td>前向-后向算法</td></tr>
+          <tr><td><strong>最可能序列</strong></td><td>$\arg\max P(X^{0..T} \mid O^{1..T})$</td><td>整条轨迹的整体最优解释</td><td>Viterbi（max-product）</td></tr>
+        </tbody>
+      </table>
+      <div class="warn">⚠️ 四个任务算法不同、答案也不同：要边缘用前向-后向，要路径用 Viterbi，别拿错</div>
+    </div>
+  </section>
+
+  <!-- 8 例1：天气-心情 HMM 设定 -->
+  <section class="slide" data-narration="本章沙盘：天气心情模型。隐状态 X 取零或一，零是阴郁的心情，一是晴朗；观测 O 也取零或一，是能看到的信号。参数三组：先验对半开，零和一各零点五；转移有惯性，留在原状零点七，翻转零点三；发射基本可信，观测与状态一致零点九，错位零点一。观测序列是：O 一等于一，O 二等于一，连续两个好信号。我们要回答三个问题：每过一个时刻，对当天心情的把握是多少？事后回看第一天呢？最可能的两天心情序列又是什么？带上纸笔，这就开算。">
+    <div class="slide-head"><span class="sec">例子</span><h3>天气-心情 HMM：先验 0.5，转移留 0.7，发射对 0.9</h3></div>
+    <div class="slide-body">
+      <div class="cols">
+        <div class="col">
+          <table class="small">
+            <thead><tr><th>参数组</th><th>取值</th></tr></thead>
+            <tbody>
+              <tr><td class="l"><strong>先验</strong></td><td class="l">$P(X^1{=}0)=P(X^1{=}1)=0.5$</td></tr>
+              <tr><td class="l"><strong>转移</strong>（惯性）</td><td class="l">留原状 $0.7$，翻转 $0.3$</td></tr>
+              <tr><td class="l"><strong>发射</strong>（可信）</td><td class="l">观测=状态 $0.9$，错位 $0.1$</td></tr>
+              <tr><td class="l"><strong>观测序列</strong></td><td class="l">$O^1=1,\ O^2=1$</td></tr>
+            </tbody>
+          </table>
+          <div class="tip">X∈{0阴郁, 1晴朗}，O∈{0,1} 是可见信号</div>
+        </div>
+        <div class="col">
+          <div class="mmd">
+            <div class="mermaid">
+flowchart LR
+  X1["X¹"] --> X2["X²"]
+  X1 --> O1["O¹=1"]
+  X2 --> O2["O²=1"]
+  style O1 fill:#fbeedd,stroke:#c4651f,stroke-width:2.5px
+  style O2 fill:#fbeedd,stroke:#c4651f,stroke-width:2.5px
+            </div>
+          </div>
+          <p style="text-align:center; font-size:18px; color:var(--muted);">两时间片展开，连续两个好信号</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 9 前向递推公式 -->
+  <section class="slide" data-narration="滤波靠前向递推。定义前向消息阿尔法：阿尔法 t 在 x 处的值，等于状态 X t 取 x、且观测到 t 为止全部证据的联合概率，注意它没有归一化。马尔可夫性给出递推：阿尔法 t 加一，等于新观测的发射概率，乘上对上一状态求和的转移加权。拆开来读：求和那部分是预测，把昨天的信念沿转移前推；乘发射概率那部分是更新，用今天的观测修正。每个时刻只维护 d 个数，每步计算量是 d 的平方量级，与已经流逝的时间无关，rollup 的好处在这里全部兑现。下一页代入数字。">
+    <div class="slide-head"><span class="sec">滤波</span><h3>前向递推 = 预测（转移前推）＋ 更新（观测修正）</h3></div>
+    <div class="slide-body">
+      <p>前向消息：$\alpha_t(x) = P(X^t{=}x,\ O^{1..t})$（<strong>未归一化</strong>的联合）</p>
+      <div class="formula formula-concl">$$\boldsymbol{\alpha_{t+1}(x') = \underbrace{P(O^{t+1}\mid x')}_{\text{更新：观测修正}} \cdot \underbrace{\sum_{x} P(x'\mid x)\,\alpha_t(x)}_{\text{预测：转移前推}}}$$</div>
+      <div class="deep">每时刻只维护 $d$ 个数，每步 $O(d^2)$，与已流逝的时间无关——rollup 在此兑现；归一化后就是滤波分布，所有 $\alpha$ 之和顺手给出证据概率</div>
+    </div>
+  </section>
+
+  <!-- 10 手算：前向 t=1 -->
+  <section class="slide" data-narration="第一时刻，先验乘第一个观测。阿尔法一的零，等于先验零点五乘发射零点一，得零点零五；阿尔法一的一，等于零点五乘零点九，得零点四五。这两个数还没有归一化，它们的和是零点五。归一化之后得到滤波结果：给定 O 一等于一，心情晴朗的概率是零点四五除以零点五，等于零点九。一个好信号，把对半开的先验推到了零点九。请记住这两个未归一化的数，零点零五和零点四五，下一步的预测要从它们出发。">
+    <div class="slide-head"><span class="sec">手算</span><h3>t=1：先验 × 第一个观测 → 滤波 0.9</h3></div>
+    <div class="slide-body">
+      <div class="step">
+        <p><strong>① 阿尔法一的两个值</strong>（先验 × 发射 $P(O^1{=}1\mid X^1)$）：</p>
+        <div class="formula">$$\alpha_1(0) = 0.5 \times 0.1 = \boldsymbol{0.05}, \qquad \alpha_1(1) = 0.5 \times 0.9 = \boldsymbol{0.45}$$</div>
+      </div>
+      <div class="step">
+        <p><strong>② 归一化得滤波</strong>（两者之和 $=0.50$）：</p>
+        <div class="formula formula-concl">$$P(X^1{=}1\mid O^1{=}1) = \frac{0.45}{0.50} = \boldsymbol{0.9}$$</div>
+      </div>
+      <div class="deep">一个好信号，把对半开的先验推到 0.9；记住未归一化的 0.05 / 0.45，下一步从它们出发</div>
+      <p class="step-hint">按空格 / → 逐步展开推导</p>
+    </div>
+  </section>
+
+  <!-- 11 手算：前向 t=2（互动停顿页） -->
+  <section class="slide" data-narration="第二时刻，预测加更新。先暂停视频，自己把预测和更新各推一遍。推出来了吗？好，对答案。预测：状态取零，零点零五乘零点七加零点四五乘零点三，得零点一七；状态取一，零点零五乘零点三加零点四五乘零点七，得零点三三。更新：分别乘上发射概率，阿尔法二的零是零点一乘零点一七，得零点零一七；阿尔法二的一是零点九乘零点三三，得零点二九七。归一化，零点二九七除以两者之和零点三一四，约等于零点九四六。两个一致的观测，把信念从零点九推到零点九四六。顺手记下：所有阿尔法之和零点三一四，就是证据概率，算似然时白送。">
+    <div class="slide-head"><span class="sec">手算</span><h3>t=2：预测 0.17/0.33 → 更新 → 滤波 ≈ 0.946</h3></div>
+    <div class="slide-body">
+      <div class="step">
+        <div class="formula">$$\text{① 预测：}\; 0.05{\times}0.7+0.45{\times}0.3 = \boldsymbol{0.17}, \qquad 0.05{\times}0.3+0.45{\times}0.7 = \boldsymbol{0.33}$$</div>
+      </div>
+      <div class="step">
+        <div class="formula">$$\text{② 更新（乘发射）：}\; \alpha_2(0) = 0.1 \times 0.17 = \boldsymbol{0.017}, \qquad \alpha_2(1) = 0.9 \times 0.33 = \boldsymbol{0.297}$$</div>
+      </div>
+      <div class="step">
+        <div class="formula formula-concl">$$P(X^2{=}1\mid O^1,O^2) = \frac{0.297}{0.017+0.297} = \frac{0.297}{0.314} \approx \boldsymbol{0.946} \quad\text{（证据概率 } P(O^1,O^2)=0.314\text{）}$$</div>
+      </div>
+      <div class="pause"><div class="icon">✍️</div><div class="txt"><b>暂停推导</b><p>遮住答案，自己把 t=2 的预测与更新各推一遍——预测两个数、更新两个数、归一化一个数。</p></div></div>
+      <p class="step-hint">按空格 / → 逐步展开推导</p>
+    </div>
+  </section>
+
+  <!-- 12 后向递推公式 -->
+  <section class="slide" data-narration="平滑要让未来证据倒流回历史。定义后向消息贝塔：贝塔 t 在 x 处的值，是假设时刻 t 状态为 x，之后全部观测出现的概率。它从时间终点倒着递推，边界是终点的贝塔恒等于一，因为终点之后没有未来观测，什么都可能。递推式：贝塔 t 等于对下一状态求和，转移概率乘发射概率、再乘下一时刻的贝塔。最后一步漂亮极了：任一时刻的平滑，正比于阿尔法乘贝塔。前向消息带着过去走到这一刻，后向消息带着未来倒退回这一刻，两支队伍会师，乘积归一化就是真相。下一页继续用天气心情算给你看。">
+    <div class="slide-head"><span class="sec">平滑</span><h3>后向递推把未来证据倒流回来，α·β 会师得平滑</h3></div>
+    <div class="slide-body">
+      <p>后向消息：$\beta_t(x) = P(O^{t+1..T} \mid X^t{=}x)$，边界 $\beta_T(x)=1$</p>
+      <div class="formula">$$\beta_t(x) = \sum_{x'} P(x'\mid x)\,P(O^{t+1}\mid x')\,\beta_{t+1}(x')$$</div>
+      <div class="formula formula-concl">$$\boldsymbol{P(X^t{=}x \mid O^{1..T}) \;\propto\; \alpha_t(x)\cdot\beta_t(x)} \quad\text{（前向带过去，后向带未来，会师相乘）}$$</div>
+    </div>
+  </section>
+
+  <!-- 13 手算：后向＋平滑 -->
+  <section class="slide" data-narration="接着算第一时刻的平滑。边界：贝塔二的零和一都等于一。倒推贝塔一：状态取零时，零点七乘零点一乘一，加零点三乘零点九乘一，得零点三四；状态取一时，零点三乘零点一加零点七乘零点九，得零点六六。读一下这两个数：如果第一天心情晴朗，未来出现好信号的可能性是零点六六，远高于阴郁时的零点三四——未来证据在为第一天的晴朗投票。会师：阿尔法乘贝塔，零点零五乘零点三四得零点零一七，零点四五乘零点六六得零点二九七，归一化得零点九四六。对比滤波的零点九：看完第二天的观测再回看第一天，把握真的上升了——未来证据确实倒流回来修正了历史。">
+    <div class="slide-head"><span class="sec">手算</span><h3>β₁ = 0.34/0.66，平滑 0.946 &gt; 滤波 0.9：未来修正历史</h3></div>
+    <div class="slide-body">
+      <div class="step">
+        <p><strong>① 边界</strong>：$\beta_2(0)=\beta_2(1)=1$（没有未来观测）</p>
+      </div>
+      <div class="step">
+        <p><strong>② 倒推 $\beta_1$</strong>（代入转移 × 发射 $P(O^2{=}1\mid\cdot)$ × $\beta_2$）：</p>
+        <div class="formula">$$\beta_1(0) = 0.7{\times}0.1 + 0.3{\times}0.9 = \boldsymbol{0.34}, \qquad \beta_1(1) = 0.3{\times}0.1 + 0.7{\times}0.9 = \boldsymbol{0.66}$$</div>
+      </div>
+      <div class="step">
+        <p><strong>③ 会师</strong>（$\alpha_1 \cdot \beta_1$）：$0.05{\times}0.34 = 0.017$，　$0.45{\times}0.66 = 0.297$</p>
+        <div class="formula formula-concl">$$P(X^1{=}1\mid O^1,O^2) = \frac{0.297}{0.314} \approx \boldsymbol{0.946} \;>\; \text{滤波 } 0.9$$</div>
+      </div>
+      <div class="deep">未来证据倒流修正历史：看完 $O^2{=}1$ 回看 $t{=}1$，「晴朗」的把握从 0.9 升到 0.946</div>
+      <p class="step-hint">按空格 / → 逐步展开推导</p>
+    </div>
+  </section>
+
+  <!-- 14 Viterbi 公式 -->
+  <section class="slide" data-narration="第四个任务，最可能序列。语音识别要问的不是第三十七帧最像哪个音素，而是整条音素序列哪条最可能。把第十三章的最大乘积搬到链上：定义德尔塔 t，是以 X t 等于 x 结尾、且解释前 t 个观测的最优路径分数。递推式和前向几乎一模一样：德尔塔 t 加一等于发射概率，乘上对上一状态取最大的转移乘德尔塔。与前向唯一的算子差别：求和换成取最大；多出来的数据结构：每个状态记一根回溯指针，指向赢家前驱。这就是维特比算法。再强调一遍：要边缘用阿尔法，要路径用德尔塔，别拿错。">
+    <div class="slide-head"><span class="sec">最可能序列</span><h3>Viterbi = 链上的 max-product：∑ 换 max ＋ 回溯指针</h3></div>
+    <div class="slide-body">
+      <p>$\delta_t(x)$ = 以 $X^t{=}x$ 结尾、解释 $O^{1..t}$ 的<strong>最优路径分数</strong></p>
+      <div class="formula formula-concl">$$\boldsymbol{\delta_{t+1}(x') = P(O^{t+1}\mid x') \cdot \max_{x}\ \big[ P(x'\mid x)\,\delta_t(x) \big]} \quad\text{＋ 回溯指针记赢家}$$</div>
+      <div class="warn">与前向递推<strong>唯一</strong>差别：$\sum$ 换成 $\max$，外加一根回溯指针——要边缘用 $\alpha$，要路径用 $\delta$</div>
+    </div>
+  </section>
+
+  <!-- 15 手算：Viterbi -->
+  <section class="slide" data-narration="代入数字。第一时刻和前向相同：德尔塔一是零点零五和零点四五。第二时刻开始分岔：德尔塔二的零，零点一乘上取最大，候选是零点零三五和零点一三五，取零点一三五，得零点零一三五，指针指向 X 一等于一；德尔塔二的一，零点九乘取最大，候选零点零一五和零点三一五，取零点三一五，得零点二八三五，指针也指向一。回溯：终点赢家是 X 二等于一，指针指回 X 一等于一，最可能序列就是一一，分数零点二八三五，穷举四条路径验证一致。对比一下：前向在这一步把两条来路加总成零点一七和零点三三，维特比只留最强来路。序列一长、分叉一多，两者可以分道扬镳。">
+    <div class="slide-head"><span class="sec">手算</span><h3>Viterbi：δ₂ = 0.0135/0.2835，回溯得最可能序列 (1,1)</h3></div>
+    <div class="slide-body">
+      <div class="step">
+        <p><strong>① t=1</strong>（与前向相同）：$\delta_1(0)=0.5{\times}0.1=0.05$，　$\delta_1(1)=0.5{\times}0.9=0.45$</p>
+      </div>
+      <div class="step">
+        <p><strong>② t=2，状态 0</strong>：$\delta_2(0) = 0.1 \times \max(0.05{\times}0.7,\ 0.45{\times}0.3) = 0.1\times\max(0.035,\ \boldsymbol{0.135}) = \boldsymbol{0.0135}$，指针 → $X^1{=}1$</p>
+      </div>
+      <div class="step">
+        <p><strong>③ t=2，状态 1</strong>：$\delta_2(1) = 0.9 \times \max(0.05{\times}0.3,\ 0.45{\times}0.7) = 0.9\times\max(0.015,\ \boldsymbol{0.315}) = \boldsymbol{0.2835}$，指针 → $X^1{=}1$</p>
+      </div>
+      <div class="step">
+        <div class="formula formula-concl">$$\text{回溯：终点 } X^2{=}1 \to X^1{=}1 \;\Rightarrow\; \text{最可能序列 } \boldsymbol{(1,1)}，\text{分数 } \boldsymbol{0.2835}$$</div>
+        <p style="font-size:19px;">穷举验证：(0,0)=0.0035，(0,1)=0.0135，(1,0)=0.0135，<strong>(1,1)=0.2835</strong> ✓ 一致</p>
+      </div>
+      <div class="warn">半步对比：前向把来路<strong>加总</strong>（0.17 / 0.33），Viterbi 只留<strong>最强来路</strong>（0.135 / 0.315）——序列一长，两者可分道扬镳</div>
+      <p class="step-hint">按空格 / → 逐步展开推导</p>
+    </div>
+  </section>
+
+  <!-- 16 卡尔曼滤波一页 -->
+  <section class="slide" data-narration="状态连续时，递推里的求和变成积分，只有线性高斯系统上每步信念保持高斯，这就是卡尔曼滤波。看一组数字：上一刻后验均值十、方差四，转移噪声方差一。预测均值不变，方差变宽成五——不看新数据只会更不确定。观测十二到达，卡尔曼增益等于五除以五加四，九分之五。更新均值等于十加九分之五乘二，得九分之一百，约十一点一一；方差缩成九分之二十，约二点二二。直觉是两台秤按精度加权：预测噪声大、观测更准，答案偏向观测。最后两句话：工程上常用固定滞后平滑，只回看未来 L 步，成本与总时长无关；非线性非高斯时，粒子滤波接棒。">
+    <div class="slide-head"><span class="sec">连续</span><h3>线性高斯时递推闭式化：卡尔曼滤波，预测变宽、更新收窄</h3></div>
+    <div class="slide-body">
+      <table class="small">
+        <thead><tr><th>步骤</th><th>公式</th><th>本例数字</th><th>直觉</th></tr></thead>
+        <tbody>
+          <tr><td>预测均值</td><td>$\mu_1^- = \mu_0$</td><td>$10$</td><td class="l">随机游走不改中心</td></tr>
+          <tr><td>预测方差</td><td>$\sigma_1^{-2} = \sigma_0^2 + Q$</td><td>$4+1=\boldsymbol{5}$（变宽）</td><td class="l">不看新数据只会更不确定</td></tr>
+          <tr><td>卡尔曼增益</td><td>$K = \frac{\sigma_1^{-2}}{\sigma_1^{-2}+R}$</td><td>$\frac{5}{9} \approx 0.556$</td><td class="l">观测与预测的话语权分配</td></tr>
+          <tr><td>更新均值</td><td>$\mu_1 = \mu_1^- + K(o^1-\mu_1^-)$</td><td>$10 + \frac{5}{9}\times 2 = \frac{100}{9} \approx \boldsymbol{11.11}$</td><td class="l">按精度折中，偏向观测 12</td></tr>
+          <tr><td>更新方差</td><td>$\sigma_1^2 = (1-K)\sigma_1^{-2}$</td><td>$\frac{20}{9} \approx \boldsymbol{2.22}$（收窄）</td><td class="l">每条新观测都在压缩不确定性</td></tr>
+        </tbody>
+      </table>
+      <div class="deep">💡 直觉：两台秤按<strong>精度</strong>（方差倒数）加权——观测更准，所以 11.11 偏向 12 而不是简单平均 11</div>
+      <div class="tip">固定滞后平滑（Fixed-lag Smoothing）：只回看 L 步，代价常数化、与总时长无关；非线性/非高斯 → <strong>粒子滤波</strong>（接 Ch12）接棒</div>
+    </div>
+  </section>
+
+  <!-- 17 误区 -->
+  <section class="slide" data-narration="扫雷时间。第一个误区：以为平滑就是滤波的事后重放。错，平滑用了未来证据，本例里第一时刻的把握从零点九升到零点九四六，答案可以不同。第二个误区：拿逐时刻平滑的边缘逐个取 arg max，拼起来冒充最可能序列。这是第十三章 MAP 不等于边缘 arg max 的时序版——转移约束可能迫使联合最优路径，在某些时刻经过边缘上不占优的状态；要路径，必须跑维特比。第三个误区：以为前向后向是近似算法。恰恰相反，它是精确算法，与展开网上精确消去的结果完全一致，差别只在效率与内存。这三个坑，考试年年有人掉。">
+    <div class="slide-head"><span class="sec">避坑</span><h3>三个误区：重放、拼接、以为是近似</h3></div>
+    <div class="slide-body">
+      <div class="trap">❌ <strong>平滑 = 滤波的事后重放</strong><br>✅ 平滑用了未来证据（$P(X^t|O^{1..T})$），答案可以不同于滤波——本例 0.9 → 0.946</div>
+      <div class="trap">❌ <strong>最可能序列 = 逐时刻平滑取 arg max 再拼接</strong><br>✅ 这是 Ch13「MAP ≠ 边缘 arg max」的时序版：联合最优路径可能经过边缘不占优的状态，要路径必须跑 <strong>Viterbi</strong></div>
+      <div class="trap">❌ <strong>前向-后向是近似算法</strong><br>✅ 它<strong>精确</strong>：与展开网上精确消去结果一致，差别只在效率与内存</div>
+    </div>
+  </section>
+
+  <!-- 18 与相邻章接口 -->
+  <section class="slide" data-narration="看看邻居怎么分工。第六章给表示：两时间片模板和展开语义，本章拿过来做推理。第十三章给工具：最大乘积，本章的维特比就是它在链上的特例。第十九章反过来问参数从哪来：学隐马尔可夫模型参数的 Baum-Welch 算法，本质是 EM，它的 E 步正是本章的前向后向——本章学扎实，十九章就是顺水推舟。还要再强调一遍那个大节点：推理部分到本章收官，从第十六章开始全书转入学习。下一章先回答最朴素的问题：我们一直假设参数全部已知，现实里这个假设根本不成立——参数从哪来？从数据里学。">
+    <div class="slide-head"><span class="sec">接口</span><h3>Ch6 给表示、Ch13 给工具、Ch19 用本章做 E 步</h3></div>
+    <div class="slide-body">
+      <table>
+        <thead><tr><th>相邻章</th><th>它给本章什么 / 本章给它什么</th></tr></thead>
+        <tbody>
+          <tr><td class="l"><strong>Ch6 模板表示</strong></td><td class="l">给本章：2TBN 与展开语义——本章推理的输入</td></tr>
+          <tr><td class="l"><strong>Ch13 MAP</strong></td><td class="l">给本章：max-product 工具——Viterbi 是它的链上特例</td></tr>
+          <tr><td class="l"><strong>Ch19 EM</strong></td><td class="l">本章给它：前向-后向——Baum-Welch 学 HMM 参数的 E 步</td></tr>
+          <tr><td class="l"><strong>Ch16 起</strong></td><td class="l">推理收官，转入学习：模型参数从数据怎么来</td></tr>
+        </tbody>
+      </table>
+      <div class="tip">钩子：本章假设参数全已知——现实里参数从哪来？下一章开始回答</div>
+    </div>
+  </section>
+
+  <!-- 19 小结 -->
+  <section class="slide" data-narration="三句话讲完第十五章。第一句，解决什么：序列无限长，不能把整条轨迹建成一个大网络，要在时间与内存都跟时长无关的前提下，回答滤波、预测、平滑、最可能序列四类查询。第二句，核心机制：马尔可夫性让当前信念成为过去与未来的唯一接口，前向递推做滤波，后向消息倒流与阿尔法相乘做平滑，求和换最大、加回溯指针就是维特比。第三句，承上启下：推理到此收官，第十六章起转入学习，回答模型参数从数据怎么来。必背公式写在下面：平滑正比于阿尔法乘贝塔，合上书也要能默写。">
+    <div class="slide-head"><span class="sec">小结</span><h3>三句话讲完第15章</h3></div>
+    <div class="slide-body">
+      <div class="chain">
+        <div class="link"><span class="no">1</span><span class="txt"><strong>解决什么</strong>：序列无限长，要在时间/内存与 T 无关的前提下回答滤波、预测、平滑、最可能序列</span></div>
+        <div class="link"><span class="no">2</span><span class="txt"><strong>核心机制</strong>：马尔可夫性 → 当前信念是唯一接口（rollup）；α 前向滤波、β 倒流平滑、max ＋指针得 Viterbi</span></div>
+        <div class="link"><span class="no">3</span><span class="txt"><strong>承上启下</strong>：推理到此收官；Ch16 起转入学习——参数从数据怎么来</span></div>
+      </div>
+      <div class="formula formula-concl">$$P(X^t \mid O^{1..T}) \propto \alpha_t \cdot \beta_t \quad\text{——合上书也要能默写}$$</div>
+    </div>
+  </section>
+
+  <!-- 20 结束页 -->
+  <section class="slide slide-cover" data-narration="第十五章到此结束，推理篇也一起收官。毕业挑战，拿一张纸：第一，画出两时间片模板和三时间步展开图，说出不能直接展开推理的两个理由；第二，默写四类任务的数学形式；第三，默算例一的滤波，阿尔法的两个值和零点九四六；第四，默算贝塔一并合成平滑；第五，跑一遍维特比，得到序列一一、分数零点二八三五。全部拿下，推理篇你就毕业了。下一章第十六章，学习模型概述：我们一直假设参数已知，可现实里参数从哪来？从数据里学。我们下一章见。">
+    <div class="kicker">本 章 结 束 · 推 理 篇 收 官</div>
+    <h1>时间无限长，信念只有一个</h1>
+    <div class="sub">毕业挑战：合上书，拿一张纸</div>
+    <div class="divider"></div>
+    <div class="meta">
+      ☑ 画 2TBN 与展开图，说出不建大网的两个理由　　☑ 默写四类任务的数学形式<br>
+      ☑ 默算滤波 α₂=0.017/0.297 → 0.946　　☑ 默算 β₁=0.34/0.66 合成平滑<br>
+      ☑ 跑 Viterbi 得序列 (1,1)、分数 0.2835<br><br>
+      下一章 · 第16章 学习模型：概述——参数从哪来？从数据里学
+    </div>
+  </section>
+
+  <!-- 页脚 -->
+  <div id="footer">
+    <span class="brand">第15章 动态网络中的推理 · PGM 课件</span>
+    <span id="pagenum">1 / 20</span>
+  </div>
+
+  <!-- 导航 -->
+  <div class="nav">
+    <button id="prev" title="上一页 (←)">‹</button>
+    <button id="next" title="下一页 (→ / 空格)">›</button>
+  </div>
+  <div id="hint">← → 翻页 · 空格下一页 · 推导页逐步显示 · 点击左右半屏翻页</div>
+
+</div>
+
+<!-- mermaid 本地引用，保证离线可用；初始化参数全套课件统一，勿改 -->
+<script src="assets/mermaid.min.js"></script>
+<script>
+mermaid.initialize({
+  startOnLoad: false,   // 必须为 false：display:none 的隐藏页渲染会得到 0 宽高的退化 SVG，
+                        // 改为页面激活时懒渲染（见 renderMermaid）
+  theme: "base",
+  themeVariables: {
+    primaryColor: "#ebf8ff",
+    primaryBorderColor: "#2b6cb0",
+    primaryTextColor: "#1a365d",
+    lineColor: "#718096",
+    fontFamily: "-apple-system, PingFang SC, sans-serif",
+    fontSize: "15px"
+  },
+  flowchart: { curve: "linear", htmlLabels: false }
+});
+</script>
+<script>
+(function(){
+  const slides = Array.from(document.querySelectorAll('.slide'));
+  const total = slides.length;
+  let idx = 0;
+
+  const params = new URLSearchParams(location.search);
+  const startSlide = parseInt(params.get('slide'), 10);
+  if (params.get('autohide') === '1') document.body.classList.add('autohide');
+  if (!isNaN(startSlide) && startSlide >= 1 && startSlide <= total) idx = startSlide - 1;
+
+  const progress = document.getElementById('progress');
+  const pagenum = document.getElementById('pagenum');
+  const prevBtn = document.getElementById('prev');
+  const nextBtn = document.getElementById('next');
+
+  // 推导分步：每页记住已展开的步数；autohide（截图）模式下 CSS 强制全显
+  const stepState = new Map();
+  function stepsOf(i){ return Array.from(slides[i].querySelectorAll('.step')); }
+  function applySteps(){
+    stepsOf(idx).forEach((el, k)=> el.classList.toggle('on', k < (stepState.get(idx) || 0)));
+  }
+  // 前进一步：先展开本页下一步，全部展开后才翻页
+  function forward(){
+    const steps = stepsOf(idx);
+    const shown = stepState.get(idx) || 0;
+    if (shown < steps.length){ stepState.set(idx, shown + 1); applySteps(); return; }
+    go(idx + 1);
+  }
+  // 后退一步：先收起本页最后一步，收完才回上一页
+  function backward(){
+    const steps = stepsOf(idx);
+    const shown = stepState.get(idx) || 0;
+    if (shown > 0){ stepState.set(idx, shown - 1); applySteps(); return; }
+    go(idx - 1);
+  }
+
+  // mermaid 懒渲染：只在页面激活（有真实宽高）时渲染该页的图，渲染后打 data-done 防重复
+  function renderMermaid(slide){
+    if (typeof mermaid === 'undefined') return;
+    const nodes = Array.from(slide.querySelectorAll('.mermaid:not([data-done])'));
+    if (!nodes.length) return;
+    nodes.forEach(n => n.setAttribute('data-done', ''));
+    mermaid.run({ nodes }).catch(err => {
+      nodes.forEach(n => n.removeAttribute('data-done'));
+      console.error('mermaid 渲染失败：', err);
+    });
+  }
+
+  function render(){
+    slides.forEach((s,i)=> s.classList.toggle('active', i===idx));
+    progress.style.width = ((idx+1)/total*100) + '%';
+    pagenum.textContent = (idx+1) + ' / ' + total;
+    prevBtn.disabled = (idx===0);
+    nextBtn.disabled = (idx===total-1);
+    applySteps();
+    renderMermaid(slides[idx]);
+  }
+  function go(n){ idx = Math.max(0, Math.min(total-1, n)); render(); }
+
+  prevBtn.addEventListener('click', e=>{ e.stopPropagation(); backward(); });
+  nextBtn.addEventListener('click', e=>{ e.stopPropagation(); forward(); });
+
+  document.addEventListener('keydown', e=>{
+    if(e.key==='ArrowRight'||e.key===' '||e.key==='PageDown'){ e.preventDefault(); forward(); }
+    else if(e.key==='ArrowLeft'||e.key==='PageUp'){ e.preventDefault(); backward(); }
+    else if(e.key==='Home'){ stepState.set(idx, 0); go(0); }
+    else if(e.key==='End'){ go(total-1); }
+  });
+
+  document.getElementById('stage').addEventListener('click', e=>{
+    if(e.target.closest('.nav')) return;
+    const x = e.clientX;
+    if(x < window.innerWidth*0.5) backward(); else forward();
+  });
+
+  function fit(){
+    const s = Math.min(window.innerWidth/1280, window.innerHeight/720);
+    document.getElementById('stage').style.transform = 'translate(-50%,-50%) scale(' + s + ')';
+  }
+  window.addEventListener('resize', fit);
+  fit();
+  render();
+})();
+</script>
+</body>
+</html>

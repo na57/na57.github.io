@@ -1,0 +1,591 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第11章 近似推理：置信传播 · PGM 课件</title>
+<script>
+window.MathJax = {
+  tex: {
+    inlineMath: [['$', '$'], ['\\(', '\\)']],
+    displayMath: [['$$', '$$'], ['\\[', '\\]']],
+    processEscapes: true,
+    tags: 'none'
+  },
+  svg: { fontCache: 'global', scale: 1.05 },
+  options: { skipHtmlTags: ['script','noscript','style','textarea','pre','code'] }
+};
+</script>
+<!-- MathJax 本地引用（tex-svg 单文件全量组件，约2MB，自带字体数据），file:// 与断网均可用 -->
+<script src="assets/tex-svg.js" async></script>
+<style>
+  :root{
+    --primary:#1a365d; --accent:#2b6cb0; --accent-light:#ebf8ff; --accent-border:#bee3f8;
+    --text:#2d3748; --muted:#718096; --border:#e2e8f0; --bg-light:#f7fafc;
+    --success:#38a169; --danger:#e53e3e; --warning:#dd6b20; --warn-bg:#fffaf0;
+  }
+  *{margin:0;padding:0;box-sizing:border-box;}
+  html,body{width:100%;height:100%;overflow:hidden;background:#0f172a;}
+  body{
+    font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Hiragino Sans GB","Microsoft YaHei","WenQuanYi Micro Hei",sans-serif;
+    color:var(--text);
+  }
+  #stage{
+    position:absolute; left:50%; top:50%;
+    width:1280px; height:720px;
+    transform:translate(-50%,-50%) scale(1);
+    transform-origin:center center;
+    background:#ffffff;
+    box-shadow:0 0 40px rgba(0,0,0,.4);
+    overflow:hidden;
+  }
+  .slide{
+    position:absolute; inset:0;
+    padding:36px 60px 52px;
+    display:none;
+    flex-direction:column;
+    background:#ffffff;
+    opacity:0;
+    transition:opacity .35s ease;
+  }
+  .slide.active{ display:flex; opacity:1; }
+
+  #progress{ position:absolute; top:0; left:0; height:6px; background:var(--accent); width:0; z-index:50; transition:width .35s; }
+
+  /* 封面 / 结束页 */
+  .slide-cover{ justify-content:center; align-items:center; text-align:center; }
+  .slide-cover{ background:linear-gradient(135deg,#1a365d 0%,#2b6cb0 100%); color:#fff; }
+  .slide-cover .kicker{ font-size:22px; letter-spacing:6px; opacity:.85; margin-bottom:18px;}
+  .slide-cover h1{ font-size:64px; font-weight:800; line-height:1.2; margin-bottom:22px; letter-spacing:2px;}
+  .slide-cover .sub{ font-size:26px; opacity:.92; margin-bottom:36px;}
+  .slide-cover .meta{ font-size:19px; opacity:.85; line-height:2;}
+  .slide-cover .divider{ width:160px;height:5px;background:#fff;opacity:.6;margin:0 auto 30px;border-radius:3px;}
+  .slide-cover .question{ font-size:24px; background:rgba(255,255,255,.12); border:1px solid rgba(255,255,255,.35); border-radius:12px; padding:12px 28px; margin-bottom:30px;}
+
+  /* 页头：结论式标题 */
+  .slide-head{ display:flex; align-items:baseline; gap:16px; border-bottom:3px solid var(--accent); padding-bottom:9px; margin-bottom:12px;}
+  .slide-head .sec{ font-size:17px; color:var(--accent); font-weight:700; background:var(--accent-light); padding:3px 11px; border-radius:6px; white-space:nowrap;}
+  .slide-head h3{ font-size:29px; color:var(--primary); font-weight:700;}
+  .slide-body{ flex:1; display:flex; flex-direction:column; justify-content:center; min-height:0; }
+
+  p{ font-size:21px; line-height:1.65; margin-bottom:8px;}
+  .lead{ font-size:23px; color:#374151; line-height:1.75;}
+  ul,ol{ margin:0 0 8px 26px; font-size:21px; line-height:1.7;}
+  li{ margin-bottom:5px;}
+  strong{ color:var(--primary); }
+
+  /* 公式块 */
+  .formula{ background:var(--accent-light); border-left:5px solid var(--accent); border-radius:0 10px 10px 0; padding:9px 22px; margin:9px 0; text-align:center; font-size:23px;}
+  .formula-concl{ background:#fffaf0; border-left:5px solid var(--warning);}
+  .MathJax{ font-size:1.05em !important; }
+  mjx-container[display="true"]{ margin:6px 0 !important; }
+
+  /* 表格 */
+  table{ width:100%; border-collapse:collapse; margin:10px 0; font-size:20px;}
+  th{ background:var(--accent); color:#fff; padding:8px 12px; text-align:center; font-weight:600;}
+  td{ padding:7px 12px; border:1px solid var(--border); text-align:center; vertical-align:middle;}
+  tr:nth-child(even) td{ background:var(--bg-light);}
+  td.l{ text-align:left; }
+  table.small{ font-size:18px; }
+  table.small td, table.small th{ padding:6px 10px; }
+
+  /* 组件 */
+  .card{ background:var(--accent-light); border:1px solid var(--accent-border); border-radius:12px; padding:12px 20px; margin:10px 0;}
+  .tip{ background:#ebf8ff; border-left:5px solid var(--accent); border-radius:0 10px 10px 0; padding:10px 20px; margin:10px 0; font-size:20px; color:#2c5282;}
+  .deep{ background:#f0fff4; border-left:5px solid var(--success); border-radius:0 10px 10px 0; padding:10px 20px; margin:10px 0; font-size:20px; color:#22543d;}
+  .warn{ background:var(--warn-bg); border-left:5px solid var(--warning); border-radius:0 10px 10px 0; padding:10px 20px; margin:10px 0; font-size:20px; color:#744210;}
+  .trap{ background:#fef2f2; border-left:5px solid var(--danger); border-radius:0 10px 10px 0; padding:10px 20px; margin:10px 0; font-size:20px; color:#7f1d1d;}
+
+  .pause{
+    background:var(--warn-bg); border:2px dashed var(--warning); border-radius:14px;
+    padding:10px 22px; margin:10px 0; display:flex; align-items:center; gap:16px;
+  }
+  .pause .icon{ font-size:36px; line-height:1; }
+  .pause .txt b{ color:var(--warning); font-size:21px; }
+  .pause .txt p{ font-size:18px; color:#744210; margin:3px 0 0; }
+
+  .cols{ display:flex; gap:28px; align-items:stretch; }
+  .col{ flex:1; min-width:0; }
+
+  /* 推导分步：仅互动模式隐藏，截图(autohide)模式全部可见 */
+  .step{ opacity:0; transform:translateY(8px); transition:opacity .3s ease, transform .3s ease; }
+  .step.on{ opacity:1; transform:none; }
+  body.autohide .step{ opacity:1 !important; transform:none !important; }
+  .step-hint{ font-size:14px; color:var(--muted); margin-top:4px;}
+  body.autohide .step-hint{ display:none; }
+
+  /* 因果链 */
+  .chain{ margin:6px 0; }
+  .chain .link{ display:flex; align-items:center; gap:14px; margin:6px 0;}
+  .chain .no{ width:34px; height:34px; border-radius:50%; background:var(--accent); color:#fff; font-size:18px; font-weight:700; display:flex; align-items:center; justify-content:center; flex-shrink:0;}
+  .chain .txt{ font-size:21px; line-height:1.5;}
+  .chain .txt strong{ color:var(--primary); }
+
+  /* mermaid 容器：高度封顶，防止溢出 720px 舞台 */
+  .mmd{ background:var(--bg-light); border:1px solid var(--border); border-radius:12px; padding:10px 14px; display:flex; justify-content:center; align-items:center; margin:8px 0;}
+  .mmd .mermaid{ display:flex; justify-content:center; width:100%; visibility:hidden; }
+  .mmd .mermaid[data-done]{ visibility:visible; }
+  .mmd .mermaid svg{ max-width:100%; height:auto; max-height:230px; }
+  .mmd.mmd-tall .mermaid svg{ max-height:330px; }
+  .mmd.mmd-sm svg{ max-height:150px; }
+  .mmd-row{ display:flex; gap:18px; }
+  .mmd-row .mmd{ flex:1; flex-direction:column; }
+  .mmd .cap{ font-size:17px; color:var(--muted); margin-top:6px; text-align:center;}
+  .mmd .cap b{ color:var(--text); }
+
+  #footer{ position:absolute; bottom:0; left:0; right:0; height:40px; display:flex; align-items:center; justify-content:space-between; padding:0 30px; font-size:15px; color:#94a3b8; background:rgba(247,250,252,.85); border-top:1px solid var(--border); z-index:40;}
+  #footer .brand{ font-weight:600; color:var(--accent); }
+
+  .nav{ position:absolute; bottom:48px; right:40px; display:flex; gap:12px; z-index:45;}
+  .nav button{ width:54px; height:54px; border-radius:50%; border:none; background:var(--accent); color:#fff; font-size:24px; cursor:pointer; box-shadow:0 3px 10px rgba(43,108,176,.4); display:flex; align-items:center; justify-content:center;}
+  .nav button:hover{ background:var(--primary); }
+  .nav button:disabled{ background:#cbd5d0; cursor:default; box-shadow:none;}
+
+  #hint{ position:absolute; bottom:48px; left:40px; font-size:14px; color:#94a3b8; z-index:45;}
+
+  body.autohide #progress, body.autohide #footer, body.autohide .nav, body.autohide #hint{ display:none !important; }
+</style>
+</head>
+<body>
+<div id="stage">
+
+  <div id="progress"></div>
+
+  <!-- 1 封面 -->
+  <section class="slide slide-cover active" data-narration="同学们好，欢迎来到第十一章：近似推理的置信传播。上一章的团树算法给了我们精确的答案，但它有个硬约束：树宽一大，团表就存不下，网格图、稠密图上精确推理整体失效。这一章我们做一件明知故犯的事：把树上的消息传递规则原封不动地搬到带环图上。搬过去之后算出来的究竟是什么？本章的任务不是说一句近似所以差不多就行，而是说清近似到底近似成了什么。学完你能手算两轮带环置信传播，并解释它为什么方向对、强度却系统性失真。">
+    <div class="kicker">概率图模型 · 第 11 章 · 推理</div>
+    <h1>近似推理：置信传播</h1>
+    <div class="sub">Belief Propagation —— 树上精确，带环只是驻点</div>
+    <div class="question">本章要回答：把树上那套消息规则直接搬到带环图上，算出来的究竟是什么？</div>
+    <div class="meta">
+      配套讲义：《PGM 互动讲义》第11章 · 基于 Koller &amp; Friedman (2009)<br>
+      ← → 或空格翻页 · 推导页逐步显示
+    </div>
+  </section>
+
+  <!-- 2 全书位置 -->
+  <section class="slide" data-narration="先看本章在全书的位置。第十章的团树算法精确，但树宽大的图上计算爆炸；本章退一步，把消息传递规则从树上直接搬到带环图，得到实用但有损的带环置信传播，它求的不是真实边缘，而是 Bethe 自由能的驻点；第十二章再换一条完全不同的路，用随机采样代替确定性消息；第十五章把这套近似思想带进行时序模型的滤波。本章在整个推理版图里的角色是：工程上最常用的近似算法，和理论上最值得分析的近似算法，两者是同一个东西。">
+    <div class="slide-head"><span class="sec">定位</span><h3>精确推理失效后的第一站：实用但有损的消息传递</h3></div>
+    <div class="slide-body">
+      <div class="mmd mmd-sm">
+        <div class="mermaid">
+flowchart LR
+  A["Ch10 团树算法<br>树上精确消息传播"] --> B["Ch11 置信传播<br>树上精确 / 带环近似"]:::here
+  B --> C["Ch12 粒子方法<br>用采样代替消息"]
+  C --> D["Ch15 动态网络推理<br>时序模型中的近似滤波"]
+  classDef here fill:#2b6cb0,color:#ffffff,stroke:#1a365d,stroke-width:3px
+        </div>
+      </div>
+      <p style="text-align:center; margin-top:10px;">本章关键词：<strong>Bethe 驻点</strong> —— 带环 BP 求的从来不是真实边缘</p>
+    </div>
+  </section>
+
+  <!-- 3 本章主线 -->
+  <section class="slide" data-narration="本章逻辑一条链。第一环，团树精确但树宽一大就爆炸，网格、稠密图上精确推理失效。第二环，回到消息传递本身：如果原图恰好是树，可以甩掉团的包袱，直接在节点间传消息，这就是置信传播。第三环，用归纳论证说清它在树上为什么精确：每条消息是发送方一侧子树的证据汇总，无环保证不重复计数。第四环，换变分视角看同一个算法：置信传播的不动点恰好是 Bethe 自由能的驻点。第五环，把规则照搬进带环图，得到带环置信传播——买单的时刻到了：求的是 Bethe 驻点，不保证收敛，收敛了也不是真边缘。">
+    <div class="slide-head"><span class="sec">主线</span><h3>树上精确、带环近似——说清近似到底近似成了什么</h3></div>
+    <div class="slide-body">
+      <div class="chain">
+        <div class="link"><span class="no">1</span><span class="txt">团树精确但<strong>树宽一大就爆炸</strong>：网格、稠密图上精确推理失效</span></div>
+        <div class="link"><span class="no">2</span><span class="txt">回到消息本身：原图是树时甩掉团的包袱，节点间直接传消息（<strong>BP</strong>）</span></div>
+        <div class="link"><span class="no">3</span><span class="txt">归纳论证：消息 = 子树证据汇总，<strong>无环 ⟹ 不重复计数</strong> ⟹ 精确</span></div>
+        <div class="link"><span class="no">4</span><span class="txt">变分视角：<strong>BP 不动点 ⟺ Bethe 自由能驻点</strong>（YFW 定理）</span></div>
+        <div class="link"><span class="no">5</span><span class="txt">照搬进带环图 = Loopy BP → <strong>求的是 Bethe 驻点，不是真边缘</strong></span></div>
+      </div>
+      <div class="tip">每一步都在回答「为什么需要下一步」；终点是本章买下的账单</div>
+    </div>
+  </section>
+
+  <!-- 4 动机：团树在网格上爆炸 -->
+  <section class="slide" data-narration="先把逼我们放弃精确的账单摆出来。团树的成本由最大团决定，而最大团的大小由树宽决定。网格图的树宽是两边的较小值，稠密图的树宽随节点数线性增长。算一笔账：三十乘四十的网格，一千二百个二值变量，树宽约三十，最大团三十一个变量，团表是二的三十一次方项，约二十亿行，存都存不下，更别提运算。变量消去和团树在这里一起失效——这是第四章配分函数埋下的账单到期了。但在彻底放弃之前，先注意一个被团树包装住的事实：如果原图本身就是一棵树，消息可以甩掉团的包袱，直接在节点之间传。先搞懂这个直接版本为什么在树上精确，才有资格谈搬到环上会丢掉什么。">
+    <div class="slide-head"><span class="sec">动机</span><h3>树宽一涨，团树和变量消去一起失效</h3></div>
+    <div class="slide-body">
+      <table class="small">
+        <thead><tr><th>图</th><th>树宽 w</th><th>最大团表（二值）</th><th>精确推理</th></tr></thead>
+        <tbody>
+          <tr><td class="l">树 / 链</td><td>1</td><td>2² = 4 项</td><td>✅ 轻松</td></tr>
+          <tr><td class="l">3×4 网格</td><td>≈3</td><td>2⁴ = 16 项</td><td>✅ 可行</td></tr>
+          <tr><td class="l">30×40 网格</td><td>≈30</td><td>2³¹ ≈ 20 亿项</td><td>❌ 存不下</td></tr>
+        </tbody>
+      </table>
+      <div class="deep">💡 但如果原图<strong>本身就是一棵树</strong>：消息可以甩掉团的包袱，直接在节点间传递——这个直接版本就是<strong>置信传播（BP）</strong></div>
+      <div class="tip">策略：先搞懂 BP 在树上为什么精确，再看搬到环上丢掉什么</div>
+    </div>
+  </section>
+
+  <!-- 5 BP 消息与置信公式 -->
+  <section class="slide" data-narration="给出树上置信传播的全部规则，就两条公式。设每条边上有成对势，每个节点上有单元势，证据也折进单元势里。节点 i 发给邻居 j 的消息定义为：对 i 的取值求和，求和项是边上的势，乘 i 的单元势，再乘 i 的除 j 以外所有邻居发来的消息。所有消息算完后，节点 i 的置信就是它的单元势乘上所有收到的消息，归一化即得边缘。读法很重要：消息是 i 对 j 说的一句话——我这一侧整棵子树的全部证据，汇总成对你取值的看法。它是一个关于 j 取值的向量，不是概率分布，不需要归一化。">
+    <div class="slide-head"><span class="sec">定义</span><h3>BP 的全部规则：一条消息公式，一条置信公式</h3></div>
+    <div class="slide-body">
+      <div class="formula">$$m_{i\to j}(x_j) = \sum_{x_i} \psi_{ij}(x_i, x_j)\, \varphi_i(x_i) \prod_{k \in N(i)\setminus j} m_{k\to i}(x_i)$$</div>
+      <div class="formula formula-concl">$$\boldsymbol{b_i(x_i) \propto \varphi_i(x_i) \prod_{k \in N(i)} m_{k\to i}(x_i)}$$</div>
+      <div class="deep">💡 $m_{i\to j}$ = i 对 j 说：「我这一侧<strong>整棵子树</strong>的全部证据，汇总成对你取值的看法」——是向量，不是分布</div>
+    </div>
+  </section>
+
+  <!-- 6 例1：链上手算（互动停顿） -->
+  <section class="slide" data-narration="在链上把手算做完整。三个二值变量连成链，两条边的势都是相同得十、不同得一，证据是观测到 C 等于零。先暂停视频，自己把三条消息和 A 的置信算一遍。推出来了吗？对答案。叶子消息是十和一，意思是我观测到自己是零，所以你多半是零。中继消息：十乘十加一乘一得一百零一，另一格二十。A 的置信正比于一百零一比二十，归一化约零点八三五。枚举验证：带证据只剩四种赋值，权重和一百二十一，结果一模一样。">
+    <div class="slide-head"><span class="sec">演练</span><h3>链 A—B—C 带证据手算：P(a=0|C=0) = 101/121 ≈ 0.835</h3></div>
+    <div class="slide-body">
+      <div class="step"><p>① <strong>叶子消息</strong> m_C→B：C 无其他邻居 ⟹ m(b=0) = ψ(0,0)·1 = <strong>10</strong>，m(b=1) = ψ(1,0)·1 = <strong>1</strong>（「我是 0，你多半是 0」）</p></div>
+      <div class="step"><p>② <strong>中继消息</strong> m_B→A(a=0) = 10·10 + 1·1 = <strong>101</strong>；m_B→A(a=1) = 1·10 + 10·1 = <strong>20</strong>（汇总子树 {B,C}）</p></div>
+      <div class="step"><p>③ <strong>置信</strong> b_A ∝ {101, 20} ⟹ P(a=0|C=0) = 101/121 ≈ <strong>0.835</strong></p></div>
+      <div class="step"><p>④ <strong>枚举验证</strong>：c=0 的 4 种赋值权重 100、1、10、10，Z′ = 121 ⟹ (100+1)/121 ✓ 一模一样</p></div>
+      <div class="pause"><div class="icon">✍️</div><div class="txt"><b>暂停推导</b><p>遮住答案，先自己算：叶子消息、中继消息、置信，再和枚举对拍。</p></div></div>
+      <p class="step-hint">按空格 / → 逐步揭示答案</p>
+    </div>
+  </section>
+
+  <!-- 7 为什么树上精确 -->
+  <section class="slide" data-narration="为什么树上的置信传播是精确的？给出一个归纳论证，这是对子树大小做归纳。把每条边看成分界线，切断后 i 所在的那一侧叫子树。基础步：i 是叶子时，子树只有它自己，消息公式退化为势乘单元势再求和，正是单节点子树的边缘化定义，成立。归纳步：假设进入 i 的所有消息都已正确汇总各自的子树。关键在这里——因为树无环，这些子树两两不相交，它们的并集加上 i 自己正好是更大的那棵子树，于是消息公式把各不相交子树的汇总相乘再求和，恰好就是大子树上的边缘化，成立。一句话抓住本质：无环，所以各方向子树两两不相交，所以每份证据恰好被数一次。精确性是图结构的功劳，不是迭代的功劳。">
+    <div class="slide-head"><span class="sec">机制</span><h3>树上为什么精确：无环 ⟹ 子树两两不交 ⟹ 每份证据恰好数一次</h3></div>
+    <div class="slide-body">
+      <div class="step"><p>① <strong>基础步</strong>：i 是叶子 ⟹ $m_{i\to j}(x_j) = \sum_{x_i} \psi_{ij}\varphi_i$，正是单节点子树「势乘积对内部变量求和」✓</p></div>
+      <div class="step"><p>② <strong>归纳步</strong>：设各 $m_{k\to i}$ 已正确汇总子树 $T_{k\to i}$；<strong>树无环 ⟹ 这些子树两两不相交</strong>，并集加 {i} 恰为 $T_{i\to j}$</p></div>
+      <div class="step"><p>③ 乘积 $\prod m_{k\to i}$ 把各<strong>不相交</strong>子树的汇总相乘，再对 $x_i$ 求和 = $T_{i\to j}$ 上的边缘化 ✓ ∎</p></div>
+      <div class="formula formula-concl">$$\boldsymbol{\text{无环} \Rightarrow \text{子树两两不交} \Rightarrow \text{每份证据恰好被计一次}}$$</div>
+      <p class="step-hint">按空格 / → 逐步展开论证</p>
+    </div>
+  </section>
+
+  <!-- 8 误区：树上没有收敛问题 -->
+  <section class="slide" data-narration="这页纠正一个根深蒂固的误解：置信传播是个迭代近似算法，要跑到收敛。在树上，这话不对。看消息之间的依赖关系：每条消息只依赖于更靠近叶子的消息，这个依赖是有向无环的。任选一个根，先由叶子向根传一遍，再由根向叶传一遍，两遍调度之后所有消息被确定，而且精确——有限步内结束，没有什么收敛可言。迭代到收敛这个概念，是专门为带环图准备的：环让消息依赖成圈，谁先谁后没有天然顺序，才不得不反复刷新。所以请记住两个说法的精确分工：树上，两遍精确结束；带环，迭代到收敛或者到最大轮数认栽。">
+    <div class="slide-head"><span class="sec">辨析</span><h3>树上 BP 两遍精确结束——「迭代到收敛」是为带环图准备的</h3></div>
+    <div class="slide-body">
+      <div class="cols">
+        <div class="col"><div class="deep">✅ <strong>树上</strong>：消息依赖是有向无环的 → 叶→根、根→叶两遍调度，有限步<strong>精确结束</strong>，无迭代、无收敛问题</div></div>
+        <div class="col"><div class="warn">⚠️ <strong>带环</strong>：消息依赖成圈，无天然顺序 → 只能反复迭代，且可能震荡不收敛</div></div>
+      </div>
+      <div class="trap">❌ 「BP 是迭代近似算法，要跑到收敛」——这只对带环图成立；拿它描述树上 BP 是把图结构的功劳记错账</div>
+    </div>
+  </section>
+
+  <!-- 9 Bethe 近似：伪边缘拼接 -->
+  <section class="slide" data-narration="换一种更深刻的看法看同一个算法：把推理当成优化问题，这是变分推断的家族。真实后验太难算，那就不直接搜索联合分布，改为搜索一组伪边缘：每个节点一个单变量伪边缘，每条边一个双变量伪边缘，只要求它们局部一致——边伪边缘对一端求和要等于那端的节点伪边缘，且各自归一。然后问题变成：怎么用这组低阶边缘把联合分布拼出来？Bethe 近似的答案是：所有边伪边缘相乘，再除以节点伪边缘的度数减一次方。分母是在配平：每个变量在每条边上各被数了一次，共被数了度数次，多出来的度数减一次要除掉。这个拼接公式，就是理解整个近似误差的钥匙。">
+    <div class="slide-head"><span class="sec">变分视角</span><h3>Bethe 近似：假装联合分布完全由节点边缘和边边缘决定</h3></div>
+    <div class="slide-body">
+      <p>不再搜索联合分布，搜索一组<strong>伪边缘</strong>：每节点 $b_i(x_i)$、每边 $b_{ij}(x_i,x_j)$，只要求<strong>局部一致</strong>：$\sum_{x_j} b_{ij} = b_i$，$\sum_{x_i} b_i = 1$</p>
+      <div class="formula">$$b(\boldsymbol{x}) \approx \frac{\prod_{(i,j)\in E} b_{ij}(x_i,x_j)}{\prod_{i} b_i(x_i)^{d_i - 1}}$$</div>
+      <div class="tip">分母幂次 $d_i - 1$ 在配平：$x_i$ 在每条边上各被数一次（共 $d_i$ 次），多出的 $d_i - 1$ 次要除掉</div>
+    </div>
+  </section>
+
+  <!-- 10 树上 Bethe 精确 -->
+  <section class="slide" data-narration="Bethe 拼接在树上是精确的：把真实边缘代入拼接公式，结果精确等于联合分布。链上当场验证：右边是两条边边缘的乘积除以中间节点的边缘，用条件概率拆开，等于条件乘边缘乘条件——而链上两端给定中间条件独立，这正是联合分布本身。一般的树对节点数归纳：砍掉一条边，两边独立拼接。结论值得记住：树上的联合分布完全被节点边缘和边边缘决定，不含任何更高阶的信息。这就是 Bethe 近似在树上不丢东西的原因——也为下一页的丢失埋下伏笔。">
+    <div class="slide-head"><span class="sec">机制</span><h3>树上的联合分布完全被「节点边缘＋边边缘」决定</h3></div>
+    <div class="slide-body">
+      <div class="formula">$$P(\boldsymbol{x}) = \frac{\prod_{(i,j)\in E} P(x_i,x_j)}{\prod_{i} P(x_i)^{d_i-1}} \quad\text{（取 } b \text{ 为真实边缘时，树上精确成立）}$$</div>
+      <div class="step"><p>① 链 A—B—C 上验证：右边 = $\dfrac{P(a,b)\,P(b,c)}{P(b)} = P(a|b)\,P(b)\,P(c|b)$</p></div>
+      <div class="step"><p>② 链上 $A \perp C \mid B$ ⟹ 上式 = $P(a,b,c)$ ✓</p></div>
+      <div class="step"><p>③ 一般树对节点数归纳：砍掉一条边，两边独立拼接 ∎</p></div>
+      <div class="deep">💡 代价的另一面：Bethe 拼接<strong>看不见任何高于「边」阶数的信息</strong>——环上这会真的丢东西</div>
+      <p class="step-hint">按空格 / → 逐步展开验证</p>
+    </div>
+  </section>
+
+  <!-- 11 Bethe 自由能与 YFW 定理 -->
+  <section class="slide" data-narration="这页是本章的理论头条。把拼出来的分布代入自由能，就得到 Bethe 自由能：平均能量只用局部伪边缘就能算，熵展开成 Bethe 熵，边熵之和减去度数减一倍的节点熵之和。在树上 Bethe 熵等于真实熵，最小化它就是精确推理。然后是 YFW 定理，只记结论：任意图包括带环图上，置信传播的不动点恰好是 Bethe 自由能在局部一致约束下的驻点。树上那个唯一驻点就是真实边缘；带环驻点可以有多个，一般不等于真实边缘。重要性在于：问题从在算什么，变成驻点离真实边缘有多远。证明不展开，会用结论即可。">
+    <div class="slide-head"><span class="sec">定理</span><h3>YFW 定理：BP 求的是 Bethe 驻点，不是真边缘</h3></div>
+    <div class="slide-body">
+      <div class="formula">$$H_B = \sum_{(i,j)\in E} H(b_{ij}) - \sum_{i} (d_i - 1)\, H(b_i) \qquad F_B = U_B - H_B$$</div>
+      <div class="formula formula-concl">$$\boldsymbol{\text{BP 不动点} \;\Longleftrightarrow\; \text{Bethe 自由能在局部一致约束下的驻点}} \quad\text{（Yedidia–Freeman–Weiss, 2000）}$$</div>
+      <div class="deep">✅ 树上：驻点唯一 = 真实边缘（Bethe 熵 = 真实熵）　　⚠️ 带环：驻点可有多个，一般 ≠ 真实边缘</div>
+      <div class="tip">为什么重要：问题从「BP 在算什么」变成精确问题「Bethe 驻点离真实边缘有多远」——证明不展开，会用结论即可</div>
+    </div>
+  </section>
+
+  <!-- 12 环上丢了什么：重复计数 -->
+  <section class="slide" data-narration="环上到底丢了什么？两个视角，同一个缺陷。变分视角说：Bethe 假设联合分布完全由节点和边的边缘决定，可环上存在绕环一周的整体关联，它改变不了任何单节点和单边的边缘，却真实改变联合分布——只看低阶边缘的拼接公式对这类信息原则上是盲的。算法视角更直观：信息重复计数。看这张三角形，C 处的证据沿两条路到达 A：一条直达，一条经 B 绕行。而 A 的置信公式把两条路径的消息全部相乘——乘法意味着当作独立证据。同一份证据被当成两份独立证据，方向通常没错，强度却被系统性放大，这就叫过自信。下一页我们用数字看它长什么样：置信传播说零点九三，枚举说零点七四。">
+    <div class="slide-head"><span class="sec">机制</span><h3>环上：同一份证据沿两条路到达，被当成两份独立证据</h3></div>
+    <div class="slide-body">
+      <div class="cols">
+        <div class="col">
+          <div class="mmd mmd-sm">
+            <div class="mermaid">
+flowchart TB
+  C["C（软证据 (3,1)）"]
+  B["B"]
+  A["A"]
+  C ---|"直达"| A
+  C --- B
+  B --- A
+  linkStyle 0 stroke:#b03a2e,stroke-width:2.5px;
+  linkStyle 1 stroke:#c4651f,stroke-width:2.5px;
+  linkStyle 2 stroke:#c4651f,stroke-width:2.5px;
+            </div>
+          </div>
+          <p style="font-size:18px; text-align:center; color:var(--muted);">C 的证据沿红、橙两条路径进入 A，置信公式把两路消息<strong>相乘</strong></p>
+        </div>
+        <div class="col">
+          <div class="warn">⚠️ <strong>重复计数</strong>：同一份证据 × 两份独立证据 → 方向对、<strong>强度被放大</strong>（过自信）</div>
+          <div class="tip">变分视角的同一件事：Bethe 拼接看不见「绕环一周」的高阶关联——<strong>熵的计数错误 = 消息的重复计数</strong></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 13 Loopy BP 算法 -->
+  <section class="slide" data-narration="现在正式做那件明知故犯的事：把消息规则原封不动搬到带环图上，这就是带环置信传播。算法三步。第一步，初始化：所有消息置为均匀，全一。第二步，迭代：每轮用消息公式刷新所有消息，可以同步刷新也可以异步。第三步，停止：消息变化小于阈值就判收敛，到达最大轮数就认栽。注意和树上的本质差别：树上两遍精确结束，环上消息依赖成圈，只能迭代，而且三种结局都可能发生——收敛且接近真值、收敛但失真、震荡不收敛。接下来两个完整例子，各看一种结局。">
+    <div class="slide-head"><span class="sec">算法</span><h3>Loopy BP：规则照搬，调度变成迭代，三种结局都可能</h3></div>
+    <div class="slide-body">
+      <div class="chain">
+        <div class="link"><span class="no">1</span><span class="txt"><strong>初始化</strong>：所有消息置为均匀（全 1）</span></div>
+        <div class="link"><span class="no">2</span><span class="txt"><strong>迭代</strong>：每轮用消息公式刷新所有消息（同步或异步）</span></div>
+        <div class="link"><span class="no">3</span><span class="txt"><strong>停止</strong>：消息变化小于阈值判收敛；到最大轮数认栽</span></div>
+      </div>
+      <div class="warn">⚠️ 三种结局都可能发生：<strong>收敛且接近 / 收敛但失真 / 震荡不收敛</strong>——下面两例各看一种</div>
+    </div>
+  </section>
+
+  <!-- 14 例2手算：前两轮（互动停顿） -->
+  <section class="slide" data-narration="例二，三节点小环，三条边都是相同得十、不同得一，C 上有软证据三比一。由对称性只需追踪三条消息在零处的值，三条更新式打在屏幕上。先暂停视频，从均匀初始化出发自己算前两轮。推出来了吗？第一轮，u 等于十五点五除以二十二，约零点七零五。第二轮，r 约零点六六七。此时 A 的置信正比于零点七零五乘零点六六七，归一化约零点八二七——已经超过真实值零点七四。因为 r 是绕环路径送来的证据，u 是直达路径送来的，两者相乘，C 的证据被数了两遍。">
+    <div class="slide-head"><span class="sec">演练</span><h3>例2手算：两轮迭代后 b_A(0) ≈ 0.827，已越过真实值 0.740</h3></div>
+    <div class="slide-body">
+      <div class="formula">$$u \leftarrow \frac{29q+1}{22q+11}, \qquad r \leftarrow \frac{9u+1}{11}, \qquad q \leftarrow \frac{9r+1}{11}$$</div>
+      <div class="step"><p>① <strong>第 1 轮</strong>（初值全 0.5）：u = (29×0.5+1)/(22×0.5+11) = 15.5/22 ≈ <strong>0.705</strong></p></div>
+      <div class="step"><p>② <strong>第 2 轮</strong>：r = (9×0.705+1)/11 ≈ <strong>0.667</strong></p></div>
+      <div class="step"><p>③ b_A(0) ∝ u·r = 0.705×0.667 ≈ 0.470，b_A(1) ∝ 0.295×0.333 ≈ 0.098 ⟹ 归一化 <strong>≈ 0.827</strong>，已超真实值 0.740</p></div>
+      <div class="step"><p>④ 为什么越过：r 是 C→B→A 绕环证据，u 是 C→A 直达证据，相乘 = 同一份证据<strong>数了两遍</strong></p></div>
+      <div class="pause"><div class="icon">✍️</div><div class="txt"><b>暂停推导</b><p>遮住答案，从均匀初始化把第 1、2 轮的 u、r 与置信各算一遍。</p></div></div>
+      <p class="step-hint">按空格 / → 逐步揭示答案</p>
+    </div>
+  </section>
+
+  <!-- 15 例2收敛：0.93 vs 0.740 -->
+  <section class="slide" data-narration="继续迭代下去看结局。轮次表：初始化全零点五；第一轮 u 跳到零点七零五；之后 r、q 跟进，置信一路爬升，零点八二七、零点八七六、零点九零四；极限时三条消息收敛到零点八一零、零点七五四、零点七零八，置信约零点九三。现在对拍标准答案：枚举八种赋值，权重从三千到一千，配分函数四千一百二十，真实边缘是三千零五十除以四千一百二十，约零点七四零。结论触目惊心：消息干干净净地收敛了，答案却比真实值过自信零点一九。方向是对的，强度严重失真。这就是收敛不等于正确的标准样本，也是 Bethe 驻点不是真边缘的具体长相。">
+    <div class="slide-head"><span class="sec">对拍</span><h3>收敛得很干净，答案却过自信 0.19：0.93 vs 0.740</h3></div>
+    <div class="slide-body">
+      <div class="cols">
+        <div class="col">
+          <table class="small">
+            <thead><tr><th>轮次 t</th><th>u</th><th>r</th><th>q</th><th>b_A(0)</th></tr></thead>
+            <tbody>
+              <tr><td>0</td><td>0.500</td><td>0.500</td><td>0.500</td><td>0.500</td></tr>
+              <tr><td>1</td><td>0.705</td><td>0.500</td><td>0.500</td><td>0.705</td></tr>
+              <tr><td>2</td><td>0.705</td><td>0.667</td><td>0.500</td><td>0.827</td></tr>
+              <tr><td>4</td><td>0.779</td><td>0.667</td><td>0.637</td><td>0.876</td></tr>
+              <tr><td>5</td><td>0.779</td><td>0.728</td><td>0.637</td><td>0.904</td></tr>
+              <tr><td><strong>极限</strong></td><td><strong>0.810</strong></td><td><strong>0.754</strong></td><td><strong>0.708</strong></td><td><strong>≈0.93</strong></td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="col">
+          <div class="card"><strong>枚举对拍</strong>：8 种赋值权重和 Z = 4120<br>真实边缘 P(a=0) = 3050/4120 ≈ <strong>0.740</strong></div>
+          <div class="trap">❌ BP 收敛到 ≈ <strong>0.93</strong>，偏差 0.19——方向对、强度系统性失真<br>✅ 机制：C 的证据经两条路径被 A 重复计数，迭代中互相加强</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 16 例3：震荡与阻尼 -->
+  <section class="slide" data-narration="第三种结局：震荡不收敛。三条边换成强反铁磁势：不同得一百分，相同得一分，三角形因此受挫。由对称性所有消息同值，更新式打在屏幕上。从零点九出发：第一轮跌到零点一零八，第二轮弹回零点八八四——消息在高低之间来回翻转。更新斜率约负零点九八，振幅每轮只衰减百分之二，要两百多轮才平息；近确定性势下可以永远振荡。工程急救是阻尼：新消息与旧值加权平均，阿尔法常取零点三到零点五。代价是收敛变慢，收益是压住震荡——它不改变不动点的位置，修不了失真。">
+    <div class="slide-head"><span class="sec">反例</span><h3>强耦合受挫环：消息来回翻转，阻尼只能压震荡、修不了失真</h3></div>
+    <div class="slide-body">
+      <div class="cols">
+        <div class="col">
+          <div class="formula">$$x \leftarrow \frac{100 - 99x}{101} \qquad \text{斜率} \approx -0.98$$</div>
+          <table class="small">
+            <thead><tr><th>轮次 t</th><th>0</th><th>1</th><th>2</th><th>3</th><th>4</th><th>5</th></tr></thead>
+            <tbody><tr><td>x = m(0)</td><td>0.900</td><td>0.108</td><td>0.884</td><td>0.123</td><td>0.869</td><td>0.138</td></tr></tbody>
+          </table>
+          <p style="font-size:18px; color:var(--muted);">振幅每轮只衰减约 2%——两百多轮才平息；近确定性势可永远振荡</p>
+        </div>
+        <div class="col">
+          <div class="card"><strong>阻尼（Damping）</strong>$$m^{(t)} \leftarrow \alpha\, m^{(t-1)} + (1-\alpha)\, \hat{m}^{(t)}, \quad \alpha \in [0.3,\, 0.5]$$</div>
+          <div class="warn">⚠️ 阻尼只压震荡、收敛更慢；<strong>不动点位置不变</strong>——0.93 vs 0.74 那类失真它修不了</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 17 经验法则与自检 -->
+  <section class="slide" data-narration="既然不保证收敛、收敛也不保证正确，带环置信传播凭什么是最常用的近似算法？凭两件事：实践中它经常好得出奇，而且快。图像去噪的网格模型、纠错码的译码——LDPC 和 turbo 码的译码本质上就是它——大量弱环加多证据的实际模型里，误差小到可以忽略，速度比团树快几个数量级。经验法则记两组：容易收敛且接近的，是环弱、证据多、相关弱的图——证据会切断环上的消息回路；容易震荡或失真的，是强耦合、近确定性势、受挫结构。实践自检四条：多初始化看是否收敛到同一不动点；震荡时加阻尼；在能枚举的小子图上与精确解对拍；势接近确定性时默认它不可信。这些都救不回来时，就该换采样路线了——那是下一章。">
+    <div class="slide-head"><span class="sec">工程</span><h3>什么时候信它：弱环多证据放心用，强耦合近确定性默认不可信</h3></div>
+    <div class="slide-body">
+      <div class="cols">
+        <div class="col">
+          <div class="deep">✅ <strong>易收敛且接近</strong>：环弱（势近均匀）、证据多（切断消息回路）、相关弱</div>
+          <div class="warn">⚠️ <strong>易震荡/失真</strong>：强耦合环、近确定性势、受挫结构</div>
+          <div class="tip">无论收敛与否：带环 BP 求的是 <strong>Bethe 驻点</strong>，不是边缘分布</div>
+        </div>
+        <div class="col">
+          <div class="card"><strong>实践自检清单</strong><br>① 多初始化：收敛到不同不动点 ⟹ 不可信<br>② 震荡先加阻尼 α = 0.5 再调<br>③ 小图对拍：可枚举子图上比精确解<br>④ 势近确定性 ⟹ 默认不可信</div>
+          <div class="tip">救不回来（要强保证、算配分函数）→ 换采样：第 12 章粒子方法</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 18 常见误区 -->
+  <section class="slide" data-narration="这页扫雷。第一个误解：算法收敛了，所以结果就是对的。例二就是反例——消息干干净净地收敛，答案却比真实值过自信零点一九。收敛只说明到达某个不动点，不动点离真实边缘的距离取决于环的强度，没有任何自带的误差条。第二个：环不大，误差应该不大。错——误差取决于环上耦合的强度，不取决于环的长度。三个节点的最小环配强耦合，足以产生零点九三对零点七四的失真甚至震荡；很长的弱环反而几乎无损。第三个：阻尼能提高精度。错——阻尼只压震荡，不动点由消息方程决定，它改变不了驻点的位置，也就修不了系统性失真。要误差保证，得换方法，比如下一章的采样。">
+    <div class="slide-head"><span class="sec">避坑</span><h3>三个高频误解：收敛即正确、环小误差小、阻尼修精度</h3></div>
+    <div class="slide-body">
+      <div class="trap">❌ <strong>收敛了，所以结果对</strong><br>✅ 收敛只到 Bethe 驻点：例2 干净收敛到 0.93，真实值 0.740——收敛与正确之间隔着驻点到真边缘的距离</div>
+      <div class="trap">❌ <strong>环不大，误差就不大</strong><br>✅ 失真取决于环上<strong>耦合强度</strong>而非环长：3 节点强环足以失真/震荡，长弱环几乎无损</div>
+      <div class="trap">❌ <strong>阻尼能提高精度</strong><br>✅ 阻尼只压震荡、收敛更慢；不动点位置由消息方程决定，系统性失真它修不了</div>
+    </div>
+  </section>
+
+  <!-- 19 接口 -->
+  <section class="slide" data-narration="收尾前看三种推理范式的分工。第十章团树，精确，但受树宽封顶，适合多查询在线推理；本章带环置信传播，确定性消息，快几个数量级，但只求得 Bethe 驻点、无误差保证，适合弱环多证据的大图；下一章粒子方法，随机采样，慢且结果有方差，但样本趋于无穷时渐近无偏、可逼近任意概率量——恰好补上本章给不了的东西。选择逻辑一句话：能精确就团树，图大环弱用置信传播，要强保证或强耦合就采样。下一章我们就换一条完全不同的路：不再传确定性消息，改用随机采样逼近期望。">
+    <div class="slide-head"><span class="sec">接口</span><h3>三种推理范式：精确的缓存、快速的驻点、无偏的采样</h3></div>
+    <div class="slide-body">
+      <table>
+        <thead><tr><th></th><th>Ch10 团树</th><th>Ch11 Loopy BP（本章）</th><th>Ch12 粒子方法</th></tr></thead>
+        <tbody>
+          <tr><td class="l"><strong>手段</strong></td><td class="l">缓存消元中间因子</td><td class="l">确定性消息迭代</td><td class="l">随机采样逼近期望</td></tr>
+          <tr><td class="l"><strong>结果</strong></td><td class="l">精确边缘</td><td class="l">Bethe 驻点（近似）</td><td class="l">渐近无偏（M→∞）</td></tr>
+          <tr><td class="l"><strong>代价</strong></td><td class="l">树宽封顶</td><td class="l">可能不收敛 / 过自信</td><td class="l">慢、有方差</td></tr>
+          <tr><td class="l"><strong>适用</strong></td><td class="l">树宽小、多查询</td><td class="l">大图弱环多证据</td><td class="l">强耦合、要误差保证</td></tr>
+        </tbody>
+      </table>
+      <div class="tip">选择逻辑：能精确就团树；图大环弱用 BP；要强保证或强耦合 → 采样（下一章）</div>
+    </div>
+  </section>
+
+  <!-- 20 小结 -->
+  <section class="slide" data-narration="三句话讲完本章。第一句，解决什么：精确推理在树宽大的图上爆炸，本章把树上消息规则搬到带环图，并回答算出来的到底是什么。第二句，核心机制：消息是子树证据汇总，树上因无环不重复计数而精确；带环即成带环置信传播，其不动点恰好是 Bethe 自由能的驻点；环上驻点一般不是真实边缘，且因证据重复计数而系统性过自信，强耦合时甚至震荡。第三句，承上启下：本章快而实用但只到 Bethe 驻点；要误差保证，下一章换采样路线。必背结论：带环置信传播求的是 Bethe 驻点，不是真实边缘。">
+    <div class="slide-head"><span class="sec">小结</span><h3>三句话讲完第11章</h3></div>
+    <div class="slide-body">
+      <div class="chain">
+        <div class="link"><span class="no">1</span><span class="txt"><strong>解决什么</strong>：精确推理在树宽大图上爆炸 → 把树上消息规则搬到带环图，算什么？</span></div>
+        <div class="link"><span class="no">2</span><span class="txt"><strong>核心机制</strong>：树上无环不重复计数故精确；带环成 Loopy BP，不动点 = Bethe 驻点，重复计数致过自信</span></div>
+        <div class="link"><span class="no">3</span><span class="txt"><strong>承上启下</strong>：Ch10 精确受树宽限制；本章快但无误差保证；要强保证 → Ch12 采样</span></div>
+      </div>
+      <div class="formula formula-concl">$$\text{带环 BP 求的是 Bethe 自由能的驻点，不是真实边缘——本章头条，合上书也要能说出}$$</div>
+    </div>
+  </section>
+
+  <!-- 21 结束页 -->
+  <section class="slide slide-cover" data-narration="第十一章到此结束。毕业挑战，合上书拿一张纸：第一，写出消息更新公式与置信公式，标注每个符号的含义；第二，用归纳法说清树上置信传播为什么精确，关键词是子树、两两不交、不重复计数；第三，手算链上的例子，推出一百零一分之一百二十一；第四，写出 Bethe 熵的形式，说出不动点等价于 Bethe 驻点这条定理及含义；第五，用重复计数解释例二为什么收敛到零点九三而真实值是零点七四；第六，说出易收敛与易震荡的两类条件，并写出阻尼公式。全部拿下，就走进第十二章——粒子方法：分布太复杂就采样，样本不足就加权，权重退化就重采样。我们下一章见。">
+    <div class="kicker">本 章 结 束</div>
+    <h1>树上精确，带环只是驻点</h1>
+    <div class="sub">毕业挑战：合上书，拿一张纸</div>
+    <div class="divider"></div>
+    <div class="meta">
+      ☑ 默写消息公式与置信公式　　☑ 归纳论证树上精确性（子树不交）<br>
+      ☑ 手算链例：101/121　　☑ 说出 YFW 定理：BP 不动点 ⟺ Bethe 驻点<br>
+      ☑ 用重复计数解释 0.93 vs 0.74　　☑ 写出阻尼公式并说清它修不了什么<br><br>
+      下一章 · 第12章 近似推理：粒子方法——分布太复杂就采样
+    </div>
+  </section>
+
+  <!-- 页脚 -->
+  <div id="footer">
+    <span class="brand">第11章 近似推理：置信传播 · PGM 课件</span>
+    <span id="pagenum">1 / 21</span>
+  </div>
+
+  <!-- 导航 -->
+  <div class="nav">
+    <button id="prev" title="上一页 (←)">‹</button>
+    <button id="next" title="下一页 (→ / 空格)">›</button>
+  </div>
+  <div id="hint">← → 翻页 · 空格下一页 · 推导页逐步显示 · 点击左右半屏翻页</div>
+
+</div>
+
+<!-- mermaid 本地引用，保证离线可用 -->
+<script src="assets/mermaid.min.js"></script>
+<script>
+mermaid.initialize({
+  startOnLoad: false,   // 必须为 false：display:none 的隐藏页渲染会得到 0 宽高的退化 SVG，
+                        // 改为页面激活时懒渲染（见 renderMermaid）
+  theme: "base",
+  themeVariables: {
+    primaryColor: "#ebf8ff",
+    primaryBorderColor: "#2b6cb0",
+    primaryTextColor: "#1a365d",
+    lineColor: "#718096",
+    fontFamily: "-apple-system, PingFang SC, sans-serif",
+    fontSize: "15px"
+  },
+  flowchart: { curve: "linear", htmlLabels: false }
+});
+</script>
+<script>
+(function(){
+  const slides = Array.from(document.querySelectorAll('.slide'));
+  const total = slides.length;
+  let idx = 0;
+
+  const params = new URLSearchParams(location.search);
+  const startSlide = parseInt(params.get('slide'), 10);
+  if (params.get('autohide') === '1') document.body.classList.add('autohide');
+  if (!isNaN(startSlide) && startSlide >= 1 && startSlide <= total) idx = startSlide - 1;
+
+  const progress = document.getElementById('progress');
+  const pagenum = document.getElementById('pagenum');
+  const prevBtn = document.getElementById('prev');
+  const nextBtn = document.getElementById('next');
+
+  // 推导分步：每页记住已展开的步数；autohide（截图）模式下 CSS 强制全显
+  const stepState = new Map();
+  function stepsOf(i){ return Array.from(slides[i].querySelectorAll('.step')); }
+  function applySteps(){
+    stepsOf(idx).forEach((el, k)=> el.classList.toggle('on', k < (stepState.get(idx) || 0)));
+  }
+  // 前进一步：先展开本页下一步，全部展开后才翻页
+  function forward(){
+    const steps = stepsOf(idx);
+    const shown = stepState.get(idx) || 0;
+    if (shown < steps.length){ stepState.set(idx, shown + 1); applySteps(); return; }
+    go(idx + 1);
+  }
+  // 后退一步：先收起本页最后一步，收完才回上一页
+  function backward(){
+    const steps = stepsOf(idx);
+    const shown = stepState.get(idx) || 0;
+    if (shown > 0){ stepState.set(idx, shown - 1); applySteps(); return; }
+    go(idx - 1);
+  }
+
+  // mermaid 懒渲染：只在页面激活（有真实宽高）时渲染该页的图，渲染后打 data-done 防重复
+  function renderMermaid(slide){
+    if (typeof mermaid === 'undefined') return;
+    const nodes = Array.from(slide.querySelectorAll('.mermaid:not([data-done])'));
+    if (!nodes.length) return;
+    nodes.forEach(n => n.setAttribute('data-done', ''));
+    mermaid.run({ nodes }).catch(err => {
+      nodes.forEach(n => n.removeAttribute('data-done'));
+      console.error('mermaid 渲染失败：', err);
+    });
+  }
+
+  function render(){
+    slides.forEach((s,i)=> s.classList.toggle('active', i===idx));
+    progress.style.width = ((idx+1)/total*100) + '%';
+    pagenum.textContent = (idx+1) + ' / ' + total;
+    prevBtn.disabled = (idx===0);
+    nextBtn.disabled = (idx===total-1);
+    applySteps();
+    renderMermaid(slides[idx]);
+  }
+  function go(n){ idx = Math.max(0, Math.min(total-1, n)); render(); }
+
+  prevBtn.addEventListener('click', e=>{ e.stopPropagation(); backward(); });
+  nextBtn.addEventListener('click', e=>{ e.stopPropagation(); forward(); });
+
+  document.addEventListener('keydown', e=>{
+    if(e.key==='ArrowRight'||e.key===' '||e.key==='PageDown'){ e.preventDefault(); forward(); }
+    else if(e.key==='ArrowLeft'||e.key==='PageUp'){ e.preventDefault(); backward(); }
+    else if(e.key==='Home'){ stepState.set(idx, 0); go(0); }
+    else if(e.key==='End'){ go(total-1); }
+  });
+
+  document.getElementById('stage').addEventListener('click', e=>{
+    if(e.target.closest('.nav')) return;
+    const x = e.clientX;
+    if(x < window.innerWidth*0.5) backward(); else forward();
+  });
+
+  function fit(){
+    const s = Math.min(window.innerWidth/1280, window.innerHeight/720);
+    document.getElementById('stage').style.transform = 'translate(-50%,-50%) scale(' + s + ')';
+  }
+  window.addEventListener('resize', fit);
+  fit();
+  render();
+})();
+</script>
+</body>
+</html>

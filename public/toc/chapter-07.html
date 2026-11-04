@@ -1,0 +1,909 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第7章 时间复杂性 · 计算理论互动讲义</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+<nav class="topbar">
+  <div class="topbar-inner">
+    <span class="brand"><a href="index.html" style="color:inherit">← 学习地图</a></span>
+    <span class="crumb">段三 · 复杂性 / 第7章</span>
+  </div>
+</nav>
+
+<div class="wrap">
+
+  <div class="lecture-head">
+    <span class="ch-label">CHAPTER 07 · 复杂性（时间）</span>
+    <h1>时间复杂性</h1>
+    <p class="lead">第 4–6 章回答了"能不能算"，本章追问"多快能算"——并撞见计算机科学最大的悬案：P 对 NP。</p>
+  </div>
+
+  <!-- ===== 章首四件套之 1：全书定位 ===== -->
+  <div class="position-bar">
+    <strong>本章在主线上的位置：</strong>第 1–3 章给出"算法"的精确定义（图灵机），第 4–6 章用它证明"有些问题永远算不出答案" → <u>本章给"算得出"的问题按耗时分级：P（快）、NP（可验证）、NP 完全（NP 中最难）</u> → 第 8 章用同一把尺子量"空间"。<br>
+    第7章回答主线上的第七个问题：<strong>在可判定的问题里，哪些是"有效可解"的，哪些只是"原则上可解"的？</strong>
+    <div class="map-inline">
+      <span class="node">Ch1–3 语言与自动机（什么是计算）</span><span class="arrow">→</span>
+      <span class="node">Ch4–6 可计算性（什么算得出）</span><span class="arrow">→</span>
+      <span class="node here">Ch7–8 复杂性（本章 Ch7：算多快）</span><span class="arrow">→</span>
+      <span class="node">Ch9–10 难解性与前沿（算不动怎么办）</span>
+    </div>
+  </div>
+
+  <!-- ===== 章首四件套之 2：学习目标 ===== -->
+  <div class="objectives">
+    <h4>🎯 学完本章，合上书你应该能：</h4>
+    <ol>
+      <li>说出大 O / 小 o 记号的定义，并用 A = {0ᵏ1ᵏ} 说明单带机与多带机的时间差为什么是平方级</li>
+      <li>写出 P 与 NP 的定义，解释"多项式时间"为什么被当作"有效可解"的分界线</li>
+      <li>对 PATH 给出多项式算法并手算一遍标记过程；对 CLIQUE 给出验证者与证书</li>
+      <li>完整重做 3SAT ≤ₚ CLIQUE 的归约：给公式画出图、报出团大小、双向论证</li>
+      <li>复述 Cook–Levin 定理的证明骨架：tableau 变量怎么设、四类子句各干什么、公式为什么只有多项式规模</li>
+      <li>指出"NP 就是不可解""P vs NP 只是理论游戏"这两个流行说法各错在哪里</li>
+    </ol>
+  </div>
+
+  <div class="lecture">
+
+    <!-- ===== 章首四件套之 3：推导主线图 ===== -->
+    <div class="figure">
+      <div class="mermaid">
+flowchart LR
+  A["第4-6章：有些问题<br>永远算不出"] --> B["那算得出的<br>要等多久"]
+  B --> C["大O记号：<br>只看渐近骨架"]
+  C --> D["多项式时间 P：<br>有效可解的界限"]
+  D --> E["可验证类 NP：<br>答案好验未必好找"]
+  E --> F["多项式归约：<br>把难度互相传递"]
+  F --> G["Cook-Levin：<br>SAT 是 NP 中最难"]
+  G --> H["代价：P 对 NP<br>至今悬而未决"]
+  classDef hot fill:#fbeedd,stroke:#c4651f,stroke-width:2.5px,color:#c4651f;
+  classDef danger fill:#fae9e7,stroke:#b03a2e,stroke-width:2.5px,color:#b03a2e;
+  class G hot;
+  class H danger;
+      </div>
+      <div class="caption">本章推导主线：从"可判定"到"多快可判定"，分级尺子（P / NP / 归约）一步步逼出 NP 完全与 P 对 NP 问题——这就是通向第 9、10 章"难解性"的门口。</div>
+    </div>
+
+    <!-- ============ 7.1 ============ -->
+    <h2><span class="sec-no">7.1</span>从"可判定"到"算多快"：为什么需要大 O 记号</h2>
+
+    <p>第 5 章用归约证明了一大批问题不可判定——连"原则上能算"都谈不上。但反过来，"可判定"也不够：一个判定算法若要跑 2ⁿ 步，输入稍大就等于永远跑不完。所以复杂性理论提出一个更细的问题：<strong>把输入长度 n 固定，算法最坏要跑多少步？</strong>记为 <span class="term">运行时间</span>（running time）f(n)。</p>
+
+    <p>精确的步数依赖机器细节，没有意义；我们只看渐近骨架。<span class="term">大 O 记号</span>（big-O notation）：说 f(n) = O(g(n))，若存在常数 c 和 n₀，使对所有 n ≥ n₀ 都有 f(n) ≤ c·g(n)。直觉：g 是 f 的"渐近上界"，常数因子和低阶项一律忽略。例如：</p>
+
+    <div class="formula">f(n) = 5n³ + 2n² + 22n + 6 = O(n³)</div>
+
+    <p>因为取 c = 6，当 n ≥ 10 时 2n² + 22n + 6 ≤ n³，故 f(n) ≤ 6n³。同时也有 f(n) = O(n⁴)——上界不唯一，但我们总报最紧的那个。反过来，<span class="term">小 o 记号</span>（small-o）：f(n) = o(g(n)) 表示 f/g → 0，即"严格低阶"，如 n² = o(n³)、n log n = o(n²)。</p>
+
+    <h3>例 1（完整手算）：同一个问题，模型不同差多少？</h3>
+    <p>考察语言 A = {0ᵏ1ᵏ | k ≥ 0}（第 1 章里它超出正则语言的能力）。在<strong>单带图灵机</strong>上判定它：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>算法</th><th>思路</th><th>每轮成本</th><th>轮数</th><th>总时间</th></tr>
+        <tr><td>M₁（朴素配对）</td><td>从左扫到右划掉一个 0，回头再划一个 1，重复</td><td>O(n) 一趟扫描</td><td>n/2 轮</td><td><strong>O(n²)</strong></td></tr>
+        <tr><td>M₂（隔位消去）</td><td>每趟划掉每隔一个的 0 和 1，并奇偶校验</td><td>O(n)</td><td>O(log n) 轮</td><td><strong>O(n log n)</strong></td></tr>
+        <tr><td>M₃（多带机）</td><td>把 0 段复制到带 2，再两带头同步右移比对</td><td>O(n)</td><td>1 轮</td><td><strong>O(n)</strong></td></tr>
+      </table>
+    </div>
+
+    <p>单带机最优也要约 n log n，多带机只要 n——模型确实影响时间。但关键定理是：<strong>任何 t(n) 时间的多带机，都能被单带机在 O(t(n)²) 时间内模拟</strong>（单带头用"扫描整条带"来模拟多带的一次移动，最多 O(t) 趟）。同理，随机存取机、非确定机与确定机之间，时间差距都不超过多项式。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃：多项式是模型无关的</span>
+      <p>模型之间只差平方（多项式），所以"<strong>是否存在多项式时间算法</strong>"这个问题与模型无关——n² 和 n³ 算同一档，n 和 2ⁿ 才是两档。这正是复杂性理论敢用"多项式 vs 指数"作分界线的底气：这条线划在任何合理的计算模型上都一样。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 大 O 不等于实用</span>
+      <p>n¹⁰⁰ 也是"多项式"，0.001·2ⁿ 在 n ≤ 40 时比 n¹⁰⁰ 快得多。大 O 是<strong>渐近骨架</strong>，回答"规模变大时谁先失控"，不回答"这个实例跑几秒"。把它当工程指标是张冠李戴——但在理论上，多项式与指数的鸿沟恰好对应"问题结构被利用"与"只能蛮力枚举"的本质差别。</p>
+    </div>
+
+    <!-- 回忆卡片 7.1 -->
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 7.1-1</div>
+              <div class="q-text">f(n) = O(g(n)) 的精确定义是什么？为什么报 O 时总报最紧的界？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              存在常数 c、n₀，对所有 n ≥ n₀ 有 f(n) ≤ c·g(n)。O(n⁴) 对三次函数也成立但信息量少——最紧的界才刻画渐近增长速度。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 7.1-2</div>
+              <div class="q-text">为什么"是否存在多项式时间算法"与图灵机的具体型号无关？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              各合理模型互相模拟的时间开销最多是多项式（如多带→单带只差平方），多项式函数对多项式复合封闭，所以"多项式可解"这个性质在所有模型上保持一致。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 7.2 ============ -->
+    <h2><span class="sec-no">7.2</span>P：把"有效可解"钉在多项式上</h2>
+
+    <p>上一节说"多项式 vs 指数"是模型无关的分界，现在把快的一侧命名：<span class="term">P</span>（Polynomial Time）是所有能被<strong>确定性单带图灵机在多项式时间</strong>内判定的语言组成的类，即 P = ⋃<sub>k</sub> TIME(nᵏ)。PATH、素数判定（AKS）、线性规划、最大流，都在 P 里。</p>
+
+    <h3>例 2（完整手算）：PATH ∈ P</h3>
+    <p>PATH = {⟨G, s, t⟩ | 有向图 G 中存在从 s 到 t 的路径}。朴素思路是枚举所有可能的路径：n 个顶点的排列有 n! 条，n! ≈ (n/e)ⁿ 是<strong>超指数</strong>——这条路走不通。但下面的标记算法是多项式的：</p>
+
+    <div class="box insight">
+      <span class="box-tag">✅ 标记算法（宽度优先的图灵机版）</span>
+      <p>① 给顶点 s 打标记；② 扫描所有边：若边 (a,b) 中 a 已标记而 b 未标记，给 b 打标记；③ 重复 ② 直到一轮中没有新标记产生；④ 若 t 被标记则接受，否则拒绝。</p>
+    </div>
+
+    <div class="figure">
+      <div class="mermaid">
+flowchart LR
+  s(("s")) --> a(("a"))
+  a --> b(("b"))
+  s --> c(("c"))
+  c --> b
+  b --> t(("t"))
+  classDef hot fill:#fbeedd,stroke:#c4651f,stroke-width:2.5px,color:#c4651f;
+  class s hot;
+      </div>
+      <div class="caption">图 7.1 PATH 手算实例。标记顺序：第 0 轮标 s；第 1 轮由边 s→a、s→c 标 a、c；第 2 轮由 a→b（或 c→b）标 b；第 3 轮由 b→t 标 t。t 被标记 → 接受。共 4 轮扫描。</div>
+    </div>
+
+    <p><strong>时间分析：</strong>顶点至多 n 个，每轮至少新标一个顶点，故至多 n 轮；每轮扫描全部边，O(m)。总时间 O(n·m) = O(n³)——多项式，PATH ∈ P。✓</p>
+
+    <p>对照一下：同一个问题，"枚举路径"要 n! 步，"标记法"只要 n³ 步。<strong>指数与多项式的差别不是机器快慢的差别，而是算法思想的差别</strong>——有没有利用问题的结构（可达性具有"可传递、可贪心扩展"的结构）。</p>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 找不到多项式算法 ≠ 不在 P</span>
+      <p>素数判定曾被认为可能需要指数时间，直到 2002 年 AKS 算法证明它 ∈ P。"我不会做"和"不存在"是两回事——这预告了 7.6 节的核心误区，也是 P 对 NP 问题如此难缠的原因：证明下界远比设计上界难。</p>
+    </div>
+
+    <!-- 回忆卡片 7.2 -->
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 7.2-1</div>
+              <div class="q-text">写出 P 的定义（用 TIME(nᵏ)），并举两个 P 中的问题。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              P = ⋃<sub>k≥1</sub> TIME(nᵏ)：确定性多项式时间可判定的语言类。例：PATH、素数判定、最大流、线性规划。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 7.2-2</div>
+              <div class="q-text">PATH 的标记算法为什么是多项式时间？朴素枚举路径为什么不是？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              标记法至多 n 轮、每轮 O(m)，共 O(nm) 多项式。枚举路径有至多 n! 条候选，n! 是超指数——蛮力枚举没有利用可达性的结构。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 7.3 ============ -->
+    <h2><span class="sec-no">7.3</span>NP：找答案难，验答案易</h2>
+
+    <p>把 PATH 换一个问题：HAMPATH = {⟨G, s, t⟩ | G 中有从 s 到 t 且<strong>经过每个顶点恰好一次</strong>的路径}（哈密顿路径）。微小的改动，局面全变：至今没有人知道多项式算法。注意——不是"证明了没有"，而是"没人找到"。但有一条出路：如果有人<strong>声称</strong>存在这样的路径并直接给出它，你只需 O(n) 时间就能核对（按顺序检查相邻顶点是否有边、每个顶点是否恰好出现一次）。</p>
+
+    <p>这就是 <span class="term">NP</span>（Nondeterministic Polynomial time，非确定多项式时间）的精神：<strong>验证易、求解未必易</strong>。形式化用验证者定义：</p>
+
+    <div class="box insight">
+      <span class="box-tag">✅ NP 的验证者定义</span>
+      <p>语言 A 的<span class="term">验证者</span>（verifier）是一台多项式时间算法 V，使得 A = { w | 存在字符串 c（<span class="term">证书</span> certificate）使 V 接受 ⟨w, c⟩ }，且 |c| 不超过 |w| 的多项式。NP = 所有具有多项式时间验证者的语言组成的类。</p>
+    </div>
+
+    <p><strong>例 3：CLIQUE ∈ NP。</strong>CLIQUE = {⟨G, k⟩ | 图 G 含 k 个顶点两两相邻的子图（k-团）}。证书 c = 一份 k 个顶点的名单；验证者逐对检查这 k 个顶点间的边是否齐全，共 C(k,2) = O(k²) 对，多项式时间。✓ 但"找到"这 k 个顶点，已知的最好办法仍是指数级的枚举。</p>
+
+    <p>NP 还有一个等价定义（这正是名字的来源）：A ∈ NP 当且仅当存在<strong>非确定图灵机</strong>在多项式时间内判定 A——非确定的"猜"对应证书 c，"验"对应 V。两个定义随手互推：验证者枚举证书 = 非确定分支；非确定机的接受分支就是证书。</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>关系</th><th>论证</th></tr>
+        <tr><td><strong>P ⊆ NP</strong></td><td>P 中的算法自己就是验证者：忽略证书直接判定</td></tr>
+        <tr><td><strong>NP ⊆ EXPTIME</strong></td><td>证书只有 2<sup>poly(n)</sup> 个候选，逐个验证即得指数时间上界</td></tr>
+        <tr><td><strong>P = NP ？</strong></td><td>未知。即："验证易"是否蕴含"求解易"？</td></tr>
+      </table>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ NP 不是"非多项式"</span>
+      <p>NP 的 N 是 Nondeterministic（非确定），不是 Non-polynomial。恰恰相反：P ⊆ NP，NP 里的问题全都有指数级算法。把 NP 读成"不可解"或"超多项式"是本课程流传最广的错误，7.6 节专门清算它。</p>
+    </div>
+
+    <!-- 回忆卡片 7.3 -->
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 7.3-1</div>
+              <div class="q-text">用验证者与证书写出 NP 的定义，并给 CLIQUE 配一对（证书，验证过程）。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              A ∈ NP ⟺ 存在多项式时间 V 使 w∈A ⟺ ∃c（|c| 多项式长）V 接受 ⟨w,c⟩。CLIQUE：证书 = k 个顶点的名单；验证者检查两两之间的边齐全，O(k²) 时间。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 7.3-2</div>
+              <div class="q-text">证明 P ⊆ NP 与 NP ⊆ EXPTIME（各一句话）。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              P ⊆ NP：P 的判定算法就是无视证书的验证者。NP ⊆ EXPTIME：多项式长的证书至多 2<sup>poly(n)</sup> 个，枚举每个并验证，总耗时指数级。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 7.4 ============ -->
+    <h2><span class="sec-no">7.4</span>多项式归约与 NP 完全：3SAT ≤ₚ CLIQUE 完整走一遍</h2>
+
+    <p>第 5 章用映射归约传递"不可判定"；这里用它的多项式版传递"难解"。<span class="term">多项式时间归约</span>（polynomial time reduction）：A ≤ₚ B，若存在多项式时间可计算的函数 f，使 w ∈ A ⟺ f(w) ∈ B。它有两条直接推论：</p>
+
+    <ul>
+      <li>若 A ≤ₚ B 且 B ∈ P，则 A ∈ P（归约 + 解 B，两段多项式复合仍多项式）；</li>
+      <li>若 A ≤ₚ B 且 A 很难，则 B 至少同样难——难度沿箭头传递。</li>
+    </ul>
+
+    <p><span class="term">NP 完全</span>（NP-complete）：语言 B 满足 ① B ∈ NP；② 每个 A ∈ NP 都有 A ≤ₚ B（此条称 <span class="term">NP 难</span>，NP-hard）。若任一 NP 完全问题落入 P，则 P = NP——它们是 NP 中"最难"的一群，一荣俱荣、一损俱损。</p>
+
+    <h3>例 4（完整归约）：3SAT ≤ₚ CLIQUE</h3>
+    <p>3SAT：每个子句恰好 3 个字面量的 CNF 公式的可满足性问题（它是 NP 完全的，由 Cook–Levin 定理 + SAT ≤ₚ 3SAT 得到）。给定 3CNF 公式 φ，构造图 G 与数 k：</p>
+
+    <div class="box insight">
+      <span class="box-tag">✅ 归约构造（三条规则）</span>
+      <p>① 顶点：φ 中每个字面量的每次出现是一个顶点（k 个子句 → 3k 个顶点，按子句分 k 组）；② 边：两个顶点连边，当且仅当它们<strong>来自不同子句</strong>且<strong>标签不矛盾</strong>（不能一个是 x、另一个是 ¬x）；③ 目标：k = 子句个数。</p>
+    </div>
+
+    <p>拿一个具体公式从头做到尾（Sipser 书上的例子）：</p>
+
+    <div class="formula">φ = (x₁ ∨ x₁ ∨ x₂) ∧ (¬x₁ ∨ ¬x₂ ∨ ¬x₂) ∧ (¬x₁ ∨ x₂ ∨ x₂)</div>
+
+    <p><strong>第 1 步：列顶点。</strong>3 个子句 → 9 个顶点：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>子句组</th><th>顶点（记法：标签@组号）</th></tr>
+        <tr><td>组 1：(x₁ ∨ x₁ ∨ x₂)</td><td>x₁@1a，x₁@1b，x₂@1</td></tr>
+        <tr><td>组 2：(¬x₁ ∨ ¬x₂ ∨ ¬x₂)</td><td>¬x₁@2，¬x₂@2a，¬x₂@2b</td></tr>
+        <tr><td>组 3：(¬x₁ ∨ x₂ ∨ x₂)</td><td>¬x₁@3，x₂@3a，x₂@3b</td></tr>
+      </table>
+    </div>
+
+    <p><strong>第 2 步：连边。</strong>跨组全连，只排除矛盾对：{x₁, ¬x₁} 对、{x₂, ¬x₂} 对。例如 x₁@1a 与 ¬x₁@2、¬x₁@3 <strong>不连</strong>；x₂@1 与 ¬x₂@2a、¬x₂@2b 不连；其余跨组对全连。</p>
+
+    <p><strong>第 3 步：报参数。</strong>k = 3（子句数）。归约完成——9 个顶点、按规则连边、问"有没有 3-团"。整个构造只需扫一遍公式，O(子句数²)，多项式时间。✓</p>
+
+    <div class="figure">
+      <div class="mermaid">
+flowchart TB
+  subgraph C1["子句1"]
+    n1["x₂@1"]
+  end
+  subgraph C2["子句2"]
+    n2["¬x₁@2"]
+  end
+  subgraph C3["子句3"]
+    n3["¬x₁@3"]
+  end
+  n1 --- n2
+  n1 --- n3
+  n2 --- n3
+  classDef hot fill:#fbeedd,stroke:#c4651f,stroke-width:2.5px,color:#c4651f;
+  class n1,n2,n3 hot;
+      </div>
+      <div class="caption">图 7.2 归约产物中的一个 3-团（全图共 9 个顶点，此处只画出被选中的 3 个）。三顶点跨组、标签两两不矛盾，故两两有边——这正对应满足赋值 x₂=1、x₁=0。</div>
+    </div>
+
+    <p><strong>第 4 步：双向论证（正确性证明，不许跳步）。</strong></p>
+
+    <p><strong>⇒ 若 φ 可满足：</strong>取一个满足赋值，如 x₁ = 0，x₂ = 1。每个子句至少一个真字面量：子句 1 由 x₂=1 满足，子句 2 由 ¬x₁=真满足，子句 3 由 ¬x₁=真满足。从每个子句各取一个真字面量：{x₂@1，¬x₁@2，¬x₁@3}。它们跨组（连边条件 1 ✓）；它们同为真，不可能矛盾——若两个标签矛盾（x 与 ¬x），不可能在同一个赋值下同真（连边条件 2 ✓）。所以两两有边，构成 3-团。✓</p>
+
+    <p><strong>⇐ 若 G 有 3-团：</strong>团内无同组顶点（同组顶点间按规则不连边），而团有 3 个顶点、共 3 组 → 每组恰好一个顶点。把这些顶点的标签赋为真：不会出现 x 与 ¬x 同时被要求为真（矛盾对之间没有边，不可能同团）。未被指定的变量随便赋值。此时每个子句的那个入选字面量为真 → φ 可满足。✓（本例中团 {x₂@1，¬x₁@2，¬x₁@3} 对应 x₂=1、x₁=0，回代验证三个子句全真。）</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 归约的三板斧</span>
+      <p>每个 NP 完全性证明都是这个套路：① 给构造（多项式时间）；② ⇒：好实例的解变成目标实例的解；③ ⇐：目标实例的解读回原实例的解。其中 ⇐ 方向最容易出漏洞——必须论证目标解的"额外自由度"（本例：团内顶点为什么能拼出一个不矛盾的赋值）不会造假。</p>
+    </div>
+
+    <!-- 回忆卡片 7.4 -->
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 7.4-1</div>
+              <div class="q-text">写出 A ≤ₚ B 的定义，以及"NP 完全"的两个条件。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              A ≤ₚ B：存在多项式时间可计算 f 使 w∈A ⟺ f(w)∈B。B 是 NP 完全 ⟺ ① B∈NP；② 所有 A∈NP 都 A ≤ₚ B（NP 难）。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 7.4-2</div>
+              <div class="q-text">3SAT ≤ₚ CLIQUE 中，图的顶点、边、k 分别怎么定？为什么团内顶点必能读出一个不矛盾的赋值？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              顶点 = 字面量的每次出现（按子句分组）；边 = 跨组且标签不矛盾；k = 子句数。团内顶点两两有边，故没有矛盾标签对，把它们全赋真不会冲突——这就是 ⇐ 方向的关键。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 7.5 ============ -->
+    <h2><span class="sec-no">7.5</span>Cook–Levin 定理：SAT 为什么能代表整个 NP</h2>
+
+    <p>7.4 节把 3SAT 归约到 CLIQUE，但这一切需要一个"第一个"NP 完全问题。<span class="term">Cook–Levin 定理</span>（Cook–Levin theorem，1971/1973 独立证明）：<strong>SAT（布尔公式的可满足性）是 NP 完全的</strong>。SAT ∈ NP 显然（证书 = 赋值，代入验证即可）；难点在 NP 难：要对<strong>任意</strong> NP 语言 A，把"w ∈ A 吗"编译成一个布尔公式。</p>
+
+    <h3>证明骨架：tableau 是一张可以被公式看管的表格</h3>
+    <p>A ∈ NP，故有非确定机 N 在 n^k 时间内判定 A。固定输入 w（|w| = n）。N 在 w 上的一条计算分支可以写成一张 <span class="term">画面表</span>（tableau）：n^k 行 × n^k 列的表格，第 i 行是第 i 步的<strong>格局</strong>（configuration：带内容 + 头位置 + 状态，两端加 # 标记）。</p>
+
+    <p><strong>核心观察：</strong>"这张表是 N 的一条合法接受计算"完全是一堆<strong>局部条件</strong>的合取——而局部条件可以写成布尔公式。令 C = Q ∪ Γ ∪ {#}（状态、带符号、端标记），设变量：</p>
+
+    <div class="formula">x<sub>i,j,s</sub> ：第 i 行第 j 列的格子里是符号 s （i, j ∈ [1, nᵏ]，s ∈ C）</div>
+
+    <p>变量总数 n^k × n^k × |C| = O(n²ᵏ)——多项式。公式 φ = φ<sub>cell</sub> ∧ φ<sub>start</sub> ∧ φ<sub>move</sub> ∧ φ<sub>accept</sub>：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>子句部件</th><th>管什么</th><th>怎么写</th><th>规模</th></tr>
+        <tr><td>φ<sub>cell</sub></td><td>每格<strong>恰好一个</strong>符号</td><td>每格：(∨<sub>s</sub> x<sub>i,j,s</sub>) ∧ ∧<sub>s≠t</sub>(¬x<sub>i,j,s</sub> ∨ ¬x<sub>i,j,t</sub>)</td><td>O(n²ᵏ)</td></tr>
+        <tr><td>φ<sub>start</sub></td><td>第 1 行 = 起始格局 q₀w₁…wₙ</td><td>x<sub>1,1,#</sub> ∧ x<sub>1,2,q₀</sub> ∧ x<sub>1,3,w₁</sub> ∧ … ∧ 空白与末端 # 的单元子句</td><td>O(nᵏ)</td></tr>
+        <tr><td>φ<sub>move</sub></td><td>每相邻两行是 N 的一步合法转移</td><td>每个 2×3 窗口：析取所有"合法窗口"的变量组合</td><td>O(n²ᵏ)</td></tr>
+        <tr><td>φ<sub>accept</sub></td><td>某格出现接受状态</td><td>∨<sub>i,j</sub> x<sub>i,j,q_accept</sub></td><td>O(n²ᵏ)</td></tr>
+      </table>
+    </div>
+
+    <p>φ<sub>move</sub> 是心脏：格局 i+1 与格局 i 的差别只可能出现在读写头附近的 2×3 窗口里（头一步最多移动一格），而"合法窗口"的样式由转移函数 δ 决定，只有有限多种。逐个窗口枚举合法样式写成析取——每个窗口 O(1) 大，共 O(n²ᵏ) 个窗口。</p>
+
+    <p><strong>等价性：</strong>φ 可满足 ⟺ 存在一张满足全部局部条件的 tableau ⟺ 它是 N 在 w 上的合法接受计算（起始对、步步合法、最终接受）⟺ N 接受 w ⟺ w ∈ A。<strong>规模：</strong>总公式长 O(n²ᵏ)——多项式，归约成立。∎（骨架完）</p>
+
+    <h3>小规模实例：看看公式长什么样</h3>
+    <p>设 N 是一台一步机器：读头下若是 0 就接受，否则拒绝；输入 w = 0（n = 1，取 k = 1，tableau 只画 2 行 5 列，# 为端标记）。合法计算：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>行</th><th>格1</th><th>格2</th><th>格3</th><th>格4</th><th>格5</th></tr>
+        <tr><td>1（起始）</td><td>#</td><td>q₀</td><td>0</td><td>␣</td><td>#</td></tr>
+        <tr><td>2（接受）</td><td>#</td><td>q_acc</td><td>0</td><td>␣</td><td>#</td></tr>
+      </table>
+    </div>
+
+    <p>对应公式片段（C = {#, q₀, q_acc, 0, ␣}）：</p>
+    <ul>
+      <li>φ<sub>cell</sub> 对格 (1,2)：(x<sub>1,2,#</sub> ∨ x<sub>1,2,q₀</sub> ∨ x<sub>1,2,q_acc</sub> ∨ x<sub>1,2,0</sub> ∨ x<sub>1,2,␣</sub>) ∧ (¬x<sub>1,2,#</sub> ∨ ¬x<sub>1,2,q₀</sub>) ∧ (¬x<sub>1,2,#</sub> ∨ ¬x<sub>1,2,q_acc</sub>) ∧ …（共 1 条"至少一个" + C(5,2) = 10 条"至多一个"）；10 个格子各来一份。</li>
+      <li>φ<sub>start</sub>：x<sub>1,1,#</sub> ∧ x<sub>1,2,q₀</sub> ∧ x<sub>1,3,0</sub> ∧ x<sub>1,4,␣</sub> ∧ x<sub>1,5,#</sub>——把第 1 行<strong>钉死</strong>。</li>
+      <li>φ<sub>move</sub>：对窗口（行1–2，列1–3），合法样式之一是 (#, q₀, 0 / #, q_acc, 0)，对应 (x<sub>1,1,#</sub> ∧ x<sub>1,2,q₀</sub> ∧ x<sub>1,3,0</sub>) → (x<sub>2,1,#</sub> ∧ x<sub>2,2,q_acc</sub> ∧ x<sub>2,3,0</sub>) 形式的约束，与所有其他合法窗口析取；远离头的窗口（列 3–5 中头不在场）只能是"三格原样照抄"的合法样式。</li>
+      <li>φ<sub>accept</sub>：x<sub>1,1,q_acc</sub> ∨ x<sub>1,2,q_acc</sub> ∨ … ∨ x<sub>2,5,q_acc</sub>（10 个字面量的析取）。</li>
+    </ul>
+    <p>这个 50 变量的小公式可满足（上面的表就是证据）；若把输入改成 w = 1，则没有任何合法表能同时满足 φ<sub>start</sub> 与 φ<sub>accept</sub>——公式不可满足。公式把"计算"冻结成了"约束满足"，这就是 Cook–Levin 的全部魔法。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 为什么 SAT 能代表整个 NP</span>
+      <p>因为"非确定计算"本质是<strong>一堆局部一致性约束</strong>：格子像格子、起步像起步、步步像转移、结局像接受。SAT 恰好是"局部约束满足"的通用语言。任何 NP 问题的证书验证过程都能铺成 tableau，所以 SAT 难就等价于"验证与求解的差距"本身难。</p>
+    </div>
+
+    <!-- 回忆卡片 7.5 -->
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 7.5-1</div>
+              <div class="q-text">Cook–Levin 中变量 x(i,j,s) 的含义？四类子句各负责什么？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              x(i,j,s) ="tableau 第 i 行 j 列是符号 s"。φ_cell 每格恰一符号；φ_start 首行钉为起始格局；φ_move 每个 2×3 窗口是合法转移；φ_accept 某格出现 q_accept。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 7.5-2</div>
+              <div class="q-text">Cook–Levin 归约的公式规模为什么是多项式？合法窗口为什么只看 2×3？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              tableau 是 nᵏ×nᵏ，变量 O(n²ᵏ)，四类子句各 O(n²ᵏ)，k 固定 → 多项式。读写头一步最多移一格，相邻两格局的差异被禁锢在头附近的 2×3 窗口内，所以局部检查足够。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 7.6 ============ -->
+    <h2><span class="sec-no">7.6</span>错误直觉清算：三个最流行的误解</h2>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 误区一："NP 就是不可解"</span>
+      <p>错得离谱。不可判定问题（第 4–6 章）是<strong>任何算法都不存在</strong>；NP 里的问题全都有指数时间算法（枚举证书逐个验），只是不知道有没有多项式算法。"难算"与"不能算"之间隔着整个第 5 章。HAMPATH 输入 30 个顶点时蛮力已经吃力，但输入 10 个顶点时秒解——这是工程问题，不是数学禁令。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 误区二："P vs NP 只是理论家的游戏"</span>
+      <p>恰恰相反，它是最"实用"的未解问题。现代密码学（RSA、椭圆曲线）的安全性赌注就是"求逆易验证、难求解"——若 P = NP，公钥密码体系整体崩塌；反之若证明 P ≠ NP，则任何"多项式破解"的幻想可以停止。物流调度、芯片布线、蛋白质折叠、编译器寄存器分配，全都是 NP 难问题——它们的最优解要不要继续追，取决于这个问题的答案。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 误区三："证明 NP 完全 = 判死刑，别做了"</span>
+      <p>NP 完全只排除"所有实例都多项式可解"，不排除：① 近似算法（第 10 章：顶点覆盖有 2-近似）；② 参数化算法（k 小时快）；③ 特殊实例（树宽小的图上很多问题变容易）；④ 平均情形 / 启发式（SAT 求解器在工业实例上千万变量照跑）。证明 NP 完全是<strong>换赛道的信号</strong>，不是终点。</p>
+    </div>
+
+    <!-- 回忆卡片 7.6 -->
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 7.6-1</div>
+              <div class="q-text">"NP 就是不可解"错在哪？用一句话区分"难算"与"不能算"。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              NP 问题都有指数算法（枚举证书），"不可解"是连算法都不存在（可判定性问题）。难算 = 已知算法慢；不能算 = 数学上不存在算法。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 7.6-2</div>
+              <div class="q-text">NP 完全性证明之后，还有哪些正当的求解路线？（举三条）</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              近似算法（保证比例的次优解）；参数化/特殊结构（树宽、k 小）；平均情形与工业求解器（SAT solver）。NP 完全排除的是"一切实例精确多项式可解"，不是所有希望。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 概念卡 ============ -->
+    <h2><span class="sec-no">🃏</span>概念卡：本章概念的一分钟画像</h2>
+    <p>翻面前先自问：这个概念我能用一句话讲清楚吗？</p>
+    <div class="flip-grid">
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 1</div>
+            <div class="q-text">大 O 记号（Big-O Notation）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">f = O(g)：存在 c、n₀ 使 n ≥ n₀ 时 f(n) ≤ c·g(n)，即 g 是 f 的渐近上界。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">把运行时间从机器细节中抽象出来，只留增长骨架。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">只报数量级："万级、亿级"，不报精确账。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">当成实际运行时间；n¹⁰⁰ 也是多项式但毫无实用价值。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">全课程所有复杂度陈述；P、NP、层级定理（Ch9）的语言。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 2</div>
+            <div class="q-text">P（Polynomial Time）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">P = ⋃<sub>k</sub> TIME(nᵏ)：确定性多项式时间可判定的语言类。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">给"有效可解"一个模型无关的数学定义。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">规模翻倍，耗时只翻固定倍数，不会爆炸。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为 P = "快"：n¹⁰⁰ ∈ P 但不快；P 是"不随规模失控"。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">一切算法的及格线；与 NP 对照定义了世纪难题。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 3</div>
+            <div class="q-text">NP（Nondeterministic Polynomial Time）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">证书可多项式时间验证的语言类；等价于非确定机多项式时间可判定。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">刻画"答案好验、难求"的一大批自然问题（HAMPATH、CLIQUE、SAT）。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">阅卷容易出题难；看答案一眼懂，自己想破头。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">读成"非多项式"——N 是非确定；P ⊆ NP，NP 全有指数算法。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">NP 完全理论的地基；IP、PCP（Ch10）都是它的亲属。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 4</div>
+            <div class="q-text">多项式时间归约（≤ₚ）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">A ≤ₚ B：多项式可计算 f 使 w∈A ⟺ f(w)∈B。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">让"难度"在问题间传递：B 容易则 A 容易，A 难则 B 难。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">把 A 的卷子多项式时间翻译成 B 的卷子。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">方向搞反：证 B 难要 A ≤ₚ B（难的归到 B），不是 B ≤ₚ A。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">所有 NP 完全性证明；Ch8 的 PSPACE/NL 完全同理。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 5</div>
+            <div class="q-text">NP 完全（NP-complete）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">B∈NP 且所有 A∈NP 都 A ≤ₚ B；NP 中最难的一批问题。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">把"P 对 NP"这一个大问题压缩成"SAT（或任一 NP 完全问题）在不在 P"一个小问题。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">多米诺骨牌的第一张：任何一张倒（进 P），全倒（P=NP）。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为 NP 完全 = 最难的可解问题——NP 之外（PSPACE 等）还有更难的。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">遇到新问题时先判它在不在 P、是不是 NP 完全，再定求解策略。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 6</div>
+            <div class="q-text">Cook–Levin 定理</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">SAT 是 NP 完全的：任意 NP 语言的成员判定可多项式编译成 SAT 实例。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">提供"第一个"NP 完全问题，之后靠归约链扩散（SAT→3SAT→CLIQUE→…）。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">计算 = 局部一致性约束；SAT = 约束满足的通用语言。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为证明是枚举所有 NP 问题逐一归约——它只归约一次：归约"非确定计算"这个概念本身。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">一切 NP 完全性链条的起点；tableau 技巧在 IP=PSPACE（Ch10）中重演。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 7</div>
+            <div class="q-text">验证者 / 证书（Verifier / Certificate）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">w∈A ⟺ ∃c 使 V 接受 ⟨w,c⟩；V 多项式时间，c 多项式长。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">绕开非确定机，用普通算法定义 NP——更贴近"解题与验题"的直觉。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">证书是标准答案，验证者是阅卷老师。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为证书必须好找——它只须"存在且好验"，找它就是求解本身。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">证某问题 ∈ NP 的标准动作；交互证明（Ch10）是它的对话版。</span></div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- ============ 分层习题 ============ -->
+    <h2><span class="sec-no">📝</span>分层习题</h2>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>判断对错：<strong>"f(n) = n² + 1000n 是 O(n²)，但不是 O(n³)。"</strong>说明理由。</div>
+      <details>
+        <summary>提示</summary>
+        <p>回到定义：O(n³) 只要求存在某个 c、n₀ 使 f(n) ≤ c·n³。上界需要"最紧"吗？</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">前半对、后半错。f = O(n²)：取 c = 2，n ≥ 1000 时 1000n ≤ n²，故 f(n) ≤ 2n²。f 也 = O(n³)：取 c = 1，n ≥ 1001 时 n² + 1000n ≤ n³。O 是上界，不唯一，"是 O(n²) 但不是 O(n³)"把 O 误读成了精确阶——精确的低阶严格说法用小 o：f = o(n³) 成立，f = o(n²) 不成立。</div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>判断对错：<strong>"若 A ≤ₚ B 且 A 是 NP 完全的，则 B 一定是 NP 完全的。"</strong></div>
+      <details>
+        <summary>提示</summary>
+        <p>NP 完全有两个条件。≤ₚ 的传递性给你哪一个？另一个从哪来？</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">错，少了 B ∈ NP 这一条。由 A NP 难 + A ≤ₚ B + ≤ₚ 传递，可得 B 是 NP 难；但若 B 本身不在 NP 中（比如 B = 某个 PSPACE 完全问题 TQBF，它 NP 难却不在已知属于 NP），就称不上 NP 完全。正确命题：A ≤ₚ B、A NP 完全、<strong>且 B ∈ NP</strong> ⟹ B NP 完全。这也是每个 NP 完全性证明先证"∈ NP"的原因。</div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>对公式 φ = (x ∨ y ∨ z) ∧ (¬x ∨ ¬y ∨ ¬z) 执行 3SAT ≤ₚ CLIQUE 归约：写出顶点、边规则、k，并给出一个团与对应的满足赋值。</div>
+      <details>
+        <summary>提示</summary>
+        <p>2 个子句 → 6 个顶点。矛盾对是哪些？k 等于几？</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p>顶点：组1 {x@1, y@1, z@1}，组2 {¬x@2, ¬y@2, ¬z@2}。边：跨组全连，排除矛盾对 {x@1,¬x@2}、{y@1,¬y@2}、{z@1,¬z@2}——共 C(6,2)−3−3（同组 3+3）= 15−6 = 9 条边。k = 2。</p>
+          <p>取团 {x@1, ¬y@2}：跨组、不矛盾，有边，是 2-团。读出赋值 x=1、y=0（z 任意，取 z=0）：子句1 由 x=1 满足，子句2 由 ¬y=1 满足。✓</p>
+          <p>验证反面：φ 可满足（如上述赋值）⟺ G 有 2-团——任何 2-团都不能含矛盾对，必能读出不矛盾赋值，且两个顶点分属两组各满足一个子句。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>对图 7.1（边：s→a、s→c、a→b、c→b、b→t，外加一条孤立顶点 d）手算 PATH 标记算法 ⟨G, s, t⟩ 与 ⟨G, t, s⟩ 两个实例，各给出每轮标记集合与结论。</div>
+      <details>
+        <summary>提示</summary>
+        <p>逐轮列出"本轮新标了谁"；注意边有方向，t→s 方向没有任何出边。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p>实例 ⟨G, s, t⟩：第 0 轮 {s}；第 1 轮加 {a, c}；第 2 轮加 {b}；第 3 轮加 {t}；第 4 轮无新增，停。t 被标记 → <strong>接受</strong>。</p>
+          <p>实例 ⟨G, t, s⟩：第 0 轮 {t}；t 无出边，第 1 轮无新增，停。s 未标记 → <strong>拒绝</strong>。孤立点 d 两轮均从未被标记，符合预期（它与可达性无关）。</p>
+          <p>耗时：每实例至多 5 轮（顶点数），每轮扫 5 条边，远小于枚举路径的开销。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l3">L3 建模应用</span>某航空公司要上线两个查询功能：①"能否从昆明经若干次中转到达哈尔滨？"②"能否安排一条恰好经过全部 100 个通航城市各一次的巡回航线？"分别判断这两个功能背后的判定问题属于哪个类、敢不敢承诺秒级响应，并说明理由。</div>
+      <details>
+        <summary>提示</summary>
+        <p>把两个场景分别翻译成本章学过的两个命名问题。它们的已知地位分别是什么？</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p>① 是 PATH（有向可达性）∈ P：标记算法 O(n·m)，100 城市毫秒级，<strong>敢承诺</strong>秒级响应。</p>
+          <p>② 是 HAMPATH（哈密顿路径，巡回版本即 TSP 的判定版）——NP 完全：验证一条给出的航线容易（O(n) 检查相邻有航班、城市不重不漏），但目前已知算法最坏指数。<strong>不敢承诺</strong>秒级精确响应；工程上应改承诺"近似/限时启发式"，这正是 7.6 节误区三指出的换赛道思路（第 10 章会正式讲近似）。</p>
+          <p>同一组数据（航线图），一个问题的结构（可达性可贪心扩展）被多项式算法利用，另一个（全局不重复约束）目前只能枚举——P 与 NP 完全的分界线就是这两句话的分界线。</p>
+        </div>
+      </details>
+    </div>
+
+    <!-- ============ 本章自测 ============ -->
+    <h2><span class="sec-no">✍️</span>本章自测</h2>
+    <p class="quiz-hint">点击选项判分，答错会给出原因。</p>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 1</div>
+      <div class="q-stem">"多项式时间是合理的有效可解标准"，其理论依据是：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 多项式函数增长最慢</li>
+        <li data-opt="b">B. 各合理计算模型互相模拟只差多项式，故"多项式可解"是模型无关的性质</li>
+        <li data-opt="c">C. 所有实际问题都有多项式算法</li>
+        <li data-opt="d">D. 多项式时间算法一定比指数时间算法快</li>
+      </ul>
+      <div class="quiz-explain">选 B。模型间模拟开销最多平方级，多项式对多项式复合封闭，所以 P 的定义不依赖机型。A 错：n¹⁰⁰ 增长极快；C 错：NP 完全问题就没人知道多项式算法；D 错：在有限范围内 0.001·2ⁿ 可以比 n¹⁰⁰ 快，多项式保证的是渐近不失控。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="c">
+      <div class="q-no">自测 2</div>
+      <div class="q-stem">下列关于 NP 的说法，正确的是：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. NP 是"非多项式"的缩写</li>
+        <li data-opt="b">B. NP 中的问题没有多项式算法</li>
+        <li data-opt="c">C. NP 中的问题存在多项式长的证书，可在多项式时间内验证</li>
+        <li data-opt="d">D. NP 中的问题是不可判定的</li>
+      </ul>
+      <div class="quiz-explain">选 C。这是验证者定义。A 错：N 是 Nondeterministic；B 错：P ⊆ NP，P 里的问题都在 NP 且有多项式算法，NP 完全问题是否有多项式算法未知而非"没有"；D 错：NP ⊆ EXPTIME，全部可判定——"不可判定"是第 4–6 章的事。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="a">
+      <div class="q-no">自测 3</div>
+      <div class="q-stem">3SAT ≤ₚ CLIQUE 归约中，从公式 φ 构造的图 G 的边规则是：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 不同子句的字面量之间连边，但矛盾标签对（x 与 ¬x）不连</li>
+        <li data-opt="b">B. 同一子句内的字面量两两连边</li>
+        <li data-opt="c">C. 所有字面量对都连边</li>
+        <li data-opt="d">D. 只有标签相同的字面量才连边</li>
+      </ul>
+      <div class="quiz-explain">选 A。跨子句保证 k-团恰好每子句选一个顶点；排除矛盾对保证团能读出不矛盾的赋值。B 反了（同组恰不连，否则团可同组造假）；C 会把 x 与 ¬x 同时选进团；D 则图里几乎没有边，k-团根本不存在。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="d">
+      <div class="q-no">自测 4</div>
+      <div class="q-stem">Cook–Levin 定理证明中，φ_move 只需要检查 2×3 窗口，是因为：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 表格只有两行三列</li>
+        <li data-opt="b">B. SAT 公式只允许短子句</li>
+        <li data-opt="c">C. 验证者只能看到局部</li>
+        <li data-opt="d">D. 读写头一步最多移动一格，相邻格局的差异被限制在头附近的局部区域内</li>
+      </ul>
+      <div class="quiz-explain">选 D。图灵机的一步是局部的：头下符号改写、头左/右移一格，其余照抄——所以"步步合法"等价于"每个 2×3 窗口合法"。A 错：tableau 是 nᵏ×nᵏ 的；B 错：φ_move 的子句可以很长（析取所有合法窗口），3SAT 是后来再归约得到的；C 把"验证者"与 tableau 构造混为一谈。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 5</div>
+      <div class="q-stem">已知 A 是 NP 完全问题，且发现 A ≤ₚ B，可以推出：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. B 是 NP 完全的</li>
+        <li data-opt="b">B. B 是 NP 难的；若再有 B ∈ NP，则 B 是 NP 完全的</li>
+        <li data-opt="c">C. B 不在 P 中</li>
+        <li data-opt="d">D. A ≤ₚ B 说明 B ≤ₚ A</li>
+      </ul>
+      <div class="quiz-explain">选 B。归约传递 NP 难，但 NP 完全还需 B ∈ NP 这个独立条件（自测 L1 第 2 题同款）。A 少了前提；C 错：B 完全可能是平凡在 P 中的语言（归约方向决定难度从 A 传到 B 的上界，不能反推下界——除非 P≠NP 已证）；D 错：≤ₚ 不对称。</div>
+    </div>
+
+    <!-- ============ 三句话复述 ============ -->
+    <div class="retell">
+      <h3>🗣️ 用自己的话，三句话讲完本章</h3>
+      <p>对着空气（或室友）说出这三句。说卡壳的那句，回去重读对应小节。</p>
+      <details>
+        <summary>句1：这章解决什么问题？——</summary>
+        <div class="retell-answer">参考答案：可判定的问题里，哪些"快"哪些"慢"。用大 O 把运行时间抽象成渐近骨架，把"有效可解"钉在多项式时间（P）上，把"答案好验"定义为 NP，并问：这两者是否相等？</div>
+      </details>
+      <details>
+        <summary>句2：核心机制是什么？——</summary>
+        <div class="retell-answer">参考答案：多项式时间归约 ≤ₚ 让难度在问题间传递；Cook–Levin 定理用 tableau 把"任意非确定计算"编译成 SAT 公式（变量 x(i,j,s) + 四类子句），证明 SAT 是 NP 完全；之后 SAT→3SAT→CLIQUE→… 的归约链识别出一大批同等难度的问题——任一落入 P 则 P=NP。</div>
+      </details>
+      <details>
+        <summary>句3：它和前后章怎么分工？——</summary>
+        <div class="retell-answer">参考答案：第 4–6 章回答"能不能算"（可判定性），本章回答"多快能算"（时间分级）；第 8 章换一把尺子量空间（PSPACE/L/NL），第 9 章证明"有些问题就是算不动"（层级定理），第 10 章给出算不动时的出路（近似、随机、交互证明）。</div>
+      </details>
+    </div>
+
+    <!-- ============ 复习计划 ============ -->
+    <div class="review-plan">
+      <h3>🔁 间隔复习计划</h3>
+      <p>回忆本身比重读有效 10 倍。到点只做一件事：翻卡 + 重做标记题。</p>
+      <table>
+        <tr><th>时间点</th><th>复习内容</th><th>预计用时</th></tr>
+        <tr><td>第 1 天</td><td>概念卡 1–7 全部 + 回忆卡 7.3-1、7.4-2、7.5-1</td><td>12 分钟</td></tr>
+        <tr><td>第 3 天</td><td>概念卡 3、4、6（NP/归约/Cook–Levin）+ 重做 L2 两题 + 自测错题</td><td>12 分钟</td></tr>
+        <tr><td>第 7 天</td><td>三句话复述出声说一遍 + 重做例 4 的 3SAT≤ₚCLIQUE 双向论证 + 回忆卡 7.5-2</td><td>15 分钟</td></tr>
+        <tr><td>第 15 天</td><td>只做合上书挑战；全过则本章毕业，卡在哪条就重读对应小节</td><td>15 分钟</td></tr>
+      </table>
+    </div>
+
+    <!-- 合上书挑战 -->
+    <div class="final-challenge">
+      <h3>📕 合上书挑战</h3>
+      <p class="fc-sub">现在关掉这个页面，拿一张纸，凭记忆完成以下任务。全部做完再回来核对——这是本章真正的毕业考试。</p>
+      <ol id="ch07-challenge-list">
+        <li><span class="fc-check"></span>写出 P、NP、NP 完全三个定义，并证明 P ⊆ NP ⊆ EXPTIME</li>
+        <li><span class="fc-check"></span>说明为什么"多项式可解"与计算模型无关（多带→单带的平方模拟）</li>
+        <li><span class="fc-check"></span>对 (x∨y∨z)∧(¬x∨¬y∨¬z) 画出 3SAT≤ₚCLIQUE 的图：顶点、边规则、k，给一个团和对应赋值</li>
+        <li><span class="fc-check"></span>复述 Cook–Levin 骨架：变量 x(i,j,s)、四类子句、规模 O(n²ᵏ)</li>
+        <li><span class="fc-check"></span>向一个说"NP 就是不可解"的朋友解释他错在哪（一分钟版本）</li>
+        <li><span class="fc-check"></span>回答本章的主线问题：在可判定问题里，什么叫"有效可解"，它的边界在哪里？（一句话）</li>
+      </ol>
+    </div>
+
+    <div class="complete-zone">
+      <button class="btn-complete" id="ch07-btn-complete" onclick="markDone()">✓ 我已完成本章（含合上书挑战）</button>
+    </div>
+
+    <div class="chapter-nav">
+      <a href="chapter-06.html"><span class="nav-dir">← 上一章</span>第6章 可计算性进阶</a>
+      <a href="chapter-08.html" class="next"><span class="nav-dir">下一章 →</span>第8章 空间复杂性</a>
+    </div>
+
+  </div>
+</div>
+
+<footer class="footer">
+  <div class="wrap">第7章 时间复杂性 · 计算理论互动讲义 · 基于 Sipser《Introduction to the Theory of Computation》(3rd ed)</div>
+</footer>
+
+<script src="assets/mermaid.min.js"></script>
+<script>
+mermaid.initialize({
+  startOnLoad: true,
+  theme: "base",
+  themeVariables: {
+    primaryColor: "#e3edf7",
+    primaryBorderColor: "#1d5f9e",
+    primaryTextColor: "#1d5f9e",
+    lineColor: "#5c554b",
+    secondaryColor: "#fbeedd",
+    tertiaryColor: "#f5f1e8",
+    fontFamily: "-apple-system, PingFang SC, sans-serif",
+    fontSize: "14px"
+  },
+  flowchart: { curve: "linear", htmlLabels: false }
+});
+</script>
+<script>
+// 自测题判分
+document.querySelectorAll(".quiz-block").forEach(block => {
+  const answer = block.dataset.answer;
+  const explain = block.querySelector(".quiz-explain");
+  block.querySelectorAll(".quiz-opts li").forEach(li => {
+    li.addEventListener("click", () => {
+      const opts = block.querySelectorAll(".quiz-opts li");
+      opts.forEach(o => o.classList.add("disabled"));
+      if (li.dataset.opt === answer) {
+        li.classList.add("correct");
+      } else {
+        li.classList.add("wrong");
+        block.querySelector(`[data-opt="${answer}"]`).classList.add("correct");
+      }
+      explain.classList.add("show");
+    });
+  });
+});
+
+// 合上书清单打勾
+document.querySelectorAll("#ch07-challenge-list li").forEach(li => {
+  li.addEventListener("click", () => li.classList.toggle("checked"));
+});
+
+// 完成标记 → localStorage（第7章）
+const KEY = "ct_progress_v1";
+function loadProgress() {
+  try { return JSON.parse(localStorage.getItem(KEY)) || {}; } catch (e) { return {}; }
+}
+const progress = loadProgress();
+const btn = document.getElementById("ch07-btn-complete");
+if (progress["7"] && progress["7"].done) {
+  btn.textContent = "✓ 已完成 · 再次点击重置";
+  btn.classList.add("done");
+}
+function markDone() {
+  const p = loadProgress();
+  if (p["7"] && p["7"].done) {
+    delete p["7"];
+    btn.textContent = "✓ 我已完成本章（含合上书挑战）";
+    btn.classList.remove("done");
+  } else {
+    p["7"] = { done: true, completedAt: Date.now(), reviewsDone: 0 };
+    btn.textContent = "✓ 已完成 · 复习提醒已开启";
+    btn.classList.add("done");
+  }
+  localStorage.setItem(KEY, JSON.stringify(p));
+}
+</script>
+
+</body>
+</html>

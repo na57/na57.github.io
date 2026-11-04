@@ -1,0 +1,1000 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第2章 正则语言：有限自动机与正则表达式 · 计算理论互动讲义</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+<nav class="topbar">
+  <div class="topbar-inner"><span class="brand"><a href="index.html" style="color:inherit">← 学习地图</a></span><span class="crumb">部分一 · 语言与自动机 / 第2章</span></div>
+</nav>
+
+<div class="wrap">
+
+  <div class="lecture-head">
+    <span class="ch-label">CHAPTER 02 · 语言与自动机</span>
+    <h1>正则语言：有限自动机与正则表达式</h1>
+    <p class="lead">给"最弱的机器"画一幅完整肖像：它能做什么、不能做什么，边界精确到哪里。</p>
+  </div>
+
+  <!-- 本章定位 -->
+  <div class="position-bar">
+    <strong>本章在主线上的位置：</strong>语言与证明工具就位 → <u>给"最弱的机器"完整画像并找到它的边界</u> → 第3章给机器加栈突破此边界。<br>
+    第2章回答主线上的第二个问题：<strong>没有记忆的计算模型能识别哪些语言？边界在哪？</strong>
+    <div class="map-inline">
+      <span class="node">Ch1 引言（语言与证明）</span><span class="arrow">→</span>
+      <span class="node here">Ch2 正则语言（有限自动机）</span><span class="arrow">→</span>
+      <span class="node">Ch3 上下文无关语言（加栈）</span><span class="arrow">‖</span>
+      <span class="node">Ch4 图灵机与可判定性</span><span class="arrow">→</span>
+      <span class="node">Ch5 可归约性与不可判定</span><span class="arrow">→</span>
+      <span class="node">Ch6 递归定理与自指</span><span class="arrow">‖</span>
+      <span class="node">Ch7 时间复杂度 P 与 NP</span><span class="arrow">→</span>
+      <span class="node">Ch8 NP 完全性</span><span class="arrow">‖</span>
+      <span class="node">Ch9 难解性应对（空间/随机/近似）</span><span class="arrow">→</span>
+      <span class="node">Ch10 前沿（密码学/交互证明）</span>
+    </div>
+  </div>
+
+  <!-- 学习目标 -->
+  <div class="objectives">
+    <h4>🎯 学完本章，合上书你应该能：</h4>
+    <ol>
+      <li>写出 DFA 的五元组定义，并给定一个小 DFA 画出状态图、列出转移表</li>
+      <li>手工模拟 DFA 与 NFA 在给定输入上的运行过程，逐符号写出状态（或状态集合）变化并判定是否接受</li>
+      <li>对一个含 ε 转移的小 NFA 执行完整子集构造，画出等价 DFA 并指出接受集合</li>
+      <li>给定简单正则表达式说出它描述的语言；给定简单语言写出正则表达式，并按 Thompson 构造搭出等价 NFA</li>
+      <li>用泵引理三段式（假设拿泵长 → 选魔法串 → 分情况泵出矛盾）证明 {0ⁿ1ⁿ} 类语言非正则</li>
+      <li>说出 DFA、NFA、正则表达式三者等价的确切含义，并举出至少两个"看着正则其实非正则"的反例</li>
+    </ol>
+  </div>
+
+  <div class="lecture">
+
+    <!-- 章首推导主线 -->
+    <div class="figure">
+      <div class="mermaid">
+flowchart LR
+  A["Ch1 备好语言与证明工具"] --> B["给最弱机器下严格定义：DFA"]
+  B --> C["NFA：允许猜测，设计变简单"]
+  C --> D["子集构造：NFA 不强于 DFA"]
+  D --> E["正则表达式：同一类语言的模式视角"]
+  E --> F["泵引理：精确找出边界"]
+  F --> G["遗留问题：无记忆机器够不着 0ⁿ1ⁿ，第3章给它加栈"]
+  classDef danger fill:#fae9e7,stroke:#b03a2e,stroke-width:2.5px,color:#b03a2e;
+  class G danger;
+      </div>
+      <div class="caption">本章推导主线：定义 → 推广 → 等价 → 第二种描述 → 找边界，末节点指向第3章。</div>
+    </div>
+
+    <!-- ============ 2.1 ============ -->
+    <h2><span class="sec-no">2.1</span>确定型有限自动机：如何形式化"有限记忆"？</h2>
+
+    <p>第1章我们非正式地见过自动机：几个圆圈、一些箭头、从起点跟着符号走。直觉够了，但证明定理需要数学对象。本节回答：<strong>怎样把"一台只有有限记忆的机器"压缩成一个五元组？</strong></p>
+
+    <p><span class="term">确定型有限自动机</span>（Deterministic Finite Automaton，DFA）是一个五元组 M = (Q, Σ, δ, q₀, F)：</p>
+    <ul>
+      <li><strong>Q</strong>：有限状态集合——机器全部记忆的载体，它就"只能记住自己此刻在哪个状态"；</li>
+      <li><strong>Σ</strong>：有限字母表——输入串由这里的符号组成；</li>
+      <li><strong>δ : Q × Σ → Q</strong>：<span class="term">转移函数</span>（Transition Function）——"在状态 q 读到符号 a，下一步去 δ(q, a)"；</li>
+      <li><strong>q₀ ∈ Q</strong>：起始状态；</li>
+      <li><strong>F ⊆ Q</strong>：接受状态集合。</li>
+    </ul>
+
+    <p>形式化"接受"：把 δ 逐符号扩展到整串，记 δ̂(q, ε) = q，δ̂(q, wa) = δ(δ̂(q, w), a)。若 δ̂(q₀, w) ∈ F，则 M 接受 w。M 识别的语言 L(M) = { w | δ̂(q₀, w) ∈ F }。被某个 DFA 识别的语言称为<span class="term">正则语言</span>（Regular Language）。</p>
+
+    <h3>完整例子：识别"含子串 001 的二进制串"</h3>
+    <p>设计之前先回答一个问题：<strong>每个状态要记住什么？</strong>机器只需要记住"001 这个模式目前已经匹配到哪里了"：</p>
+    <ul>
+      <li><strong>q₀</strong>：还没见到任何可用的 0（最近一个符号是 1，或刚开始）；</li>
+      <li><strong>q₁</strong>：刚见到一个 0，期待下一个 0；</li>
+      <li><strong>q₂</strong>：刚见到 00，期待 1——再读 1 就成功；</li>
+      <li><strong>q₃</strong>：已经见过 001，任务完成——之后读什么都无所谓（接受态，也是陷阱态）。</li>
+    </ul>
+
+    <div class="figure">
+      <div class="mermaid">
+flowchart LR
+  s(["start"]) --> q0("q0")
+  q0 -- "0" --> q1("q1")
+  q0 -- "1" --> q0
+  q1 -- "0" --> q2("q2")
+  q1 -- "1" --> q0
+  q2 -- "0" --> q2
+  q2 -- "1" --> q3(("q3"))
+  q3 -- "0, 1" --> q3
+      </div>
+      <div class="caption">图 2.1 识别"含子串 001"的 DFA。看 q₂ 读 0 仍回 q₂（00 后面再添 0 不算失败，最后一个 0 仍是候选结尾的第二位 0）；q₃ 双线圈，读什么都留在 q₃。</div>
+    </div>
+
+    <p>同一台机器写成转移表（与状态图完全等价，二者可互相翻译）：</p>
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>状态</th><th>读 0</th><th>读 1</th><th>状态含义</th></tr>
+        <tr><td>→ q₀</td><td>q₁</td><td>q₀</td><td>还没见到可用的 0</td></tr>
+        <tr><td>q₁</td><td>q₂</td><td>q₀</td><td>刚见到一个 0</td></tr>
+        <tr><td>q₂</td><td>q₂</td><td>q₃</td><td>刚见到 00</td></tr>
+        <tr><td>* q₃</td><td>q₃</td><td>q₃</td><td>已见 001（接受）</td></tr>
+      </table>
+    </div>
+
+    <p>输入 <strong>0010</strong> 的逐步执行轨迹（被接受）：</p>
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>步骤</th><th>已读前缀</th><th>当前状态</th><th>说明</th></tr>
+        <tr><td>0</td><td>ε</td><td>q₀</td><td>从起始态出发</td></tr>
+        <tr><td>1</td><td>0</td><td>q₁</td><td>见到第一个 0</td></tr>
+        <tr><td>2</td><td>00</td><td>q₂</td><td>凑齐 00</td></tr>
+        <tr><td>3</td><td>001</td><td>q₃</td><td>命中 001，进入接受态</td></tr>
+        <tr><td>4</td><td>0010</td><td>q₃</td><td>已接受，再读 0 仍留 q₃ ⇒ <strong>接受</strong></td></tr>
+      </table>
+    </div>
+
+    <p>输入 <strong>010</strong> 的执行轨迹（被拒绝）：</p>
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>步骤</th><th>已读前缀</th><th>当前状态</th><th>说明</th></tr>
+        <tr><td>0</td><td>ε</td><td>q₀</td><td>出发</td></tr>
+        <tr><td>1</td><td>0</td><td>q₁</td><td>见到一个 0</td></tr>
+        <tr><td>2</td><td>01</td><td>q₀</td><td>0 后接 1，匹配中断，前功尽弃</td></tr>
+        <tr><td>3</td><td>010</td><td>q₁</td><td>读完停在非接受态 ⇒ <strong>拒绝</strong></td></tr>
+      </table>
+    </div>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>设计 DFA = 回答"每个状态要记住什么"。先给每个状态写一句人话含义（如"刚见到 00"），转移边就自然长出来：对每个状态逐个问"此刻读到 0 怎么办、读到 1 怎么办"。状态含义先行，转移表随后自动出现——这是本章一切构造题的第一招。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>δ 是<strong>全函数</strong>：每个状态对每个符号都必须有出边，不允许"卡死"。初学者的状态图常常少画了"失败边"（比如 q₀ 读 1 去哪）。少了边，数学上它就不是 DFA。实在无处可去时，必须显式补一个自环的陷阱态兜底。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 2.1-1</div>
+              <div class="q-text">默写 DFA 的五元组，并说出 δ 的类型签名与"全函数"含义。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              M = (Q, Σ, δ, q₀, F)：状态集、字母表、转移函数、起始态、接受集。δ : Q × Σ → Q，全函数——每个状态读每个符号都有且仅有一个后继。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 2.1-2</div>
+              <div class="q-text">在 001 例子中，状态 q₂ 读到 0 为什么回到 q₂ 而不是 q₀ 或 q₁？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              已见 00 后再读 0 得到 …000，其最后两位仍是 00，匹配进度没有倒退——"刚见到 00"这一记忆仍然成立，故自环回 q₂。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 2.2 ============ -->
+    <h2><span class="sec-no">2.2</span>非确定型有限自动机：让机器"猜"会怎样？</h2>
+
+    <p>上一节的 DFA 每一步都被钉死。但有些语言用 DFA 设计很绕：比如"以 ab 结尾的串"，DFA 需要记住"上一个字符是不是 a"。如果允许机器<strong>猜</strong>——"我猜现在就是倒数第二位"——设计会直白得多。本节回答：猜测能力如何定义，它会不会改变机器的能力上限？</p>
+
+    <p><span class="term">非确定型有限自动机</span>（Nondeterministic Finite Automaton，NFA）与 DFA 的差别只在转移函数：</p>
+    <div class="formula">δ : Q × (Σ ∪ {ε}) → P(Q)</div>
+    <ul>
+      <li>读一个符号可以到达<strong>一个状态集合</strong>（零个、一个或多个），机器分裂成多个并行分支；</li>
+      <li>允许 <span class="term">ε 转移</span>（ε-transition）：不消耗任何输入符号就能跳槽到另一个状态；</li>
+      <li><strong>接受语义</strong>：只要存在至少一条计算分支读完整个输入后停在接受态，串就被接受。</li>
+    </ul>
+
+    <h3>完整例子：识别"以 ab 结尾的串"的 NFA</h3>
+    <p>设计思路一句话：在 p 上原地打转随便读，<strong>猜</strong>某个 a 是倒数第二位，经 q 验证下一个符号是 b 后进接受态 r。</p>
+
+    <div class="figure">
+      <div class="mermaid">
+flowchart LR
+  s(["start"]) --> p("p")
+  p -- "a, b" --> p
+  p -- "a" --> q("q")
+  q -- "b" --> r(("r"))
+      </div>
+      <div class="caption">图 2.2 识别"以 ab 结尾"的 NFA。看 p 读 a 有两条出边（留下或去 q）——这就是"猜"；q 没有 b 以外的出边，分支可死亡。</div>
+    </div>
+
+    <p>跑输入 <strong>aab</strong>，把全部分支列出来（初始只有 {p}）：</p>
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>分支</th><th>路径</th><th>结局</th></tr>
+        <tr><td>分支 1</td><td>p →(a) p →(a) p →(b) p</td><td>读完停在 p，非接受态 ⇒ 该分支拒绝</td></tr>
+        <tr><td>分支 2</td><td>p →(a) q →(a) ✗</td><td>q 读 a 无出边，分支中途死亡</td></tr>
+        <tr><td>分支 3</td><td>p →(a) p →(a) q →(b) r</td><td>读完停在 r ⇒ <strong>接受</strong></td></tr>
+      </table>
+    </div>
+    <p>三条分支里只要有一条活路到 r，整个输入 aab 就被接受。用"状态集合"的视角看同一过程：{p} →(a) {p,q} →(a) {p,q} →(b) {p,r}，r ∈ F 故接受——这正是下一节子集构造的读法。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>NFA 的"猜对就算"是<strong>存在性语义</strong>：它不是概率（没有 50% 这种数字），不是并行加速（不省时间，分支可以指数多），只是让描述更紧凑。你把 NFA 想成一个会分身术的侦探：分身再多，只要有一个分身破案，就算破案。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 错误直觉预警</span>
+      <p>"NFA 比 DFA 强"是错觉。NFA 设计起来省事，但下一节就证明：每台 NFA 都能被一台 DFA 完全模拟，二者识别的语言类一模一样。猜测省的是<strong>描述长度</strong>，不是<strong>识别能力</strong>。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 2.2-1</div>
+              <div class="q-text">NFA 的转移函数签名是什么？它与 DFA 有哪两点不同？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              δ : Q × (Σ ∪ {ε}) → P(Q)。不同：① 结果是状态集合（可多可零）而非单一状态；② 允许 ε 转移，不读符号也能换状态。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 2.2-2</div>
+              <div class="q-text">NFA 在什么意义下接受一个串？大部分分支拒绝时串还算被接受吗？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              存在性语义：存在至少一条分支读完整个输入并停在接受态即接受。其余分支拒绝或死亡都不影响——哪怕 99% 的分支失败，只要 1 条成功就接受。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 2.3 ============ -->
+    <h2><span class="sec-no">2.3</span>子集构造：NFA 为什么不多算一个语言？</h2>
+
+    <p>上一节留下悬念：猜测到底有没有增加能力？本节用本章第一个核心证明模板回答：<strong>没有</strong>。</p>
+
+    <div class="box insight">
+      <span class="box-tag">✅ 定理</span>
+      <p>每个 NFA 都有与之等价的 DFA（识别完全相同的语言）。证明方法是<span class="term">子集构造</span>（Subset Construction，也叫 Powerset Construction）：用 DFA 的一个状态代表"NFA 此刻可能处在的状态集合"。</p>
+    </div>
+
+    <p>构造的关键在 ε 转移：读符号前后，机器可能沿着 ε 边"免费"漂移。先定义 <span class="term">ε 闭包</span>（ε-closure）E(R)：从集合 R 出发，只走 ε 边能到达的所有状态（含 R 自己）。</p>
+
+    <h3>完整手算：对带 ε 的"以 ab 结尾"NFA 做子集构造</h3>
+    <p>把 2.2 的 NFA 加一个新初态 s 和一条 ε 边，得到 4 个状态的 NFA：</p>
+
+    <div class="figure">
+      <div class="mermaid">
+flowchart LR
+  st(["start"]) --> s("s")
+  s -- "ε" --> p("p")
+  p -- "a, b" --> p
+  p -- "a" --> q("q")
+  q -- "b" --> r(("r"))
+      </div>
+      <div class="caption">图 2.3 带 ε 转移的版本：s 一开局就免费漂到 p，所以 {s} 的 ε 闭包是 {s, p}。</div>
+    </div>
+
+    <p>子集构造四步，一步不跳：</p>
+    <ol>
+      <li><strong>起态取闭包</strong>：DFA 起态 A = E({s}) = {s, p}（s 沿 ε 边免费到 p）。</li>
+      <li><strong>每个集合 × 每个符号：先并 δ 再取闭包</strong>：
+        <ul>
+          <li>A = {s,p} 读 a：δ(s,a) ∪ δ(p,a) = ∅ ∪ {p,q} = {p,q}；ε 闭包仍是 {p,q} → 记为 <strong>B</strong>。读 b：∅ ∪ {p} = {p} → 记为 <strong>C</strong>。</li>
+          <li>B = {p,q} 读 a：{p,q} ∪ ∅ = {p,q}，闭包 {p,q} = B（自环）。读 b：{p} ∪ {r} = {p,r}，闭包 {p,r} → 记为 <strong>D</strong>。</li>
+          <li>C = {p} 读 a：{p,q} → B。读 b：{p} → C（自环）。</li>
+          <li>D = {p,r} 读 a：{p,q} ∪ ∅ = {p,q} → B。读 b：{p} ∪ ∅ = {p} → C。</li>
+        </ul>
+      </li>
+      <li><strong>接受集合</strong>：凡含 NFA 接受态 r 的集合 ⇒ 只有 D = {p, r}。</li>
+      <li><strong>到没有新集合为止</strong>：A、B、C、D 都已展开，共 4 个状态，构造结束。</li>
+    </ol>
+
+    <p>汇总成等价 DFA 的转移表：</p>
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>DFA 状态</th><th>= NFA 状态集合</th><th>读 a</th><th>读 b</th></tr>
+        <tr><td>→ A</td><td>{s, p}</td><td>B</td><td>C</td></tr>
+        <tr><td>B</td><td>{p, q}</td><td>B</td><td>D</td></tr>
+        <tr><td>C</td><td>{p}</td><td>B</td><td>C</td></tr>
+        <tr><td>* D</td><td>{p, r}</td><td>B</td><td>C</td></tr>
+      </table>
+    </div>
+
+    <div class="figure">
+      <div class="mermaid">
+flowchart LR
+  st(["start"]) --> A("A")
+  A -- "a" --> B("B")
+  A -- "b" --> C("C")
+  B -- "a" --> B
+  B -- "b" --> D(("D"))
+  C -- "a" --> B
+  C -- "b" --> C
+  D -- "a" --> B
+  D -- "b" --> C
+      </div>
+      <div class="caption">图 2.4 子集构造得到的 4 状态 DFA。验证：aab 走 A→B→B→D 接受；ba 走 A→C→B 拒绝。与原 NFA 完全一致。</div>
+    </div>
+
+    <p><strong>爆炸风险</strong>：n 个状态的 NFA，子集构造最多产生 2ⁿ 个 DFA 状态（每个子集一个）。2 状态变 4，10 状态理论上可变 1024——等价的代价可能是指数膨胀。</p>
+
+    <div class="box insight">
+      <span class="box-tag">✅ 证明模板卡 · 子集构造流程</span>
+      <p><strong>①</strong> 起态 = E({q₀})，先取 ε 闭包；<strong>②</strong> 对每个已达集合 R 和每个符号 a：先算 ⋃<sub>r∈R</sub> δ(r, a)，再对结果取 ε 闭包，得到新集合；<strong>③</strong> 凡含原 NFA 接受态的集合全部标为接受；<strong>④</strong> 重复 ② 直到没有新集合产生。四步机械执行，永不遗漏——考试大题照此走即可拿全分。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>"等价"指<strong>识别的语言相同</strong>，不是结构相同、更不是状态数相同。DFA 可能比原 NFA 大得多（最坏 2ⁿ）。另一个高频错误：第 ② 步忘记取 ε 闭包——只并了 δ 就停手，导致漏掉所有靠 ε 边白嫖的状态，整张表全错。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 2.3-1</div>
+              <div class="q-text">子集构造中，等价 DFA 的起始状态是什么？为什么不是 {q₀}？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              起态 = E({q₀})，即 q₀ 的 ε 闭包。因为 NFA 在读任何符号之前就能沿 ε 边免费漂移，开局的真实位置是"q₀ 加所有 ε 可达状态"的集合。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 2.3-2</div>
+              <div class="q-text">子集构造里，哪些集合被标为 DFA 的接受状态？n 状态 NFA 最坏膨胀到多少？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              凡含有原 NFA 至少一个接受状态的集合，都是接受态。最坏膨胀到 2ⁿ 个状态——这是"等价"要付的指数代价。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 2.4 ============ -->
+    <h2><span class="sec-no">2.4</span>正则表达式：换一种方式描述同一类语言</h2>
+
+    <p>前三节是"识别器"视角：给一台机器，串喂进去判 Yes/No。本节换成"模式/生成"视角：写一个表达式，直接声明这个语言的串长什么样。答案依然指向同一类语言。</p>
+
+    <p>先看三种<span class="term">正则运算</span>（Regular Operations）：<strong>并</strong> A ∪ B、<strong>连接</strong> A ∘ B = { xy | x∈A, y∈B }、<strong>星号</strong> A* = { x₁x₂…xₖ | k ≥ 0，每个 xᵢ ∈ A }（含 ε）。正则语言对三者封闭——证明是构造性的：把两台 NFA 并联（新初态 ε 分两路）、串联（旧接受态 ε 接新初态）、或套星号回路（新初末态之间 ε 来去）。</p>
+
+    <div class="figure">
+      <div class="mermaid">
+flowchart LR
+  u0["新初态"] -- "ε" --> n1["N1"]
+  u0 -- "ε" --> n2["N2"]
+  n1 -- "ε" --> uf["新接受"]
+  n2 -- "ε" --> uf
+  c1["N1"] -- "ε" --> c2["N2"]
+  k0["新初态"] -- "ε" --> k1["N"]
+  k0 -- "ε" --> kf["新接受"]
+  k1 -- "ε" --> kf
+  kf -. "ε 回头" .-> k1
+      </div>
+      <div class="caption">图 2.5 封闭性三构造：上方并联（并）、左下串联（连接）、右下星号回路（新初态也可 ε 直达新接受态，保证含空串）。</div>
+    </div>
+
+    <p><span class="term">正则表达式</span>（Regular Expression）归纳定义：R 是正则表达式，当且仅当 R 是以下之一——</p>
+    <ol>
+      <li>∅（空语言）、ε（只含空串）、a（a ∈ Σ，只含单符串 a）；</li>
+      <li>(R₁ ∪ R₂)、(R₁ ∘ R₂)、(R₁*)，其中 R₁、R₂ 已是正则表达式。</li>
+    </ol>
+    <p>优先级：<strong>星号 &gt; 连接 &gt; 并</strong>。所以 01* ∪ 0 = (0(1*)) ∪ 0，不要误读成 (01)*。</p>
+
+    <p>例子快练——遮住右列先自己想：</p>
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>正则表达式</th><th>描述的语言</th></tr>
+        <tr><td>0*10*</td><td>恰好含一个 1 的串（0 围着一个 1）</td></tr>
+        <tr><td>(01 ∪ 10)*</td><td>由 01 和 10 两种砖块拼成的串（含 ε）</td></tr>
+        <tr><td>Σ*1</td><td>以 1 结尾的串</td></tr>
+        <tr><td>(0 ∪ 1)*</td><td>= Σ*，全体二进制串</td></tr>
+      </table>
+    </div>
+
+    <h3>完整构造：为正则表达式 (ab ∪ a)* 搭等价 NFA</h3>
+    <p>按归纳定义<strong>自底向上</strong>逐步搭建（Thompson 构造）：每个片段一个新初态、一个新接受态，组合时只用 ε 边缝合。</p>
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>步骤</th><th>搭什么</th><th>怎么搭</th></tr>
+        <tr><td>1</td><td>片段 a</td><td>新初态 x₁ --a--> 新接受 x₂</td></tr>
+        <tr><td>2</td><td>片段 b</td><td>新初态 y₃ --b--> 新接受 y₄</td></tr>
+        <tr><td>3</td><td>片段 ab（连接）</td><td>y₁ --a--> y₂，再用 ε 边 y₂ --ε--> y₃ 把片段 b 缝在后面</td></tr>
+        <tr><td>4</td><td>ab ∪ a（并）</td><td>新初态 u₀ 用两条 ε 边分别接片段 a 与片段 ab 的初态；两片接受态各用 ε 边接新接受 u₁</td></tr>
+        <tr><td>5</td><td>(ab ∪ a)*（星号）</td><td>新初态 s₀ --ε--> u₀，且 s₀ --ε--> 新接受 f₀（保证空串被接受）；u₁ --ε--> u₀ 形成回路，u₁ --ε--> f₀ 收尾</td></tr>
+      </table>
+    </div>
+
+    <div class="figure">
+      <div class="mermaid">
+flowchart LR
+  st(["start"]) --> s0("s0")
+  s0 -- "ε" --> u0("u0")
+  s0 -- "ε" --> f0(("f0"))
+  u0 -- "ε" --> x1("x1")
+  u0 -- "ε" --> y1("y1")
+  x1 -- "a" --> x2("x2")
+  y1 -- "a" --> y2("y2")
+  y2 -- "ε" --> y3("y3")
+  y3 -- "b" --> y4("y4")
+  x2 -- "ε" --> u1("u1")
+  y4 -- "ε" --> u1
+  u1 -- "ε" --> u0
+  u1 -- "ε" --> f0
+      </div>
+      <div class="caption">图 2.6 (ab ∪ a)* 的 Thompson 构造成品。看 u₁→u₀ 那条回头 ε 边——它就是星号；s₀→f₀ 的直通 ε 边保证 ε 被接受。</div>
+    </div>
+
+    <p><strong>等价性定理</strong>：一个语言是正则的 ⟺ 它能被某个正则表达式描述。两个方向各一句话：RE → NFA 就是上面的归纳构造；NFA → RE 用 <span class="term">广义非确定型有限自动机</span>（GNFA）逐个消去状态、把边上的标签滚成越来越大的正则表达式，本章只需记住思想。三者等价：DFA = NFA = 正则表达式。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>DFA/NFA 是<strong>识别器</strong>视角（给串判 Yes/No），正则表达式是<strong>生成/模式</strong>视角（声明串的构造方式）。三者是同一类语言的三种"语言"——就像同一件事的三个译本，按场合选用最顺手的一个：做实现用 DFA，做设计用 NFA，写模式用正则表达式。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 2.4-1</div>
+              <div class="q-text">正则表达式的三条基础规则和三条组合规则分别是什么？优先级如何？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              基础：∅、ε、a（a∈Σ）；组合：并、连接、星号。优先级：星号 &gt; 连接 &gt; 并。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 2.4-2</div>
+              <div class="q-text">Thompson 构造给 R* 套星号时，新初态为什么要连一条 ε 边直达新接受态？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              因为 R* 必须包含空串 ε（k=0 次重复）。新初态直通新接受态的 ε 边让"一次都不进 R"成为合法路径，保证 ε 被接受。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 2.5 ============ -->
+    <h2><span class="sec-no">2.5</span>泵引理：正则语言的"体检报告"</h2>
+
+    <p>前四节一直在证明"正则语言能做什么"，本节反转：证明某些语言<strong>做不到</strong>。工具只有一个直觉——鸽巢原理。</p>
+
+    <p>一台 DFA 只有 p 个状态。读一个长度 ≥ p 的串 s 时，路径上经过的状态数超过 p，必有某个状态被踩了两次。设第一次、第二次踩中同一状态之间读掉的那段为 y，那么 y 是一个<strong>循环</strong>：多绕几圈（y²、y³…）或一圈都不绕（y⁰），机器根本分不出来——这些串要么全在语言里，要么全不在。这就是<span class="term">泵引理</span>（Pumping Lemma）。</p>
+
+    <div class="box insight">
+      <span class="box-tag">✅ 泵引理（严格陈述）</span>
+      <p>若 A 是正则语言，则存在<strong>泵长</strong> p ≥ 1，使得任意 s ∈ A 且 |s| ≥ p，都可分解为 s = xyz 且同时满足：<br>
+      (1) 对任意 i ≥ 0，xyⁱz ∈ A；　(2) |y| &gt; 0；　(3) |xy| ≤ p。</p>
+    </div>
+
+    <p>三个条件各司其职：(1) 是"泵"本身——中段可任意重复或删除；(2) 保证泵的东西非空，否则引理毫无意义；(3) 限制循环段出现的位置——<strong>必须落在串的前 p 个字符内</strong>，这是做题时锁死 y 形态的关键。</p>
+
+    <p><strong>证明思想（三步）</strong>：① 取 p = 某台识别 A 的 DFA 的状态数；② 读 s 的前 p 个符号经过 p+1 个状态，鸽巢原理给出重复状态 qⱼ = qₖ；③ 令 y 为两次踩中 qⱼ 之间读掉的段，|y| &gt; 0 且 |xy| ≤ p 自动成立，绕圈可泵。</p>
+
+    <h3>完整三段式反证：B = { 0ⁿ1ⁿ | n ≥ 0 } 不是正则语言</h3>
+    <p><strong>第 ① 步 · 假设拿泵长</strong>：假设 B 正则，泵引理给出泵长 p。<strong>选串</strong> s = 0ᵖ1ᵖ。显然 s ∈ B 且 |s| = 2p ≥ p，泵引理保证存在分解 s = xyz 满足三条件。</p>
+    <p><strong>第 ② 步 · 分情况讨论 y 的位置</strong>（条件 |y| &gt; 0 保证 y 非空）：</p>
+    <ul>
+      <li><strong>情况一</strong>：y 全落在前半段 0 区。则 xy²z 中 0 的个数 &gt; p，1 的个数 = p，0、1 不等 ⇒ xy²z ∉ B。</li>
+      <li><strong>情况二</strong>：y 横跨 0/1 边界，即 y 含 0 也含 1。则 xy²z 出现 …1…0…1…0… 的交错 ⇒ xy²z ∉ B。</li>
+      <li><strong>情况三</strong>：y 全落在后半段 1 区。则 xy²z 中 1 多于 0 ⇒ xy²z ∉ B。</li>
+    </ul>
+    <p>——而条件 (3) |xy| ≤ p 其实直接排除了情况二、三：xy 整体落在前 p 个字符里，前 p 个字符全是 0，所以 y 必然是纯 0 段 0ᵏ（k ≥ 1）。考试里用这一步锁死，连分情况都省了。这里把三种情况列全，是为了让你看清每个条件到底在防什么。</p>
+    <p><strong>第 ③ 步 · 矛盾收网</strong>：所有可能的分解都泵出 xy²z ∉ B，违反泵引理条件 (1)。假设不成立 ⇒ <strong>B 非正则</strong>。∎</p>
+
+    <div class="box insight">
+      <span class="box-tag">✅ 证明模板卡 · 泵引理三段式</span>
+      <p><strong>①</strong> 假设语言正则，拿到泵长 p；<strong>②</strong> 构造魔法串 s（与 p 挂钩，让任何合法分解都无处可逃，常用 p 次幂把 y 锁死在单一符号段）；<strong>③</strong> 枚举 y 的全部位置情况（或用 |xy| ≤ p 一步锁死），逐一选出泵次 i（通常 i=2 或 i=0）使 xyⁱz 跑出语言外，得矛盾。<br>
+      <strong>博弈解读</strong>：p 由对方任选、分解 xyz 由对方任选（只受条件 2、3 约束）；s 和泵次 i 由<strong>我方</strong>选。我方后手出招，必须对对方的所有可能应手全部取胜。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 本章头号红线</span>
+      <p>泵引理是<strong>单向蕴含</strong>：正则 ⇒ 满足泵条件。它只能用来证"非正则"（逆否：泵条件被破坏 ⇒ 非正则），<strong>不能</strong>用来证"正则"——存在满足泵三条件却非正则的语言。"我验证了某串可泵，所以语言正则"是充分必要混淆，方向用反整题零分。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 2.5-1</div>
+              <div class="q-text">默写泵引理的三个条件，并说出第 (3) 条在 0ⁿ1ⁿ 证明中的作用。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              (1) 任意 i≥0 有 xyⁱz ∈ A；(2) |y| &gt; 0；(3) |xy| ≤ p。第 (3) 条把 xy 锁死在 s 的前 p 个字符内——选 s=0ᵖ1ᵖ 时 y 必为纯 0 段，一次泵出矛盾。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 2.5-2</div>
+              <div class="q-text">泵引理证明中，哪些量由"对方"选、哪些由"我方"选？为什么不能用它证正则？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              对方选泵长 p 和分解 xyz；我方选魔法串 s 与泵次 i，且须对对方所有应手全胜。它只是单向蕴含（正则⇒可泵），满足泵条件的语言未必正则，故只能证非正则。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 2.6 ============ -->
+    <h2><span class="sec-no">2.6</span>错误直觉集中清算：本章最容易踩的四个坑</h2>
+
+    <p>正文讲完了。考试和面试里丢分的往往不是不懂，而是直觉走偏。本节把本章四大误区钉死在墙上，每条都给出"为什么错"和"代价是什么"。</p>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 误区一："NFA 表达能力比 DFA 强"</span>
+      <p>错。2.3 的子集构造证明两者识别的语言类完全相同——都是正则语言。NFA 的优势只在<strong>简洁性</strong>：同一个语言，NFA 可能用 n 个状态，等价 DFA 最坏要 2ⁿ 个。猜测省的是描述长度，不是识别能力；想白捡简洁，代价是指数膨胀。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 误区二："泵引理可以证明语言是正则的"</span>
+      <p>错，方向反了。泵引理是"正则 ⇒ 可泵"的单向蕴含，逆命题不成立。它唯一的用途是<strong>反证非正则</strong>：假设正则 → 推出泵条件被破坏 → 矛盾。拿它正向使用，等于拿体检合格标准去诊断健康人没病——逻辑上不成立。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 误区三："正则语言都是有限语言"</span>
+      <p>错。a* = { ε, a, aa, aaa, … } 是无限语言，它有再小不过的两状态 DFA（其实一个状态就够）。正则与否看的是"识别所需的记忆是否有界"，不是语言的大小。有限语言一定正则，但正则语言可以无限——星号就是专门制造无限的运算。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 误区四："DFA 的 δ 可以缺省，卡死就当拒绝"</span>
+      <p>错。δ : Q × Σ → Q 是全函数，每个状态对每个符号必须有唯一出边。"卡死拒读"是 NFA 的特权（δ 可以返回 ∅）。DFA 想表达"读到就失败"，必须显式补一个所有出边都指回自己的<span class="term">陷阱态</span>（Trap/Dead State）——2.1 的 q₃ 就是接受版的陷阱态。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 2.6-1</div>
+              <div class="q-text">"NFA 更强"错在哪？NFA 真正的优势和它要的代价分别是什么？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              错在识别能力相同（子集构造保证等价）。NFA 真正的优势是描述简洁；代价是转成 DFA 最坏膨胀 2ⁿ 倍。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 2.6-2</div>
+              <div class="q-text">为什么"有限语言一定正则，但正则语言未必有限"是对的？各举一例。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              有限语言可为每个串造一条专用接受路径（如 {001} 用 4 状态链）。正则语言可以无限：a* 一个状态自环就识别了无限多个串。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 概念卡 ============ -->
+    <h2><span class="sec-no">🃏</span>概念卡：本章概念的一分钟画像</h2>
+    <p>翻面前先自问：这个概念我能用一句话讲清楚吗？</p>
+    <div class="flip-grid">
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 1</div>
+            <div class="q-text">确定型有限自动机（Deterministic Finite Automaton）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">五元组 (Q, Σ, δ, q₀, F)，δ : Q × Σ → Q 为全函数，每步唯一确定。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">把"有限记忆的机器"变成可证明定理的数学对象。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">一台只有固定几个档位的机器，全部记忆就是"我在哪一档"。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为 δ 可以缺省卡死——不行，缺边必须补陷阱态。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">词法分析器、协议状态机；Ch3 下推自动机、Ch4 图灵机的对照起点。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 2</div>
+            <div class="q-text">非确定型有限自动机（Nondeterministic Finite Automaton）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">δ : Q × (Σ ∪ {ε}) → P(Q)，接受 = 存在一条分支读完停在接受态。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">让自动机设计变直白：允许机器"猜"，描述大幅缩短。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">会分身术的侦探：分身随便死，有一个破案就算破案。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">当成概率或并行加速——都不是，它只是存在性语义。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">正则表达式的编译中间形态；Ch7 非确定图灵机的前身。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 3</div>
+            <div class="q-text">子集构造（Subset Construction）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">用 DFA 状态代表 NFA 的可能状态集合：起态 E({q₀})，逐步"先并 δ 再取 ε 闭包"。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">证明 NFA ≼ DFA，即非确定性不增加识别能力。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">不追踪每个分身，只记"现在还活着的分身占了哪些状态"。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">忘记取 ε 闭包；以为等价意味着状态数差不多。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">正则表达式引擎的编译流水线；Ch7 P 与 NP 中"确定性模拟非确定"的思想原型。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 4</div>
+            <div class="q-text">正则表达式（Regular Expression）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">由 ∅、ε、a 出发，经并、连接、星号归纳构造的模式表达式。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">用"生成/模式"视角描述正则语言，人写人读都方便。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">串的配方：先声明砖块，再声明怎么拼。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">忽略优先级（星 &gt; 连接 &gt; 并）；以为它能数 0ⁿ1ⁿ 这类配对。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">文本检索、词法规则；与 DFA/NFA 的等价性是本章枢纽。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 5</div>
+            <div class="q-text">泵引理（Pumping Lemma）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">正则语言中长串必含可任意重复的非空中段 y，且 |xy| ≤ p。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">提供证明"某语言非正则"的标准武器。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">有限状态走长路必绕圈，绕圈段可随意泵。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">反向使用证正则——单向蕴含，用反整题零分。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">本章考试大题；Ch3 有上下文无关版泵引理，套路相同。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 6</div>
+            <div class="q-text">陷阱态（Trap / Dead State）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">所有出边都指回自身的非接受状态，一旦进入永不脱身。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">为 DFA 的全函数要求兜底：失败输入有处可去。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">状态机的垃圾桶/黑洞。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">画状态图时漏掉它，导致 δ 不再是全函数。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">补全 DFA 缺省边；001 例子的 q₃ 是"接受版"陷阱态。</span></div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- ============ 分层习题 ============ -->
+    <h2><span class="sec-no">📝</span>分层习题</h2>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>判断：一台 NFA 读同一个输入串，能否同时存在两条都到达接受态的计算分支？</div>
+      <details>
+        <summary>提示</summary>
+        <p>回到接受语义的定义：它要求"存在至少一条"还是"恰好一条"？分支数量有没有上限？</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">能。接受语义只要求"存在至少一条"分支读完停在接受态，对成功分支的数量毫无限制。例如"以 ab 结尾"的 NFA 读 aab 与读 aaab 时，在最后一个 a 处既留在 p 又去了 q——多条分支并存是 NFA 的常态。易错点：把"确定型"的唯一路径直觉带进 NFA，误以为分叉必须二选一。</div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>判断正误并说明理由："若语言 L 满足泵引理的三个条件，则 L 是正则语言。"</div>
+      <details>
+        <summary>提示</summary>
+        <p>泵引理的蕴含方向是什么？充分和必要，哪个是哪个？</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">错误。泵引理是单向蕴含：正则 ⇒ 满足泵条件。它的逆命题不成立——可以构造出满足全部三条泵条件、却被其他方法（如封闭性 + 更强的泵引理变体）证明非正则的语言。因此泵条件只是正则性的<strong>必要</strong>条件而非<strong>充分</strong>条件。它唯一的合法用途是反向：破坏泵条件 ⇒ 非正则。方向用反是本题最常见的零分姿势。</div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>设计识别"倒数第 2 位是 1"的二进制串的 NFA（不超过 3 个状态），然后对它执行子集构造的前两步（求 DFA 起态、算出起态在 0 和 1 下的后继集合）。</div>
+      <details>
+        <summary>提示</summary>
+        <p>让机器在原地打转随便读，"猜"某个 1 是倒数第 2 位——猜对之后还需再读恰好一个符号收尾。子集构造第一步永远先取 ε 闭包。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p><strong>NFA 设计</strong>（3 个状态）：q₀ 是起点，读 0、1 都自环（原地打转等待）；q₀ 读 1 时<strong>同时</strong>分叉到 q₁（猜这个 1 是倒数第 2 位）；q₁ 读 0 或 1 都到 q₂；q₂ 是唯一接受态，且无出边——读完输入时分支必须恰好停在 q₂。</p>
+          <p>验证：w = 011。q₀→(0)q₀→(1) 分叉 {q₀, q₁} →(1)：q₀ 自环 + q₀ 又分叉到 q₁ + 旧 q₁ 读 1 到 q₂ ⇒ 集合 {q₀, q₁, q₂}，含 q₂ 故接受；倒数第 2 位确为 1 ✓。w = 010：末位读后集合为 {q₀, q₁}，不含 q₂，拒绝 ✓。</p>
+          <p><strong>子集构造前两步</strong>：</p>
+          <p>第 ① 步（起态）：本 NFA 无 ε 转移，A = E({q₀}) = {q₀}。</p>
+          <p>第 ② 步（起态的转移）：A 读 0：δ(q₀,0) = {q₀}，闭包 {q₀} ⇒ A →(0) A（自环）。A 读 1：δ(q₀,1) = {q₀, q₁}，闭包仍为 {q₀, q₁} ⇒ 新集合 B = {q₀, q₁}，A →(1) B。</p>
+          <p>（后续步骤供自检：B 读 0 → {q₀}∪{q₂} = {q₀, q₂}；B 读 1 → {q₀,q₁}∪{q₂} = {q₀,q₁,q₂}，后者含 q₂ 为接受态。）</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>用泵引理证明 L = { w ∈ {0,1}* | w 中 0 与 1 的个数相等 } 不是正则语言，写完整三段式。</div>
+      <details>
+        <summary>提示</summary>
+        <p>魔法串仍然选 0ᵖ1ᵖ——它属于 L（0、1 各 p 个），且 |xy| ≤ p 能把 y 锁死在纯 0 段。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p><strong>第 ① 步</strong>：假设 L 正则，则存在泵长 p。选 s = 0ᵖ1ᵖ：s ∈ L（0、1 各 p 个）且 |s| = 2p ≥ p，故存在分解 s = xyz 满足 (1) 任意 i ≥ 0 有 xyⁱz ∈ L；(2) |y| &gt; 0；(3) |xy| ≤ p。</p>
+          <p><strong>第 ② 步</strong>：由条件 (3)，xy 整体落在 s 的前 p 个字符内，而前 p 个字符全是 0，故 y = 0ᵏ，由条件 (2) 知 k ≥ 1。取 i = 2：xy²z = 0ᵖ⁺ᵏ1ᵖ，其中 0 有 p+k 个、1 有 p 个，两者不等，故 xy²z ∉ L。</p>
+          <p><strong>第 ③ 步</strong>：对任何满足 (2)(3) 的分解，泵两次都逃出 L，与条件 (1) 矛盾。假设不成立，故 L 非正则。∎（技巧点评：选串时让"被锁死的段"恰好是计数天平的某一端，泵它就打破平衡。）</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l3">L3 建模应用</span>现实场景：编译器词法分析器要识别"合法标识符"——字母开头，后面跟任意多个字母或数字（如 x、tmp2、Loop9x）。① 写出描述它的正则表达式；② 说明为什么词法分析器最终基于 DFA 而不是直接模拟 NFA 来实现。</div>
+      <details>
+        <summary>提示</summary>
+        <p>把"字母"记为 L、"数字"记为 D，先拼出"首字符"和"后续字符"两个片段。再想想：词法分析要在每微秒处理海量字符，它承受得起分支回溯吗？</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p><strong>① 正则表达式</strong>：L(L ∪ D)*，其中 L = a∪b∪…∪z∪A∪…∪Z，D = 0∪1∪…∪9。首字符强制来自 L（字母开头），后续任意次重复 L 或 D。</p>
+          <p><strong>② 为什么用 DFA</strong>：DFA 每读一个字符只做一次查表转移，单趟扫描、每字符 O(1)、全程无回溯，吞吐稳定——这是词法分析的性能底线。NFA 直接模拟要维护"当前活跃状态集合"，实现复杂且常数因子大。工程上的标准流水线恰好是本章定理链的应用：正则表达式 →（Thompson 构造）NFA →（子集构造）DFA →（状态最小化）更小的 DFA。lex/flex 等工具走的就是这条路。正则表达式的表达能力不够识别配对结构（如括号配平——那需要第3章的下推自动机），但对标识符、数字字面量这类词法单位刚刚好。</p>
+        </div>
+      </details>
+    </div>
+
+    <!-- ============ 自测 ============ -->
+    <h2><span class="sec-no">✍️</span>本章自测</h2>
+    <p class="quiz-hint">点击选项判分，答错会给出原因。</p>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 1</div>
+      <div class="q-stem">关于 DFA 的转移函数 δ，下列说法正确的是？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 某些（状态, 符号）对可以无定义，机器走到就停机拒绝</li>
+        <li data-opt="b">B. δ : Q × Σ → Q 是全函数，每个状态读每个符号都有唯一后继</li>
+        <li data-opt="c">C. δ 可以把一个状态映射到一个状态集合</li>
+        <li data-opt="d">D. δ 允许 ε 转移，即不读符号也能换状态</li>
+      </ul>
+      <div class="quiz-explain">B 正确：全函数 + 唯一后继是"确定型"的两个支柱。A 错：DFA 不许卡死，要表达"失败"必须显式补陷阱态；C、D 都是 NFA 的特征（值域为幂集、允许 ε 边），张冠李戴。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="c">
+      <div class="q-no">自测 2</div>
+      <div class="q-stem">NFA 接受输入串 w 的语义是？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 所有计算分支都读完 w 并停在接受态</li>
+        <li data-opt="b">B. 超过半数的计算分支停在接受态</li>
+        <li data-opt="c">C. 存在至少一条计算分支读完 w 并停在接受态</li>
+        <li data-opt="d">D. 随机挑一条分支，它停在接受态</li>
+      </ul>
+      <div class="quiz-explain">C 正确：接受是存在性语义。A 错：那是全称要求，会把几乎所有 NFA 设计废掉；B 错：NFA 没有概率概念，"多数"无从谈起；D 错：不是随机机制，不接受"碰运气"式定义——只要一条活路存在就接受，与分支死活比例无关。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="c">
+      <div class="q-no">自测 3</div>
+      <div class="q-stem">对一台含 ε 转移的 NFA 做子集构造，等价 DFA 的起始状态是？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. { q₀ }，只含 NFA 的起始状态</li>
+        <li data-opt="b">B. Q，NFA 全部状态的集合</li>
+        <li data-opt="c">C. E({ q₀ })，即 q₀ 沿 ε 边可达的所有状态（含 q₀）</li>
+        <li data-opt="d">D. F，NFA 的接受状态集合</li>
+      </ul>
+      <div class="quiz-explain">C 正确：开局不读任何符号时，NFA 已能沿 ε 边免费漂移，所以 DFA 起态是 ε 闭包。A 错：漏掉 ε 可达状态，整张转移表从第一行就错；B 错：瞎猜的最大集合，与可达性无关；D 错：接受集决定的是"哪些集合标接受"，不是起点。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 4</div>
+      <div class="q-stem">泵引理可以用来？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 证明某个语言是正则的</li>
+        <li data-opt="b">B. 证明某个语言不是正则的</li>
+        <li data-opt="c">C. 两者都可以，视用法而定</li>
+        <li data-opt="d">D. 构造与 NFA 等价的 DFA</li>
+      </ul>
+      <div class="quiz-explain">B 正确：泵引理是"正则 ⇒ 可泵"的单向蕴含，只能用其逆否（破坏泵条件 ⇒ 非正则）做反证。A、C 错：满足泵条件的语言未必正则，正向使用是充分必要混淆；D 错：构造等价 DFA 是子集构造的任务，与泵引理无关。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 5</div>
+      <div class="q-stem">证明 { 0ⁿ1ⁿ } 非正则时，为什么选 s = 0ᵖ1ᵖ 而不是随便取一个长串？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 因为它是该语言里最短的串</li>
+        <li data-opt="b">B. 因为配合条件 |xy| ≤ p，可把 y 锁死在纯 0 段，泵一次必出矛盾</li>
+        <li data-opt="c">C. 因为它最容易在状态图上画出来</li>
+        <li data-opt="d">D. 因为泵引理要求 s 必须是回文串</li>
+      </ul>
+      <div class="quiz-explain">B 正确：魔法串的全部意义在于与 p 挂钩，让 |xy| ≤ p 这条约束替我们锁死 y 的形态，把"分情况讨论"压缩成一击必杀。A 错：ε 更短但 |s| ≥ p 不满足；C 错：选串是逻辑需要不是画图需要；D 错：泵引理对 s 的形状没有这种要求，0ᵖ1ᵖ 也不是回文。</div>
+    </div>
+
+    <!-- ============ 三句话复述 ============ -->
+    <div class="retell">
+      <h3>🗣️ 用自己的话，三句话讲完本章</h3>
+      <p>对着空气（或室友）说出这三句。说卡壳的那句，回去重读对应小节。</p>
+      <details>
+        <summary>句1：这章解决什么问题？——</summary>
+        <div class="retell-answer">参考答案：给"没有记忆的计算"（只有有限个状态）画完整画像：它能识别哪些语言（正则语言），以及它的能力边界精确划在哪里。</div>
+      </details>
+      <details>
+        <summary>句2：核心机制是什么？——</summary>
+        <div class="retell-answer">参考答案：DFA、NFA、正则表达式是同一类语言的三种视角，等价性由子集构造（NFA→DFA）和 Thompson 构造（RE→NFA）建立；边界由泵引理刻画——有限状态走长路必绕圈，循环段可泵，像 0ⁿ1ⁿ 这样需要无限计数配对的语言因此出局。</div>
+      </details>
+      <details>
+        <summary>句3：它和前后章怎么分工？——</summary>
+        <div class="retell-answer">参考答案：第1章备好语言与证明工具；本章用它们给最弱的机器封顶，留下"无记忆机器够不着 0ⁿ1ⁿ"这个边界；第3章给机器加一条栈变成下推自动机，恰好突破这个边界。</div>
+      </details>
+    </div>
+
+    <!-- ============ 复习计划 ============ -->
+    <div class="review-plan">
+      <h3>🔁 间隔复习计划</h3>
+      <p>回忆本身比重读有效 10 倍。到点只做一件事：翻卡 + 重做标记题。</p>
+      <table>
+        <tr><th>时间点</th><th>复习内容</th><th>预计用时</th></tr>
+        <tr><td>第 1 天</td><td>概念卡 1–6 全部 + 回忆卡 2.1 至 2.6 全部，翻错的做记号</td><td>12 分钟</td></tr>
+        <tr><td>第 3 天</td><td>概念卡 3、5（子集构造、泵引理）+ 做记号的回忆卡 + 自测错题 + 重做习题 L2-2</td><td>10 分钟</td></tr>
+        <tr><td>第 7 天</td><td>三句话复述出声说一遍 + 合上书挑战第 1–5 条</td><td>12 分钟</td></tr>
+        <tr><td>第 15 天</td><td>只做合上书挑战全 7 条；能全过，本章毕业</td><td>15 分钟</td></tr>
+      </table>
+    </div>
+
+    <!-- 合上书挑战 -->
+    <div class="final-challenge">
+      <h3>📕 合上书挑战</h3>
+      <p class="fc-sub">现在关掉这个页面，拿一张纸，凭记忆完成以下任务。全部做完再回来核对——这是本章真正的毕业考试。</p>
+      <ol id="ch02-challenge-list">
+        <li><span class="fc-check"></span>默写 DFA 五元组 (Q, Σ, δ, q₀, F)，说出每项含义与 δ 的类型签名</li>
+        <li><span class="fc-check"></span>不看书画出"含子串 001"的 4 状态 DFA，标全 8 条转移边与 q₃ 自环</li>
+        <li><span class="fc-check"></span>对 2.3 的含 ε 三状态 NFA 默做完整子集构造，画出 4 状态等价 DFA 并标出接受集合</li>
+        <li><span class="fc-check"></span>默写泵引理的三个条件，并各用一句话说明它们的作用</li>
+        <li><span class="fc-check"></span>默写 {0ⁿ1ⁿ} 非正则的完整三段式证明（含选串、锁死 y、泵出矛盾）</li>
+        <li><span class="fc-check"></span>说出 DFA、NFA、正则表达式三者的等价关系与各自视角，以及 NFA→DFA 的代价</li>
+        <li><span class="fc-check"></span>一句话回答本章主线问题：没有记忆的计算模型能识别哪些语言？边界在哪？</li>
+      </ol>
+    </div>
+
+    <div class="complete-zone"><button class="btn-complete" id="ch02-btn-complete" onclick="markDone()">✓ 我已完成本章（含合上书挑战）</button></div>
+
+    <div class="chapter-nav">
+      <a href="chapter-01.html"><span class="nav-dir">← 上一章</span>第1章 引言：语言、自动机与证明方法</a>
+      <a href="chapter-03.html" class="next"><span class="nav-dir">下一章 →</span>第3章 上下文无关语言：文法与下推自动机</a>
+    </div>
+
+  </div>
+</div>
+
+<footer class="footer"><div class="wrap">第2章 正则语言 · 计算理论互动讲义 · 基于 Sipser《Introduction to the Theory of Computation》(3rd ed)</div></footer>
+
+<script src="assets/mermaid.min.js"></script>
+<script>
+mermaid.initialize({
+  startOnLoad: true,
+  theme: "base",
+  themeVariables: {
+    primaryColor: "#e3edf7",
+    primaryBorderColor: "#1d5f9e",
+    primaryTextColor: "#1d5f9e",
+    lineColor: "#5c554b",
+    secondaryColor: "#fbeedd",
+    tertiaryColor: "#f5f1e8",
+    fontFamily: "-apple-system, PingFang SC, sans-serif",
+    fontSize: "14px"
+  },
+  flowchart: { curve: "linear", htmlLabels: false }
+});
+</script>
+<script>
+// 自测题判分（原样复用，勿改）
+document.querySelectorAll(".quiz-block").forEach(block => {
+  const answer = block.dataset.answer;
+  const explain = block.querySelector(".quiz-explain");
+  block.querySelectorAll(".quiz-opts li").forEach(li => {
+    li.addEventListener("click", () => {
+      const opts = block.querySelectorAll(".quiz-opts li");
+      opts.forEach(o => o.classList.add("disabled"));
+      if (li.dataset.opt === answer) {
+        li.classList.add("correct");
+      } else {
+        li.classList.add("wrong");
+        block.querySelector(`[data-opt="${answer}"]`).classList.add("correct");
+      }
+      explain.classList.add("show");
+    });
+  });
+});
+
+// 合上书清单打勾
+document.querySelectorAll("#ch02-challenge-list li").forEach(li => {
+  li.addEventListener("click", () => li.classList.toggle("checked"));
+});
+
+// 完成标记 → localStorage
+const KEY = "ct_progress_v1";
+function loadProgress() {
+  try { return JSON.parse(localStorage.getItem(KEY)) || {}; } catch (e) { return {}; }
+}
+const progress = loadProgress();
+const btn = document.getElementById("ch02-btn-complete");
+if (progress["2"] && progress["2"].done) {
+  btn.textContent = "✓ 已完成 · 再次点击重置";
+  btn.classList.add("done");
+}
+function markDone() {
+  const p = loadProgress();
+  if (p["2"] && p["2"].done) {
+    delete p["2"];
+    btn.textContent = "✓ 我已完成本章（含合上书挑战）";
+    btn.classList.remove("done");
+  } else {
+    p["2"] = { done: true, completedAt: Date.now(), reviewsDone: 0 };
+    btn.textContent = "✓ 已完成 · 复习提醒已开启";
+    btn.classList.add("done");
+  }
+  localStorage.setItem(KEY, JSON.stringify(p));
+}
+</script>
+
+</body>
+</html>

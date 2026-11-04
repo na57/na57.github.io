@@ -1,0 +1,596 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第12章 近似推理：粒子方法 · PGM 课件</title>
+<script>
+window.MathJax = {
+  tex: {
+    inlineMath: [['$', '$'], ['\\(', '\\)']],
+    displayMath: [['$$', '$$'], ['\\[', '\\]']],
+    processEscapes: true,
+    tags: 'none'
+  },
+  svg: { fontCache: 'global', scale: 1.05 },
+  options: { skipHtmlTags: ['script','noscript','style','textarea','pre','code'] }
+};
+</script>
+<!-- MathJax 本地引用（tex-svg 单文件全量组件，约2MB，自带字体数据），file:// 与断网均可用 -->
+<script src="assets/tex-svg.js" async></script>
+<style>
+  :root{
+    --primary:#1a365d; --accent:#2b6cb0; --accent-light:#ebf8ff; --accent-border:#bee3f8;
+    --text:#2d3748; --muted:#718096; --border:#e2e8f0; --bg-light:#f7fafc;
+    --success:#38a169; --danger:#e53e3e; --warning:#dd6b20; --warn-bg:#fffaf0;
+  }
+  *{margin:0;padding:0;box-sizing:border-box;}
+  html,body{width:100%;height:100%;overflow:hidden;background:#0f172a;}
+  body{
+    font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Hiragino Sans GB","Microsoft YaHei","WenQuanYi Micro Hei",sans-serif;
+    color:var(--text);
+  }
+  #stage{
+    position:absolute; left:50%; top:50%;
+    width:1280px; height:720px;
+    transform:translate(-50%,-50%) scale(1);
+    transform-origin:center center;
+    background:#ffffff;
+    box-shadow:0 0 40px rgba(0,0,0,.4);
+    overflow:hidden;
+  }
+  .slide{
+    position:absolute; inset:0;
+    padding:36px 60px 52px;
+    display:none;
+    flex-direction:column;
+    background:#ffffff;
+    opacity:0;
+    transition:opacity .35s ease;
+  }
+  .slide.active{ display:flex; opacity:1; }
+
+  #progress{ position:absolute; top:0; left:0; height:6px; background:var(--accent); width:0; z-index:50; transition:width .35s; }
+
+  /* 封面 / 结束页 */
+  .slide-cover{ justify-content:center; align-items:center; text-align:center; }
+  .slide-cover{ background:linear-gradient(135deg,#1a365d 0%,#2b6cb0 100%); color:#fff; }
+  .slide-cover .kicker{ font-size:22px; letter-spacing:6px; opacity:.85; margin-bottom:18px;}
+  .slide-cover h1{ font-size:64px; font-weight:800; line-height:1.2; margin-bottom:22px; letter-spacing:2px;}
+  .slide-cover .sub{ font-size:26px; opacity:.92; margin-bottom:36px;}
+  .slide-cover .meta{ font-size:19px; opacity:.85; line-height:2;}
+  .slide-cover .divider{ width:160px;height:5px;background:#fff;opacity:.6;margin:0 auto 30px;border-radius:3px;}
+  .slide-cover .question{ font-size:24px; background:rgba(255,255,255,.12); border:1px solid rgba(255,255,255,.35); border-radius:12px; padding:12px 28px; margin-bottom:30px;}
+
+  /* 页头：结论式标题 */
+  .slide-head{ display:flex; align-items:baseline; gap:16px; border-bottom:3px solid var(--accent); padding-bottom:9px; margin-bottom:12px;}
+  .slide-head .sec{ font-size:17px; color:var(--accent); font-weight:700; background:var(--accent-light); padding:3px 11px; border-radius:6px; white-space:nowrap;}
+  .slide-head h3{ font-size:29px; color:var(--primary); font-weight:700;}
+  .slide-body{ flex:1; display:flex; flex-direction:column; justify-content:center; min-height:0; }
+
+  p{ font-size:21px; line-height:1.65; margin-bottom:8px;}
+  .lead{ font-size:23px; color:#374151; line-height:1.75;}
+  ul,ol{ margin:0 0 8px 26px; font-size:21px; line-height:1.7;}
+  li{ margin-bottom:5px;}
+  strong{ color:var(--primary); }
+
+  /* 公式块 */
+  .formula{ background:var(--accent-light); border-left:5px solid var(--accent); border-radius:0 10px 10px 0; padding:9px 22px; margin:9px 0; text-align:center; font-size:23px;}
+  .formula-concl{ background:#fffaf0; border-left:5px solid var(--warning);}
+  .MathJax{ font-size:1.05em !important; }
+  mjx-container[display="true"]{ margin:6px 0 !important; }
+
+  /* 表格 */
+  table{ width:100%; border-collapse:collapse; margin:10px 0; font-size:20px;}
+  th{ background:var(--accent); color:#fff; padding:8px 12px; text-align:center; font-weight:600;}
+  td{ padding:7px 12px; border:1px solid var(--border); text-align:center; vertical-align:middle;}
+  tr:nth-child(even) td{ background:var(--bg-light);}
+  td.l{ text-align:left; }
+  table.small{ font-size:18px; }
+  table.small td, table.small th{ padding:6px 10px; }
+
+  /* 组件 */
+  .card{ background:var(--accent-light); border:1px solid var(--accent-border); border-radius:12px; padding:12px 20px; margin:10px 0;}
+  .tip{ background:#ebf8ff; border-left:5px solid var(--accent); border-radius:0 10px 10px 0; padding:10px 20px; margin:10px 0; font-size:20px; color:#2c5282;}
+  .deep{ background:#f0fff4; border-left:5px solid var(--success); border-radius:0 10px 10px 0; padding:10px 20px; margin:10px 0; font-size:20px; color:#22543d;}
+  .warn{ background:var(--warn-bg); border-left:5px solid var(--warning); border-radius:0 10px 10px 0; padding:10px 20px; margin:10px 0; font-size:20px; color:#744210;}
+  .trap{ background:#fef2f2; border-left:5px solid var(--danger); border-radius:0 10px 10px 0; padding:10px 20px; margin:10px 0; font-size:20px; color:#7f1d1d;}
+
+  .pause{
+    background:var(--warn-bg); border:2px dashed var(--warning); border-radius:14px;
+    padding:10px 22px; margin:10px 0; display:flex; align-items:center; gap:16px;
+  }
+  .pause .icon{ font-size:36px; line-height:1; }
+  .pause .txt b{ color:var(--warning); font-size:21px; }
+  .pause .txt p{ font-size:18px; color:#744210; margin:3px 0 0; }
+
+  .cols{ display:flex; gap:28px; align-items:stretch; }
+  .col{ flex:1; min-width:0; }
+
+  /* 推导分步：仅互动模式隐藏，截图(autohide)模式全部可见 */
+  .step{ opacity:0; transform:translateY(8px); transition:opacity .3s ease, transform .3s ease; }
+  .step.on{ opacity:1; transform:none; }
+  body.autohide .step{ opacity:1 !important; transform:none !important; }
+  .step-hint{ font-size:14px; color:var(--muted); margin-top:4px;}
+  body.autohide .step-hint{ display:none; }
+
+  /* 因果链 */
+  .chain{ margin:6px 0; }
+  .chain .link{ display:flex; align-items:center; gap:14px; margin:6px 0;}
+  .chain .no{ width:34px; height:34px; border-radius:50%; background:var(--accent); color:#fff; font-size:18px; font-weight:700; display:flex; align-items:center; justify-content:center; flex-shrink:0;}
+  .chain .txt{ font-size:21px; line-height:1.5;}
+  .chain .txt strong{ color:var(--primary); }
+
+  /* mermaid 容器：高度封顶，防止溢出 720px 舞台 */
+  .mmd{ background:var(--bg-light); border:1px solid var(--border); border-radius:12px; padding:10px 14px; display:flex; justify-content:center; align-items:center; margin:8px 0;}
+  .mmd .mermaid{ display:flex; justify-content:center; width:100%; visibility:hidden; }
+  .mmd .mermaid[data-done]{ visibility:visible; }
+  .mmd .mermaid svg{ max-width:100%; height:auto; max-height:230px; }
+  .mmd.mmd-tall .mermaid svg{ max-height:330px; }
+  .mmd.mmd-sm svg{ max-height:150px; }
+  .mmd-row{ display:flex; gap:18px; }
+  .mmd-row .mmd{ flex:1; flex-direction:column; }
+  .mmd .cap{ font-size:17px; color:var(--muted); margin-top:6px; text-align:center;}
+  .mmd .cap b{ color:var(--text); }
+
+  #footer{ position:absolute; bottom:0; left:0; right:0; height:40px; display:flex; align-items:center; justify-content:space-between; padding:0 30px; font-size:15px; color:#94a3b8; background:rgba(247,250,252,.85); border-top:1px solid var(--border); z-index:40;}
+  #footer .brand{ font-weight:600; color:var(--accent); }
+
+  .nav{ position:absolute; bottom:48px; right:40px; display:flex; gap:12px; z-index:45;}
+  .nav button{ width:54px; height:54px; border-radius:50%; border:none; background:var(--accent); color:#fff; font-size:24px; cursor:pointer; box-shadow:0 3px 10px rgba(43,108,176,.4); display:flex; align-items:center; justify-content:center;}
+  .nav button:hover{ background:var(--primary); }
+  .nav button:disabled{ background:#cbd5d0; cursor:default; box-shadow:none;}
+
+  #hint{ position:absolute; bottom:48px; left:40px; font-size:14px; color:#94a3b8; z-index:45;}
+
+  body.autohide #progress, body.autohide #footer, body.autohide .nav, body.autohide #hint{ display:none !important; }
+</style>
+</head>
+<body>
+<div id="stage">
+
+  <div id="progress"></div>
+
+  <!-- 1 封面 -->
+  <section class="slide slide-cover active" data-narration="同学们好，欢迎来到第十二章：近似推理的粒子方法。前面两章都把墙撞了一遍：精确推理被树宽卡死，置信传播在强环上要么不收敛、要么误差没保证。这一章换一条完全不同的思路——不算分布，从分布里抽样。分布太复杂就采样，样本被证据作废就加权，权重退化就重采样，这就是本章的三句口诀。学完你能手算蒙特卡洛估计的误差账，能手跑三粒子的粒子滤波全程：传播、加权、算有效样本量、重采样。也要记住本章买下的账单：误差按根号 M 分之一缩小，但永远不会归零。">
+    <div class="kicker">概率图模型 · 第 12 章 · 推理</div>
+    <h1>近似推理：粒子方法</h1>
+    <div class="sub">Particle Methods —— 分布太复杂就采样，样本不足就加权，权重退化就重采样</div>
+    <div class="question">本章要回答：分布复杂到无法精确计算时，如何用一堆随机样本回答「概率是多少」？</div>
+    <div class="meta">
+      配套讲义：《PGM 互动讲义》第12章 · 基于 Koller &amp; Friedman (2009)<br>
+      ← → 或空格翻页 · 推导页逐步显示
+    </div>
+  </section>
+
+  <!-- 2 全书位置 -->
+  <section class="slide" data-narration="先看本章在推理版图里的位置。第十一章的置信传播是确定性近似：快，但有系统性偏差，强环上失效。本章的粒子方法是随机近似：慢、带噪声，但大数定律保证样本趋于无穷时收敛到真值——两者恰好互补。本章只负责回答概率是多少；下一章会回答另一个问题：最可能的赋值是什么，那是优化问题，采样答不好它。再往后，第十五章的动态网络是粒子滤波的主战场，本章的粒子滤波小节就是为它埋的伏笔。所以本章的角色是：推理家族里唯一带渐近无偏保证的通用方法。">
+    <div class="slide-head"><span class="sec">定位</span><h3>与确定性近似互补：慢、带噪，但渐近精确</h3></div>
+    <div class="slide-body">
+      <div class="mmd mmd-sm">
+        <div class="mermaid">
+flowchart LR
+  A["Ch11 置信传播<br>确定性近似，强环失效"] --> B["Ch12 粒子方法<br>随机近似，渐近精确"]:::here
+  B --> C["Ch13 MAP推理<br>换问题：最可能的赋值"]
+  C --> D["Ch15 动态网络推理<br>粒子滤波的主战场"]
+  classDef here fill:#2b6cb0,color:#ffffff,stroke:#1a365d,stroke-width:3px
+        </div>
+      </div>
+      <p style="text-align:center; margin-top:10px;">采样用<strong>随机误差</strong>换<strong>通用性</strong>；变分用<strong>系统性偏差</strong>换<strong>速度和确定性</strong></p>
+    </div>
+  </section>
+
+  <!-- 3 本章主线 -->
+  <section class="slide" data-narration="本章逻辑一条链，每一步都被前一步的故障逼出来。第一环，精确推理被树宽卡死、置信传播在强环上失效，换思路：不算分布，从分布里抽样，这是正向采样。第二环，误差按根号 M 分之一缩小——能缩小，但永不归零，这是采样的出厂账单。第三环，证据一来，大量样本不合证据被作废，于是证据不采样、改成加权，有了似然加权和重要性采样。第四环，加权的代价是权重退化：少数粒子拿走几乎全部权重，有效样本量崩塌。第五环，两条出路：周期性重采样，得到粒子滤波；或放弃独立样本、改用马尔可夫链，得到吉布斯采样。本章每一节都是这条链上的一环。">
+    <div class="slide-head"><span class="sec">主线</span><h3>每个新方法都被前一个方法的故障逼出来</h3></div>
+    <div class="slide-body">
+      <div class="chain">
+        <div class="link"><span class="no">1</span><span class="txt">两条路撞墙（树宽 / 强环）→ <strong>不算分布，从分布里抽样</strong>（正向采样）</span></div>
+        <div class="link"><span class="no">2</span><span class="txt">误差按 <strong>1/√M</strong> 缩小、永不归零 —— 采样的出厂账单</span></div>
+        <div class="link"><span class="no">3</span><span class="txt">证据让样本大量作废 → 证据不采样、改<strong>加权</strong>（似然加权 / 重要性采样）</span></div>
+        <div class="link"><span class="no">4</span><span class="txt">加权的代价：<strong>权重退化</strong>，少数粒子拿走几乎全部权重（M_eff 崩塌）</span></div>
+        <div class="link"><span class="no">5</span><span class="txt">两条出路：<strong>重采样</strong>（粒子滤波）/ 改用<strong>马尔可夫链</strong>（吉布斯采样）</span></div>
+      </div>
+      <div class="tip">拒绝采样 → 似然加权 → 重要性采样 → 吉布斯 → 粒子滤波：各治一种病，别堆算法名</div>
+    </div>
+  </section>
+
+  <!-- 4 动机 + 蒙特卡洛恒等式 -->
+  <section class="slide" data-narration="先立本章的总账本。精确推理复杂度随树宽指数增长，图一稠密就算不动；置信传播在强环上误差不保。两条路都撞墙之后，还剩一条完全不同的思路：不算分布，从分布里抽样。这套思路统称蒙特卡洛方法：要估计期望，就采 M 个样本，用样本均值近似。大数定律保证，M 趋于无穷时样本均值收敛到真值；取示性函数，概率就变成了频率。关键一跃在于：采样把推理变成统计，好处是与树宽无关——图再复杂，采一个样本只是一次查表；代价是答案带随机误差。后面整章，就是在和这份误差打交道。">
+    <div class="slide-head"><span class="sec">动机</span><h3>不算分布，让分布自己生成例子，再用频率读答案</h3></div>
+    <div class="slide-body">
+      <div class="formula formula-concl">$$\boldsymbol{\mathbb{E}_P[f(X)] \approx \frac{1}{M} \sum_{m=1}^{M} f\!\left(x^{(m)}\right)} \qquad \text{大数定律：} M \to \infty \text{ 收敛到真值}$$</div>
+      <p style="text-align:center;">取 f 为示性函数，<strong>「概率」就变成「频率」</strong>：$P(Y=y) \approx$ 样本中 $Y=y$ 的比例</p>
+      <div class="deep">💡 关键一跃：推理 → 统计。<strong>与树宽无关</strong>——图再复杂，单样本只是一次查表；代价是答案带随机误差</div>
+    </div>
+  </section>
+
+  <!-- 5 正向采样 + 例1 -->
+  <section class="slide" data-narration="第一条流水线：正向采样，简单得近乎朴素。三步：把节点按拓扑序排好，父节点在前；轮到每个节点时父节点值已定，直接从条件概率表里抽一个；走完一遍得一个完整样本，重复 M 遍得 M 个独立样本。看例一：云推雨的小网络，雨的真值是零点五。采十个样本，七个下雨，估计零点七，和真值差了零点二。这不是算法错了，是 M 等于十太小——这个估计的标准差约零点一五八，零点七落在真值一个多标准差之内，完全正常。记住这个感觉：采样估计天然带噪声，问题只是噪声多大、多快消失。这正是下一页要算的账。">
+    <div class="slide-head"><span class="sec">方法</span><h3>正向采样：拓扑序逐节点查表抽样，M 遍得 M 个独立样本</h3></div>
+    <div class="slide-body">
+      <div class="cols">
+        <div class="col">
+          <div class="chain">
+            <div class="link"><span class="no">1</span><span class="txt">节点按<strong>拓扑序</strong>排好（父先于子）</span></div>
+            <div class="link"><span class="no">2</span><span class="txt">依次从 $P(X_i \mid \text{Pa}(X_i)\text{ 的已采样值})$ 抽一个</span></div>
+            <div class="link"><span class="no">3</span><span class="txt">重复 M 遍得 <strong>M 个独立样本</strong></span></div>
+          </div>
+          <div class="deep">✅ 与树宽无关：图再复杂，单样本代价永远很小</div>
+        </div>
+        <div class="col">
+          <div class="card"><strong>例1</strong>：C→R，真值 P(r¹) = 0.5<br>10 个样本 7 个下雨 ⟹ $\hat{P}(r^1) = 0.7$<br>σ = √(0.5×0.5/10) ≈ <strong>0.158</strong>——0.7 在真值一个多标准差内，完全正常</div>
+          <div class="warn">⚠️ 0.7 ≠ 算法错了，是 M=10 太小——采样估计<strong>天然带噪声</strong></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 6 误差账：1/√M -->
+  <section class="slide" data-narration="现在把噪声量化，答案整齐得惊人。估计事件概率 p 时，每个样本是一次伯努利试验，估计量的方差是 p 乘一减 p 再除以 M，标准差正比于根号 M 分之一。手算两个量级感受它有多慢：p 等于零点三，M 一百时标准差约零点零四六，估计值常在零点三加减零点零五之间晃，只能报到小数点后一位；M 一万时标准差约零点零零四六——样本翻一百倍，误差只缩到十分之一。推论很硬：想让误差减半，要四倍样本；想多一位小数，要一百倍样本。这条铁律与维度、树宽都无关，这是采样在高维复杂模型上存活的根本原因；但也意味着精度是用样本量硬买来的，误差不消失，只缩小。">
+    <div class="slide-head"><span class="sec">重点</span><h3>铁律：误差只随 1/√M 缩小、不会消失——每一位小数要 100 倍样本</h3></div>
+    <div class="slide-body">
+      <div class="formula">$$\mathrm{Var}(\hat{p}) = \frac{p(1-p)}{M} \qquad \sigma(\hat{p}) = \frac{\sqrt{p(1-p)}}{\sqrt{M}} \propto \frac{1}{\sqrt{M}}$$</div>
+      <div class="cols">
+        <div class="col">
+          <div class="card">p = 0.3：<br>M = 100 ⟹ σ ≈ <strong>0.046</strong>（只敢报一位小数）<br>M = 10000 ⟹ σ ≈ <strong>0.0046</strong>（样本 ×100，误差 ÷10）</div>
+        </div>
+        <div class="col">
+          <div class="deep">✅ 与维度、树宽<strong>无关</strong>——高维复杂模型上存活的根本原因</div>
+          <div class="warn">⚠️ 误差减半 → 4 倍样本；误差 ÷10 → 100 倍样本。<strong>永不归零</strong></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 7 罕见事件与拒绝采样 -->
+  <section class="slide" data-narration="1/√M 的账在罕见事件上会变成灾难。若事件概率是零点零一，想把标准差压到零点零零五以下，需要约四十万个样本——其中百分之九十九根本没命中事件，白白生成。带证据的查询本质上就是罕见事件问题的重灾区。最直接的改造叫拒绝采样：正向采样照跑，把不满足证据的样本整张扔掉，用剩下的估计条件概率。毛病一眼可见：证据概率若是百分之一，一千个样本平均只剩十个可用，等于把 M 直接砍掉两个数量级。样本是我们花钱买的，不能扔——这个念头逼出了下一页的似然加权。">
+    <div class="slide-head"><span class="sec">问题</span><h3>拒绝采样：证据概率 1% 时，1000 个样本只剩 10 个</h3></div>
+    <div class="slide-body">
+      <div class="formula">$$P(Y=y \mid E=e) \approx \frac{\#\{Y=y \text{ 且 } E=e \text{ 的样本}\}}{\#\{E=e \text{ 的样本}\}}$$</div>
+      <div class="cols">
+        <div class="col"><div class="warn">⚠️ <strong>罕见事件是大敌</strong>：p = 0.01、要求 σ ≤ 0.005 ⟹ M ≈ <strong>40 万</strong>，约 99% 样本白生成</div></div>
+        <div class="col"><div class="trap">❌ P(e) = 0.01 时拒绝采样 1000 个只剩 ≈ 10 个可用——等于把 M 砍掉两个数量级</div></div>
+      </div>
+      <div class="tip">样本是花钱买的，不能扔 → 下一页：证据不采样，改成「记账」</div>
+    </div>
+  </section>
+
+  <!-- 8 似然加权 + 例3 -->
+  <section class="slide" data-narration="似然加权的改造：证据变量不再采样，直接钉死为观测值；其余变量照常按拓扑序采样。这样样本不再来自正确分布，于是给每个样本记一个权重来补偿——权重就是所有证据变量在当前父节点配置下的似然乘积。估计时用加权频率。看例三：云、雨、湿草地三级网络，证据是草地湿了，目标是有雨的后验，真值零点九。四个样本：三个采到有雨、各带权重零点九，一个无雨、权重零点一。加权估计二点七除以二点八，约零点九六四——四个样本就逼近了真值。对比拒绝采样：不撕卷子，改让每张卷子交一份与证据的相容度成绩单。证据越罕见，似然加权赢得越多，效率差距正比于证据概率的倒数。">
+    <div class="slide-head"><span class="sec">方法</span><h3>似然加权：证据钉死不采样，每个样本交一份「相容度」权重</h3></div>
+    <div class="slide-body">
+      <div class="formula">$$w(x) = \prod_{e \in E} P(e \mid \text{Pa}(e)\text{ 的采样值}) \qquad P(Y=y \mid e) \approx \frac{\sum_{m:\, y^{(m)}=y} w^{(m)}}{\sum_m w^{(m)}}$$</div>
+      <div class="cols">
+        <div class="col">
+          <table class="small">
+            <thead><tr><th>样本</th><th>C</th><th>R</th><th>W（钉死）</th><th>w = P(w¹|R)</th></tr></thead>
+            <tbody>
+              <tr><td>1</td><td>1</td><td>1</td><td>1</td><td>0.9</td></tr>
+              <tr><td>2</td><td>0</td><td>0</td><td>1</td><td>0.1</td></tr>
+              <tr><td>3</td><td>1</td><td>1</td><td>1</td><td>0.9</td></tr>
+              <tr><td>4</td><td>0</td><td>1</td><td>1</td><td>0.9</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="col">
+          <div class="deep">✅ $\hat{P}(r^1|w^1) = 2.7/2.8 ≈ \boldsymbol{0.964}$（真值 0.9；M=4 的噪声在意料之中）</div>
+          <div class="tip">效率差 ≈ 1/P(e)：P(e)=0.01 时拒绝采样剩 10 个，似然加权 <strong>1000 个全留</strong></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 9 似然加权的软肋 -->
+  <section class="slide" data-narration="似然加权不是免费的，先记它的软肋。权重只由证据的似然决定。如果证据变量靠近网络的根部，比如证据就是根节点云，它的父节点为空，权重退化为先验——所有样本权重几乎相同，等于没利用证据信息，采样的方向完全没被证据引导。更糟的情况：证据很多时，每个样本的权重是一堆小数的乘积，有的样本权重是零点零零一，有的是零点一，权重方差爆炸。少数样本说了算，多数样本白采——这正是权重退化，下一节的一般框架会把它量化成有效样本量。记住因果链：加权解决样本作废，却引入权重退化。">
+    <div class="slide-head"><span class="sec">辨析</span><h3>软肋：证据在根部则权重无信息，证据多則权重方差爆炸</h3></div>
+    <div class="slide-body">
+      <div class="trap">❌ <strong>证据靠近根部</strong>：证据父节点为空 ⟹ 权重退化为先验 P(e)，所有样本权重几乎相同——等于没利用证据引导采样方向</div>
+      <div class="trap">❌ <strong>证据很多</strong>：权重 = 一堆小数的乘积 ⟹ 权重方差爆炸，少数样本说了算、多数白采</div>
+      <div class="warn">⚠️ 因果链：加权解决了「样本作废」，却引入「<strong>权重退化</strong>」——下一节把它量化成有效样本量 M_eff</div>
+    </div>
+  </section>
+
+  <!-- 10 重要性采样 + 例4 -->
+  <section class="slide" data-narration="把加权推到极致就是重要性采样。目标分布采不了——比如配分函数算不出——就改从一个容易采的提议分布采样，再用权重纠正偏差：权重等于未归一化目标除以提议，恰好绕开配分函数。估计用自归一化：加权值之和除以权重之和。看手算：目标是零点一、零点三、零点六，提议偏爱 a。采六个样本，c 只被采到一次，但它权重是三，靠权重把采少了补回来，三个估计都在真值附近。一句话记住机制：提议负责提供覆盖率，权重负责纠偏。">
+    <div class="slide-head"><span class="sec">方法</span><h3>重要性采样：Q 负责覆盖率，权重 w = p̃/q 负责纠偏</h3></div>
+    <div class="slide-body">
+      <div class="formula">$$w(x) = \frac{\tilde{p}(x)}{q(x)} \qquad \mathbb{E}_P[f] \approx \frac{\sum_m w^{(m)} f(x^{(m)})}{\sum_m w^{(m)}} \quad\text{（用 } \tilde{p} \text{ 绕开配分函数 } Z\text{）}$$</div>
+      <div class="cols">
+        <div class="col">
+          <div class="card"><strong>例4</strong>：P = (0.1, 0.3, 0.6)，Q = (0.5, 0.3, 0.2)<br>w = p/q = (0.2, 1.0, 3.0)<br>采 6 个：a,a,b,a,c,b（c 只 1 次，但权重 3.0 补回）</div>
+        </div>
+        <div class="col">
+          <div class="deep">✅ Σw = 5.6 ⟹ P̂ = (0.6, 2.0, 3.0)/5.6 ≈ (<strong>0.107, 0.357, 0.536</strong>)，真值 (0.1, 0.3, 0.6)</div>
+          <div class="tip">Q 三要求：支撑覆盖 P、形状接近 P、容易采样</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 11 权重退化与 M_eff -->
+  <section class="slide" data-narration="给权重退化开诊断书。五个粒子的权重是一百、一、一、一、一，归一化后第一个占百分之九十六，任何估计都是它一个粒子说了算。量化工具叫有效样本量：权重和的平方，除以权重平方和。代入得约一点零八——五个粒子的信息量约等于一个。两个极端记牢：权重全相等时等于 M，最好；一个独占时等于一，最坏。还要知道高维是放大器：对数权重的方差随维度线性增长，有效样本量随维度指数级萎缩，调提议分布治不好。出路两条：周期性重采样，或者改用马尔可夫链。">
+    <div class="slide-head"><span class="sec">诊断</span><h3>有效样本量 M_eff：5 个权重 (100,1,1,1,1) 只顶 1.08 个样本</h3></div>
+    <div class="slide-body">
+      <div class="formula formula-concl">$$\boldsymbol{M_{\mathrm{eff}} = \frac{\left(\sum_m w^{(m)}\right)^2}{\sum_m \left(w^{(m)}\right)^2} = \frac{1}{\sum_m \left(\bar{w}^{(m)}\right)^2}} \qquad (100,1,1,1,1):\; M_{\mathrm{eff}} = \frac{104^2}{10004} \approx 1.08$$</div>
+      <div class="cols">
+        <div class="col"><div class="deep">✅ 两个极端：权重全相等 ⟹ M_eff = M（最好）；一个独占 ⟹ M_eff = 1（最坏）</div></div>
+        <div class="col"><div class="warn">⚠️ 高维放大器：log 权重方差随维度线性增长 ⟹ M_eff 随维度<strong>指数级萎缩</strong>——调 Q 治不好</div></div>
+      </div>
+      <div class="tip">出路：周期性<strong>重采样</strong>（→ 粒子滤波），或改用<strong>马尔可夫链</strong>（→ 吉布斯采样）</div>
+    </div>
+  </section>
+
+  <!-- 12 吉布斯采样机制 -->
+  <section class="slide" data-narration="第二条出路：放弃独立样本，改用马尔可夫链。马尔可夫链蒙特卡洛的玩法是：构造一条随机游走链，让链的平稳分布恰好等于目标分布，然后从链上依次取状态当样本。直觉是：把状态空间想成地图，目标分布是海拔，链偏爱往高处走，长期看它在各地停留的时间比例收敛到海拔。在图模型上最顺手的链是吉布斯采样：固定其余变量的当前值，轮流把每个变量按它自己的条件分布重采一次。为什么天生适合图模型？因为给定马尔可夫毯，节点与其余世界独立——全条件分布只依赖邻居，每次更新只是一次局部查表归一化，与全图大小无关。这就是它在复杂模型上廉价的原因。">
+    <div class="slide-head"><span class="sec">方法</span><h3>吉布斯采样：每次只动一个变量，全条件分布只看马尔可夫毯</h3></div>
+    <div class="slide-body">
+      <div class="mmd mmd-sm">
+        <div class="mermaid">
+flowchart LR
+  S["当前状态 (x, y)"] --> X["固定 y<br>从 P(X｜y) 重采 x"]:::hot
+  X --> Y["固定新 x<br>从 P(Y｜x) 重采 y"]:::hot
+  Y --> S2["新状态 (x', y')<br>追加到链上"]
+  S2 -->|"下一轮扫描"| X
+  classDef hot fill:#fbeedd,stroke:#c4651f,stroke-width:2.5px,color:#c4651f;
+        </div>
+      </div>
+      <div class="formula">$$X_i^{(\text{新})} \sim P(X_i \mid X_{-i}^{(\text{当前})}) \qquad P(X_i \mid X_{-i}) \propto \prod_{C:\, X_i \in C} \psi_C(X_C) \;\text{——只依赖邻居，与全图大小无关}$$</div>
+      <div class="deep">💡 链的<strong>平稳分布</strong> = 目标分布：跑够久后，链访问各状态的频率逼近 P</div>
+    </div>
+  </section>
+
+  <!-- 13 例5：吉布斯手跑 5 步（互动停顿） -->
+  <section class="slide" data-narration="把吉布斯手跑一遍。联合分布：零零零点五，零一零点一，一零零点二，一一零点二。先备两张条件分布表，就是行内或列内归一化。先暂停视频，从零零出发自己走五步。推出来了吗？第一步固定 y 重采 x，状态不动；第二步固定 x 重采 y，变零一；第三步采到一；第四步 y 留在一；第五步 x 回到零。五步轨迹：零零、零零、零一、一一、一一、零一。跑上几百步，链停留在四个状态的频率会逼近联合分布本身——用频率读出边缘与期望。">
+    <div class="slide-head"><span class="sec">演练</span><h3>例5手跑 5 步：(0,0) 出发，轨迹 (0,0)→(0,1)→(1,1)→(1,1)→(0,1)</h3></div>
+    <div class="slide-body">
+      <div class="cols">
+        <div class="col">
+          <div class="step"><p>① 联合：P(0,0)=0.5, P(0,1)=0.1, P(1,0)=0.2, P(1,1)=0.2</p></div>
+          <div class="step"><p>② 条件表（行/列内归一化）：P(X|y=0)≈(0.714, 0.286)；P(X|y=1)≈(0.333, 0.667)；P(Y|x=0)≈(0.833, 0.167)；P(Y|x=1)=(0.5, 0.5)</p></div>
+          <div class="step"><p>③ 从 (0,0) 轮替重采：X|y=0 → 0；Y|x=0 → 1；X|y=1 → 1；Y|x=1 → 1；X|y=1 → 0</p></div>
+          <div class="step"><p>④ 轨迹 (0,0)→(0,0)→(0,1)→(1,1)→(1,1)→(0,1)；几百步后频率 → (0.5, 0.1, 0.2, 0.2) ✓</p></div>
+        </div>
+        <div class="col">
+          <div class="pause"><div class="icon">✍️</div><div class="txt"><b>暂停推导</b><p>遮住轨迹，自己从 (0,0) 走 5 步：每步只动一个变量，查对应条件分布表。</p></div></div>
+          <div class="tip">每步只是一次<strong>局部查表归一化</strong>——这就是吉布斯在大图上廉价的原因</div>
+        </div>
+      </div>
+      <p class="step-hint">按空格 / → 逐步揭示答案</p>
+    </div>
+  </section>
+
+  <!-- 14 MCMC 的两笔代价 -->
+  <section class="slide" data-narration="MCMC 有两笔必须记账的代价。第一笔，燃烧期：链从任意初值出发，前面的样本带着初值的口音，必须丢弃一段，之后链才近似来自平稳分布。第二笔，样本相关：相邻样本只差一个变量——例五里从零挪到零一就用了一步——不是独立的。所以 M 个链上样本的信息量少于 M 个独立样本，实际误差缩小慢于根号 M 分之一。还有一个结构性风险：对多峰分布，链可能长期困在一个峰里，混合缓慢，这时频率估计会严重失真——它告诉你某个峰的全部细节，却对另一个峰一无所知。记一句话：吉布斯跑够久，收敛的是分布，不是独立性。">
+    <div class="slide-head"><span class="sec">代价</span><h3>burn-in 去口音、样本相关拖慢误差——跑久收敛的是分布，不是独立性</h3></div>
+    <div class="slide-body">
+      <div class="trap">❌ <strong>燃烧期（burn-in）</strong>：链前段带初值「口音」，必须丢弃——从极小概率状态出发，前几十步不算数</div>
+      <div class="trap">❌ <strong>样本相关</strong>：相邻样本只差一个变量 ⟹ M 个链上样本信息量 &lt; M 个独立样本，误差缩小<strong>慢于 1/√M</strong></div>
+      <div class="warn">⚠️ <strong>多峰风险</strong>：链长期困在一个峰里（混合缓慢）→ 频率估计严重失真，且自信地报错</div>
+    </div>
+  </section>
+
+  <!-- 15 粒子滤波机制 -->
+  <section class="slide" data-narration="最后一块拼图：时间会流动，粒子要跟上。动态系统带来新场景：状态随时间演化，观测不断到来，要在线地维护滤波分布。对每个时刻重新跑一遍采样太浪费；粒子滤波，也叫序贯重要性重采样，让 M 个加权粒子随时间滚动前进。每个时刻三件事：传播，每个粒子按转移模型采样下一步；加权，新观测到来，权重乘上似然再归一化；重采样，若有效样本量低于阈值，按权重有放回地重抽 M 个粒子，权重重置为 M 分之一——把算力从死胡同粒子转移到高权重区域。三个环节各治一种病：传播治状态在动，加权治证据说话，重采样治权重退化。下一页用三个粒子把完整一轮算给你看。">
+    <div class="slide-head"><span class="sec">方法</span><h3>粒子滤波（SIR）：传播 → 加权 → M_eff 过低才重采样</h3></div>
+    <div class="slide-body">
+      <div class="mmd mmd-sm">
+        <div class="mermaid">
+flowchart LR
+  P["传播<br>x' ~ P(X'｜x)"] --> W["加权<br>w ← w·P(o｜x') 并归一化"]
+  W --> C{"M_eff 低于阈值？"}:::hot
+  C -->|"是"| R["重采样<br>按 w̄ 有放回抽 M 个，权重重置 1/M"]
+  C -->|"否"| N["保留粒子与权重"]
+  R -->|"回到传播"| P
+  N -->|"回到传播"| P
+  classDef hot fill:#fbeedd,stroke:#c4651f,stroke-width:2.5px,color:#c4651f;
+        </div>
+      </div>
+      <div class="deep">💡 三环各治一病：传播治「状态在动」，加权治「证据说话」，重采样治「权重退化」——M_eff 是重采样的守门员</div>
+    </div>
+  </section>
+
+  <!-- 16 例6：3 粒子权重演化手算（互动停顿） -->
+  <section class="slide" data-narration="本章的重头手算：机器人定位，三个粒子走完整一轮。状态是位置一、二、三，观测是看到门。t 零时刻三个粒子分别在一、二、三，权重各三分之一。先暂停视频，自己把传播、加权、有效样本量、重采样各算一遍。推出来了吗？传播：三个粒子都留在原地。加权：权重乘似然得零点一、零点九、零点二，归一化后零点零八三、零点七五零、零点一六七。有效样本量约一点七五，低于阈值二，触发重采样。按归一化权重划分累积区间，三个随机数落进去，抽出 B、B、C，新粒子集二、二、三，权重重置。低权重的死了，高权重的被复制——这就是重采样的全部含义。">
+    <div class="slide-head"><span class="sec">演练</span><h3>例6手算：3 粒子的权重演化——加权 → M_eff = 1.75 → 触发重采样</h3></div>
+    <div class="slide-body">
+      <div class="step"><p>① <strong>t=0</strong>：粒子 {1, 2, 3}，权重各 1/3（先验均匀）</p></div>
+      <div class="step"><p>② <strong>t=1 传播</strong>：1→1（0.7）、2→2（0.6）、3→3（0.7）⟹ 仍 {1, 2, 3}</p></div>
+      <div class="step"><p>③ <strong>加权</strong>：观测 d，w ∝ (⅓×0.1, ⅓×0.9, ⅓×0.2) = (0.1, 0.9, 0.2)，归一化 w̄ = (<strong>0.083, 0.750, 0.167</strong>)</p></div>
+      <div class="step"><p>④ <strong>M_eff</strong> = 1/(0.083²+0.750²+0.167²) = 1/0.572 ≈ <strong>1.75 &lt; 2 ⟹ 触发重采样</strong></p></div>
+      <div class="step"><p>⑤ <strong>重采样</strong>：累积区间 [0,.083)A / [0.083,0.833)B / [0.833,1]C；随机数 0.30, 0.60, 0.95 ⟹ B,B,C ⟹ 新粒子集 <strong>{2,2,3}</strong>，权重重置 1/3</p></div>
+      <div class="pause"><div class="icon">✍️</div><div class="txt"><b>暂停推导</b><p>遮住答案，把「加权 → 归一化 → M_eff → 重采样」四步独立算一遍。</p></div></div>
+      <p class="step-hint">按空格 / → 逐步揭示答案</p>
+    </div>
+  </section>
+
+  <!-- 17 例6续：粒子贫化 -->
+  <section class="slide" data-narration="别停在一轮，继续滚动看长期账本。t 二再观测到门，归一化权重零点六九二、零点一五四、零点一五四，滤波分布说机器人在位置二的概率约零点六九——粒子云跟着证据移到了门附近。坏消息在家谱上：t 一重采样后位置一的粒子灭绝，t 二后位置三的也灭绝，到 t 四三个粒子塌成同一个值。讽刺的是此时有效样本量是满分三——但那是同一个值的三份拷贝。若真实状态此刻不在二，粒子云里没有一个替它说话，滤波会自信地报错。这就是粒子贫化：重采样修复的是权重分布，修复不了多样性。工程规矩是少重采样、巧重采样，必要时加扰动步——只缓解，不治本。">
+    <div class="slide-head"><span class="sec">慢性病</span><h3>粒子贫化：重采样修复权重分布，修复不了多样性</h3></div>
+    <div class="slide-body">
+      <table class="small">
+        <thead><tr><th>时刻</th><th>传播后取值</th><th>观测</th><th>归一化权重 w̄</th><th>M_eff</th><th>家谱账本</th></tr></thead>
+        <tbody>
+          <tr><td>t=1</td><td>1 / 2 / 3</td><td>d</td><td>0.083 / 0.750 / 0.167</td><td>1.75</td><td class="l">重采样后 A（位置1）灭绝 → {2,2,3}</td></tr>
+          <tr><td>t=2</td><td>2 / 3 / 3</td><td>d</td><td>0.692 / 0.154 / 0.154</td><td>≈1.4</td><td class="l">P(X⁽²⁾=2|d,d)≈0.69；C（位置3）也灭绝</td></tr>
+          <tr><td>t=4</td><td>2 / 2 / 2</td><td>d</td><td>1/3 各</td><td>3.0</td><td class="l"><strong>满分是错觉</strong>：同值同源的三份拷贝</td></tr>
+        </tbody>
+      </table>
+      <div class="trap">❌ M_eff = 3.0 不代表健康——若真实状态不在 2，粒子云里<strong>没有一个替它说话</strong>，滤波自信地报错</div>
+      <div class="tip">工程规矩「少重采样、巧重采样」：阈值触发（如 M/2）、分层/系统重采样、必要时加 MCMC 扰动步——只缓解，不治本</div>
+    </div>
+  </section>
+
+  <!-- 18 常见误区 -->
+  <section class="slide" data-narration="这页扫雷。第一个误解：采样是近似，所以不如精确推理严谨。位置摆反了——采样是渐近精确且通常无偏的，样本量趋于无穷收敛到真值；第十一章的变分近似反而有偏、误差不可控。真正的权衡是：采样用随机误差换通用性，变分用系统性偏差换速度。第二个：吉布斯跑够久，相邻样本就近似独立，误差严格按根号 M 分之一缩。错——每步只改一个变量，相邻样本高度相关，收敛的是分布不是独立性，误差缩小更慢。第三个：重采样越多越健康。错——重采样用复制换掉多样性，只在有效样本量低于阈值时才该触发；粒子贫化那页的满分错觉就是过度重采样的下场。">
+    <div class="slide-head"><span class="sec">避坑</span><h3>三个高频误解：采样不严谨、链上样本独立、重采样越多越好</h3></div>
+    <div class="slide-body">
+      <div class="trap">❌ <strong>采样是近似，不如精确推理严谨</strong><br>✅ 采样<strong>渐近精确且通常无偏</strong>（M→∞ 收敛）；变分反而有系统性偏差、误差不可控。权衡：随机误差换通用性</div>
+      <div class="trap">❌ <strong>吉布斯跑够久，样本就近似独立</strong><br>✅ 每步只改一个变量，相邻样本高度相关——收敛的是<strong>分布</strong>，不是独立性；误差缩小慢于 1/√M</div>
+      <div class="trap">❌ <strong>重采样越多越健康</strong><br>✅ 重采样用复制换掉多样性，只在 M_eff 低于阈值时触发——t=4 的「满分 M_eff」就是过度重采样的错觉</div>
+    </div>
+  </section>
+
+  <!-- 19 接口 -->
+  <section class="slide" data-narration="收尾前看分工与下一章的起点。三种推理范式现在凑齐了：团树精确但树宽封顶；置信传播快但有偏，只求到 Bethe 驻点；本章采样渐近无偏、与树宽无关，代价是慢、带噪、误差只按根号 M 分之一缩。回答概率是多少，三家各有地盘。但有一类问题粒子方法天生答不好：最可能的完整赋值是什么。图像去噪要的不是每个像素的边缘概率，而是整张最可能的干净图；语音识别要的是最可能的一句话。用采样回答它很笨拙：要恰好多次采到同一个最大值才能发现它，而概率质量可能分散在海量次优赋值上。问题换了，算法也得换——下一章专门为这个问题设计武器。">
+    <div class="slide-head"><span class="sec">接口</span><h3>「概率是多少」三家分完；「最可能是什么」采样答不好</h3></div>
+    <div class="slide-body">
+      <table>
+        <thead><tr><th></th><th>Ch10 团树</th><th>Ch11 Loopy BP</th><th>Ch12 粒子方法（本章）</th></tr></thead>
+        <tbody>
+          <tr><td class="l"><strong>误差性质</strong></td><td class="l">精确</td><td class="l">有偏（Bethe 驻点）</td><td class="l">随机误差、渐近无偏</td></tr>
+          <tr><td class="l"><strong>代价</strong></td><td class="l">树宽指数爆炸</td><td class="l">可能不收敛 / 过自信</td><td class="l">1/√M，精度用样本硬买</td></tr>
+          <tr><td class="l"><strong>地盘</strong></td><td class="l">树宽小、多查询</td><td class="l">大图弱环多证据</td><td class="l">强耦合、高维、要无偏保证</td></tr>
+        </tbody>
+      </table>
+      <div class="warn">⚠️ MAP 问题（最可能的完整赋值）：概率质量散在海量次优赋值上，采样很难「恰好多次采到最大值」→ 第 13 章换武器</div>
+    </div>
+  </section>
+
+  <!-- 20 小结 -->
+  <section class="slide" data-narration="三句话讲完本章。第一句，解决什么：精确推理随树宽爆炸、置信传播在强环失效，本章用随机样本的经验分布逼近真实分布，渐近精确地回答概率是多少。第二句，核心机制：正向采样按拓扑序抽样，误差按根号 M 分之一缩小；证据来了改加权；权重退化逼出重采样和马尔可夫链——粒子滤波做传播、加权、重采样的循环，吉布斯按只依赖马尔可夫毯的全条件分布逐变量重采。第三句，承上启下：本章答概率是多少，下一章答最可能的赋值是什么，那是优化问题；粒子滤波将成为第十五章的标准件。必背两条：蒙特卡洛恒等式和有效样本量公式。">
+    <div class="slide-head"><span class="sec">小结</span><h3>三句话讲完第12章</h3></div>
+    <div class="slide-body">
+      <div class="chain">
+        <div class="link"><span class="no">1</span><span class="txt"><strong>解决什么</strong>：两条路撞墙 → 用样本的经验分布逼近真实分布，渐近精确地回答「概率是多少」</span></div>
+        <div class="link"><span class="no">2</span><span class="txt"><strong>核心机制</strong>：正向采样 → 误差 1/√M → 证据改加权 → 权重退化（M_eff 崩塌）→ 重采样 / 马尔可夫链</span></div>
+        <div class="link"><span class="no">3</span><span class="txt"><strong>承上启下</strong>：本章答「概率是多少」；Ch13 答「最可能是什么」（优化问题）；粒子滤波 → Ch15 主战场</span></div>
+      </div>
+      <div class="formula formula-concl">$$\mathbb{E}_P[f] \approx \tfrac{1}{M}\sum_m f(x^{(m)}), \quad \sigma \propto \tfrac{1}{\sqrt{M}}, \quad M_{\mathrm{eff}} = \tfrac{(\sum w)^2}{\sum w^2} \quad\text{——合上书也要能默写}$$</div>
+    </div>
+  </section>
+
+  <!-- 21 结束页 -->
+  <section class="slide slide-cover" data-narration="第十二章到此结束。毕业挑战，合上书拿一张纸：第一，写出蒙特卡洛估计公式与标准差公式，说出误差减半需要几倍样本；第二，说出正向采样的三步流程；第三，解释似然加权中权重等于什么，以及它和拒绝采样在证据罕见时的效率差；第四，写出重要性采样的权重公式与有效样本量公式，算一算一百、一、一、一、一对应的有效样本量；第五，手跑三个粒子的粒子滤波一个完整时刻：传播、加权、归一化、有效样本量、重采样；第六，说出 burn-in 和样本相关各是什么代价。全部拿下，就走进第十三章——MAP 推理：把求和换成取最大，看任务难度如何整个改变。我们下一章见。">
+    <div class="kicker">本 章 结 束</div>
+    <h1>误差不消失，只按 1/√M 缩小</h1>
+    <div class="sub">毕业挑战：合上书，拿一张纸</div>
+    <div class="divider"></div>
+    <div class="meta">
+      ☑ 默写蒙特卡洛恒等式与 σ ∝ 1/√M　　☑ 正向采样三步流程<br>
+      ☑ 似然加权权重公式与 1/P(e) 效率差　　☑ w = p̃/q 与 M_eff 手算 (100,1,1,1,1) → 1.08<br>
+      ☑ 3 粒子滤波完整一轮手算　　☑ 说出 burn-in 与样本相关两笔代价<br><br>
+      下一章 · 第13章 MAP推理——任务从求和换成取最大，难度性质整个改变
+    </div>
+  </section>
+
+  <!-- 页脚 -->
+  <div id="footer">
+    <span class="brand">第12章 近似推理：粒子方法 · PGM 课件</span>
+    <span id="pagenum">1 / 21</span>
+  </div>
+
+  <!-- 导航 -->
+  <div class="nav">
+    <button id="prev" title="上一页 (←)">‹</button>
+    <button id="next" title="下一页 (→ / 空格)">›</button>
+  </div>
+  <div id="hint">← → 翻页 · 空格下一页 · 推导页逐步显示 · 点击左右半屏翻页</div>
+
+</div>
+
+<!-- mermaid 本地引用，保证离线可用 -->
+<script src="assets/mermaid.min.js"></script>
+<script>
+mermaid.initialize({
+  startOnLoad: false,   // 必须为 false：display:none 的隐藏页渲染会得到 0 宽高的退化 SVG，
+                        // 改为页面激活时懒渲染（见 renderMermaid）
+  theme: "base",
+  themeVariables: {
+    primaryColor: "#ebf8ff",
+    primaryBorderColor: "#2b6cb0",
+    primaryTextColor: "#1a365d",
+    lineColor: "#718096",
+    fontFamily: "-apple-system, PingFang SC, sans-serif",
+    fontSize: "15px"
+  },
+  flowchart: { curve: "linear", htmlLabels: false }
+});
+</script>
+<script>
+(function(){
+  const slides = Array.from(document.querySelectorAll('.slide'));
+  const total = slides.length;
+  let idx = 0;
+
+  const params = new URLSearchParams(location.search);
+  const startSlide = parseInt(params.get('slide'), 10);
+  if (params.get('autohide') === '1') document.body.classList.add('autohide');
+  if (!isNaN(startSlide) && startSlide >= 1 && startSlide <= total) idx = startSlide - 1;
+
+  const progress = document.getElementById('progress');
+  const pagenum = document.getElementById('pagenum');
+  const prevBtn = document.getElementById('prev');
+  const nextBtn = document.getElementById('next');
+
+  // 推导分步：每页记住已展开的步数；autohide（截图）模式下 CSS 强制全显
+  const stepState = new Map();
+  function stepsOf(i){ return Array.from(slides[i].querySelectorAll('.step')); }
+  function applySteps(){
+    stepsOf(idx).forEach((el, k)=> el.classList.toggle('on', k < (stepState.get(idx) || 0)));
+  }
+  // 前进一步：先展开本页下一步，全部展开后才翻页
+  function forward(){
+    const steps = stepsOf(idx);
+    const shown = stepState.get(idx) || 0;
+    if (shown < steps.length){ stepState.set(idx, shown + 1); applySteps(); return; }
+    go(idx + 1);
+  }
+  // 后退一步：先收起本页最后一步，收完才回上一页
+  function backward(){
+    const steps = stepsOf(idx);
+    const shown = stepState.get(idx) || 0;
+    if (shown > 0){ stepState.set(idx, shown - 1); applySteps(); return; }
+    go(idx - 1);
+  }
+
+  // mermaid 懒渲染：只在页面激活（有真实宽高）时渲染该页的图，渲染后打 data-done 防重复
+  function renderMermaid(slide){
+    if (typeof mermaid === 'undefined') return;
+    const nodes = Array.from(slide.querySelectorAll('.mermaid:not([data-done])'));
+    if (!nodes.length) return;
+    nodes.forEach(n => n.setAttribute('data-done', ''));
+    mermaid.run({ nodes }).catch(err => {
+      nodes.forEach(n => n.removeAttribute('data-done'));
+      console.error('mermaid 渲染失败：', err);
+    });
+  }
+
+  function render(){
+    slides.forEach((s,i)=> s.classList.toggle('active', i===idx));
+    progress.style.width = ((idx+1)/total*100) + '%';
+    pagenum.textContent = (idx+1) + ' / ' + total;
+    prevBtn.disabled = (idx===0);
+    nextBtn.disabled = (idx===total-1);
+    applySteps();
+    renderMermaid(slides[idx]);
+  }
+  function go(n){ idx = Math.max(0, Math.min(total-1, n)); render(); }
+
+  prevBtn.addEventListener('click', e=>{ e.stopPropagation(); backward(); });
+  nextBtn.addEventListener('click', e=>{ e.stopPropagation(); forward(); });
+
+  document.addEventListener('keydown', e=>{
+    if(e.key==='ArrowRight'||e.key===' '||e.key==='PageDown'){ e.preventDefault(); forward(); }
+    else if(e.key==='ArrowLeft'||e.key==='PageUp'){ e.preventDefault(); backward(); }
+    else if(e.key==='Home'){ stepState.set(idx, 0); go(0); }
+    else if(e.key==='End'){ go(total-1); }
+  });
+
+  document.getElementById('stage').addEventListener('click', e=>{
+    if(e.target.closest('.nav')) return;
+    const x = e.clientX;
+    if(x < window.innerWidth*0.5) backward(); else forward();
+  });
+
+  function fit(){
+    const s = Math.min(window.innerWidth/1280, window.innerHeight/720);
+    document.getElementById('stage').style.transform = 'translate(-50%,-50%) scale(' + s + ')';
+  }
+  window.addEventListener('resize', fit);
+  fit();
+  render();
+})();
+</script>
+</body>
+</html>

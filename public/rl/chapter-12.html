@@ -1,0 +1,812 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第12章 资格迹 · 强化学习互动讲义</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+<nav class="topbar">
+  <div class="topbar-inner">
+    <span class="brand"><a href="index.html" style="color:inherit">← 学习地图</a></span>
+    <span class="crumb">阶段四 · 策略与前沿 / 第12章</span>
+  </div>
+</nav>
+
+<div class="wrap">
+
+  <div class="lecture-head">
+    <span class="ch-label">CHAPTER 12 · 策略与前沿</span>
+    <h1>资格迹</h1>
+    <p class="lead">在"等到底的 MC"与"只看一步的 TD"之间装一个连续旋钮，并且把它变成能在线的算法。</p>
+  </div>
+
+  <div class="position-bar">
+    <strong>本章在主线上的位置：</strong>第 5–8 章给出了 MC / TD / n 步回报这条"偏差—方差"光谱，第 9–11 章把它搬进函数逼近 → <u>本章用资格迹把那把光谱变成"每一步都能更新"的在线机制，并把迹接入控制</u> → 第 13 章转向另一条完全不同的路：不再评估值函数，直接对策略本身求梯度。<br>
+    第12章回答主线上的第 X 个问题：<strong>如何把"多步信用分配"从"整局算完再回溯"变成"边经历边更新"？</strong>
+    <div class="map-inline">
+      <span class="node">Ch1–4 表格法基础（MDP·DP 的理想解）</span><span class="arrow">→</span>
+      <span class="node">Ch5–8 表格型无模型（MC·TD·n 步）</span><span class="arrow">→</span>
+      <span class="node">Ch9–11 函数逼近（把表换成参数）</span><span class="arrow">→</span>
+      <span class="node here">Ch12 资格迹（时间维的缝合）</span><span class="arrow">→</span>
+      <span class="node">Ch13 策略梯度（全书收口）</span>
+    </div>
+  </div>
+
+  <div class="objectives">
+    <h4>🎯 学完本章，合上书你应该能：</h4>
+    <ol>
+      <li>写出 λ 回报的定义，并手算权重 (1−λ)λ<sup>n−1</sup> 与终止时的残差权重 λ<sup>T−t−1</sup></li>
+      <li>写出累积迹与替换迹的更新式，并解释 γλ 衰减的两个来源</li>
+      <li>对一条三条状态的小轨迹手算一遍 TD(λ) 的迹与更新量，说出它为什么落在 MC 与 TD(0) 之间</li>
+      <li>写出 Sarsa(λ) 与 Watkins 的 Q(λ) 的更新式，并解释后者为什么要"切断"迹</li>
+      <li>解释"真实在线学习"要修正什么问题、荷兰迹改的是哪一项</li>
+      <li>指出"资格迹只是加速技巧"这句话在哪一半对、哪一半错</li>
+    </ol>
+  </div>
+
+  <div class="lecture">
+
+    <div class="figure">
+      <div class="mermaid">
+flowchart LR
+  A["MC 等到本局结束：偏差小 方差大<br>TD(0) 每步自举：偏差大 方差小"] --> B["能不能在两端之间<br>连续地调"]
+  B --> C["λ 回报：所有 n 步回报<br>按 1−λ 乘 λ 的 n−1 次方加权"]
+  C --> D["但前向视角要等整局<br>算完才知道权重"]
+  D --> E["资格迹：每步 γλ 衰减的短期记忆<br>TD 误差沿迹回传给近期状态"]
+  E --> F["TD(λ) 与 Sarsa(λ)<br>在线更新 离线意义下等于 λ 回报"]
+  F --> G["代价：离策略必须切断迹<br>函数逼近下前后向等价失效"]
+  classDef hot fill:#fbeedd,stroke:#c4651f,stroke-width:2.5px,color:#c4651f;
+  classDef danger fill:#fae9e7,stroke:#b03a2e,stroke-width:2.5px,color:#b03a2e;
+  class E hot;
+  class G danger;
+      </div>
+      <div class="caption">本章推导主线：起点是第 5–8 章留下的"偏差—方差"两难，终点是两个代价——离策略要切断迹，函数逼近下前后向视角不再严格等价。看清这两条代价，你就知道资格迹不是万能加速器。</div>
+    </div>
+
+    <!-- ================= 12.1 ================= -->
+    <h2><span class="sec-no">12.1</span>为什么需要 λ：把"等多久"变成一个旋钮</h2>
+
+    <p>第 5–8 章的回答是二选一：<span class="term">蒙特卡洛</span>（Monte Carlo, MC）等到本局结束、用完整回报， unbiased 但方差大；<span class="term">时序差分</span>（Temporal-Difference, TD(0)）每步用 <span class="var">R</span> + <span class="var">γV</span>(<span class="var">S′</span>) 自举，方差小但偏差大。第 7 章的 n 步回报说明中间还有一整排选项，但它们仍是"离散地选 n"。</p>
+
+    <p>本节的问题是：能不能让"看多远"变成一个可以连续调节的参数，而不是整数？答案是把<strong>所有</strong> n 步回报按指数衰减的权重叠加，得到 <span class="term">λ 回报</span>（λ-return）。先回顾 n 步回报的记号：</p>
+
+    <div class="formula">G<sub>t:t+n</sub> = R<sub>t+1</sub> + γR<sub>t+2</sub> + … + γ<sup>n−1</sup>R<sub>t+n</sub> + γ<sup>n</sup>V(S<sub>t+n</sub>)</div>
+
+    <p>λ 回报把它对所有 n 加权求和（权重像"几何分布"一样逐层衰减），并规定终止后剩下的权重全部给完整回报：</p>
+
+    <div class="formula">G<sup>λ</sup><sub>t</sub> = (1 − λ) ∑<sub>n≥1</sub> λ<sup>n−1</sup> G<sub>t:t+n</sub> &nbsp;&nbsp;（+ 终止时的残差项 λ<sup>T−t−1</sup>G<sub>t:T</sub>）</div>
+
+    <h3>手算一：权重到底加不加得到 1</h3>
+    <p>取 λ = 0.5、距离本局结束还有 4 步（T − t = 4）。逐项算权重：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>n</th><th>权重 (1−λ)λ<sup>n−1</sup></th><th>数值</th><th>含义</th></tr>
+        <tr><td>1</td><td>(1−0.5)×0.5<sup>0</sup></td><td>0.500</td><td>一步回报 G<sub>t:t+1</sub></td></tr>
+        <tr><td>2</td><td>(1−0.5)×0.5<sup>1</sup></td><td>0.250</td><td>两步回报</td></tr>
+        <tr><td>3</td><td>(1−0.5)×0.5<sup>2</sup></td><td>0.125</td><td>三步回报</td></tr>
+        <tr><td>4（终止）</td><td>残差 λ<sup>3</sup></td><td>0.125</td><td>完整回报 G<sub>t:T</sub></td></tr>
+        <tr><td colspan="2"><strong>合计</strong></td><td><strong>1.000</strong></td><td>权重归一到 1</td></tr>
+      </table>
+    </div>
+
+    <p>为什么残差恰好是 λ<sup>3</sup>？因为无限几何级数的总和是 1：</p>
+    <div class="formula">(1 − λ) ∑<sub>n≥1</sub> λ<sup>n−1</sup> = (1 − λ) · <span class="frac"><span class="num-part">1</span><span class="den-part">1 − λ</span></span> = 1</div>
+    <p>前 3 项已经用掉了 0.5 + 0.25 + 0.125 = 0.875，剩下的 0.125 无处可去，只能整体交给"剩余的完整回报"——这正是残差项。λ = 0 时只剩一步回报（退化为 TD(0)）；λ = 1 时所有中间权重为 0，只剩完整回报（退化为 MC）。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>λ 不是"看几步"，而是"每多看一眼，重要性就打一次 λ 折"。λ 小 → 信任近处、快速自举；λ 大 → 信任远处、接近 MC。λ 是偏差—方差旋钮，0 和 1 是两个端点，中间是连续的。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>λ 回报本身<strong>不是</strong>一个能在线运行的算法：算 G<sup>λ</sup><sub>t</sub> 需要知道未来所有回报，还得知道何时终止才能补残差项。它是"前向视角"（Forward View）的分析工具——一个用来定义"理想目标"的数学对象。下一节才把它变成每步可执行的算法。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 12.1-1</div>
+              <div class="q-text">λ 回报的权重公式是什么？终止时的残差项为什么是 λ<sup>T−t−1</sup>？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              第 n 步回报权重 (1−λ)λ<sup>n−1</sup>；因 (1−λ)∑λ<sup>n−1</sup> = 1，前 T−t−1 项用掉 1 − λ<sup>T−t−1</sup>，剩余权重 λ<sup>T−t−1</sup> 整体归给完整回报 G<sub>t:T</sub>。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 12.1-2</div>
+              <div class="q-text">λ = 0 和 λ = 1 分别退化成什么？为什么说 λ 回报不能直接在线执行？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              λ=0 → TD(0)（只用一步回报）；λ=1 → MC（只用完整回报）。λ 回报要先看到未来全部回报、还要知道终止时刻才能补残差，所以只是前向视角的定义，不是在线算法。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ================= 12.2 ================= -->
+    <h2><span class="sec-no">12.2</span>资格迹：让 TD 误差沿"最近走过的路"回传</h2>
+
+    <p>上一节给了理想目标 G<sup>λ</sup>，但它要等整局。这一节换个方向看同一件事：<strong>与其向后等回报，不如让每步产生的 TD 误差向前"回敬"给最近访问过的状态</strong>。承载这份记忆的就是<span class="term">资格迹</span>（Eligibility Trace）。</p>
+
+    <p>每个状态配一个迹变量 e<sub>t</sub>(s)，含义是"这个状态对当前误差负有多少责任"：</p>
+
+    <div class="formula">e<sub>0</sub>(s) = 0，&nbsp; e<sub>t</sub>(s) = γλ · e<sub>t−1</sub>(s) + 1{S<sub>t</sub> = s}</div>
+
+    <p>每步先算 TD 误差 δ<sub>t</sub> = R<sub>t+1</sub> + γV(S<sub>t+1</sub>) − V(S<sub>t</sub>)，然后<strong>所有</strong>状态按自己的迹同步更新：</p>
+
+    <div class="formula">V(s) ← V(s) + α · δ<sub>t</sub> · e<sub>t</sub>(s)&nbsp;&nbsp;（对所有 s，而不只是 S<sub>t</sub>）</div>
+
+    <p>这就是 <span class="term">TD(λ)</span>。γλ 同时做两件事：γ 让"越远的状态，其回报被折扣得越少"（与目标定义一致），λ 让"越旧的责任，衰减得越快"（与权重定义一致）。</p>
+
+    <h3>手算二：一条三状态轨迹，三种算法</h3>
+    <p>设定：表格型，γ = 1，λ = 0.5，α = 0.1，V(A) = V(B) = 0。轨迹：A --(R=0)--> B --(R=1)--> 终止。用累积迹，逐时间步记表：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>t</th><th>转移</th><th>δ<sub>t</sub></th><th>e(A)</th><th>e(B)</th><th>ΔV(A)</th><th>ΔV(B)</th></tr>
+        <tr><td>1</td><td>A→B，R=0</td><td>0 + 0 − 0 = <strong>0</strong></td><td>1</td><td>0</td><td>0</td><td>0</td></tr>
+        <tr><td>2</td><td>B→终止，R=1</td><td>1 + 0 − 0 = <strong>1</strong></td><td>γλ×1 = 0.5</td><td>0.5×0+1 = 1</td><td>0.1×1×0.5 = <strong>0.05</strong></td><td>0.1×1×1 = <strong>0.10</strong></td></tr>
+      </table>
+    </div>
+
+    <p>t=1 时 δ 为零（两个价值都是 0，回报也是 0），所以迹虽然立起来了，但没人被更新——这正是"迹只是责任额度，真正付账要等误差出现"。t=2 误差出现，A 凭 0.5 的残存额度拿到一半的更新量。对比三种结果：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>算法</th><th>V(A)</th><th>V(B)</th><th>为什么</th></tr>
+        <tr><td>TD(0)</td><td>0</td><td>0.10</td><td>只更新当前状态 B</td></tr>
+        <tr><td>TD(λ=0.5)</td><td><strong>0.05</strong></td><td>0.10</td><td>A 按迹 0.5 拿到一半责任</td></tr>
+        <tr><td>MC（等价 λ=1）</td><td>0.10</td><td>0.10</td><td>A 的迹保持 1，全额更新</td></tr>
+      </table>
+    </div>
+
+    <p>0.05 恰好落在 0 与 0.10 正中间——这不是巧合，而是"前向视角与后向视角在表格、离线、每局意义上等价"的一个数值切片：<span class="term">后向视角</span>（Backward View）用迹累积，<span class="term">前向视角</span>（Forward View）用 λ 回报加权，两者算出的总更新量相同。</p>
+
+    <div class="box insight">
+      <span class="box-tag">✅ 两种迹</span>
+      <p><span class="term">累积迹</span>（Accumulating Trace）就是上面的 e ← γλe + 1，同一状态被多次访问会累加到大于 1，责任叠加。<span class="term">替换迹</span>（Replacing Trace）把该状态直接置为 1（或 max(1, e)），表示"只记最近一次访问"。替换迹在实践中常更稳，但只在近似意义上仍对应 λ 回报。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>迹不是"把奖励向后传播"。回传的载体是 TD 误差 δ，而 δ 里混着自举的价值估计；迹决定的是"这个误差该按什么比例记在谁头上"。另外 λ 在迹里不是"衰减奖励"，它衰减的是<strong>责任</strong>——奖励本身的折扣由 γ 负责。把两者混为一谈，就会在推导时把 γλ 写成 λ。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 12.2-1</div>
+              <div class="q-text">写出累积迹的更新式与 TD(λ) 的价值更新式。为什么更新时要遍历所有状态？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              e<sub>t</sub>(s) = γλe<sub>t−1</sub>(s) + 1{S<sub>t</sub>=s}；V(s) ← V(s) + αδ<sub>t</sub>e<sub>t</sub>(s)。因为误差不只属于当前状态：近期访问过的状态都为它"负过责"，迹就是它们的责任额度。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 12.2-2</div>
+              <div class="q-text">手算例中 λ=0.5 时 V(A) 的更新量是多少？它相对 TD(0) 与 MC 处在什么位置？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              ΔV(A) = αδ·e(A) = 0.1×1×0.5 = 0.05；TD(0) 是 0，MC 是 0.1，0.05 恰在中间。说明迹按比例在两种极端之间插值。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ================= 12.3 ================= -->
+    <h2><span class="sec-no">12.3</span>Sarsa(λ)：把迹搬进控制</h2>
+
+    <p>上一节只解决了预测。要控制，迹就得从"状态"升级到"状态—动作对"，因为控制中我们要评估的是 Q(s,a)。做法很直接：给每个 (s,a) 配一条迹，误差照旧是 Sarsa 的 δ：</p>
+
+    <div class="formula">e<sub>t</sub>(s,a) = γλ e<sub>t−1</sub>(s,a) + 1{S<sub>t</sub>=s, A<sub>t</sub>=a}<br>δ<sub>t</sub> = R<sub>t+1</sub> + γQ(S<sub>t+1</sub>, A<sub>t+1</sub>) − Q(S<sub>t</sub>, A<sub>t</sub>)<br>Q(s,a) ← Q(s,a) + αδ<sub>t</sub>e<sub>t</sub>(s,a)</div>
+
+    <p>注意 δ 里出现了 A<sub>t+1</sub>——它必须先被选出来才能算误差，这就是 Sarsa 名字的来历（S, A, R, S′, A′）。用上节的同一条轨迹代入（动作记为"右""左"），数字完全一样：t=1 时 δ = 0，e(A,右) = 1；t=2 时 δ = 1，e(A,右) 衰减到 0.5，Q(A,右) 得 0.05，Q(B,左) 得 0.10。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 一句话记住</span>
+      <p>Sarsa(λ) = Sarsa 的误差 + TD(λ) 的责任记账。策略改善仍是 ε-贪心（第 5 章），只是"改善"之前，价值已经被迹更新得更接近 λ 回报目标。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>迹里记的是<strong>实际执行过的</strong>动作，包括探索动作。所以 Sarsa(λ) 学到的是"带探索的行为策略"的价值——这与 Sarsa 的 on-policy 本性一致。如果你想要的是贪心目标策略的价值，就该换到下一节的 Q(λ)，并且处理切断问题。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 12.3-1</div>
+              <div class="q-text">Sarsa(λ) 的三个更新式分别是什么？迹的维度与预测情形有什么不同？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              e(s,a)=γλe+1{当前对}；δ=R+γQ(S′,A′)−Q(S,A)；Q(s,a)+=αδe(s,a)。迹从"每状态一条"变成"每状态—动作对一条"。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 12.3-2</div>
+              <div class="q-text">为什么说 Sarsa(λ) 的迹会记录探索动作？这带来什么性质？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              迹记录的是实际执行的 (S,A)，ε-贪心探索动作也会留下迹，因此它评估的是行为策略（on-policy），与 Sarsa 的本性一致。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ================= 12.4 ================= -->
+    <h2><span class="sec-no">12.4</span>Watkins 的 Q(λ)：离策略为什么必须"切断"</h2>
+
+    <p>上一节的迹忠实记录了"实际走过的路"。Q-learning 想要的却是"如果按贪心走会怎样"——目标和行为分家了。矛盾就在这里：一条迹代表"执行过的动作在历史上负过的责任"，可目标策略根本没执行过那些动作，凭什么用贪心目标去更新它们？</p>
+
+    <p>Watkins 的 Q(λ) 采取最保守的做法：<strong>一旦下一步的行为动作不是贪心动作，就把所有迹清零</strong>。</p>
+
+    <div class="formula">若 A<sub>t+1</sub> = argmax<sub>a</sub> Q(S<sub>t+1</sub>, a)：正常更新迹与 Q<br>否则：e(s,a) ← 0（全部切断），只做当前对的单步更新</div>
+
+    <p>直觉：迹只在"行为仍然沿着目标策略走"的段落里有效。一旦行为偏离，这段历史就不能再用贪心目标去解释，信用链必须断掉重来。这与第 7 章"树回溯 / 重要性采样"的动机同源：离策略的多步信用，必须解决"行为与目标不一致"的分布错配，切断是最粗暴的一种解法。</p>
+
+    <h3>切断有多频繁：一个真算的数</h3>
+    <p>设行为策略是 ε-贪心、ε = 0.1，且贪心动作唯一。每步选中贪心动作的概率近似 1 − ε = 0.9（忽略 ε 里恰好抽中贪心项的 1/|A| 修正）。一条迹能连续存活 L 步的概率是 0.9<sup>L</sup>，几何分布的期望：</p>
+
+    <div class="formula">E[L] = <span class="frac"><span class="num-part">0.9</span><span class="den-part">1 − 0.9</span></span> = 9 步</div>
+
+    <p>也就是说，ε = 0.1 时迹平均活不过 10 步。λ 想传递的"长程信用"在离策略下名存实亡——这是 Q(λ) 相对 Sarsa(λ) 优势缩水的根本原因，也是后续"树回溯 Q(λ)"（第 7 章树回溯的推广）出现的原因。</p>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>以为 Q(λ) 是"Q-learning + 迹"，性能必然更好。实际相反：离策略 + 频繁切断，迹经常还没积累就被清零。选 Q(λ) 不是因为"更先进"，而是因为你<strong>确实需要</strong>离策略（比如行为策略来自旧数据或人类示教）。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 12.4-1</div>
+              <div class="q-text">Watkins 的 Q(λ) 在什么条件下切断迹？为什么必须切断？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              当下一步行为动作 A<sub>t+1</sub> 不等于当前 Q 的贪心动作时清零全部迹。因为此时行为已偏离目标策略，历史迹代表的"执行过的动作"无法再用贪心目标解释，信用链必须断开。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 12.4-2</div>
+              <div class="q-text">ε=0.1 的 ε-贪心下，迹平均能存活多少步？这说明什么？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              存活概率 0.9<sup>L</sup>，几何分布期望 0.9/(1−0.9) = 9 步。说明离策略下迹很快被切断，λ 的长程信用传递大打折扣。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ================= 12.5 ================= -->
+    <h2><span class="sec-no">12.5</span>真实在线学习：前后向等价在逼近下失效之后</h2>
+
+    <p>12.2 节说"前向视角 = 后向视角"，但那是在<strong>表格 + 离线 + 每局批量更新</strong>的理想条件下。真实场景三个条件全破：用函数逼近（权重向量 w 共享）、边经历边更新（在线）、策略还在变。此时"每步都用当前 w 算 δ"会让迹与真实 λ 回报之间出现系统性错位——这就是<span class="term">真实在线学习</span>（True Online Learning）要修的问题。</p>
+
+    <p>修正的关键是<span class="term">荷兰迹</span>（Dutch Trace）。线性函数逼近下，累积迹是 e ← γλe + x，而荷兰迹多了一项修正：</p>
+
+    <div class="formula">e ← γλ e + (1 − α γλ e<sup>⊤</sup>x) x</div>
+
+    <p>括号里的 (1 − αγλe<sup>⊤</sup>x) 是一个标量，作用是扣掉"这次更新会顺带改变未来迹所指向方向"的那部分重复计入。用荷兰迹的<span class="term">真实在线 TD(λ)</span>满足：每一步的更新量，恰好等于"假设此刻本局终止、对当前 w 施加 λ 回报更新"的更新量——在离线性情形下是精确相等，而普通 TD(λ) 只是近似。</p>
+
+    <div class="box insight">
+      <span class="box-tag">✅ 为什么值得关心</span>
+      <p>它把"λ 回报是什么"和"算法每步做什么"重新对齐了。这使得调 λ、比较算法、做理论分析时，"前向视角"重新成为可信的参照系；代价是每步多一次内积，且公式只对线性逼近有干净的解释。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>以为迹 + 函数逼近只是"把 e 换成向量"。真正的坑在<span class="term">致命三合</span>（Deadly Triad）：函数逼近 + 自举 + 离策略三者同时出现时，即使表格算法收敛的版本也可能发散。迹会放大这种不稳定（更新沿特征方向反复叠加），所以第 11 章讨论的收敛条件在这里仍然是前提，而不是被迹"解决"了。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 12.5-1</div>
+              <div class="q-text">普通 TD(λ) 在"函数逼近 + 在线"下为什么不再精确等价于 λ 回报？荷兰迹改了什么？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              权重 w 每步都在变，迹指向的方向与后续更新互相干扰，产生系统性错位。荷兰迹在 e ← γλe + x 上加修正项 (1 − αγλe<sup>⊤</sup>x)x，扣掉重复计入的部分。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 12.5-2</div>
+              <div class="q-text">"真实在线 TD(λ)"保证的性质是什么？它与致命三合是什么关系？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              每步更新恰等于"此刻终止时的 λ 回报更新"（线性情形精确）。它修正的是等价性，不解决逼近 + 自举 + 离策略的发散风险。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ================= 12.6 ================= -->
+    <h2><span class="sec-no">12.6</span>错误直觉专场：资格迹只是"加速技巧"吗？</h2>
+
+    <p>这章最容易被一句话打包带走："资格迹就是一种让 TD 学得更快的工程技巧。"这句话有一半是对的，另一半会在你把它用到函数逼近时咬你一口。逐条拆：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>说法</th><th>判定</th><th>准确的说法</th></tr>
+        <tr><td>"迹只是加速，最终答案不变"</td><td><strong>表格下勉强对，逼近下错</strong></td><td>表格预测中不同 λ 都收敛到 v<sub>π</sub>，变的是<strong>瞬态速度与样本效率</strong>；函数逼近下不同 λ 收敛到<strong>不同的不动点</strong>，λ 改变了你在优化什么目标。</td></tr>
+        <tr><td>"迹把奖励反向传播，像反向传播算法"</td><td><strong>错</strong></td><td>回传的是 TD 误差 δ，不是奖励；迹只是决定每个状态分到多少 δ。奖励进入 δ 的分子，仅此一次。</td></tr>
+        <tr><td>"λ 越大越好，越接近真实回报"</td><td><strong>错</strong></td><td>λ 大 → 方差大、收敛慢；λ 小 → 偏差大。λ 是旋钮，不是越大越好。</td></tr>
+        <tr><td>"迹可以免费替代经验回放"</td><td><strong>错</strong></td><td>迹只保留"责任额度"，不保留原始转移样本；它无法像回放那样重复利用旧数据或打破相关性。</td></tr>
+      </table>
+    </div>
+
+    <div class="box idea">
+      <span class="box-tag">💡 一句话校正</span>
+      <p>迹的本质是<strong>把"多步信用分配"改写成一个每步可维护的记账系统</strong>：它改变的是"误差该记在谁头上、记多久"，因此在表格下只影响速度，在逼近下会影响收敛目标。它从来不是"同一算法的 turbo 按钮"。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 12.6-1</div>
+              <div class="q-text">"资格迹只是加速技巧"在什么条件下算对、什么条件下错？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              表格预测下勉强对：所有 λ 收敛到同一 v<sub>π</sub>，只改瞬态效率；函数逼近下错：λ 改变不动点（优化目标本身），不同 λ 收敛到不同解。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 12.6-2</div>
+              <div class="q-text">迹沿时间回传的到底是什么量？为什么说它不像反向传播？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              回传 TD 误差 δ；迹只决定分配比例。反向传播是沿计算图传梯度，迹是沿"访问历史"传误差，两者机制与目的都不同。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ================= 概念卡 ================= -->
+    <h2><span class="sec-no">🃏</span>概念卡：本章概念的一分钟画像</h2>
+    <p>翻面前先自问：这个概念我能用一句话讲清楚吗？</p>
+    <div class="flip-grid">
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 1</div>
+            <div class="q-text">λ 回报（λ-return）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">所有 n 步回报按 (1−λ)λ<sup>n−1</sup> 加权的和，终止时残差 λ<sup>T−t−1</sup> 给完整回报。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">把 MC 与 TD 的"离散选择"变成连续旋钮，量化偏差—方差折中。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">每多看远一步，重要性就打一次 λ 折。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为它是可在线执行的算法——它只是定义目标的前向视角。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">分析目标；由 TD(λ)、Sarsa(λ) 的后向视角逼近实现。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 2</div>
+            <div class="q-text">资格迹（Eligibility Trace）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">每个状态（或状态—动作对）的记账变量 e，按 γλ 衰减、访问时 +1，表示"对当前误差负多少责"。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">让多步信用分配能在每步维护，不必保存整条轨迹。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">沙滩上的脚印：越新越清晰（γλ 衰减），越旧越淡。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为迹在传播奖励；它传播的是 TD 误差，且不保留原始样本。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">TD(λ)、Sarsa(λ)、Q(λ)；函数逼近下与特征同维。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 3</div>
+            <div class="q-text">前向视角 / 后向视角（Forward / Backward View）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">前向：用 λ 回报算目标；后向：用迹在每步回传 TD 误差。表格离线每局意义下两者等价。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">前向给"该学什么"的清晰定义，后向给"怎么在线学"的可执行机制。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">前向是事后复盘，后向是边打边记分。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为等价无条件成立——函数逼近 + 在线下会失效（要荷兰迹修正）。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">比较算法、做理论分析；第 13 章策略梯度的回报估计也常两种视角。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 4</div>
+            <div class="q-text">Sarsa(λ)</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">on-policy 控制 + 状态—动作迹：e(s,a)=γλe+1，Q += αδe，δ 为 Sarsa 误差。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">让控制也享受多步信用分配的样本效率。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">Sarsa 的误差 + TD(λ) 的记账本。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为迹只记贪心动作——探索动作同样留迹（on-policy）。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">需要在线、依赖自身探索数据的控制任务。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 5</div>
+            <div class="q-text">Watkins 的 Q(λ)</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">Q-learning + 迹；一旦行为动作偏离贪心动作，全部迹清零。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">离策略下多步信用与目标策略不一致时的合法处理。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">脚印一旦离开目标路线，整串脚印作废。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为它总优于 Sarsa(λ)——ε=0.1 时迹平均只活 9 步。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">必须离策略时（旧数据、示教数据）；更优解是树回溯 Q(λ)。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 6</div>
+            <div class="q-text">荷兰迹与真实在线 TD(λ)（Dutch Trace / True Online）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">e ← γλe + (1−αγλe<sup>⊤</sup>x)x；用它的在线 TD(λ) 每步更新恰等于"此刻终止"的 λ 回报更新（线性情形精确）。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">修复函数逼近 + 在线更新下前向/后向视角的错位。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">记账时顺便扣掉"这笔账会改变未来记账口径"的重复部分。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为它解决了致命三合的发散——它只修正等价性。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">线性/特征逼近下的在线 λ 学习；深度 RL 的 λ 变体多受它启发。</span></div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- ================= 分层习题 ================= -->
+    <h2><span class="sec-no">📝</span>分层习题</h2>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>判断：<strong>"λ = 1 的 TD(λ) 与蒙特卡洛在每局意义下等价，因此 λ 只是 MC 与 TD(0) 之间的插值，没有新东西。"</strong></div>
+      <details>
+        <summary>提示</summary>
+        <p>想一想：λ 回报是一个连续旋钮，但"每步都能更新"这件事本身，是不是 MC 做不到的？</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">前半对、后半错。λ=1 时迹不衰减，每局结束的总更新确实等于 MC 的更新（表格、离线意义下）；但 TD(λ) 的机制价值在于<strong>每步都能产生更新</strong>，λ=1 时它等价于"把 MC 的整局更新摊到每一步去做"，而不是"等整局再算"。此外 λ 还在函数逼近下改变不动点。把它降格为"插值"会漏掉后向视角这个可在线执行的机制。</div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>判断：<strong>"Watkins 的 Q(λ) 在行为动作偏离贪心动作时清零迹，是为了节省计算量。"</strong></div>
+      <details>
+        <summary>提示</summary>
+        <p>清零是"省事"还是"必须"？如果不清零，用贪心目标去更新一条"执行的是探索动作"的迹，会算出什么？</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">错。切断是<strong>正确性要求</strong>，不是优化：迹代表"执行过的动作负过的责任"，而 Q-learning 的目标是贪心动作的价值。行为偏离目标后，这段迹无法再用贪心目标解释，继续更新等于把探索路径的信用记到目标策略头上（分布错配）。代价是迹变短、优势缩水（ε=0.1 时平均只活 9 步）。</div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>λ = 0.5，某局还剩 4 步结束。写出 λ 回报的四项权重并验证归一；再把 λ 改成 0.8，重算四项权重（残差用 λ<sup>3</sup>），说明分布的变化。</div>
+      <details>
+        <summary>提示</summary>
+        <p>前 3 项用 (1−λ)λ<sup>n−1</sup>，第 4 项残差用 λ<sup>T−t−1</sup> = λ<sup>3</sup>。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p>λ = 0.5：0.5、0.25、0.125、残差 0.125；和 = 1.000。</p>
+          <p>λ = 0.8：n=1 → 0.2×1 = 0.200；n=2 → 0.2×0.8 = 0.160；n=3 → 0.2×0.64 = 0.128；残差 0.8<sup>3</sup> = 0.512。和 = 0.200+0.160+0.128+0.512 = <strong>1.000</strong>。</p>
+          <p>解读：λ 从 0.5 升到 0.8，完整回报的权重从 0.125 涨到 0.512——目标迅速向 MC 靠拢，前几步回报几乎被忽略（0.2 与 0.16）。λ 越大，越"信远处"。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>用 12.2 节的轨迹（A→B，R=0；B→终止，R=1），把 λ 从 0.5 改为 1.0（γ=1，α=0.1，V 初值 0），重算两步的迹与更新量，并说明为什么结果与 MC 一致。</div>
+      <details>
+        <summary>提示</summary>
+        <p>λ=1 时迹的衰减因子是 γλ = 1，t=2 时 e(A) 保持原值。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p>t=1：δ = 0+0−0 = 0；e(A)=1，e(B)=0；无更新。</p>
+          <p>t=2：δ = 1+0−0 = 1；e(B) = 0+1 = 1；e(A) = 1×1 = <strong>1</strong>（不衰减）。ΔV(A) = 0.1×1×1 = <strong>0.10</strong>，ΔV(B) = 0.10。</p>
+          <p>与 MC 一致的原因：λ=1 时迹永不衰减，凡是访问过的状态都保留全额责任 1，于是本局结束时每个被访问状态的更新量都等于 α×完整回报，正是常 MC 的更新。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l3">L3 建模应用</span>仓库机器人负责"取货→放货"，一局约 300 步，奖励稀疏：只有放对货架时 +1，中途碰撞 −1。①你选 λ 偏大还是偏小，为什么？②若训练数据来自由人工遥控产生的旧轨迹（离策略），迹会遇到什么问题、怎么缓解？③写出你在 ②中的更新式（用 Q(λ) 或树回溯，说明取舍）。</div>
+      <details>
+        <summary>提示</summary>
+        <p>稀疏奖励 → 信用分配距离长；离策略 → 行为与目标不一致；两件事都指向"迹能不能活到奖励出现的时刻"。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p>① 稀疏奖励 + 长回合：奖励出现前有大量无信息步骤，TD(0) 的偏差会让价值传播极慢，应<strong>偏大 λ</strong>（如 0.8–0.95）让信用传得更远。但碰撞惩罚又带来高方差，可用替换迹（每次访问重置为 1）稳定，并以 n 步截断兜底。</p>
+          <p>② 人工遥控 = 离策略：行为策略含人类偏好与噪声，贪心目标与行为频繁分歧，Watkins 切断会让迹平均只活 ~9 步（ε 近似 0.1 时），λ 的长程优势消失；极端稀疏奖励下几乎学不动。</p>
+          <p>③ 缓解：树回溯 Q(λ)（第 7 章树回溯 + 迹）。更新式：δ = R + γ max<sub>a′</sub>Q(S′,a′) − Q(S,A)（目标仍贪心），但对迹做<strong>选择性回溯</strong>——仅当行为动作恰在贪心集合内才允许迹跨越，否则只把该步的 δ 记到当前对，不乘到历史迹上。<strong>取舍</strong>：比 Watkins 保留更多信用、比重要性采样方差低；代价是实现复杂、需要维护贪心集合。</p>
+        </div>
+      </details>
+    </div>
+
+    <!-- ================= 自测 ================= -->
+    <h2><span class="sec-no">✍️</span>本章自测</h2>
+    <p class="quiz-hint">点击选项判分，答错会给出原因。</p>
+
+    <div class="quiz-block" data-answer="c">
+      <div class="q-no">自测 1</div>
+      <div class="q-stem">λ 回报中第 n 步回报的权重是：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. λ<sup>n</sup></li>
+        <li data-opt="b">B. (1−λ)λ<sup>n</sup></li>
+        <li data-opt="c">C. (1−λ)λ<sup>n−1</sup></li>
+        <li data-opt="d">D. 1/n</li>
+      </ul>
+      <div class="quiz-explain">选 C。权重从 n=1 起算，(1−λ)λ<sup>n−1</sup>；(1−λ)∑λ<sup>n−1</sup>=1 保证归一。A 漏了归一因子，和会趋于 1/(1−λ) 而非 1；B 指数错一位，n=1 时权重变 (1−λ)λ 而非 (1−λ)；D 是把平均当加权。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 2</div>
+      <div class="q-stem">TD(λ) 每步更新时，被更新的状态是：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 只有当前状态 S<sub>t</sub></li>
+        <li data-opt="b">B. 所有迹大于 0 的状态（按各自迹的比例）</li>
+        <li data-opt="c">C. 只有迹等于 1 的状态</li>
+        <li data-opt="d">D. 未来会访问的状态</li>
+      </ul>
+      <div class="quiz-explain">选 B。δ 回敬给所有近期访问过、迹仍非零的状态，幅度 = αδe(s)。A 错在那是 TD(0)；C 错，替换迹被重置为 1 但累积迹可大于 1，且更新按任意迹值比例；D 错，迹只记过去，不记未来。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="a">
+      <div class="q-no">自测 3</div>
+      <div class="q-stem">关于 Watkins 的 Q(λ) 的切断，正确的是：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 行为动作偏离贪心动作时清零迹，防止用贪心目标更新探索路径的信用</li>
+        <li data-opt="b">B. 每步都清零迹，保证离策略正确性</li>
+        <li data-opt="c">C. 只在回合结束时清零，平时不切</li>
+        <li data-opt="d">D. 切断只影响计算速度，不影响正确性</li>
+      </ul>
+      <div class="quiz-explain">选 A。切断是分布错配的合法处理。B 过度清零等于退化成单步 Q-learning，丢掉了 λ 的意义；C 等于让迹跨越不匹配的片段，目标被污染；D 把正确性问题误当性能问题。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="d">
+      <div class="q-no">自测 4</div>
+      <div class="q-stem">函数逼近 + 在线更新下，普通 TD(λ) 与 λ 回报的关系是：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 仍然精确等价</li>
+        <li data-opt="b">B. 完全无关</li>
+        <li data-opt="c">C. TD(λ) 更准确，所以不需要 λ 回报</li>
+        <li data-opt="d">D. 只是近似；荷兰迹 + 真实在线 TD(λ) 才能恢复"每步 = 此刻终止的 λ 回报更新"的精确性（线性情形）</li>
+      </ul>
+      <div class="quiz-explain">选 D。权重在线变化使迹与后续更新互相干扰，产生系统性错位。A 忽略了 w 变动；B 错，λ 回报仍是目标参照；C 因果颠倒——λ 回报是定义，算法是逼近实现。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 5</div>
+      <div class="q-stem">"资格迹只是加速技巧"这句话最准确的评价是：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 完全正确</li>
+        <li data-opt="b">B. 表格下近似成立（只改瞬态速度），函数逼近下不成立（λ 改变不动点）</li>
+        <li data-opt="c">C. 完全错误，迹与速度无关</li>
+        <li data-opt="d">D. 正确，因为迹不改变更新方向</li>
+      </ul>
+      <div class="quiz-explain">选 B。表格预测中不同 λ 收敛到同一 v<sub>π</sub>，差别在样本效率与瞬态；函数逼近中 λ 进入不动点的误差界，改变优化目标。A 漏掉逼近情形；C 否认了样本效率这一真实收益；D 与 B 冲突且理由错——迹确实改变每次更新的分配。</div>
+    </div>
+
+    <!-- ================= 复述 ================= -->
+    <div class="retell">
+      <h3>🗣️ 用自己的话，三句话讲完本章</h3>
+      <p class="retell-sub">对着空气（或室友）说出这三句。说卡壳的那句，回去重读对应小节。</p>
+      <details>
+        <summary>句1：这章解决什么问题？——</summary>
+        <div class="retell-answer">参考答案：第 5–8 章只能在 "等整局的 MC" 和 "只看一步的 TD" 之间二选一；本章要把"看多远"变成连续旋钮（λ 回报），并给出一个每步都能执行的机制（资格迹）。</div>
+      </details>
+      <details>
+        <summary>句2：核心机制是什么？——</summary>
+        <div class="retell-answer">参考答案：每个状态（或状态—动作对）维护一条按 γλ 衰减的迹，访问时 +1；每步算出 TD 误差 δ 后，所有迹非零的状态按 αδe 同步更新。表格离线每局意义下，这等价于用 λ 回报做目标；控制版是 Sarsa(λ)，离策略版是 Watkins Q(λ)（偏离贪心即切断）。</div>
+      </details>
+      <details>
+        <summary>句3：它和前后章怎么分工？——</summary>
+        <div class="retell-answer">参考答案：第 5–8 章给了 n 步与偏差—方差光谱，第 9–11 章把价值换成参数；本章只补"时间维的信用缝合"，让逼近器也能享用多步回报。它不改变"用值函数导出策略"这条路线——第 13 章才把整条路线换成直接对策略求梯度。</div>
+      </details>
+    </div>
+
+    <div class="review-plan">
+      <h3>🔁 间隔复习计划</h3>
+      <p>回忆本身比重读有效 10 倍。到点只做一件事：翻卡 + 重做标记题。</p>
+      <table>
+        <tr><th>时间点</th><th>复习内容</th><th>预计用时</th></tr>
+        <tr><td>第 1 天</td><td>概念卡 1–6 全部 + 回忆 12.1-1、12.2-1</td><td>10 分钟</td></tr>
+        <tr><td>第 3 天</td><td>概念卡 2、3、5 + 重做 L2 两题 + 自测错题</td><td>10 分钟</td></tr>
+        <tr><td>第 7 天</td><td>三句话复述 + 手推 12.2 轨迹（λ=0.5 与 λ=1 两遍）</td><td>12 分钟</td></tr>
+        <tr><td>第 15 天</td><td>只做合上书挑战；卡在哪条就重读对应小节</td><td>15 分钟</td></tr>
+      </table>
+    </div>
+
+    <div class="final-challenge">
+      <h3>📕 合上书挑战</h3>
+      <p class="fc-sub">现在关掉这个页面，拿一张纸，凭记忆完成以下任务。全部做完再回来核对。</p>
+      <ol id="ch12-challenge-list">
+        <li><span class="fc-check"></span>写出 λ 回报的定义、权重 (1−λ)λ<sup>n−1</sup> 与终止残差 λ<sup>T−t−1</sup>，并验证权重和为 1</li>
+        <li><span class="fc-check"></span>画出"累积迹 / 替换迹"两条更新式，说明 γλ 中 γ 与 λ 各管什么</li>
+        <li><span class="fc-check"></span>手算 12.2 的轨迹：λ=0.5 时 ΔV(A)=0.05、ΔV(B)=0.10；λ=1 时 ΔV(A)=0.10</li>
+        <li><span class="fc-check"></span>写出 Sarsa(λ) 三个更新式，并说出它与 Q(λ) 的迹有何不同</li>
+        <li><span class="fc-check"></span>解释 Watkins 切断的条件，并用 0.9<sup>L</sup> 算出平均存活 9 步</li>
+        <li><span class="fc-check"></span>说出荷兰迹修正的是哪一项，以及真实在线 TD(λ) 恢复的精确性质</li>
+        <li><span class="fc-check"></span>回答本章主线问题：如何把多步信用分配变成每步可执行的在线机制？（一句话）</li>
+      </ol>
+    </div>
+
+    <div class="complete-zone">
+      <button class="btn-complete" id="ch12-btn-complete" onclick="markDone()">✓ 我已完成本章（含合上书挑战）</button>
+    </div>
+
+    <div class="chapter-nav">
+      <a href="chapter-11.html"><span class="nav-dir">← 上一章</span>第11章 函数逼近下的离策略方法</a>
+      <a href="chapter-13.html" class="next"><span class="nav-dir">下一章 →</span>第13章 策略梯度方法（全书收口）</a>
+    </div>
+
+  </div>
+</div>
+
+<footer class="footer">
+  <div class="wrap">第12章 资格迹 · 强化学习互动讲义 · 基于 Sutton &amp; Barto (2018, 2nd ed)</div>
+</footer>
+
+<script src="assets/mermaid.min.js"></script>
+<script>
+mermaid.initialize({
+  startOnLoad: true,
+  theme: "base",
+  themeVariables: {
+    primaryColor: "#e3edf7",
+    primaryBorderColor: "#1d5f9e",
+    primaryTextColor: "#1d5f9e",
+    lineColor: "#5c554b",
+    secondaryColor: "#fbeedd",
+    tertiaryColor: "#f5f1e8",
+    fontFamily: "-apple-system, PingFang SC, sans-serif",
+    fontSize: "14px"
+  },
+  flowchart: { curve: "linear", htmlLabels: false }
+});
+</script>
+<script>
+// 自测题判分
+document.querySelectorAll(".quiz-block").forEach(block => {
+  const answer = block.dataset.answer;
+  const explain = block.querySelector(".quiz-explain");
+  block.querySelectorAll(".quiz-opts li").forEach(li => {
+    li.addEventListener("click", () => {
+      const opts = block.querySelectorAll(".quiz-opts li");
+      opts.forEach(o => o.classList.add("disabled"));
+      if (li.dataset.opt === answer) {
+        li.classList.add("correct");
+      } else {
+        li.classList.add("wrong");
+        block.querySelector(`[data-opt="${answer}"]`).classList.add("correct");
+      }
+      explain.classList.add("show");
+    });
+  });
+});
+
+// 合上书清单打勾
+document.querySelectorAll("#ch12-challenge-list li").forEach(li => {
+  li.addEventListener("click", () => li.classList.toggle("checked"));
+});
+
+// 完成标记 → localStorage（第12章）
+const KEY = "rl_progress_v1";
+function loadProgress() {
+  try { return JSON.parse(localStorage.getItem(KEY)) || {}; } catch (e) { return {}; }
+}
+const progress = loadProgress();
+const btn = document.getElementById("ch12-btn-complete");
+if (progress["12"] && progress["12"].done) {
+  btn.textContent = "✓ 已完成 · 再次点击重置";
+  btn.classList.add("done");
+}
+function markDone() {
+  const p = loadProgress();
+  if (p["12"] && p["12"].done) {
+    delete p["12"];
+    btn.textContent = "✓ 我已完成本章（含合上书挑战）";
+    btn.classList.remove("done");
+  } else {
+    p["12"] = { done: true, completedAt: Date.now(), reviewsDone: 0 };
+    btn.textContent = "✓ 已完成 · 复习提醒已开启";
+    btn.classList.add("done");
+  }
+  localStorage.setItem(KEY, JSON.stringify(p));
+}
+</script>
+
+</body>
+</html>

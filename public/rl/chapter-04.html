@@ -1,0 +1,813 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第4章 动态规划 · 强化学习互动讲义</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+<nav class="topbar">
+  <div class="topbar-inner">
+    <span class="brand"><a href="index.html" style="color:inherit">← 学习地图</a></span>
+    <span class="crumb">第一段 · 表格法基础 / 第4章</span>
+  </div>
+</nav>
+
+<div class="wrap">
+
+  <div class="lecture-head">
+    <span class="ch-label">CHAPTER 04 · 表格法基础</span>
+    <h1>动态规划</h1>
+    <p class="lead">模型已知时，Bellman 方程可以直接"算"出来——不用试错，不用采样。</p>
+  </div>
+
+  <!-- ===== 章首四件套之 1：全书定位 ===== -->
+  <div class="position-bar">
+    <strong>本章在主线上的位置：</strong>第 3 章把值函数定义成 Bellman 方程组 → <u>本章在动态函数 p 已知的前提下，给出第一批求解算法：策略评估、策略迭代、值迭代</u> → 第 5 章起讨论 p 未知时怎么办（蒙特卡洛/时序差分），但更新公式的骨架仍是本章这一套。<br>
+    第4章回答主线上的第四个问题：<strong>已知环境的全部规律 p，如何系统地算出值函数与最优策略？</strong>
+    <div class="map-inline">
+      <span class="node">Ch1 引言：RL 问题</span><span class="arrow">→</span>
+      <span class="node">Ch2 多臂老虎机（无状态，练价值估计）</span><span class="arrow">→</span>
+      <span class="node">Ch3 有限 MDP（建模语言）</span><span class="arrow">→</span>
+      <span class="node here">Ch4 动态规划（模型内求解）</span><span class="arrow">‖</span>
+      <span class="node">Ch5-8 无模型表格法（MC/TD/规划）</span><span class="arrow">‖</span>
+      <span class="node">Ch9-11 函数逼近（大规模状态）</span><span class="arrow">‖</span>
+      <span class="node">Ch12-13 策略梯度与前沿</span>
+    </div>
+    <div style="margin-top:8px; font-size:12.5px; color:var(--ink-faint)">
+      全书四段分工：<strong>表格法基础（1–4）</strong>在状态可枚举的小世界里建立全部概念；<strong>表格型无模型（5–8）</strong>扔掉环境模型，用采样学习；<strong>函数逼近（9–11）</strong>把值表换成参数化函数以应对大状态空间；<strong>策略与前沿（12–13）</strong>直接优化策略本身。
+    </div>
+  </div>
+
+  <!-- ===== 章首四件套之 2：学习目标 ===== -->
+  <div class="objectives">
+    <h4>🎯 学完本章，合上书你应该能：</h4>
+    <ol>
+      <li>写出迭代策略评估的更新式，并在 4×4 网格世界上手算前三轮（k=1,2,3）的值</li>
+      <li>陈述策略改进定理，并对给定 v_π 手算一个状态的贪心改进（列出每个动作的 q）</li>
+      <li>画出策略迭代的"评估—改进"交替流程，说明它必然收敛到 π*</li>
+      <li>写出值迭代更新式，并在 2×2 网格上手算到收敛，指出它与策略迭代的关系</li>
+      <li>解释异步 DP 与广义策略迭代（GPI）的思想，说出 DP 的两个前提与"维数灾难"</li>
+    </ol>
+  </div>
+
+  <div class="lecture">
+
+    <!-- ===== 章首四件套之 3：推导主线 ===== -->
+    <div class="figure">
+      <div class="mermaid">
+flowchart LR
+  A["模型 p 已知<br>方程组可解"] --> B["Bellman 等式<br>改写成更新规则"]
+  B --> C["策略评估<br>迭代求 v_π"]
+  C --> D["策略改进<br>对 v_π 贪心"]
+  D --> E["策略迭代<br>评估改进交替"]
+  E --> F["值迭代<br>评估压成一步"]
+  F --> G["代价：需要完整模型 p<br>Ch5 起无模型"]
+  classDef hot fill:#fbeedd,stroke:#c4651f,stroke-width:2.5px,color:#c4651f;
+  classDef danger fill:#fae9e7,stroke:#b03a2e,stroke-width:2.5px,color:#b03a2e;
+  class C hot;
+  class G danger;
+      </div>
+      <div class="caption">本章推导主线：模型已知 → 方程变更新规则 → 评估与改进交替逼近最优。红色节点是第一段（1–4 章）的总账单：DP 全程依赖 p 已知，第 5 章起必须扔掉它。</div>
+    </div>
+
+    <!-- ============ 4.1 ============ -->
+    <h2><span class="sec-no">4.1</span>为什么 DP 可行：把等式读成更新规则</h2>
+
+    <p>第 3 章留下两组方程：Bellman 期望方程（v_π 的一致性条件）与最优方程（v* 的定义）。<span class="term">动态规划</span>（Dynamic Programming, DP）的核心动作只有一步：<strong>把等号"="改读成赋值"←"</strong>。等式 v = T(v) 变成迭代 v ← T(v)，反复施加点映射 T，值就一步步逼近不动点。</p>
+
+    <p>为什么这样一定收敛？因为 Bellman 算子是<span class="term">压缩映射</span>（Contraction）：每迭代一次，当前估计与真值的最大误差至少缩小 γ 倍（γ&lt;1 时；回合制 γ=1 也有类似保证）。几何级数衰减 → 必然收敛。本章所有算法的收敛性都根植于此。</p>
+
+    <p>另一个关键操作是<span class="term">自举</span>（Bootstrapping）：<strong>用当前的估计值去更新另一个估计值</strong>——不等真实回报走完，先拿"下一局面的当前估值"顶上。DP 全程自举，这是它与第 5 章蒙特卡洛方法（等真实回报）最本质的区别。</p>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 前提声明</span>
+      <p>本章一切算法都要求<strong>动态函数 p(s′,r|s,a) 完全已知</strong>——每个式子里的 ∑_{s′,r} p[·] 都要真的算出来。现实中 p 通常未知，所以 DP 在全书里更像"理论基准"与"算法模板"：第 5–8 章做的事，就是把这里的期望换成采样，其余骨架原样保留。</p>
+    </div>
+
+    <!-- 回忆卡片 4.1 -->
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 4.1-1</div>
+              <div class="q-text">DP 把 Bellman 方程变成算法的关键一步是什么？收敛性由什么保证？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              把等号改读成赋值（迭代求不动点）；Bellman 算子是压缩映射，误差每轮按 γ 几何衰减，故收敛。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 4.1-2</div>
+              <div class="q-text">什么是自举（bootstrapping）？DP 的两个前提是什么？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              用估计值更新估计值（拿下一状态的当前估值顶上，不等真实回报）。前提：模型 p 完全已知；状态空间可用表格枚举。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 4.2 ============ -->
+    <h2><span class="sec-no">4.2</span>策略评估：迭代算出 v_π</h2>
+
+    <p>第一个任务：给定策略 π，求它的值函数 v_π（这叫<span class="term">策略评估</span> Policy Evaluation，也叫预测问题）。把 Bellman 期望方程改写成更新：</p>
+
+    <div class="formula">V<sub>k+1</sub>(s) ← ∑<sub>a</sub> π(a|s) ∑<sub>s′,r</sub> p(s′,r|s,a) [ r + γ V<sub>k</sub>(s′) ]</div>
+
+    <p>从任意 V₀（通常全 0）开始，一轮轮扫描所有状态（每轮叫一次 <span class="term">sweep</span>），直到变化量小于阈值。</p>
+
+    <h3>网格世界手算：均匀随机策略的前三轮</h3>
+    <p>4×4 网格世界（终点 (1,1)、(4,4)，每步 −1，γ=1，撞墙停原地），均匀随机策略（四方向各 ¼），V₀ 全 0，<strong>每轮用上一轮的值整体更新</strong>：</p>
+    <p><strong>第 1 轮</strong>：每个非终点状态，四邻的 V₀ 都是 0，故 V₁(s) = ¼ × 4 × (−1 + 0) = <strong>−1</strong>（全部非终点格子）。</p>
+    <p><strong>第 2 轮</strong>（用 V₁ 更新）：以 (1,2) 为例——上撞墙停 (1,2)、左进终点 (1,1)、下到 (2,2)、右到 (1,3)：</p>
+    <div class="formula">V₂(1,2) = ¼[(−1+(−1)) + (−1+0) + (−1+(−1)) + (−1+(−1))] = ¼×(−7) = <strong>−1.75</strong></div>
+    <p>(2,2) 四邻全是非终点：V₂(2,2) = ¼ × 4 × (−1 + (−1)) = <strong>−2</strong>。（书上四舍五入把 −1.75 记作 −1.7。）</p>
+    <p><strong>第 3 轮</strong>（用 V₂ 更新）：(2,2) 的四邻 V₂ 值：上 (1,2)=−1.75、下 (3,2)=−2、左 (2,1)=−1.75、右 (2,3)=−2：</p>
+    <div class="formula">V₃(2,2) = ¼[(−2.75) + (−3) + (−2.75) + (−3)] = ¼×(−11.5) = <strong>−2.875</strong></div>
+    <p>继续扫下去，值单调下降并收敛到第 3 章见过的终值表：</p>
+    <div class="tbl-wrap">
+      <table>
+        <tr><th></th><th>列1</th><th>列2</th><th>列3</th><th>列4</th></tr>
+        <tr><th>行1</th><td>0</td><td>−14</td><td>−20</td><td>−22</td></tr>
+        <tr><th>行2</th><td>−14</td><td>−18</td><td>−20</td><td>−20</td></tr>
+        <tr><th>行3</th><td>−20</td><td>−20</td><td>−18</td><td>−14</td></tr>
+        <tr><th>行4</th><td>−22</td><td>−20</td><td>−14</td><td>0</td></tr>
+      </table>
+    </div>
+    <p>观察收敛过程的信息流向：终点值 0 是"水源"，第 1 轮只浸润到终点隔壁，第 2 轮再扩一圈——<strong>值像水波一样从终点向外扩散，每轮传播一格</strong>。这就是自举的物理图像。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>策略评估什么也没"学"，它只是把 p 与 π 提供的信息<strong>反复搅拌</strong>直到自洽。信息全部来自模型——这就是为什么 DP 不需要与环境交互。</p>
+    </div>
+
+    <!-- 回忆卡片 4.2 -->
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 4.2-1</div>
+              <div class="q-text">写出迭代策略评估的更新式，并说明信息（终点的值）如何在迭代中传播。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              V_{k+1}(s) ← Σ_a π(a|s) Σ_{s′,r} p[r + γV_k(s′)]；终点值每轮向外扩一格，几何衰减地收敛到 v_π。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 4.2-2</div>
+              <div class="q-text">策略评估为什么不需要与环境交互？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              更新式中的期望用已知的 p 精确算出，信息全部来自模型，不需采样真实轨迹。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 4.3 ============ -->
+    <h2><span class="sec-no">4.3</span>策略改进：对 v_π 贪心为什么一定更好</h2>
+
+    <p>算出 v_π 之后自然一问：能不能用它造一个更好的策略？做法：<strong>对每个状态，选让 q_π(s,a) 最大的动作</strong>（对 v_π 贪心化）。</p>
+
+    <p>这凭什么更好？<span class="term">策略改进定理</span>（Policy Improvement Theorem）：若新策略 π′ 在每个状态都满足 q_π(s, π′(s)) ≥ v_π(s)，则 v_{π′}(s) ≥ v_π(s) 对所有状态成立；只要某处严格大于，就严格更好。直觉：既然"先走一步更优的 a、之后照旧"都不亏，那永远这么走只会更好——<strong>一步不亏 ⟹ 步步不亏</strong>。</p>
+
+    <h3>网格世界手算：一次完整的策略改进</h3>
+    <p>拿 4.2 节收敛的 v_π（随机策略），对每个状态算四个动作的 q_π(s,a) = −1 + v_π(邻)（γ=1，确定性转移），取 argmax：</p>
+    <p><strong>(1,3)</strong>：左→(1,2)：−1+(−14)=<strong>−15</strong>；上撞墙停 (1,3)：−1+(−20)=−21；右→(1,4)：−1+(−22)=−23；下→(2,3)：−1+(−20)=−21。<br>
+    → argmax = <strong>左</strong>（q=−15），改进后该状态只走左。</p>
+    <p><strong>(2,2)</strong>：上→(1,2)：−15；左→(2,1)：−15；下→(3,2)：−21；右→(2,3)：−21。<br>
+    → 上、左<strong>并列最优</strong>（q=−15），任选其一（或各半概率）。</p>
+    <p>对所有状态做完，得到的新策略是"朝最近终点走"的最短路策略——它恰好已经是最优策略：(1,3) 的新值 = −2（距终点 2 步）。<strong>这个环境里，一次"评估 + 改进"就从随机策略直达最优</strong>；一般问题需要多轮交替，这就是下一节的策略迭代。</p>
+
+    <div class="box insight">
+      <span class="box-tag">✅ 判定规则</span>
+      <p>若对 v_π 贪心化后策略没有变化（处处 q_π(s, π(s)) 已是最大），则 π 已满足 Bellman 最优方程——π 就是 π*。<strong>"改进不动了"是最优性的判据。</strong></p>
+    </div>
+
+    <!-- 回忆卡片 4.3 -->
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 4.3-1</div>
+              <div class="q-text">陈述策略改进定理，并用一句话给出直觉。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              若 π′ 处处满足 q_π(s,π′(s)) ≥ v_π(s)，则 v_{π′} ≥ v_π；直觉：每步都选一个"先走不亏"的动作，整体必不亏。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 4.3-2</div>
+              <div class="q-text">贪心化后策略不再变化，说明什么？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              说明当前策略已满足 Bellman 最优方程，即已达最优 π*——"改进不动"是最优性判据。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 4.4 ============ -->
+    <h2><span class="sec-no">4.4</span>策略迭代与值迭代：交替的艺术</h2>
+
+    <p>把 4.2 与 4.3 拼起来：<span class="term">策略迭代</span>（Policy Iteration）——评估当前策略到收敛，贪心改进，再评估新策略…… 有限 MDP 中策略数量有限且每轮严格改进，故<strong>有限步内必收敛到 π*</strong>。</p>
+
+    <div class="figure">
+      <div class="mermaid">
+flowchart LR
+  P0["初始策略 π"] --> EV["策略评估<br>求 v_π"]
+  EV --> IM["策略改进<br>对 v_π 贪心"]
+  IM -->|改进成功| EV
+  IM -->|改进不动| DONE["π = π* 停止"]
+  classDef hot fill:#fbeedd,stroke:#c4651f,stroke-width:2.5px,color:#c4651f;
+  class DONE hot;
+      </div>
+      <div class="caption">图 4.1 策略迭代：评估与改进交替，直到改进不动为止。</div>
+    </div>
+
+    <p>可策略评估本身就要迭代好多轮，太贵。观察：改进只需要"足够好的 v_π"，不必等它完全收敛。把评估压缩到<strong>只扫一轮</strong>就改进，就得到<span class="term">值迭代</span>（Value Iteration）——直接把 Bellman 最优方程改写成更新：</p>
+
+    <div class="formula">V<sub>k+1</sub>(s) ← max<sub>a</sub> ∑<sub>s′,r</sub> p(s′,r|s,a) [ r + γ V<sub>k</sub>(s′) ]</div>
+
+    <p>注意：式子里<strong>没有显式的策略</strong>——评估与改进被 max 合并成一步。收敛后对 V* 贪心即得 π*。</p>
+
+    <h3>手算例：2×2 网格上的值迭代，两轮收敛</h3>
+    <p>2×2 网格：(1,1) 为唯一终点；每步 −1；γ=1；撞墙停原地；V₀ 全 0。非终点状态只有 (1,2)、(2,1)、(2,2)。</p>
+    <p><strong>第 1 轮</strong>：每个状态四个动作的 [r + γV₀(邻)] 全是 −1 + 0 = −1，max = <strong>−1</strong>。V₁：三格全 −1。</p>
+    <p><strong>第 2 轮</strong>：</p>
+    <ul>
+      <li>(1,2)：左→终点 (1,1)：−1+0 = −1；下→(2,2)：−1+(−1) = −2；上/右撞墙停：−2。max = <strong>−1</strong>（走左）。</li>
+      <li>(2,1)：对称，max = <strong>−1</strong>（走上）。</li>
+      <li>(2,2)：上→(1,2)：−1+(−1) = −2；左→(2,1)：−2；右/下撞墙停：−2。max = <strong>−2</strong>。</li>
+    </ul>
+    <p><strong>第 3 轮</strong>：(1,2) 走下变为 −1+(−2)=−3，仍不如走左 −1；(2,2) 上/左仍是 −2——所有值不再变化，<strong>收敛</strong>。收敛趋势：V(2,2)：0 → −1 → −2 → −2（恰好等于到终点的最少步数取负）。</p>
+    <p>提取最优策略：对 V* 贪心——(2,2) 的上与左 q 同为 −2，并列最优，任选一个即最优策略。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>策略迭代与值迭代是同一谱系的两端：评估跑无穷轮再改进 = 策略迭代；评估只跑一轮就改进 = 值迭代；中间还有"跑 k 轮"的截断策略评估。理解成<strong>一个旋钮</strong>，而不是两个孤立算法。</p>
+    </div>
+
+    <!-- 回忆卡片 4.4 -->
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 4.4-1</div>
+              <div class="q-text">写出值迭代更新式，并说明它与策略迭代的关系。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              V_{k+1}(s) ← max_a Σ p[r + γV_k(s′)]；它是"策略评估只扫一轮就贪心改进"的极限情形——同一谱系的两端。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 4.4-2</div>
+              <div class="q-text">策略迭代为什么保证有限步收敛到 π*？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              有限 MDP 的策略数量有限；每轮改进严格变好（策略改进定理），不可能绕圈——有限个策略严格爬升，必在有限步登顶。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 4.5 ============ -->
+    <h2><span class="sec-no">4.5</span>异步 DP 与广义策略迭代</h2>
+
+    <p>前面的算法每轮都要扫描<strong>全部</strong>状态——状态多时一轮 sweep 就是天价。<span class="term">异步 DP</span>（Asynchronous DP）松绑这个要求：按任意顺序、任意频率更新状态（甚至只更新当前轨迹经过的状态），只要<strong>每个状态被无限次更新</strong>，收敛性依然成立。这为"把计算花在重要状态上"开了门——第 8 章的优先级清扫（Prioritized Sweeping）与实时动态规划就是沿这条路走。</p>
+
+    <p>再抽象一层：几乎所有 RL 算法都可以看成两个过程的交替——<strong>评估</strong>（让值函数符合当前策略）与<strong>改进</strong>（让策略对值函数贪心）。这个总框架叫<span class="term">广义策略迭代</span>（Generalized Policy Iteration, GPI）。两个过程不必各自跑完：它们可以交替、交错、甚至同时进行；只要双方都持续进行，联合过程就收敛到最优。</p>
+
+    <div class="figure">
+      <div class="mermaid">
+flowchart TB
+  V["值函数 V"] -->|"驱动贪心化"| P["策略 π"]
+  P -->|"驱动评估"| V
+  V -.->|"收敛到 v*"| G["最优值与最优策略"]
+  P -.->|"收敛到 π*"| G
+  classDef hot fill:#fbeedd,stroke:#c4651f,stroke-width:2.5px,color:#c4651f;
+  class G hot;
+      </div>
+      <div class="caption">图 4.2 广义策略迭代（GPI）：评估与改进像两个互相推搡的进程，最后同时停在最优解上。</div>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 维数灾难</span>
+      <p>DP 的全部计算按"状态数 × 动作数"计价。状态空间随变量个数指数增长（Bellman 称之为 curse of dimensionality）——10 层楼电梯的状态就已经爆炸。这不是 DP 的实现问题，而是表格法的天花板；第 9 章函数逼近就是冲着它来的。</p>
+    </div>
+
+    <!-- 回忆卡片 4.5 -->
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 4.5-1</div>
+              <div class="q-text">异步 DP 放松了哪个要求？保持收敛的条件是什么？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              放松"每轮扫描全部状态"的要求，允许任意顺序/频率更新；条件是每个状态被无限次更新。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 4.5-2</div>
+              <div class="q-text">GPI 的两个过程是什么？为什么说几乎所有 RL 算法都是 GPI？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              评估（值函数向策略靠拢）与改进（策略向值函数贪心靠拢）。MC/TD/actor-critic 都只是这两个过程的不同排程与近似。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 4.6 ============ -->
+    <h2><span class="sec-no">4.6</span>错误直觉大扫除</h2>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 误区一："DP 是 RL 的主流实用方法"</span>
+      <p>恰恰相反：DP 要求<strong>完整模型 p</strong>，而 RL 的主战场恰恰是模型未知。DP 的价值在于它提供了全部后续算法的<strong>思想模板</strong>——策略评估/改进的交替（GPI）、自举更新、贪心化——第 5–8 章做的就是把"精确期望"换成"采样估计"。说"DP 需要模型，所以不是无模型方法"，这不是贬低，是分类。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 误区二："值迭代是独立于策略迭代的另一种算法"</span>
+      <p>值迭代 = 策略评估只扫一轮的策略迭代。把 max 写开，它每一步都隐含着"对当前值贪心"的改进动作。两者是同一谱系（评估轮数旋钮）的两端，不是两种思想。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 误区三："自举是用猜测更新猜测，不靠谱"</span>
+      <p>自举的确引入了"用估计更新估计"的偏差，但 Bellman 算子的压缩性保证误差不累积、反而几何衰减。真正的问题不在自举本身，而在模型：DP 的自举用的是<em>精确</em>期望（有 p），无模型方法的自举还要再叠一层采样噪声——这是第 6、7 章要处理的。</p>
+    </div>
+
+    <div class="box idea">
+      <span class="box-tag">💡 本章给下一章留的账</span>
+      <p>本章每个更新式里都有 ∑_{s′,r} p(s′,r|s,a)[·]——一个必须精确算出的期望。<strong>如果 p 未知，这个期望怎么办？</strong>第 5 章的回答：不算了，让智能体去环境里跑几局，用样本均值代替期望——蒙特卡洛方法登场。</p>
+    </div>
+
+    <!-- 回忆卡片 4.6 -->
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 4.6-1</div>
+              <div class="q-text">DP 在全书中的真实角色是什么？为什么它不是"实用 RL 方法"？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              思想模板：GPI、自举、贪心化都被后续算法继承；但它要求完整模型 p，而 RL 主战场是模型未知，故主要作理论基准。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 4.6-2</div>
+              <div class="q-text">第 5 章要解决的核心问题是什么（本章留下的账）？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              p 未知时 Bellman 更新中的期望算不出来——用真实交互的样本均值替代期望，即蒙特卡洛方法。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===== 章末五件套之 1：概念卡 ===== -->
+    <h2><span class="sec-no">🃏</span>概念卡：本章概念的一分钟画像</h2>
+    <p>翻面前先自问：这个概念我能用一句话讲清楚吗？</p>
+    <div class="flip-grid">
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 1</div>
+            <div class="q-text">迭代策略评估（Iterative Policy Evaluation）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">V_{k+1}(s) ← Σ_a π(a|s) Σ p[r + γV_k(s′)] 反复扫描至收敛。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">给定策略求其值函数（预测问题），无需解线性方程组。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">终点的值像水波，每轮向外扩一格直到铺满地图。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为要精确收敛才能用——截断几轮往往已够改进用。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">策略迭代的内环；第 5-7 章预测问题的对照基准。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 2</div>
+            <div class="q-text">策略改进定理（Policy Improvement Theorem）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">若 q_π(s,π′(s)) ≥ v_π(s) 处处成立，则 v_{π′} ≥ v_π。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">给"对值函数贪心化"一个严格的全局收益保证。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">一步不亏，步步不亏。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为贪心是短视——对 v_π 贪心包含全部未来（在 π 之下）。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">策略迭代/值迭代收敛证明的核心；GPI 改进侧的合法性。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 3</div>
+            <div class="q-text">策略迭代（Policy Iteration）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">评估到收敛 → 贪心改进 → 再评估，交替直到改进不动。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">模型已知时求最优策略；有限步必收敛。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">先给当前走法打分，再按分数改走法，改完重打。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为每轮评估必须完美——截断评估同样有效（旋钮）。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">小状态空间精确求解；GPI 的具体实例。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 4</div>
+            <div class="q-text">值迭代（Value Iteration）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">V_{k+1}(s) ← max_a Σ p[r + γV_k(s′)]；评估改进合并为一步。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">去掉策略迭代的内层评估循环，直接逼近 v*。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">每次更新都假装"下一步已经走最优"。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">当成与策略迭代无关的算法——它是评估截断到一轮的特例。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">第 7 章 Q-learning 的模型版原型；规划算法的基础。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 5</div>
+            <div class="q-text">异步 DP（Asynchronous DP）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">按任意顺序/频率更新状态，只要每个状态被无限次更新。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">全状态扫描太贵；把计算集中到重要/新近的状态上。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">不全班齐读，谁没跟上给谁补课。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为异步是近似——满足条件时收敛性一样有保证。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">第 8 章优先级清扫、实时 DP；大规模状态空间。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 6</div>
+            <div class="q-text">广义策略迭代（GPI）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">评估（值向策略靠拢）与改进（策略向值贪心）两过程的总框架。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">统一理解几乎所有 RL 算法的收敛结构。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">两人互相追赶调整，最后一起停在山顶。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为两过程必须交替跑完——可持续交错、部分推进。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">第 5-13 章所有方法（MC/TD/actor-critic）的分析框架。</span></div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- ===== 章末五件套之 2：分层习题 ===== -->
+    <h2><span class="sec-no">📝</span>分层习题</h2>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>以下说法哪些正确？① DP 算法不需要与环境交互；② 值迭代中不存在策略；③ 策略迭代每轮都必须把策略评估跑到完全收敛；④ 自举是指用估计值更新估计值。</div>
+      <details>
+        <summary>提示</summary>
+        <p>对照：DP 的信息来源、值迭代中隐含的改进、截断策略评估、bootstrapping 定义。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          ①对：期望用已知的 p 精确算出。②错：没有<em>显式</em>维护策略，但 max 操作隐含着每轮的贪心改进。③错：截断评估（甚至一轮）同样收敛，值迭代就是极端情形。④对：这正是自举的定义，DP 全程自举。
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>"策略改进定理只保证新策略在改进的那些状态上更好，其余状态可能变差。"对吗？</div>
+      <details>
+        <summary>提示</summary>
+        <p>定理的结论是对<em>所有</em>状态 v_{π′}(s) ≥ v_π(s)。想想证明里"一步不亏⟹步步不亏"的展开。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          不对。定理结论是对<strong>所有</strong>状态不变差：v_{π′}(s) ≥ v_π(s) ∀s。原因：把 v_π(s) ≤ q_π(s,π′(s)) 反复展开，每一步替换都不亏，整条轨迹的期望回报只会不降——不存在"拆东墙补西墙"。
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>策略评估第 2 轮：已知 V₁ 中所有非终点状态为 −1、终点为 0（均匀随机策略，γ=1，撞墙停原地）。手算 V₂(2,1)。(2,1) 的邻：上→终点 (1,1)，下→(3,1)，左撞墙停 (2,1)，右→(2,2)。</div>
+      <details>
+        <summary>提示</summary>
+        <p>套更新式：¼ Σ[r + V₁(邻)]，注意左动作撞墙停在原地，邻就是 (2,1) 自己。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          上：−1 + 0 = −1；下：−1 + (−1) = −2；左（停 (2,1)）：−1 + (−1) = −2；右：−1 + (−1) = −2。<br>
+          V₂(2,1) = ¼ × (−1 −2 −2 −2) = ¼ × (−7) = <strong>−1.75</strong>。<br>
+          与 (1,2) 同值——它们都一格贴终点，位置对称。
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>值迭代手算：2×2 网格（终点 (1,1)，每步 −1，γ=1，撞墙停原地），V₁ 三格全 −1。求第 2 轮 V₂(2,2)，并写出收敛后 (2,2) 的贪心策略。</div>
+      <details>
+        <summary>提示</summary>
+        <p>列出 (2,2) 四个动作的 [r + V₁(邻)]：上→(1,2)、左→(2,1)、右撞墙、下撞墙。取 max。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          上：−1 + V₁(1,2) = −1 + (−1) = −2；左：−1 + V₁(2,1) = −2；右（停）：−1 + V₁(2,2) = −2；下（停）：−2。<br>
+          V₂(2,2) = max = <strong>−2</strong>。第 3 轮四个动作仍为 −2（邻居已收敛到 −1），值不再变 → 收敛。<br>
+          贪心策略：上或左（q 同为 −2，并列最优，走向终点 (1,1)）。
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l3">L3 建模应用</span>某棋类游戏的状态转移规则完全已知（规则即模型），状态数约 10⁵。团队争论用"策略迭代"还是"值迭代"。请给出你的选择与理由，并说明若状态数涨到 10¹⁰ 时 DP 会撞上什么墙、应转向书中的哪类方法。</div>
+      <details>
+        <summary>提示</summary>
+        <p>比较两者每轮迭代成本与收敛轮数；10¹⁰ 时算一算"状态数×动作数"意味着什么。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          10⁵ 状态：两者都可行。<strong>倾向值迭代</strong>：策略迭代每轮内嵌完整评估（多轮 sweep），总成本 = 外层轮数 × 评估成本；值迭代每轮只扫一遍且 max 合并了改进，实践中常更快出近似解，且可用异步/按轨迹更新进一步省算力。<br>
+          10¹⁰ 状态：一轮 sweep 就要遍历全部状态，内存（值表）与时间双双爆炸——<strong>维数灾难</strong>。应转向：无模型采样方法（第 5-7 章，只访问实际经过的状态）+ 函数逼近（第 9 章，用参数化函数代替值表，泛化到未访问状态）。
+        </div>
+      </details>
+    </div>
+
+    <!-- ===== 章末五件套之 3：自测 ===== -->
+    <h2><span class="sec-no">✍️</span>本章自测</h2>
+    <p class="quiz-hint">点击选项判分，答错会给出原因。</p>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 1</div>
+      <div class="q-stem">DP 算法能在不与环境交互的情况下求出 v_π，根本原因是：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 它用神经网络近似了值函数</li>
+        <li data-opt="b">B. 更新式中的期望用已知的动态函数 p 精确算出</li>
+        <li data-opt="c">C. 它假设所有状态值初始为 0</li>
+        <li data-opt="d">D. 它使用了 ε-贪心探索</li>
+      </ul>
+      <div class="quiz-explain">解析：B 正确——信息全部来自模型。A 错：那是第 9 章函数逼近；C 错：初始值不影响收敛目标；D 错：DP 无探索概念，探索是采样方法的必要品。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="c">
+      <div class="q-no">自测 2</div>
+      <div class="q-stem">策略迭代保证收敛到最优策略，依赖的两个事实是：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 奖励非负 + 状态空间有限</li>
+        <li data-opt="b">B. γ &lt; 1 + 奖励有界</li>
+        <li data-opt="c">C. 策略改进定理（每轮严格改进）+ 策略数量有限</li>
+        <li data-opt="d">D. 自举 + 折扣回报</li>
+      </ul>
+      <div class="quiz-explain">解析：C 正确——严格爬升 + 有限个策略 ⟹ 有限步登顶。A、B 错：与收敛到最优无直接关系；D 错：自举与折扣是值函数收敛的条件，不是策略迭代有限收敛的关键。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="a">
+      <div class="q-no">自测 3</div>
+      <div class="q-stem">值迭代 V ← max_a Σp[r + γV] 与策略迭代的关系是：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 值迭代是"策略评估只扫一轮"的策略迭代特例</li>
+        <li data-opt="b">B. 值迭代不需要模型 p</li>
+        <li data-opt="c">C. 值迭代每轮都维护一个显式策略</li>
+        <li data-opt="d">D. 二者是互不相关的两类算法</li>
+      </ul>
+      <div class="quiz-explain">解析：A 正确——评估轮数是旋钮，值迭代把它拧到 1。B 错：式子里仍有 Σp，照样要模型；C 错：策略只在收敛后由 argmax 提取；D 错：同一谱系。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="d">
+      <div class="q-no">自测 4</div>
+      <div class="q-stem">网格世界策略改进中，(1,3) 处四个动作的 q_π 为：左 −15、上 −21、右 −23、下 −21。改进后的动作是：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 上</li>
+        <li data-opt="b">B. 右</li>
+        <li data-opt="c">C. 四者等概率随机</li>
+        <li data-opt="d">D. 左</li>
+      </ul>
+      <div class="quiz-explain">解析：D 正确，argmax 是左（−15 最大）。A、B 错：q 更小；C 错：改进是贪心化，不是保持随机——并列最优时才可以任意分配概率。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 5</div>
+      <div class="q-stem">关于异步 DP，正确的是：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 它是一种不保证收敛的近似算法</li>
+        <li data-opt="b">B. 只要每个状态被无限次更新，任意更新顺序下仍收敛</li>
+        <li data-opt="c">C. 它只适用于值迭代，不适用于策略评估</li>
+        <li data-opt="d">D. 它要求按固定顺序扫描状态</li>
+      </ul>
+      <div class="quiz-explain">解析：B 正确。A 错：满足条件时收敛有严格保证；C 错：任何 DP 更新都可异步化；D 错：恰好相反，它放松了固定扫描的要求。</div>
+    </div>
+
+    <!-- ===== 章末五件套之 4：三句话复述 ===== -->
+    <div class="retell">
+      <h3>🗣️ 用自己的话，三句话讲完本章</h3>
+      <p>对着空气（或室友）说出这三句。说卡壳的那句，回去重读对应小节。</p>
+      <details>
+        <summary>句1：这章解决什么问题？——</summary>
+        <div class="retell-answer">参考答案：当环境模型 p 完全已知时，不用试错、直接计算值函数与最优策略——把第 3 章的 Bellman 方程从"定义"变成"算法"。</div>
+      </details>
+      <details>
+        <summary>句2：核心机制是什么？——</summary>
+        <div class="retell-answer">参考答案：把 Bellman 等式改读成迭代更新（压缩映射保证收敛）：策略评估求 v_π，对 v_π 贪心化得改进（策略改进定理），两者交替即策略迭代；评估压成一轮即值迭代。全程自举。</div>
+      </details>
+      <details>
+        <summary>句3：它和前后章怎么分工？——</summary>
+        <div class="retell-answer">参考答案：第 3 章给方程，本章在模型内解方程，并留下 GPI、自举、贪心化三大模板；但每个更新都含精确期望 Σp——第 5 章起用采样替代期望，把这套骨架搬进无模型世界。</div>
+      </details>
+    </div>
+
+    <!-- ===== 章末五件套之 5：间隔复习计划 ===== -->
+    <div class="review-plan">
+      <h3>🔁 间隔复习计划</h3>
+      <p>回忆本身比重读有效 10 倍。到点只做一件事：翻卡 + 重做标记题。</p>
+      <table>
+        <tr><th>时间点</th><th>复习内容</th><th>预计用时</th></tr>
+        <tr><td>第 1 天</td><td>概念卡 1–6 全部 + 回忆卡 4.2-1、4.3-1、4.4-1</td><td>10 分钟</td></tr>
+        <tr><td>第 3 天</td><td>概念卡 2、3、4（改进定理/策略迭代/值迭代）+ 重做自测错题 + L2 两题</td><td>12 分钟</td></tr>
+        <tr><td>第 7 天</td><td>三句话复述出声说一遍 + 回忆卡 4.1-2、4.5-2、4.6-2</td><td>10 分钟</td></tr>
+        <tr><td>第 15 天</td><td>只做合上书挑战；六条全过则本章毕业，卡在哪条就重读对应小节</td><td>15 分钟</td></tr>
+      </table>
+    </div>
+
+    <!-- 合上书挑战 -->
+    <div class="final-challenge">
+      <h3>📕 合上书挑战</h3>
+      <p class="fc-sub">现在关掉这个页面（或遮住屏幕），拿一张纸，凭记忆完成以下任务。全部做完再回来核对——这是本章真正的毕业考试。</p>
+      <ol id="ch04-challenge-list">
+        <li><span class="fc-check"></span>写出迭代策略评估更新式，手算网格世界 V₁（全−1）与 V₂(1,2)=−1.75</li>
+        <li><span class="fc-check"></span>陈述策略改进定理，并手算 (1,3) 处四个动作的 q_π 与 argmax</li>
+        <li><span class="fc-check"></span>画出策略迭代的交替流程图，说明收敛依据</li>
+        <li><span class="fc-check"></span>写出值迭代更新式，手算 2×2 网格 V₂(2,2)=−2 及收敛后的贪心策略</li>
+        <li><span class="fc-check"></span>解释 GPI 的两个过程，并说明 DP 的两个前提与维数灾难</li>
+        <li><span class="fc-check"></span>回答本章的主线问题：已知环境的全部规律 p，如何系统地算出值函数与最优策略？（一句话）</li>
+      </ol>
+    </div>
+
+    <div class="complete-zone">
+      <button class="btn-complete" id="ch04-btn-complete" onclick="markDone()">✓ 我已完成本章（含合上书挑战）</button>
+    </div>
+
+    <div class="chapter-nav">
+      <a href="chapter-03.html"><span class="nav-dir">← 上一章</span>第3章 有限马尔可夫决策过程</a>
+      <a href="chapter-05.html" class="next"><span class="nav-dir">下一章 →</span>第5章 蒙特卡洛方法</a>
+    </div>
+
+  </div>
+</div>
+
+<footer class="footer">
+  <div class="wrap">第4章 动态规划 · 强化学习互动讲义 · 基于 Sutton &amp; Barto (2018, 2nd ed)</div>
+</footer>
+
+<script src="assets/mermaid.min.js"></script>
+<script>
+mermaid.initialize({
+  startOnLoad: true,
+  theme: "base",
+  themeVariables: {
+    primaryColor: "#e3edf7",
+    primaryBorderColor: "#1d5f9e",
+    primaryTextColor: "#1d5f9e",
+    lineColor: "#5c554b",
+    secondaryColor: "#fbeedd",
+    tertiaryColor: "#f5f1e8",
+    fontFamily: "-apple-system, PingFang SC, sans-serif",
+    fontSize: "14px"
+  },
+  flowchart: { curve: "linear", htmlLabels: false }
+});
+</script>
+<script>
+// 自测题逻辑
+document.querySelectorAll(".quiz-block").forEach(block => {
+  const answer = block.dataset.answer;
+  const explain = block.querySelector(".quiz-explain");
+  block.querySelectorAll(".quiz-opts li").forEach(li => {
+    li.addEventListener("click", () => {
+      const opts = block.querySelectorAll(".quiz-opts li");
+      opts.forEach(o => o.classList.add("disabled"));
+      if (li.dataset.opt === answer) {
+        li.classList.add("correct");
+      } else {
+        li.classList.add("wrong");
+        block.querySelector(`[data-opt="${answer}"]`).classList.add("correct");
+      }
+      explain.classList.add("show");
+    });
+  });
+});
+
+// 合上书清单打勾
+document.querySelectorAll("#ch04-challenge-list li").forEach(li => {
+  li.addEventListener("click", () => li.classList.toggle("checked"));
+});
+
+// 完成标记 → localStorage（第4章）
+const KEY = "rl_progress_v1";
+function loadProgress() {
+  try { return JSON.parse(localStorage.getItem(KEY)) || {}; } catch (e) { return {}; }
+}
+const progress = loadProgress();
+const btn = document.getElementById("ch04-btn-complete");
+if (progress[4] && progress[4].done) {
+  btn.textContent = "✓ 已完成 · 再次点击重置";
+  btn.classList.add("done");
+}
+function markDone() {
+  const p = loadProgress();
+  if (p[4] && p[4].done) {
+    delete p[4];
+    btn.textContent = "✓ 我已完成本章（含合上书挑战）";
+    btn.classList.remove("done");
+  } else {
+    p[4] = { done: true, completedAt: Date.now(), reviewsDone: 0 };
+    btn.textContent = "✓ 已完成 · 复习提醒已开启";
+    btn.classList.add("done");
+  }
+  localStorage.setItem(KEY, JSON.stringify(p));
+}
+</script>
+
+</body>
+</html>

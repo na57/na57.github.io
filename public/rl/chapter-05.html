@@ -1,0 +1,885 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第5章 蒙特卡洛方法 · 强化学习互动讲义</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+<nav class="topbar">
+  <div class="topbar-inner">
+    <span class="brand"><a href="index.html" style="color:inherit">← 学习地图</a></span>
+    <span class="crumb">第二段 · 表格型无模型方法 / 第5章</span>
+  </div>
+</nav>
+
+<div class="wrap">
+
+  <div class="lecture-head">
+    <span class="ch-label">CHAPTER 05 · 表格型无模型方法</span>
+    <h1>蒙特卡洛方法</h1>
+    <p class="lead">没有环境模型时，唯一能依靠的东西是经验本身——把完整回合的回报拿来平均，就是价值。</p>
+  </div>
+
+  <!-- 本章定位 -->
+  <div class="position-bar">
+    <strong>本章在主线上的位置：</strong>动态规划需要完备的环境模型 → <u>蒙特卡洛用"完整回合的平均回报"替代模型</u> → 第6章时序差分进一步做到"不等回合结束就更新"。<br>
+    第5章回答主线上的一个问题：<strong>当环境的转移概率 p 完全未知、只能一条一条地经历回合时，如何估计价值函数并改进策略？</strong>
+    <div class="map-inline">
+      <span class="node">Ch1–4 表格法基础（老虎机 · MDP · 动态规划）</span><span class="arrow">→</span>
+      <span class="node here">Ch5 蒙特卡洛方法</span><span class="arrow">→</span>
+      <span class="node">Ch6 时序差分（边经历边更新）</span><span class="arrow">→</span>
+      <span class="node">Ch7 n步自举（MC 与 TD 之间）</span><span class="arrow">→</span>
+      <span class="node">Ch8 统一视图与规划</span><span class="arrow">→</span>
+      <span class="node">Ch9–11 函数逼近</span><span class="arrow">→</span>
+      <span class="node">Ch12–13 策略与前沿</span>
+    </div>
+  </div>
+
+  <!-- 学习目标 -->
+  <div class="objectives">
+    <h4>🎯 学完本章，合上书你应该能：</h4>
+    <ol>
+      <li>说出蒙特卡洛方法与动态规划的根本区别：用采样平均代替基于模型的期望</li>
+      <li>写出回报 G<sub>t</sub> 的递推式，并在 5×5 gridworld 上倒推出一整条回报序列</li>
+      <li>解释首次访问（first-visit）与每次访问（every-visit）MC 在同一回合里给出的样本差别，并手算两种估计</li>
+      <li>用增量式均值公式把新回报并入旧估计，指出 α = 1/n 与常数 α 各自的适用场景</li>
+      <li>说出 MC 控制为什么需要探索（探索性开端 / ε-贪心 / GLIE），并写出离策略评估中重要性采样比的公式</li>
+      <li>手算普通重要性采样与加权重要性采样，并解释前者为什么会"超出已见回报的范围"</li>
+    </ol>
+  </div>
+
+  <div class="lecture">
+
+    <!-- 推导主线图 -->
+    <div class="figure">
+      <div class="mermaid">
+flowchart LR
+  A["动态规划<br>需要模型 p"] --> B["现实只有经验<br>没有模型"]
+  B --> C["跑完整回合<br>拿回报 G"]
+  C --> D["平均多条回合<br>估计 V"]
+  D --> E["增量均值<br>省掉存储"]
+  E --> F["ε贪心探索<br>支撑 MC 控制"]
+  F --> G["行为策略偏离<br>目标策略"]
+  G --> H["重要性采样<br>纠偏"]
+  H --> I["代价 等回合结束<br>方差大"]
+  classDef hot fill:#fbeedd,stroke:#c4651f,stroke-width:2.5px,color:#c4651f;
+  classDef danger fill:#fae9e7,stroke:#b03a2e,stroke-width:2.5px,color:#b03a2e;
+  class F hot;
+  class I danger;
+      </div>
+      <div class="caption">图 5.0 本章推导主线：每一步都在回答"上一步还差什么"。末端的红点——必须等回合结束、方差大——正是第6章时序差分要解决的。</div>
+    </div>
+
+    <!-- ============ 5.1 ============ -->
+    <h2><span class="sec-no">5.1</span>为什么没有模型就学不了：从动态规划的软肋说起</h2>
+
+    <p><em>先顺口交代一句：前四章手算用的是 4×4 gridworld，只因格子少、表格放得下，便于手推 Bellman；从本章起改用 Sutton 原书的 5×5——无模型方法要展示完整回合的回报序列，5×5 的路径长度和数值更贴近原书图表，第 6–8 章的算例都沿用它。</em></p>
+
+    <p>第4章的动态规划（Dynamic Programming, DP）看起来很完美：策略评估、策略改进、价值迭代，一套流程收敛到最优。但它有一个常被忽略的前提——<strong>你必须知道环境的完备模型</strong>：对每个状态 s 和动作 a，都要写出四元组概率 p(s′, r | s, a)。策略评估里的每一次更新，都要对这个分布求期望。</p>
+
+    <p>现实任务几乎从不给你这张表。玩扑克时你不知道对手的发牌分布；机器人行走时你写不出关节力矩到下一姿态的转移函数；推荐系统里你更不可能枚举用户点击的完整条件概率。你<strong>能做的只有一件事</strong>：让智能体真的去环境里跑，跑出一条条 <span class="term">回合</span>（episode）：</p>
+
+    <div class="formula">S₀, A₀, R₁, S₁, A₁, R₂, …, S<sub>T−1</sub>, A<sub>T−1</sub>, R<sub>T</sub></div>
+
+    <p><span class="term">蒙特卡洛方法</span>（Monte Carlo Methods）的思想朴素到近乎笨拙：<strong>价值的定义本来就是"期望回报"，那就用实际跑出来的回报取平均来逼近这个期望</strong>。不需要模型，不需要自举，只需要经验——而且是"完整的"经验：必须跑到回合结束，才知道这条轨迹到底值多少。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>DP 是"看着地图规划"，蒙特卡洛是"亲自走几趟再下结论"。v<sub>π</sub>(s) 的定义是数学期望，期望算不出来时，统计学的第一反应永远是：<strong>抽样，然后平均</strong>。大数定律保证样本均值收敛到期望——这就是蒙特卡洛方法全部的理论根基。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>"蒙特卡洛是一种新算法。" 错。蒙特卡洛是一种<strong>估计哲学</strong>：用样本平均替代期望。它可以套在预测问题上（估计 v<sub>π</sub>）、控制问题上（找最优策略），也会贯穿本书后面所有方法——第6章的 TD、第7章的 n 步方法，本质上都是在"从经验中平均"这件事上做时间维度上的折中。</p>
+    </div>
+
+    <!-- 回忆卡片 5.1 -->
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <p class="recall-hint">不要直接点开。先在心里或纸上说出答案，再翻面核对。</p>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 5.1-1</div>
+              <div class="q-text">动态规划做策略评估时，对环境有什么前提？蒙特卡洛方法如何绕开这个前提？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              DP 要求知道完备模型 p(s′, r | s, a)，更新时对模型求期望。蒙特卡洛不需要模型：让策略在真实（或仿真）环境中跑出完整回合，用实际回报的平均值直接估计期望价值。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 5.1-2</div>
+              <div class="q-text">为什么蒙特卡洛方法天生只能用于回合制（episodic）任务？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              因为回报 G<sub>t</sub> 只有到回合终止时才算得出来。任务若永不终止，回报是无穷项折扣和，任何有限时间内的实际采样都不是一个"完整样本"，更新就无从谈起。这正是第6章 TD 方法要打破的限制。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 5.2 ============ -->
+    <h2><span class="sec-no">5.2</span>一条完整回合怎么变成数字：回报序列与增量均值</h2>
+
+    <p>上一节说"跑完整回合取平均"，这一节把它落成具体数字。环境是 <strong>5×5 gridworld</strong>：25 个格子，起点在左上角 (1,1)，终点在右下角 (5,5)；每走一步奖励 −1，进入终点奖励 +10 且回合结束；折扣因子 γ = 0.9。我们评估一个确定性的"傻瓜策略" π：<strong>先一路向右，再一路向下</strong>。</p>
+
+    <p>这个策略从 (1,1) 出发的轨迹是固定的：(1,1) → (1,2) → (1,3) → (1,4) → (1,5) → (2,5) → (3,5) → (4,5) → (5,5)。共 8 步，前 7 步各得 −1，最后一步进终点得 +10。<span class="term">回报</span>（Return）从终点往回算，递推式 G<sub>t</sub> = R<sub>t+1</sub> + γ·G<sub>t+1</sub>：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>时刻 t</th><th>状态 S<sub>t</sub></th><th>下一奖励 R<sub>t+1</sub></th><th>回报计算</th><th>G<sub>t</sub></th></tr>
+        <tr><td>7</td><td>(4,5)</td><td>+10</td><td>10</td><td>10</td></tr>
+        <tr><td>6</td><td>(3,5)</td><td>−1</td><td>−1 + 0.9 × 10</td><td>8</td></tr>
+        <tr><td>5</td><td>(2,5)</td><td>−1</td><td>−1 + 0.9 × 8</td><td>6.2</td></tr>
+        <tr><td>4</td><td>(1,5)</td><td>−1</td><td>−1 + 0.9 × 6.2</td><td>4.58</td></tr>
+        <tr><td>3</td><td>(1,4)</td><td>−1</td><td>−1 + 0.9 × 4.58</td><td>3.122</td></tr>
+        <tr><td>2</td><td>(1,3)</td><td>−1</td><td>−1 + 0.9 × 3.122</td><td>1.8098</td></tr>
+        <tr><td>1</td><td>(1,2)</td><td>−1</td><td>−1 + 0.9 × 1.8098</td><td>0.62882</td></tr>
+        <tr><td>0</td><td>(1,1)</td><td>−1</td><td>−1 + 0.9 × 0.62882</td><td>−0.434062</td></tr>
+      </table>
+    </div>
+
+    <p>于是一条回合给起点 (1,1) 提供了一个样本：G₀ = −0.434062 ≈ −0.434。对这个确定性环境，每条回合都一模一样，平均就是它本身；但只要策略或环境带一点随机性，不同回合就会给出不同的 G，这时才轮到"平均"上场。</p>
+
+    <h3>增量式均值：不用把历史回报全存下来</h3>
+
+    <p>最直接的估计是 V(s) = (G₁ + G₂ + … + G<sub>n</sub>) / n。但每来一条新回合就重算总和既浪费内存又浪费时间。<span class="term">增量式均值</span>（Incremental Mean）把第 n 个样本并入旧均值：</p>
+
+    <div class="formula">V<sub>n</sub> = V<sub>n−1</sub> + <span class="frac"><span class="num-part">1</span><span class="den-part">n</span></span> · ( G<sub>n</sub> − V<sub>n−1</sub> )</div>
+
+    <p><strong>手算一遍</strong>：设第一条回合给出 G₁ = −0.434，则 V₁ = −0.434。第二条回合（策略扰动后走了条稍好的路）给出 G₂ = 2.2，则：</p>
+
+    <div class="formula">V₂ = −0.434 + <span class="frac"><span class="num-part">1</span><span class="den-part">2</span></span> × ( 2.2 − (−0.434) ) = −0.434 + <span class="frac"><span class="num-part">2.634</span><span class="den-part">2</span></span> = −0.434 + 1.317 = <strong>0.883</strong></div>
+
+    <p>注意这个公式的结构：<strong>新估计 = 旧估计 + 步长 × (目标 − 旧估计)</strong>。请记住它——从本章的 MC 到第6章的 TD、Sarsa、Q-learning，所有更新都长这个样子，区别只在于"目标"是什么。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>步长 1/n 会随样本增多而越来越小，这是"样本均值"的精确实现。但在非平稳环境（比如策略本身在不断改进）里，你反而希望新样本永远有发言权，于是用常数步长 α：V ← V + α(G − V)。常数 α 不再收敛到单点，而是在真值附近小幅波动——这是用"永不收敛"换"永远跟踪"。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>"α = 1/n 严格优于常数 α。" 只在平稳分布下成立。MC 控制里策略一直在变，价值函数是移动靶；若用 1/n，后期新经验的影响趋近于零，估计会"冻结"在旧策略的价值上。这就是为什么实际控制算法几乎都用常数 α（如 0.1）。</p>
+    </div>
+
+    <!-- 回忆卡片 5.2 -->
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 5.2-1</div>
+              <div class="q-text">写出回报的递推定义，并指出为什么算回报要从回合末尾倒着算最方便。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              G<sub>t</sub> = R<sub>t+1</sub> + γG<sub>t+1</sub>，终止态 G<sub>T</sub> = 0。倒推时每一步只需一次乘加（利用后一项已算好的结果），把整条序列的计算量从 O(T²) 降到 O(T)。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 5.2-2</div>
+              <div class="q-text">不看讲义，写出增量均值更新式。常数 α 相比 α = 1/n 牺牲了什么、换来了什么？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              V<sub>n</sub> ← V<sub>n−1</sub> + α(G<sub>n</sub> − V<sub>n−1</sub>)。常数 α 牺牲了渐近无偏收敛（估计会在真值附近永远小幅波动），换来了对非平稳目标的持续跟踪能力——这在策略不断改进的控制问题里是必需品。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 5.3 ============ -->
+    <h2><span class="sec-no">5.3</span>首次访问还是每次访问：同一状态的两次相遇</h2>
+
+    <p>上一节的回合里每个状态只出现一次。但随机策略下，一条轨迹完全可能<strong>两次经过同一个状态</strong>——比如智能体在 (2,3) 附近兜了个圈子。这时一个微妙的问题出现了：这一回合给状态 s 贡献了<strong>两个</strong>回报样本，用哪个？</p>
+
+    <ul>
+      <li><span class="term">首次访问 MC</span>（First-Visit MC）：只用第一次到达 s 之后的那段回报；</li>
+      <li><span class="term">每次访问 MC</span>（Every-Visit MC）：每一次到达 s 后的回报都算作一个独立样本。</li>
+    </ul>
+
+    <p><strong>最小完整例子</strong>（3 状态链上兜圈）：回合轨迹 A → B → A → C → 终止，奖励依次为 −1, −1, −1, +10，γ = 0.9。倒推回报：</p>
+
+    <ul>
+      <li>C（t=3）：G₃ = <strong>10</strong></li>
+      <li>A 的第二次访问（t=2）：G₂ = −1 + 0.9 × 10 = <strong>8</strong></li>
+      <li>B（t=1）：G₁ = −1 + 0.9 × 8 = <strong>6.2</strong></li>
+      <li>A 的第一次访问（t=0）：G₀ = −1 + 0.9 × 6.2 = <strong>4.58</strong></li>
+    </ul>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>方法</th><th>V(A) 的样本</th><th>本回合后 V(A) 的估计</th></tr>
+        <tr><td>首次访问 MC</td><td>只用 G₀ = 4.58</td><td><strong>4.58</strong></td></tr>
+        <tr><td>每次访问 MC</td><td>G₀ = 4.58 与 G₂ = 8 都算</td><td>(4.58 + 8) / 2 = <strong>6.29</strong></td></tr>
+      </table>
+    </div>
+
+    <p>同一条回合，两种方法给出不同的估计：4.58 vs 6.29。差异的来源是：第二次访问的回报 8 <strong>嵌在</strong>第一次访问的回报 4.58 里（4.58 = −1 + 0.9 × 6.2，而 6.2 又由 8 推出），两个样本统计上相关，不是独立同分布。首次访问 MC 的样本来自定义良好的"从 s 出发的回报分布"，理论分析（无偏性、大数定律）干净漂亮，所以书上的收敛性证明都以它为对象；每次访问 MC 的样本有偏但方差特性不同，实践中同样收敛，有时还更容易实现成增量形式。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>把"一次访问后的尾段轨迹"看作一个样本，那么一条长回合其实是一捆<strong>彼此重叠的样本</strong>。首次访问是"每回合每状态只取一个，保证样本定义干净"；每次访问是"重叠也照单全收，用相关性换样本量"。两者都收敛——区别只在收敛的理论性质与中间过程的表现。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>"首次访问无偏，所以实践中一定用首次访问。" 未必。无偏性是对"<strong>从 s 出发的回报</strong>"这个随机变量而言的估计性质，不等于"对下游任务更好"。在函数逼近（第9章起）和在线更新场景里，每次访问的变体反而更常用。选择依据是收敛性质与实现成本，不是"无偏"这块招牌。</p>
+    </div>
+
+    <!-- 回忆卡片 5.3 -->
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 5.3-1</div>
+              <div class="q-text">一条回合里状态 s 出现了两次，首次访问与每次访问 MC 各自怎么处理？哪种的样本相互独立？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              首次访问只取第一次到达后的回报；每次访问把两段尾迹回报都计入。两者都算不上完全独立——同一条回合内部高度相关；但首次访问保证"每个样本对应定义良好的回报分布"，理论性质最干净，每次访问的样本（如例中的 4.58 与 8）在数值上直接嵌套相关。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 5.3-2</div>
+              <div class="q-text">在 A → B → A → C → 终止（奖励 −1,−1,−1,+10，γ=0.9）的例子里，首次访问和每次访问对 V(A) 各给出什么数？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              首次访问：V(A) = 4.58（只用 G₀）。每次访问：V(A) = (4.58 + 8) / 2 = 6.29。关键步骤：第二次访问的 G₂ = −1 + 0.9×10 = 8，B 的 G₁ = −1+0.9×8 = 6.2，第一次访问 G₀ = −1+0.9×6.2 = 4.58。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 5.4 ============ -->
+    <h2><span class="sec-no">5.4</span>从评估到控制：探索是绕不开的门票</h2>
+
+    <p>会估计 v<sub>π</sub> 还不够，我们的目标是找到最优策略。照抄 DP 的 generalized policy iteration（GPI）框架：评估当前策略 → 对所有状态贪心改进 → 再评估 → 再改进……但这里藏着一个 DP 没有的麻烦。</p>
+
+    <p>DP 的贪心改进是对模型求 max 算出来的；MC 没有模型，改进只能依赖<span class="term">动作价值函数</span>（Action-Value Function）q<sub>π</sub>(s, a)——"在 s 做 a 然后跟 π，值多少"。有了 q，贪心改进就是 π′(s) = argmax<sub>a</sub> q(s, a)，完全不需要模型。这正是 MC 控制偏爱 q 而不是 v 的原因。</p>
+
+    <p>但估计 q(s, a) 的前提是：<strong>每个 (s, a) 对都被尝试过</strong>。一个确定性贪心策略在 s 永远只选一个动作，其他动作的 q 永远得不到样本——万一没被选的那个才是好的呢？这就是探索问题在 MC 里的样子。三条出路：</p>
+
+    <ul>
+      <li><span class="term">探索性开端</span>（Exploring Starts, ES）：强制每条回合从随机 (s, a) 出发，保证所有对都有非零采样概率。简单，但很多任务做不到（你没法命令机器人"从半空中某个姿态开始"）。</li>
+      <li><span class="term">ε-贪心策略</span>（ε-greedy）：以 1−ε 选当前最优动作，以 ε 均匀随机。on-policy 路线：评估和改进的就是这个带噪声的策略本身，GLIE（Greedy in the Limit with Infinite Exploration，让 ε 随时间衰减到 0）保证收敛到最优。</li>
+      <li><strong>离策略</strong>（off-policy）：干脆让"跑数据的策略"和"要学的策略"分家——这是下一节的主题。</li>
+    </ul>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>MC 控制的死穴不在"平均"，而在"覆盖"。价值估计准不准是统计问题，<strong>有没有数据是存在性问题</strong>。所有 MC 控制算法的设计，本质上都是在回答：用什么机制保证每个 (s, a) 对迟早被试到足够多次？</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>"ε-贪心只是工程 trick，理论上不重要。" 恰恰相反：没有探索机制，MC 控制连收敛的前提都不满足。GLIE 的两个条件——每个 (s, a) 被访问无穷多次、且策略极限为贪心——缺一不可，它们就是 MC 控制收敛定理的核心假设。</p>
+    </div>
+
+    <!-- 回忆卡片 5.4 -->
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 5.4-1</div>
+              <div class="q-text">为什么 MC 控制要估计 q(s, a) 而不是 v(s)？（从"没有模型"的角度回答）</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              贪心改进需要比较"在 s 选各动作的后果"。有模型时可以用 v 和 p(s′,r|s,a) 算一步前瞻；MC 没有模型，一步前瞻算不出来，只能直接估计每个动作的价值 q(s, a)，然后取 argmax。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 5.4-2</div>
+              <div class="q-text">说出保证 MC 控制数据覆盖的三种机制，并指出 GLIE 的两个条件。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              探索性开端（随机起点）、ε-贪心（on-policy）、离策略（行为策略负责探索）。GLIE：① 所有 (s, a) 对被无限次访问（探索不止）；② 策略随时间收敛到贪心（ε → 0）。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 5.5 ============ -->
+    <h2><span class="sec-no">5.5</span>离策略蒙特卡洛：用别人的数据学自己的策略</h2>
+
+    <p>ε-贪心的 on-policy 有个结构性妥协：你评估的是一个永远带 10% 噪声的策略。能不能更贪心一点——<strong>学一个纯贪心的目标策略，同时让一个更"浪"的策略去收集数据</strong>？这就是<span class="term">离策略</span>（Off-Policy）设定：</p>
+
+    <ul>
+      <li><span class="term">目标策略</span>（Target Policy）π：我们想学、想评估的策略（通常是贪心的）；</li>
+      <li><span class="term">行为策略</span>（Behavior Policy）b：实际在环境里跑、产生数据的策略（通常更随机，保证覆盖，即 π(a|s) &gt; 0 蕴含 b(a|s) &gt; 0）。</li>
+    </ul>
+
+    <p>数据是按 b 的口味采的，直接平均得到的是 v<sub>b</sub> 而不是 v<sub>π</sub>。纠偏的工具是<span class="term">重要性采样</span>（Importance Sampling）：一条轨迹在 π 下出现的相对可能性，等于逐动作概率比的连乘——<span class="term">重要性采样比</span>（Importance-Sampling Ratio）：</p>
+
+    <div class="formula">ρ<sub>t:T−1</sub> = ∏<sub>k=t</sub><sup>T−1</sup> <span class="frac"><span class="num-part">π(A<sub>k</sub> | S<sub>k</sub>)</span><span class="den-part">b(A<sub>k</sub> | S<sub>k</sub>)</span></span></div>
+
+    <p>注意：<strong>环境的转移概率完全不出现</strong>——它同时出现在轨迹在两个策略下的似然里，被约掉了。这就是为什么离策略方法依然不需要模型。</p>
+
+    <h3>手算：一个比率、两种估计</h3>
+
+    <p>设某状态 s 下有两个动作，目标策略 π 是确定性的（选 a₁ 概率 1），行为策略 b 均匀（各 0.5）。一条回合从 s 出发且前两个决策都恰好选了 a₁：</p>
+
+    <div class="formula">ρ = <span class="frac"><span class="num-part">1</span><span class="den-part">0.5</span></span> × <span class="frac"><span class="num-part">1</span><span class="den-part">0.5</span></span> = <strong>4</strong></div>
+
+    <p>若某步 b 选了 a₂，则该步 π(a₂|s) = 0，整条 ρ = 0——这条轨迹在 π 下根本不可能发生，权重为零。现在收集到两条回合：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>回合</th><th>是否符合 π</th><th>ρ</th><th>回报 G</th></tr>
+        <tr><td>第1条</td><td>两步都选 a₁</td><td>4</td><td>10</td></tr>
+        <tr><td>第2条</td><td>第一步选了 a₂</td><td>0</td><td>−6</td></tr>
+      </table>
+    </div>
+
+    <p><span class="term">普通重要性采样</span>（Ordinary IS）对 ρG 直接取平均：</p>
+
+    <div class="formula">V(s) = <span class="frac"><span class="num-part">4 × 10 + 0 × (−6)</span><span class="den-part">2</span></span> = <span class="frac"><span class="num-part">40</span><span class="den-part">2</span></span> = <strong>20</strong></div>
+
+    <p>估计值 20，比实际见过的任何回报（10 和 −6）都大！这不是 bug，而是普通 IS 的定义使然：它是无偏的（数学期望恰好是 v<sub>π</sub>），但方差可以非常夸张，单次估计可能飞出合理范围。<span class="term">加权重要性采样</span>（Weighted IS）改用权重之和做分母：</p>
+
+    <div class="formula">V(s) = <span class="frac"><span class="num-part">4 × 10 + 0 × (−6)</span><span class="den-part">4 + 0</span></span> = <span class="frac"><span class="num-part">40</span><span class="den-part">4</span></span> = <strong>10</strong></div>
+
+    <p>结果 10，落在已见回报范围之内。加权 IS 有偏（分母里的权重和本身也是随机的），但偏差随样本量消失，且方差通常小得多——实践中几乎总是首选。当回合带折扣时，还有进一步按折扣长度加权的<span class="term">折扣感知重要性采样</span>（Discount-Aware IS），把"长轨迹的高折扣权重"也考虑进比率里，思想相同：让权重更忠实地反映 π 下回报的构成。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>重要性采样本质上是"按稀有程度补发权重"：在 π 看来很正常、在 b 看来很少见的行为，每条样本要顶好几条用（ρ = 4 意味着这条样本代表 π 世界里 4 条的量）；π 绝不可能做的行为直接作废（ρ = 0）。普通 IS 忠实但暴躁，加权 IS 用一点偏差换温顺。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>"ρ 里应该有环境的转移概率。" 没有。推导中 π 与 b 下的轨迹似然分别是 ∏π(a|s)·p(s′|s,a) 和 ∏b(a|s)·p(s′|s,a)，环境项一模一样，比值里全部约去，只剩下策略比。这正是离策略方法"免模型"的关键——也是它脆弱的地方：比率连乘随轨迹变长急剧膨胀，长回合下 ρ 的方差是 MC 离策略方法的阿喀琉斯之踵。</p>
+    </div>
+
+    <!-- 回忆卡片 5.5 -->
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 5.5-1</div>
+              <div class="q-text">写出重要性采样比的公式，并解释为什么它不需要环境模型。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              ρ<sub>t:T−1</sub> = ∏<sub>k=t</sub><sup>T−1</sup> π(A<sub>k</sub>|S<sub>k</sub>) / b(A<sub>k</sub>|S<sub>k</sub>)。轨迹似然中环境的转移概率 p(s′|s,a) 在分子分母中完全相同，相约后只剩策略之比，所以只需知道两个策略的概率，无需任何环境知识。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 5.5-2</div>
+              <div class="q-text">普通 IS 与加权 IS 的公式差在哪？为什么两条样本（ρ=4, G=10；ρ=0, G=−6）下普通 IS 给出 20 而加权 IS 给出 10？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              普通 IS 分母是样本条数 n：(4×10+0)/2 = 20，无偏但可能超出已见回报范围、方差大；加权 IS 分母是权重和 Σρ：(4×10)/(4+0) = 10，有偏但偏差渐近消失、方差小，实践中更常用。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 5.6 ============ -->
+    <h2><span class="sec-no">5.6</span>错误直觉清算："无偏估计，所以 MC 比别的都好"</h2>
+
+    <p>前面五节给了 MC 一副干净的理论画像：样本均值、无偏、大数定律。这很容易催生一个危险的直觉：<strong>"MC 是统计上最'正确'的方法，应该优先于一切带偏的方法。"</strong> 这条直觉错在把"无偏"当成了全部。拆开看：</p>
+
+    <ul>
+      <li><strong>无偏 ≠ 好用</strong>。普通重要性采样严格无偏，刚才的例子里它给出了 20 这个比所有观测都大的估计——你要真拿它去指导决策，方差会要了你的命。估计量的好坏看的是均方误差（偏差² + 方差），不是只看偏差那一项。</li>
+      <li><strong>"必须等回合结束"不是小毛病</strong>。下棋要等终局才知道输赢，但很多任务是持续性的（机器人控制、服务器调度），根本没有"回合结束"这回事；就算有，等到结束才更新意味着学习信号严重延迟。第6章的 TD 用"自举"换掉"等到底"，付出的代价正是引入偏差——而这笔交易在大多数任务里是赚的。</li>
+      <li><strong>"MC 不用模型所以永远安全"</strong>。MC 确实不对环境动态建模，但离策略 MC 里的重要性采样比对<strong>策略概率</strong>极其敏感：b 的某个概率写错一点，连乘之后 ρ 就会系统性失真。免模型不等于免假设。</li>
+    </ul>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>记住一句话：<strong>MC 用零偏差换取零先验，代价是高方差和必须等待</strong>。它是不是好方法，取决于你的任务里"回合短不短、方差忍不忍得了"。这个"偏差–方差–等待时间"的三角权衡，会一路贯穿第6、7章。</p>
+    </div>
+
+    <!-- 回忆卡片 5.6 -->
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 5.6-1</div>
+              <div class="q-text">"普通 IS 无偏，所以一定比加权 IS 好。"这个推理漏掉了什么？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              漏掉了方差。均方误差 = 偏差² + 方差，普通 IS 的方差可以大到单次估计飞出合理范围（如例子中的 20），加权 IS 用可消失的小偏差换大降的方差，实践中几乎总是更优。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 5.6-2</div>
+              <div class="q-text">列举 MC 方法的两个结构性代价，并各用一个反例说明"无偏"救不了它们。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              ① 必须等回合结束：持续性任务（如服务器调度）没有终止态，MC 根本无法更新；② 高方差：长回合下重要性采样比连乘爆炸，离策略 MC 估计极不稳定。两者都与"估计是否无偏"无关。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 概念卡 ============ -->
+    <h2><span class="sec-no">🃏</span>概念卡：本章概念的一分钟画像</h2>
+    <p>翻面前先自问：这个概念我能用一句话讲清楚吗？</p>
+    <div class="flip-grid">
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 1</div>
+            <div class="q-text">蒙特卡洛预测（Monte Carlo Prediction）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">用策略跑完整回合，以实际回报的平均值估计状态价值 v<sub>π</sub>(s) 的方法。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">环境模型 p(s′,r|s,a) 未知时，动态规划无法求期望，只能改用采样平均。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">问一家餐厅好不好吃：不看菜单（模型），自己去吃十次取平均。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为它适用于任何任务——没有终止态的持续任务里回报永远算不完。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">回合制任务、有仿真器可大量采样的场景；也是第6、7章一切改进的参照系。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 2</div>
+            <div class="q-text">回报（Return, G<sub>t</sub>）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">从时刻 t 到回合结束的折扣奖励和：G<sub>t</sub> = R<sub>t+1</sub> + γR<sub>t+2</sub> + …，递推写作 G<sub>t</sub> = R<sub>t+1</sub> + γG<sub>t+1</sub>。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">把"一整条轨迹好不好"压缩成一个数，让平均成为可能。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">学期总评：期末成绩权重最大（γ 折现未来），但每一场平时分都算进去。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为必须正着逐项加——倒推递推只要 O(T)，正着算是 O(T²)。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">所有价值方法的更新目标：MC 直接用它，TD 用它的"一步截断版"。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 3</div>
+            <div class="q-text">首次访问 / 每次访问（First-Visit / Every-Visit）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">一回合内状态 s 多次出现时，只取首次尾迹回报 vs 每次尾迹回报都计样本。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">一条回合里同一状态的多个"候选样本"如何取舍。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">首次访问像"一次采访只录一段"，每次访问像"同一个人每句话都算一条证言"。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为每次访问"重复计数所以错误"——两者都收敛，只是样本相关性与理论性质不同。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">理论证明用首次访问；在线/函数逼近场景常用每次访问的增量变体。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 4</div>
+            <div class="q-text">增量式均值（Incremental Mean）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">V<sub>n</sub> ← V<sub>n−1</sub> + α(G<sub>n</sub> − V<sub>n−1</sub>)，α = 1/n 时精确等于样本均值。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">避免存储全部历史回报，O(1) 内存完成均值维护。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">老班主任更新对学生的印象：新表现和旧印象的差，乘一个小小的权重。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为 α = 1/n 永远最好——非平稳目标（策略在变）下它会"冻结"，要用常数 α。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">全书所有更新规则的母形式；第6章 TD 只是把目标 G 换成自举目标。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 5</div>
+            <div class="q-text">探索性开端与 GLIE（Exploring Starts / GLIE）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">ES：回合从随机 (s,a) 出发；GLIE：无限探索且 ε 渐近衰减到 0 的探索调度。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">贪心改进需要所有 (s,a) 的 q 值，而贪心策略自己不去碰非贪心的动作。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">想评价所有菜，就得偶尔点一道"今日最差候选"尝尝。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为探索率固定 ε = 0.1 也能收敛到最优——收敛的是 ε-最优，要 GLIE 衰减才到真最优。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">on-policy MC 控制的收敛保障；第6章 Sarsa 沿用同样的探索框架。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 6</div>
+            <div class="q-text">重要性采样（Importance Sampling）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">用逐动作策略概率比 ρ 给行为策略产生的回报重新加权，以估计目标策略的价值。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">想学贪心策略 π，手头的数据却是探索策略 b 跑出来的，分布对不上。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">选举民调按人口结构加权：稀有的关键群体，每一票要当好几票计。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为 ρ 含环境转移概率——它恰好被约掉，只剩策略比；真正的麻烦是长轨迹下 ρ 方差爆炸。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">一切离策略方法的纠偏核心：第7章 n 步离策略、第12章策略梯度都靠它。</span></div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- ============ 分层习题 ============ -->
+    <h2><span class="sec-no">📝</span>分层习题</h2>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>判断并说明理由：「蒙特卡洛方法估计的是样本均值，所以它一定是有偏的；动态规划用精确期望，所以它无偏。」这个说法对吗？</div>
+      <details>
+        <summary>提示</summary>
+        <p>先分清"对谁无偏"：MC 的估计是哪个随机变量的无偏估计？DP 的"精确"又建立在什么前提上？</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p><strong>说法错误。</strong>逐层拆：</p>
+          <p>① MC 的样本均值（普通 IS 或直接平均）恰好是对 v<sub>π</sub>(s) 的<strong>无偏</strong>估计——大数定律与期望的线性性保证 E[平均G] = E[G] = v<sub>π</sub>(s)。说"一定是有偏的"正好说反了（加权 IS 有偏，但那是另一种估计量）。</p>
+          <p>② DP 在"模型 p(s′,r|s,a) 完全正确"的前提下确实算出精确期望；但真实场景中模型往往是学出来或拍出来的，模型误差会原封不动地传进价值——此时 DP 是<strong>有偏</strong>的，偏差来自模型而非统计。</p>
+          <p>③ 易错点：把"无偏"当成绝对属性。无偏永远是"相对某个真值、在某组假设下"的性质。MC 的假设是采样忠实于真实交互；DP 的假设是模型正确。比较方法时必须连假设一起比较。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>在 5×5 gridworld 中，状态 (1,3) 在一条回合里出现两次（智能体中途绕回）。同学说："既然每个状态的回报都要用到，那首次访问 MC 就是错的，应该用每次访问。" 你同意吗？</div>
+      <details>
+        <summary>提示</summary>
+        <p>两种方法的样本定义各是什么？收敛性定理对两者分别怎么说？</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p><strong>不同意。</strong>首次访问并不是"丢弃数据"的权宜之计，而是刻意选择了一个定义干净的采样对象：每个样本都是"从 s 出发的完整回报"这一随机变量的一次独立实现（跨回合意义下），无偏性与大数定律直接成立。每次访问把同回合内相互嵌套的回报（如 4.58 与 8）都计入，样本间相关，但同样可以证明收敛到 v<sub>π</sub>。</p>
+          <p>同学的错误在于把"用了更多数据"等同于"估计更正确"。样本量多 ≠ 估计性质好——相关样本的边际信息是递减的。两种方法都收敛，选择依据是理论性质与实现便利，不是"谁用的数据多"。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>在 5×5 gridworld（步进 −1、终点 +10、γ = 0.9）中，策略走出一条较短回合：(2,4) → (2,5) → (3,5) → (4,5) → (5,5)。求这条回合中状态 (2,4) 和 (3,5) 的回报；若此前 V((2,4)) 已有两个样本均值 1.0，用 α = 1/3 的增量式把本条样本并入，写出完整过程。</div>
+      <details>
+        <summary>提示</summary>
+        <p>从终止端倒推：G((4,5)) = 10，然后逐格乘 0.9 减 1。增量式先算这是第几个样本。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p><strong>第一步：倒推回报。</strong></p>
+          <ul>
+            <li>G((4,5)) = 10（进终点拿 +10）</li>
+            <li>G((3,5)) = −1 + 0.9 × 10 = <strong>8</strong></li>
+            <li>G((2,5)) = −1 + 0.9 × 8 = 6.2</li>
+            <li>G((2,4)) = −1 + 0.9 × 6.2 = <strong>4.58</strong></li>
+          </ul>
+          <p><strong>第二步：增量并入。</strong>已有 n = 2 个样本、均值 V₂ = 1.0，本条是第 3 个样本，α = 1/3：</p>
+          <p>V₃ = V₂ + (1/3)(G − V₂) = 1.0 + (1/3)(4.58 − 1.0) = 1.0 + (1/3) × 3.58 = 1.0 + 1.193333… ≈ <strong>2.193</strong></p>
+          <p>验算：若前两条样本均值 1.0，则总和 2.0；加 4.58 得 6.58，除以 3 = 2.1933…，与增量式一致。✓</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>目标策略 π 在某两状态链上恒选动作 a₁（概率 1），行为策略 b 等概率（0.5/0.5）两动作。收集到三条从状态 s 出发的回合：① 两步都选 a₁，G = 6；② 第一步 a₁、第二步 a₂，G = −4；③ 两步都选 a₁，G = 2。分别用普通 IS 与加权 IS 估计 V<sub>π</sub>(s)，写出 ρ、分子分母与结果，并评论哪个更可信。</div>
+      <details>
+        <summary>提示</summary>
+        <p>先逐条算 ρ：只有"π 概率为零"的步会把整条 ρ 打成 0。普通 IS 分母是 3，加权 IS 分母是 ρ 之和。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p><strong>各条 ρ：</strong></p>
+          <ul>
+            <li>回合①：(1/0.5) × (1/0.5) = <strong>4</strong></li>
+            <li>回合②：第一步 (1/0.5)，第二步 π(a₂|s)/b(a₂|s) = 0/0.5 = 0，连乘得 <strong>0</strong></li>
+            <li>回合③：(1/0.5) × (1/0.5) = <strong>4</strong></li>
+          </ul>
+          <p><strong>普通 IS：</strong>V(s) = (4×6 + 0×(−4) + 4×2) / 3 = (24 + 0 + 8)/3 = 32/3 ≈ <strong>10.67</strong></p>
+          <p><strong>加权 IS：</strong>V(s) = (4×6 + 0×(−4) + 4×2) / (4 + 0 + 4) = 32/8 = <strong>4</strong></p>
+          <p><strong>评论：</strong>普通 IS 给出 10.67，比所有观测回报（6, −4, 2）都大，典型的高方差表现；加权 IS 给出 4，是"π 一致的两条样本的加权平均"，恰等于 (6+2)/2，更可信。样本量大时普通 IS 的无偏性会兑现，但小样本下加权 IS 几乎总是更好的选择。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l3">L3 建模应用</span>你在做一个"围棋 AI 陪练"项目：环境规则完全已知（有精确对弈引擎），但想评估一个"中盘让子策略"的胜率。团队里有人提议用动态规划精确求解，有人提议蒙特卡洛。请为这个项目选择方法路线，画出你的评估流程图（mermaid），并说明：① 为什么 DP 在这里不可行；② 用 on-policy 还是 off-policy，重要性采样在这里会遇到什么具体麻烦。</div>
+      <details>
+        <summary>提示</summary>
+        <p>想想围棋的状态数与分支因子；再想想一局棋的回合长度对 ρ 连乘意味着什么。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p><strong>① 为什么 DP 不可行：</strong>虽然规则模型"已知"，但 DP 的每次更新要对所有后继状态求期望并维护全状态空间的价值表——围棋合法状态数约 10¹⁷⁰，远超任何存储。DP 的瓶颈不只是"模型未知"，还有"状态空间太大"；MC 用采样绕开枚举，只访问实际经过的状态。</p>
+          <p><strong>② 选 off-policy + 加权 IS</strong>（让探索性更强的行为策略对局，评估让子目标策略）。具体麻烦：一局围棋通常 150–300 手，重要性采样比要连乘 150–300 个策略概率比；只要中盘有几手 π 与 b 分歧大，ρ 就会指数级膨胀或归零，估计方差完全失控。这正是第6–7章引入自举、截断轨迹的动机之一。</p>
+          <div class="figure">
+            <div class="mermaid">
+flowchart LR
+  A["行为策略 b 对局引擎跑 N 局"] --> B["逐局记录轨迹与胜负回报"]
+  B --> C["计算每局重要性采样比"]
+  C --> D["加权 IS 平均估计胜率"]
+  D --> E["改进目标策略 π"]
+  E --> A
+            </div>
+            <div class="caption">参考答案附图：off-policy MC 评估循环。</div>
+          </div>
+        </div>
+      </details>
+    </div>
+
+    <!-- ============ 自测 ============ -->
+    <h2><span class="sec-no">✍️</span>本章自测</h2>
+    <p class="quiz-hint">点击选项判分，答错会给出原因。</p>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 1</div>
+      <div class="q-stem">蒙特卡洛方法相对动态规划，本质上的解放是：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 不再需要折扣因子 γ</li>
+        <li data-opt="b">B. 不再需要环境的转移概率模型，用完整回合的采样平均代替期望</li>
+        <li data-opt="c">C. 不再需要回报的概念</li>
+        <li data-opt="d">D. 不再需要探索</li>
+      </ul>
+      <div class="quiz-explain">解析：B 正确——MC 的核心就是用经验样本平均替代基于 p(s′,r|s,a) 的期望。A 错：回报定义里 γ 照用不误。C 错：回报 G 恰恰是 MC 的更新目标，比以往更重要。D 错：MC 控制反而更依赖探索（ES/ε-贪心），否则 q 的相当部分根本采不到样本。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="c">
+      <div class="q-no">自测 2</div>
+      <div class="q-stem">回合 A→B→A→C→终止，奖励 −1,−1,−1,+10，γ=0.9。每次访问 MC 在本回合后给出 V(A) = ？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 4.58</li>
+        <li data-opt="b">B. 8</li>
+        <li data-opt="c">C. 6.29</li>
+        <li data-opt="d">D. 10</li>
+      </ul>
+      <div class="quiz-explain">解析：C 正确。第二次访问 G₂ = −1+0.9×10 = 8；B 的 G₁ = −1+0.9×8 = 6.2；第一次访问 G₀ = −1+0.9×6.2 = 4.58。每次访问取平均 (4.58+8)/2 = 6.29。A 是首次访问的答案（只取 G₀）；B 只算了第二次访问；D 是 C 状态的回报，与 A 无关。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="a">
+      <div class="q-no">自测 3</div>
+      <div class="q-stem">关于步长 α 的选择，下列说法正确的是：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. α = 1/n 精确复现样本均值但无法跟踪变化的策略；控制问题常用常数 α</li>
+        <li data-opt="b">B. α = 1/n 在任何场景下都严格优于常数 α</li>
+        <li data-opt="c">C. 常数 α 能让估计精确收敛到真值</li>
+        <li data-opt="d">D. α 越大，估计的方差越小</li>
+      </ul>
+      <div class="quiz-explain">解析：A 正确。B 错：只在平稳分布下成立，策略不断变化时 1/n 会让新经验权重趋零、估计冻结。C 错：常数 α 收敛到真值附近的平稳分布（持续波动），不精确收敛。D 错：α 越大，单个新样本的影响越大，估计噪声越大、方差越高。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="d">
+      <div class="q-no">自测 4</div>
+      <div class="q-stem">重要性采样比 ρ<sub>t:T−1</sub> 的公式中不包含环境转移概率 p(s′|s,a)，原因是：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 因为作者省略了，实际计算时要补上</li>
+        <li data-opt="b">B. 因为转移概率在两个策略下互为倒数</li>
+        <li data-opt="c">C. 因为蒙特卡洛方法假设环境是确定性的</li>
+        <li data-opt="d">D. 因为轨迹似然中 p 在分子分母完全相同，相约后只剩策略比</li>
+      </ul>
+      <div class="quiz-explain">解析：D 正确——这正是离策略方法免模型的关键推导。A 错：不是省略，是严格约掉。B 错：p 在两个策略下完全相同（环境不因策略而变），不是互为倒数。C 错：MC 对环境随机性没有任何假设，随机环境的 p 照样被约去。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 5</div>
+      <div class="q-stem">两条样本（ρ=4, G=10）与（ρ=0, G=−6）。普通 IS 与加权 IS 的估计分别是：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 10 与 20</li>
+        <li data-opt="b">B. 20 与 10</li>
+        <li data-opt="c">C. 都是 10</li>
+        <li data-opt="d">D. 都是 20</li>
+      </ul>
+      <div class="quiz-explain">解析：B 正确。普通 IS 分母为样本数 2：(4×10+0)/2 = 20；加权 IS 分母为权重和 4：(4×10)/4 = 10。A 把两者写反了。C/D 忽略了两种估计量分母不同这一本质差异——这个差异正是"无偏高方差 vs 有偏低方差"权衡的来源。</div>
+    </div>
+
+    <!-- ============ 复述 ============ -->
+    <div class="retell">
+      <h3>🗣️ 用自己的话，三句话讲完本章</h3>
+      <p>对着空气（或室友）说出这三句。说卡壳的那句，回去重读对应小节。</p>
+      <details>
+        <summary>句1：这章解决什么问题？——</summary>
+        <div class="retell-answer">参考答案：动态规划需要环境的完备模型才能算期望，但现实中我们只有一条条真实经历的回合。本章解决"没有模型时如何估计价值并改进策略"。</div>
+      </details>
+      <details>
+        <summary>句2：核心机制是什么？——</summary>
+        <div class="retell-answer">参考答案：跑完整回合、算出每个状态的回报 G、用（增量）平均逼近期望价值；控制上靠 ε-贪心等机制保证探索；数据若来自别的策略，就用重要性采样比 ρ 重新加权纠偏。</div>
+      </details>
+      <details>
+        <summary>句3：它和前后章怎么分工？——</summary>
+        <div class="retell-answer">参考答案：第1–4章建立了 MDP、价值和动态规划的框架但依赖模型；本章证明"经验平均"可以替代模型；代价是必须等回合结束且方差大——第6章 TD 方法用自举消除等待，第7章 n 步方法在两者之间取折中。</div>
+      </details>
+    </div>
+
+    <!-- ============ 复习计划 ============ -->
+    <div class="review-plan">
+      <h3>🔁 间隔复习计划</h3>
+      <p>回忆本身比重读有效 10 倍。到点只做一件事：翻卡 + 重做标记题。</p>
+      <table>
+        <tr><th>时间点</th><th>复习内容</th><th>预计用时</th></tr>
+        <tr><td>第 1 天</td><td>全部 6 张概念卡 + 12 张回忆卡；重做 L2 两道手算题</td><td>15 分钟</td></tr>
+        <tr><td>第 3 天</td><td>概念卡 2、4、6（回报/增量均值/重要性采样）+ 自测错题 + 重算 5.3 节的 4.58 与 6.29</td><td>10 分钟</td></tr>
+        <tr><td>第 7 天</td><td>三句话复述 + 重写重要性采样比公式并解释为何无环境项 + 合上书挑战</td><td>15 分钟</td></tr>
+        <tr><td>第 15 天</td><td>只重做合上书挑战；能全过就毕业，卡哪条回去重读对应小节</td><td>15 分钟</td></tr>
+      </table>
+    </div>
+
+    <!-- 合上书挑战 -->
+    <div class="final-challenge">
+      <h3>📕 合上书挑战</h3>
+      <p class="fc-sub">现在关掉这个页面，拿一张纸，凭记忆完成以下任务。全部做完再回来核对——这是本章真正的毕业考试。</p>
+      <ol id="ch05-challenge-list">
+        <li><span class="fc-check"></span>写出回报的递推定义 G<sub>t</sub> = R<sub>t+1</sub> + γG<sub>t+1</sub>，并在 5×5 gridworld 的 8 步回合上倒推出全部 8 个回报</li>
+        <li><span class="fc-check"></span>写出增量均值公式，说明 α = 1/n 与常数 α 的本质区别和各自适用场景</li>
+        <li><span class="fc-check"></span>用 A→B→A→C→终止（奖励 −1,−1,−1,+10，γ=0.9）算出首次访问与每次访问对 V(A) 的估计（4.58 vs 6.29）</li>
+        <li><span class="fc-check"></span>写出重要性采样比公式，解释环境转移概率为什么消失，以及"覆盖"假设是什么</li>
+        <li><span class="fc-check"></span>用（ρ=4,G=10）和（ρ=0,G=−6）算出普通 IS = 20、加权 IS = 10，并解释为什么前者可能超出已见回报范围</li>
+        <li><span class="fc-check"></span>一句话回答本章主线问题：没有环境模型时，如何估计价值函数并改进策略？</li>
+      </ol>
+    </div>
+
+    <div class="complete-zone">
+      <button class="btn-complete" id="ch05-btn-complete" onclick="markDone()">✓ 我已完成本章（含合上书挑战）</button>
+    </div>
+
+    <div class="chapter-nav">
+      <a href="chapter-04.html"><span class="nav-dir">← 上一章</span>第4章 动态规划</a>
+      <a href="chapter-06.html" class="next"><span class="nav-dir">下一章 →</span>第6章 时序差分学习</a>
+    </div>
+
+  </div>
+</div>
+
+<footer class="footer">
+  <div class="wrap">第5章 蒙特卡洛方法 · 强化学习互动讲义 · 基于 Sutton &amp; Barto《Reinforcement Learning: An Introduction》(2nd ed, 2018)</div>
+</footer>
+
+<script src="assets/mermaid.min.js"></script>
+<script>
+mermaid.initialize({
+  startOnLoad: true,
+  theme: "base",
+  themeVariables: {
+    primaryColor: "#e3edf7",
+    primaryBorderColor: "#1d5f9e",
+    primaryTextColor: "#1d5f9e",
+    lineColor: "#5c554b",
+    secondaryColor: "#fbeedd",
+    tertiaryColor: "#f5f1e8",
+    fontFamily: "-apple-system, PingFang SC, sans-serif",
+    fontSize: "14px"
+  },
+  flowchart: { curve: "linear", htmlLabels: false }
+});
+</script>
+<script>
+// 自测题判分
+document.querySelectorAll(".quiz-block").forEach(block => {
+  const answer = block.dataset.answer;
+  const explain = block.querySelector(".quiz-explain");
+  block.querySelectorAll(".quiz-opts li").forEach(li => {
+    li.addEventListener("click", () => {
+      const opts = block.querySelectorAll(".quiz-opts li");
+      opts.forEach(o => o.classList.add("disabled"));
+      if (li.dataset.opt === answer) {
+        li.classList.add("correct");
+      } else {
+        li.classList.add("wrong");
+        block.querySelector(`[data-opt="${answer}"]`).classList.add("correct");
+      }
+      explain.classList.add("show");
+    });
+  });
+});
+
+// 合上书清单打勾
+document.querySelectorAll("#ch05-challenge-list li").forEach(li => {
+  li.addEventListener("click", () => li.classList.toggle("checked"));
+});
+
+// 完成标记 → localStorage（键 rl_progress_v1，章号字符串 "5"）
+const CH05_KEY = "rl_progress_v1";
+function loadProgress() {
+  try { return JSON.parse(localStorage.getItem(CH05_KEY)) || {}; } catch (e) { return {}; }
+}
+const progress = loadProgress();
+const btn = document.getElementById("ch05-btn-complete");
+if (progress["5"] && progress["5"].done) {
+  btn.textContent = "✓ 已完成 · 再次点击重置";
+  btn.classList.add("done");
+}
+function markDone() {
+  const p = loadProgress();
+  if (p["5"] && p["5"].done) {
+    delete p["5"];
+    btn.textContent = "✓ 我已完成本章（含合上书挑战）";
+    btn.classList.remove("done");
+  } else {
+    p["5"] = { done: true, completedAt: Date.now(), reviewsDone: 0 };
+    btn.textContent = "✓ 已完成 · 复习提醒已开启";
+    btn.classList.add("done");
+  }
+  localStorage.setItem(CH05_KEY, JSON.stringify(p));
+}
+</script>
+
+</body>
+</html>

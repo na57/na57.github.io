@@ -1,0 +1,598 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第10章 精确推理：团树算法 · PGM 课件</title>
+<script>
+window.MathJax = {
+  tex: {
+    inlineMath: [['$', '$'], ['\\(', '\\)']],
+    displayMath: [['$$', '$$'], ['\\[', '\\]']],
+    processEscapes: true,
+    tags: 'none'
+  },
+  svg: { fontCache: 'global', scale: 1.05 },
+  options: { skipHtmlTags: ['script','noscript','style','textarea','pre','code'] }
+};
+</script>
+<!-- MathJax 本地引用（tex-svg 单文件全量组件，约2MB，自带字体数据），file:// 与断网均可用 -->
+<script src="assets/tex-svg.js" async></script>
+<style>
+  :root{
+    --primary:#1a365d; --accent:#2b6cb0; --accent-light:#ebf8ff; --accent-border:#bee3f8;
+    --text:#2d3748; --muted:#718096; --border:#e2e8f0; --bg-light:#f7fafc;
+    --success:#38a169; --danger:#e53e3e; --warning:#dd6b20; --warn-bg:#fffaf0;
+  }
+  *{margin:0;padding:0;box-sizing:border-box;}
+  html,body{width:100%;height:100%;overflow:hidden;background:#0f172a;}
+  body{
+    font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Hiragino Sans GB","Microsoft YaHei","WenQuanYi Micro Hei",sans-serif;
+    color:var(--text);
+  }
+  #stage{
+    position:absolute; left:50%; top:50%;
+    width:1280px; height:720px;
+    transform:translate(-50%,-50%) scale(1);
+    transform-origin:center center;
+    background:#ffffff;
+    box-shadow:0 0 40px rgba(0,0,0,.4);
+    overflow:hidden;
+  }
+  .slide{
+    position:absolute; inset:0;
+    padding:36px 60px 52px;
+    display:none;
+    flex-direction:column;
+    background:#ffffff;
+    opacity:0;
+    transition:opacity .35s ease;
+  }
+  .slide.active{ display:flex; opacity:1; }
+
+  #progress{ position:absolute; top:0; left:0; height:6px; background:var(--accent); width:0; z-index:50; transition:width .35s; }
+
+  /* 封面 / 结束页 */
+  .slide-cover{ justify-content:center; align-items:center; text-align:center; }
+  .slide-cover{ background:linear-gradient(135deg,#1a365d 0%,#2b6cb0 100%); color:#fff; }
+  .slide-cover .kicker{ font-size:22px; letter-spacing:6px; opacity:.85; margin-bottom:18px;}
+  .slide-cover h1{ font-size:64px; font-weight:800; line-height:1.2; margin-bottom:22px; letter-spacing:2px;}
+  .slide-cover .sub{ font-size:26px; opacity:.92; margin-bottom:36px;}
+  .slide-cover .meta{ font-size:19px; opacity:.85; line-height:2;}
+  .slide-cover .divider{ width:160px;height:5px;background:#fff;opacity:.6;margin:0 auto 30px;border-radius:3px;}
+  .slide-cover .question{ font-size:24px; background:rgba(255,255,255,.12); border:1px solid rgba(255,255,255,.35); border-radius:12px; padding:12px 28px; margin-bottom:30px;}
+
+  /* 页头：结论式标题 */
+  .slide-head{ display:flex; align-items:baseline; gap:16px; border-bottom:3px solid var(--accent); padding-bottom:9px; margin-bottom:12px;}
+  .slide-head .sec{ font-size:17px; color:var(--accent); font-weight:700; background:var(--accent-light); padding:3px 11px; border-radius:6px; white-space:nowrap;}
+  .slide-head h3{ font-size:29px; color:var(--primary); font-weight:700;}
+  .slide-body{ flex:1; display:flex; flex-direction:column; justify-content:center; min-height:0; }
+
+  p{ font-size:21px; line-height:1.65; margin-bottom:8px;}
+  .lead{ font-size:23px; color:#374151; line-height:1.75;}
+  ul,ol{ margin:0 0 8px 26px; font-size:21px; line-height:1.7;}
+  li{ margin-bottom:5px;}
+  strong{ color:var(--primary); }
+
+  /* 公式块 */
+  .formula{ background:var(--accent-light); border-left:5px solid var(--accent); border-radius:0 10px 10px 0; padding:9px 22px; margin:9px 0; text-align:center; font-size:23px;}
+  .formula-concl{ background:#fffaf0; border-left:5px solid var(--warning);}
+  .MathJax{ font-size:1.05em !important; }
+  mjx-container[display="true"]{ margin:6px 0 !important; }
+
+  /* 表格 */
+  table{ width:100%; border-collapse:collapse; margin:10px 0; font-size:20px;}
+  th{ background:var(--accent); color:#fff; padding:8px 12px; text-align:center; font-weight:600;}
+  td{ padding:7px 12px; border:1px solid var(--border); text-align:center; vertical-align:middle;}
+  tr:nth-child(even) td{ background:var(--bg-light);}
+  td.l{ text-align:left; }
+  table.small{ font-size:18px; }
+  table.small td, table.small th{ padding:6px 10px; }
+
+  /* 组件 */
+  .card{ background:var(--accent-light); border:1px solid var(--accent-border); border-radius:12px; padding:12px 20px; margin:10px 0;}
+  .tip{ background:#ebf8ff; border-left:5px solid var(--accent); border-radius:0 10px 10px 0; padding:10px 20px; margin:10px 0; font-size:20px; color:#2c5282;}
+  .deep{ background:#f0fff4; border-left:5px solid var(--success); border-radius:0 10px 10px 0; padding:10px 20px; margin:10px 0; font-size:20px; color:#22543d;}
+  .warn{ background:var(--warn-bg); border-left:5px solid var(--warning); border-radius:0 10px 10px 0; padding:10px 20px; margin:10px 0; font-size:20px; color:#744210;}
+  .trap{ background:#fef2f2; border-left:5px solid var(--danger); border-radius:0 10px 10px 0; padding:10px 20px; margin:10px 0; font-size:20px; color:#7f1d1d;}
+
+  .pause{
+    background:var(--warn-bg); border:2px dashed var(--warning); border-radius:14px;
+    padding:10px 22px; margin:10px 0; display:flex; align-items:center; gap:16px;
+  }
+  .pause .icon{ font-size:36px; line-height:1; }
+  .pause .txt b{ color:var(--warning); font-size:21px; }
+  .pause .txt p{ font-size:18px; color:#744210; margin:3px 0 0; }
+
+  .cols{ display:flex; gap:28px; align-items:stretch; }
+  .col{ flex:1; min-width:0; }
+
+  /* 推导分步：仅互动模式隐藏，截图(autohide)模式全部可见 */
+  .step{ opacity:0; transform:translateY(8px); transition:opacity .3s ease, transform .3s ease; }
+  .step.on{ opacity:1; transform:none; }
+  body.autohide .step{ opacity:1 !important; transform:none !important; }
+  .step-hint{ font-size:14px; color:var(--muted); margin-top:4px;}
+  body.autohide .step-hint{ display:none; }
+
+  /* 因果链 */
+  .chain{ margin:6px 0; }
+  .chain .link{ display:flex; align-items:center; gap:14px; margin:6px 0;}
+  .chain .no{ width:34px; height:34px; border-radius:50%; background:var(--accent); color:#fff; font-size:18px; font-weight:700; display:flex; align-items:center; justify-content:center; flex-shrink:0;}
+  .chain .txt{ font-size:21px; line-height:1.5;}
+  .chain .txt strong{ color:var(--primary); }
+
+  /* mermaid 容器：高度封顶，防止溢出 720px 舞台 */
+  .mmd{ background:var(--bg-light); border:1px solid var(--border); border-radius:12px; padding:10px 14px; display:flex; justify-content:center; align-items:center; margin:8px 0;}
+  .mmd .mermaid{ display:flex; justify-content:center; width:100%; visibility:hidden; }
+  .mmd .mermaid[data-done]{ visibility:visible; }
+  .mmd .mermaid svg{ max-width:100%; height:auto; max-height:230px; }
+  .mmd.mmd-tall .mermaid svg{ max-height:330px; }
+  .mmd.mmd-sm svg{ max-height:150px; }
+  .mmd-row{ display:flex; gap:18px; }
+  .mmd-row .mmd{ flex:1; flex-direction:column; }
+  .mmd .cap{ font-size:17px; color:var(--muted); margin-top:6px; text-align:center;}
+  .mmd .cap b{ color:var(--text); }
+
+  #footer{ position:absolute; bottom:0; left:0; right:0; height:40px; display:flex; align-items:center; justify-content:space-between; padding:0 30px; font-size:15px; color:#94a3b8; background:rgba(247,250,252,.85); border-top:1px solid var(--border); z-index:40;}
+  #footer .brand{ font-weight:600; color:var(--accent); }
+
+  .nav{ position:absolute; bottom:48px; right:40px; display:flex; gap:12px; z-index:45;}
+  .nav button{ width:54px; height:54px; border-radius:50%; border:none; background:var(--accent); color:#fff; font-size:24px; cursor:pointer; box-shadow:0 3px 10px rgba(43,108,176,.4); display:flex; align-items:center; justify-content:center;}
+  .nav button:hover{ background:var(--primary); }
+  .nav button:disabled{ background:#cbd5d0; cursor:default; box-shadow:none;}
+
+  #hint{ position:absolute; bottom:48px; left:40px; font-size:14px; color:#94a3b8; z-index:45;}
+
+  body.autohide #progress, body.autohide #footer, body.autohide .nav, body.autohide #hint{ display:none !important; }
+</style>
+</head>
+<body>
+<div id="stage">
+
+  <div id="progress"></div>
+
+  <!-- 1 封面 -->
+  <section class="slide slide-cover active" data-narration="同学们好，欢迎来到第十章：精确推理的团树算法。上一章的变量消去教会我们一次查询怎么算，可真实系统里查询从来不是一次性的：诊断系统要轮番报告每个变量的后验，传感器网络每分钟都在问同一个网络。而对同一个网络问第二次时，变量消去会从头再来，把自己刚算过的中间结果原样重算一遍。本章只回答一个问题：怎么给变量消去加一个缓存，把重复的运算存起来复用，做到一次校准、回答所有查询。学完你能从一张弦图亲手建出团树，手算两遍消息，并用校准等式给自己查错。">
+    <div class="kicker">概率图模型 · 第 10 章 · 推理</div>
+    <h1>精确推理：团树算法</h1>
+    <div class="sub">Clique Tree Algorithm —— 给变量消去加一个缓存</div>
+    <div class="question">本章要回答：同一个网络被反复查询时，如何避免变量消去的重复计算？</div>
+    <div class="meta">
+      配套讲义：《PGM 互动讲义》第10章 · 基于 Koller &amp; Friedman (2009)<br>
+      ← → 或空格翻页 · 推导页逐步显示
+    </div>
+  </section>
+
+  <!-- 2 全书位置 -->
+  <section class="slide" data-narration="先看本章在全书的位置。推理部分是一条递进的链：第九章的变量消去回答一次查询怎么算；本章把消元过程本身组织成一棵可复用的缓存树，一次校准之后回答所有查询；第十一章回答树宽太大、精确推理不可行时怎么办，把消息直接传到带环图上；第十四章再把这些方法推广到连续变量。所以本章是精确推理的集大成者，也是后面所有近似推理的对照组——之后每章说近似两个字，都是在和本章的精确结果比差距。">
+    <div class="slide-head"><span class="sec">定位</span><h3>精确推理的集大成者，也是所有近似算法的对照组</h3></div>
+    <div class="slide-body">
+      <div class="mmd mmd-sm">
+        <div class="mermaid">
+flowchart LR
+  A["Ch9 变量消去<br>单次查询"] --> B["Ch10 团树算法<br>一次校准，回答所有查询"]:::here
+  B --> C["Ch11 置信传播<br>树宽太大时的近似"]
+  C --> D["Ch14 混合网络推理<br>连续变量推广"]
+  classDef here fill:#2b6cb0,color:#ffffff,stroke:#1a365d,stroke-width:3px
+        </div>
+      </div>
+      <p style="text-align:center; margin-top:10px;">本章解决「<strong>多查询复用</strong>」——把消元的中间因子存进一棵树，随取随用</p>
+    </div>
+  </section>
+
+  <!-- 3 本章主线 -->
+  <section class="slide" data-narration="本章的逻辑只有一条链，先整体摆出来。第一环，多次查询下变量消去结构性重复：凡是绕开查询变量方向的求和，每次都原样重算。第二环，出路是把中间因子缓存起来——但缓存要有货架，得事先知道中间因子长在哪些变量组上。第三环，为此必须先把图弦化，否则消元半路才加边，货架尺寸无从规划。第四环，把最大团按分隔集连成满足运行交性质的树，中间因子变成边上的消息。第五环，收集加分发两遍消息，全树校准，之后任何查询只做局部求和。接下来每一页，都是这条链上的一环。">
+    <div class="slide-head"><span class="sec">主线</span><h3>给变量消去加缓存：把重复的运算存起来复用</h3></div>
+    <div class="slide-body">
+      <div class="chain">
+        <div class="link"><span class="no">1</span><span class="txt">多查询下变量消去<strong>结构性重复</strong>：绕开查询变量的求和每次都重算</span></div>
+        <div class="link"><span class="no">2</span><span class="txt">出路：缓存中间因子 —— 但得<strong>事先知道</strong>它们长在哪些变量组上</span></div>
+        <div class="link"><span class="no">3</span><span class="txt">先<strong>弦化</strong>：消元半路加边就无法规划货架，弦图让中间因子形状事先定死</span></div>
+        <div class="link"><span class="no">4</span><span class="txt">最大团按<strong>分隔集</strong>连成满足<strong>运行交性质</strong>的树，中间因子 = 边上的消息</span></div>
+        <div class="link"><span class="no">5</span><span class="txt">收集＋分发<strong>两遍消息</strong> → 全树校准 → 任意查询只做局部求和</span></div>
+      </div>
+      <div class="tip">这条链就是本章的目录：重复劳动 → 弦化 → 建树 → 消息传播 → 校准读答案 → 代价（树宽）</div>
+    </div>
+  </section>
+
+  <!-- 4 动机：同一网络两次查询 -->
+  <section class="slide" data-narration="先把重复劳动摆到桌面上。本章全程用同一个例子：四个二值变量组成四元环，每条边的势函数都是两端一致得五、不一致得一，意思是邻居倾向一致。第一次查询 A 的边缘，按 D、C、B 的顺序消元：先消 D，把含 D 的两个势乘起来得到一张八行的表，再对 D 求和。第二次查询 C 的边缘，换个顺序从头再来——消 D 时含 D 的还是那两个势，那张八行的表几分钟前刚算过，现在原样重算。凡是不经过查询变量方向的求和，两次查询完全相同。变量消去没有记忆，查询越多浪费越大；这不是实现不够好，是算法本身不会存东西。">
+    <div class="slide-head"><span class="sec">动机</span><h3>同一网络查两次，大半个流程是第一次的回放</h3></div>
+    <div class="slide-body">
+      <div class="cols">
+        <div class="col">
+          <div class="mmd mmd-sm">
+            <div class="mermaid">
+flowchart LR
+  A["A"] --- B["B"]
+  B --- C["C"]
+  C --- D["D"]
+  D --- A
+  style A fill:#fbeedd,stroke:#c4651f,stroke-width:2.5px
+  style C fill:#fbeedd,stroke:#c4651f,stroke-width:2.5px
+            </div>
+          </div>
+          <p style="text-align:center; font-size:18px; color:var(--muted);">四元环 A—B—C—D—A；每条边势函数：一致 5 / 不一致 1</p>
+        </div>
+        <div class="col">
+          <div class="card">🔁 <strong>查询 P(A)</strong>：顺序 D, C, B<br>消 D：$\varphi_3 \times \varphi_4 \to \psi(C,D,A)$，再 $\sum_D$ 得 $\tau_1(C,A)$</div>
+          <div class="card">🔁 <strong>查询 P(C)</strong>：顺序 D, A, B<br>消 D：还是 $\varphi_3 \times \varphi_4$ —— <strong>这张 8 行的表刚算过，原样重算</strong></div>
+        </div>
+      </div>
+      <div class="warn">⚠️ 凡是不经过查询变量方向的求和，两次查询完全相同——重复不是巧合，是算法没有记忆</div>
+    </div>
+  </section>
+
+  <!-- 5 为什么必须弦化 -->
+  <section class="slide" data-narration="想缓存，先得有货架：中间因子定义在哪些变量组上，必须事先定下来。看消元的本质动作：消去变量 D 时，含 D 的因子乘起来，作用范围是 D 的全部邻居；要让这个乘积合法地存进一个团，这些邻居必须两两相连。四元环上 D 的邻居是 C 和 A，可原图上没有 A 到 C 这条边，于是消元被迫加入一条填充边。一句话因果：环上的团不成树，中间因子的形状要跑到半路才知道，消息传不下去，缓存也无从规划。所以建树之前的预处理叫弦化：不断给无弦环加弦，直到所有长度大于等于四的环都有弦，这样的图叫弦图。">
+    <div class="slide-head"><span class="sec">概念</span><h3>环上的团不成树、消息传不下去——所以必须先弦化</h3></div>
+    <div class="slide-body">
+      <div class="mmd mmd-sm">
+        <div class="mermaid">
+flowchart LR
+  A["A"] --- B["B"]
+  B --- C["C"]
+  C --- D["D"]
+  D --- A
+  A -.- C
+  linkStyle 4 stroke:#b03a2e,stroke-width:2.5px;
+        </div>
+      </div>
+      <p style="text-align:center; font-size:18px; color:var(--muted);">消 D 时其邻居 C、A 必须相连 → 红色虚线 <strong>A—C 是填充边（fill-in edge）</strong></p>
+      <div class="deep">✅ 弦图的决定性性质：存在完美消元序，消每个节点时邻居已是团——<strong>全部中间因子的作用域，建树前就能从最大团里读出来</strong></div>
+    </div>
+  </section>
+
+  <!-- 6 弦化手算（互动停顿） -->
+  <section class="slide" data-narration="动手把四元环弦化一遍，按 D、C、B、A 的顺序消元，盯住图的变化。先暂停视频，自己写一写每一步加了哪条边。推出来了吗？好，对答案。第一步，消 D：它的邻居是 C 和 A，含 D 的因子乘起来作用域是 C、D、A，这要求 C 和 A 相连，原图没有，被迫加入填充边 A 到 C。第二步，消 C：此时 C 的邻居是 B 和 A，而 A 到 C 已经是边，A、B、C 三边俱全，本身就是团，不用再加边。第三步，消 B 和 A：作用域只剩已有的小团。全程只加了一条边——代价是一条边，换来的是之后所有中间因子的形状事先定死。">
+    <div class="slide-head"><span class="sec">演练</span><h3>手算弦化：按 D, C, B, A 消元，只加一条填充边</h3></div>
+    <div class="slide-body">
+      <div class="step"><p>① <strong>消 D</strong>：邻居 {C, A} 不相连 ⟹ 加填充边 <strong>A—C</strong>；中间因子 $\psi(C,D,A)$</p></div>
+      <div class="step"><p>② <strong>消 C</strong>：此时邻居 {B, A} 已有边（A—C 已加入）⟹ 作用域 {A,B,C} <strong>已是团</strong>，不加边</p></div>
+      <div class="step"><p>③ <strong>消 B、A</strong>：作用域 {A,B}、{A} 均为已有团 ⟹ 弦化完成，全图再无无弦环</p></div>
+      <div class="pause"><div class="icon">✍️</div><div class="txt"><b>暂停推导</b><p>遮住答案，自己把三步各写一遍：消谁、邻居是谁、要不要加边、加哪条。</p></div></div>
+      <p class="step-hint">按空格 / → 逐步揭示答案</p>
+    </div>
+  </section>
+
+  <!-- 7 团树构造 -->
+  <section class="slide" data-narration="弦图有了，正式建缓存树，三个动作。第一，找最大团：弦化后的图里，两两全连且不能再扩大的节点组只有两个，A、B、C 和 A、C、D，其余边都被这两个三元团包含。第二，按分隔集连边：两个团共享的变量叫分隔集，这里共享 A 和 C，用一条标着 A、C 的边连起来；团多的时候，在所有候选边里选分隔集总权重最大的生成树，让信息走最宽的路。第三，验证运行交性质，下一页专门讲。每个团的初始势能，是把原始因子分配给包含它的团之后乘起来。注意，团树不是一张新图，是同一套消元计算被重新排成了一棵树。">
+    <div class="slide-head"><span class="sec">构造</span><h3>团树 = 最大团当节点，分隔集当传送带</h3></div>
+    <div class="slide-body">
+      <div class="mmd mmd-sm">
+        <div class="mermaid">
+flowchart LR
+  C1["团 C1：{A,B,C}<br>ψ1 = φ(A,B) × φ(B,C)"] -- "分隔集 {A,C}" --- C2["团 C2：{A,C,D}<br>ψ2 = φ(C,D) × φ(D,A)"]
+  style C1 fill:#fbeedd,stroke:#c4651f,stroke-width:2.5px
+  style C2 fill:#fbeedd,stroke:#c4651f,stroke-width:2.5px
+        </div>
+      </div>
+      <div class="cols">
+        <div class="col"><div class="card">① <strong>找最大团</strong>：两两全连且不能再扩大——只有 {A,B,C} 与 {A,C,D}</div></div>
+        <div class="col"><div class="card">② <strong>按分隔集连边</strong>：$S_{ij} = C_i \cap C_j = \{A,C\}$；多团时取分隔集总权重最大的生成树</div></div>
+        <div class="col"><div class="card">③ <strong>验证运行交性质</strong>：合法性底线，下一页讲透</div></div>
+      </div>
+      <div class="deep">💡 团树不是新图——是<strong>同一套消元计算的存档格式</strong>：团是工作站，分隔集是传送带，消息就是消元里的中间因子</div>
+    </div>
+  </section>
+
+  <!-- 8 运行交性质 -->
+  <section class="slide" data-narration="运行交性质是团树合法性的全部核心，单独一页讲透。它要求：变量 X 只要出现在两个团里，就必须出现在连接它们的唯一路径上的每一个团里。本例中 A 和 C 同时出现在两个团中，而路径就是那条边本身，满足。语义是：每个变量在团树上占据一片连通区域，不能有飞地。看个反例：三个团 A B、C D、A D 连成一条链，A 出现在首尾两团，中间的团却不含 A。消息传到中间时 A 的信息断裂，尾部的团拿到的全局信息漏掉了首部关于 A 的部分，校准等式直接失效。记住：最大生成树只是顺手满足这条性质的构造法，性质本身才是底线。">
+    <div class="slide-head"><span class="sec">重点</span><h3>运行交性质：每个变量在树上必须占据一片连通区域</h3></div>
+    <div class="slide-body">
+      <div class="formula">$$\text{若 } X \in C_i \text{ 且 } X \in C_j \;\Rightarrow\; X \text{ 出现在 } C_i \text{ 到 } C_j \text{ 唯一路径上的每一个团里}$$</div>
+      <div class="cols">
+        <div class="col">
+          <div class="mmd mmd-sm">
+            <div class="mermaid">
+flowchart LR
+  K1["{A,B}"] --- K2["{C,D}"]
+  K2 --- K3["{A,D}"]
+  style K2 fill:#fae9e7,stroke:#b03a2e,stroke-width:2.5px
+            </div>
+          </div>
+          <p style="font-size:18px; text-align:center; color:var(--muted);">❌ 反例：A 在首尾两团，中间的团不含 A → A 的信息在途中断裂</p>
+        </div>
+        <div class="col">
+          <div class="warn">⚠️ 少了运行交性质，尾部团拿到的「全局信息」漏掉了首部关于 A 的部分——<strong>校准等式直接失效</strong></div>
+          <div class="tip">最大生成树只是顺手满足它的构造法；性质本身才是正确性的来源</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 9 消息公式与团信念 -->
+  <section class="slide" data-narration="现在定义装填缓存的机制：消息传播。团 i 发给邻居 j 的消息，是定义在分隔集上的因子：把自己的初始势能，乘上除 j 以外所有邻居发来的消息，再把只属于自己、不属于分隔集的变量求和消掉——剩下的就是 i 这一侧对分隔集的全部意见。这正是变量消去里乘起来再求和那一步，只不过结果被记在边上，谁都能来取。两遍就够：任选一根，先收集，叶子向根逐级汇报；再分发，根向叶逐级传达。每条边两个方向各一条消息后，全树达到校准：每条边两侧团在分隔集上的边缘完全一致。此时团信念等于初始势能乘上所有收到的消息，它就是该团变量的未归一化联合边缘。">
+    <div class="slide-head"><span class="sec">定义</span><h3>消息 = 消元的中间因子，只不过结果被记在边上</h3></div>
+    <div class="slide-body">
+      <div class="formula">$$\delta_{i\to j}(S_{ij}) = \sum_{C_i \setminus S_{ij}} \psi_i(C_i) \cdot \prod_{k \in N(i)\setminus j} \delta_{k\to i}(S_{ki})$$</div>
+      <p style="text-align:center; font-size:19px; color:var(--muted);">自己势能 × 除 j 外所有邻居的消息，再消去「只属于自己」的变量 → i 这一侧对分隔集的全部意见</p>
+      <div class="formula formula-concl">$$\boldsymbol{\beta_i(C_i) = \psi_i(C_i) \cdot \prod_{k \in N(i)} \delta_{k\to i}(S_{ki}) = \tilde{P}(C_i)} \quad\text{（未归一化边缘）}$$</div>
+      <div class="deep">两遍传遍：收集（叶→根，逐级汇报）＋ 分发（根→叶，逐级传达）→ <strong>校准</strong>：每边两侧团在分隔集上边缘一致</div>
+    </div>
+  </section>
+
+  <!-- 10 手算：初始势能 -->
+  <section class="slide" data-narration="公式看完，把数字全部算出来，接下来三页是本章的手算主场。先算初始势能。团一的势能是 A、B 边上的势乘 B、C 边上的势；每条势的规则都是一致得五、不一致得一，所以乘积只有三种取值：两条边都一致得二十五，恰好一条一致得五，都不一致得一。看表：A、B、C 全零时二十五，全一时也是二十五，其余组合是五或一。团二的势能形状完全相同。这张表没有任何新东西，只是把上一章的因子乘法老老实实做一遍——但它是后面所有消息的原料，请先确认你能独立复现这张表。">
+    <div class="slide-head"><span class="sec">手算</span><h3>原料表：ψ₁ 只有三种取值——25、5、1</h3></div>
+    <div class="slide-body">
+      <table class="small">
+        <thead><tr><th>A</th><th>B</th><th>C</th><th>φ(A,B)</th><th>φ(B,C)</th><th>ψ₁ = φ(A,B)·φ(B,C)</th></tr></thead>
+        <tbody>
+          <tr><td>0</td><td>0</td><td>0</td><td>5</td><td>5</td><td><strong>25</strong></td></tr>
+          <tr><td>0</td><td>0</td><td>1</td><td>5</td><td>1</td><td>5</td></tr>
+          <tr><td>0</td><td>1</td><td>0</td><td>1</td><td>1</td><td>1</td></tr>
+          <tr><td>0</td><td>1</td><td>1</td><td>1</td><td>5</td><td>5</td></tr>
+          <tr><td>1</td><td>0</td><td>0</td><td>1</td><td>5</td><td>5</td></tr>
+          <tr><td>1</td><td>0</td><td>1</td><td>1</td><td>1</td><td>1</td></tr>
+          <tr><td>1</td><td>1</td><td>0</td><td>5</td><td>1</td><td>5</td></tr>
+          <tr><td>1</td><td>1</td><td>1</td><td>5</td><td>5</td><td><strong>25</strong></td></tr>
+        </tbody>
+      </table>
+      <div class="tip">ψ₂(A,C,D) = φ(C,D)·φ(D,A) 形状完全相同；每条边「一致 5 / 不一致 1」⟹ 乘积 ∈ {25, 5, 1}</div>
+    </div>
+  </section>
+
+  <!-- 11 手算：收集消息（互动停顿） -->
+  <section class="slide" data-narration="收集阶段，团二向团一发消息，定义在分隔集 A、C 上，做法是对 D 求和，一共四个格子。先暂停视频，自己把这四个格子算一遍。推出来了吗？好，对答案。零零格：D 取零时势能二十五，取一时一，加起来二十六。零一格：五加五等于十。一零格同理，十。一一格：一加二十五，二十六。四个数：二十六、十、十、二十六。看一眼结构——消息在 A 等于 C 时大、不等时小，也就是说团二对分隔集的意见是你们两个最好一致，这和我们设计的势函数完全吻合。分发阶段反方向再算一遍，由网络的对称性，两条消息恰好相同。">
+    <div class="slide-head"><span class="sec">手算</span><h3>收集消息 δ₂→₁：四个格子算出 26 / 10 / 10 / 26</h3></div>
+    <div class="slide-body">
+      <div class="step"><p>① δ₂→₁(0,0) = ψ₂(0,0,0)+ψ₂(0,0,1) = 25+1 = <strong>26</strong></p></div>
+      <div class="step"><p>② δ₂→₁(0,1) = ψ₂(0,1,0)+ψ₂(0,1,1) = 5+5 = <strong>10</strong>；同理 δ₂→₁(1,0) = 5+5 = <strong>10</strong></p></div>
+      <div class="step"><p>③ δ₂→₁(1,1) = ψ₂(1,1,0)+ψ₂(1,1,1) = 1+25 = <strong>26</strong></p></div>
+      <div class="step"><p>④ 结构解读：A=C 时消息大、A≠C 时小 —— 团₂的意见是「<strong>你们两个最好一致</strong>」，与势函数吻合；由对称性 δ₁→₂ 完全相同</p></div>
+      <div class="pause"><div class="icon">✍️</div><div class="txt"><b>暂停推导</b><p>遮住答案，把四个格子各算一遍——每格都是「D 取 0 与 1 两行之和」。</p></div></div>
+      <p class="step-hint">按空格 / → 逐步揭示答案</p>
+    </div>
+  </section>
+
+  <!-- 12 校准验证：676 vs 660 -->
+  <section class="slide" data-narration="校准等式是手算时最快的查错器：每条边两侧团在分隔集上的边缘必须相等。验证零零格。左侧，对团一的信念里的 B 求和：二十五乘二十六，加一乘二十六，等于六百七十六。右侧，对团二的信念里的 D 求和，同样是六百七十六，校准通过。这里有个经典错误值得点名：如果你左侧算出六百六十，说明你查消息表时按 A、B 的取值去查了，而消息的下标是分隔集 A、C——六百六十不是另一个合法的中间值，它就是错的，正确值六百七十六直接覆盖它，没有任何商量余地。校准等式的全部价值就在这一刻：两边对不上时，它替你把错误定位到具体哪个团、哪一格。">
+    <div class="slide-head"><span class="sec">验证</span><h3>校准等式：两侧同为 676 才算对——660 是查错格子的信号</h3></div>
+    <div class="slide-body">
+      <div class="step">
+        <p><strong>① 左侧</strong>：对 β₁ 里的 B 求和（消息按下标 (A,C)=(0,0) 查，δ₂→₁ = 26）</p>
+        <div class="formula">$$\sum_B \beta_1(0,B,0) = 25\times 26 + 1\times 26 = 650 + 26 = \boldsymbol{676}$$</div>
+      </div>
+      <div class="step">
+        <p><strong>② 右侧</strong>：对 β₂ 里的 D 求和，两侧相等 ⟹ 校准通过 ✓</p>
+        <div class="formula">$$\sum_D \beta_2(0,0,D) = 25\times 26 + 1\times 26 = \boldsymbol{676} \;\checkmark$$</div>
+      </div>
+      <div class="warn">⚠️ 算出 <strong>660</strong>？说明读 C₁ 中 B=1 那行时按 (A,B)=(0,1) 查了消息格 10——消息下标是分隔集 (A,C)，应为 26。660 就是错的，676 直接覆盖它</div>
+      <p class="step-hint">按空格 / → 逐步展开验证</p>
+    </div>
+  </section>
+
+  <!-- 13 校准后读答案 -->
+  <section class="slide" data-narration="校准之后，看缓存怎么兑现承诺。读 A 的边缘：对团一信念里的 B 和 C 求和，四项加起来七百七十六；由对称性 A 取一时也是七百七十六，归一化得零点五。现在回答第二个查询，C 的边缘：对同一个信念换个方向求和，还是七百七十六，同样是零点五。注意关键事实——第二个查询没有发动任何新的消息传播，只是在已有的团信念上做局部求和。顺带，配分函数 Z 等于一千五百五十二，也从团信念里免费得到。一次校准，所有单变量查询随取随用，这就是缓存的全部含义。">
+    <div class="slide-head"><span class="sec">读答案</span><h3>一次校准后，P(A) 与 P(C) 都只是「换个方向求和」</h3></div>
+    <div class="slide-body">
+      <div class="formula">$$\tilde{P}(a^0) = \sum_{B,C} \beta_1(0,B,C) = 650+50+26+50 = 776 \;\Rightarrow\; P(a^0) = \frac{776}{1552} = \boldsymbol{0.5}$$</div>
+      <div class="formula">$$\tilde{P}(c^0) = \sum_{A,B} \beta_1(A,B,0) = 776 \;\Rightarrow\; P(c^0) = \boldsymbol{0.5} \quad\text{（零次新传播）}$$</div>
+      <div class="deep">💡 配分函数 Z = 1552 也从团信念免费得到：$\sum \beta_1 = \sum \beta_2 = 1552$</div>
+    </div>
+  </section>
+
+  <!-- 14 运算量对比 -->
+  <section class="slide" data-narration="现在把缓存省了多少变成数字。逐条数因子运算：一次因子相乘或一次对变量求和算一次。变量消去回答 A 的查询，六次运算；回答 C 的查询，又六次，其中消 D 的乘法和求和与第一次完全重复。团树呢？建势能、两条消息、两个团信念，约六次，之后每个新查询零次传播、只做局部求和。规律很清楚：k 次查询，变量消去是六乘 k 次，团树是一次校准加 k 次局部求和，查询越多省得越多。判定规则也随之而来：单次查询、图又稀疏，变量消去更省，因为没有建树开销；反复查询、在线更新、想要所有变量的边缘，团树完胜。">
+    <div class="slide-head"><span class="sec">对比</span><h3>一笔账：k 次查询，消元 6k 次运算，团树 6 次校准 + k 次局部求和</h3></div>
+    <div class="slide-body">
+      <table class="small">
+        <thead><tr><th>步骤</th><th>VE 查询 P(A)</th><th>VE 查询 P(C)</th><th>团树校准（一次）</th></tr></thead>
+        <tbody>
+          <tr><td>1</td><td class="l">φ₃ × φ₄ → ψ(C,D,A)</td><td class="l">φ₃ × φ₄ → ψ(C,D,A)　<strong>← 重复</strong></td><td class="l">建势能：ψ₁ = φ₁×φ₂，ψ₂ = φ₃×φ₄</td></tr>
+          <tr><td>2</td><td class="l">Σ_D ψ → τ₁(C,A)</td><td class="l">Σ_D ψ → τ₁(C,A)　<strong>← 重复</strong></td><td class="l">收集：δ₂→₁ = Σ_D ψ₂</td></tr>
+          <tr><td>3</td><td class="l">φ₂ × τ₁，Σ_C → τ₂(A,B)</td><td class="l">φ₁ × τ₁，Σ_A → τ₂(B,C)</td><td class="l">分发：δ₁→₂ = Σ_B ψ₁</td></tr>
+          <tr><td>4</td><td class="l">φ₁ × τ₂，Σ_B → τ₃(A)，归一化</td><td class="l">φ₂ × τ₂，Σ_B → τ₃(C)，归一化</td><td class="l">β₁、β₂；读查询 = 局部求和，<strong>无新传播</strong></td></tr>
+          <tr><td><strong>合计</strong></td><td>6 次因子运算</td><td>6 次（2 次与左列重复）</td><td><strong>≈6 次，之后每个新查询 0 次传播</strong></td></tr>
+        </tbody>
+      </table>
+      <div class="deep">k 次查询：VE = 6k；团树 = 一次校准 + k 次局部求和 —— <strong>查询越多，缓存省得越多</strong></div>
+    </div>
+  </section>
+
+  <!-- 15 证据进入团树 -->
+  <section class="slide" data-narration="工程上还有个高频需求：新证据来了怎么办。观测到变量 X 取某个值时，任取一个含 X 的团，把指示因子乘进它的势能——相当于把势能里 X 取其他值的行清零——然后只需从该团出发重新传播消息。树结构不变，其他团的初始势能不变，不用推倒重来。这叫增量更新：证据是局部事件。对比变量消去：每来一次新证据都要从头建一遍消元流程。这就是为什么诊断系统、传感器网络这类证据持续到达的场景，架构上几乎总是选团树。">
+    <div class="slide-head"><span class="sec">证据</span><h3>证据是局部事件：乘进一个团，局部重传，树不用重建</h3></div>
+    <div class="slide-body">
+      <div class="chain">
+        <div class="link"><span class="no">1</span><span class="txt">观测 X = x：任取一个<strong>含 X 的团</strong></span></div>
+        <div class="link"><span class="no">2</span><span class="txt">把指示因子乘进它的势能（X ≠ x 的行<strong>清零</strong>）</span></div>
+        <div class="link"><span class="no">3</span><span class="txt">从该团出发<strong>重新传播</strong>——树结构与其他团势能都不变</span></div>
+      </div>
+      <div class="deep">✅ 增量更新 vs 变量消去的「每次从零开始」——证据持续到达的系统（诊断、传感器网络）几乎总选团树</div>
+    </div>
+  </section>
+
+  <!-- 16 代价：树宽 -->
+  <section class="slide" data-narration="团树不是免费午餐，代价由最大团的大小决定：团内势能表有 d 的团大小次方项，d 是每个变量的取值数。而最大团多大，由弦化加了多少边决定。图的树宽定义为最优弦化下最大团大小减一，精确推理的复杂度是 d 的 w 加一次方——树宽就是精确推理的天花板。树，树宽一；四元环，树宽二；大网格，树宽随边长线性增长。三乘四的小网格团表十六项，完全可行；三十乘四十的网格团表二的三十一次方项，存都存不下。还有一个更微妙的问题：消息传播的正确性依赖树结构，每条边是两侧信息的唯一通道。如果把消息公式直接搬到带环图上迭代会怎样？那就是下一章的开场。">
+    <div class="slide-head"><span class="sec">代价</span><h3>树宽是精确推理的天花板：成本 O(d 的 w+1 次方)</h3></div>
+    <div class="slide-body">
+      <div class="formula formula-concl">$$\text{树宽 } w = (\text{最优弦化下最大团大小}) - 1 \qquad \text{复杂度 } O(d^{w+1})$$</div>
+      <table class="small">
+        <thead><tr><th>图</th><th>树宽 w</th><th>团表规模（二值变量）</th><th>精确推理</th></tr></thead>
+        <tbody>
+          <tr><td class="l">树</td><td>1</td><td>2² = 4 项</td><td>✅ 轻松</td></tr>
+          <tr><td class="l">四元环（本章例）</td><td>2</td><td>2³ = 8 项</td><td>✅ 轻松</td></tr>
+          <tr><td class="l">3×4 网格</td><td>≈3</td><td>2⁴ = 16 项</td><td>✅ 可行</td></tr>
+          <tr><td class="l">30×40 网格</td><td>≈30</td><td>2³¹ 项</td><td>❌ 存不下</td></tr>
+        </tbody>
+      </table>
+      <div class="warn">⚠️ 消息传播的正确性依赖「树」：每条边是两侧信息的唯一通道。把公式直接搬到带环图上迭代会怎样？→ 第 11 章</div>
+    </div>
+  </section>
+
+  <!-- 17 常见误区 -->
+  <section class="slide" data-narration="这页扫雷。第一个误解：团树是一种新模型或者近似算法。错——团树的每一步运算和消元完全相同，分布一点没变，它只是消元的可复用存档格式，是精确推理，毫无近似。第二个：把最大团随便连成一棵树就能传消息。错——少了运行交性质，同一个变量出现在树的两处却不连通，消息传递时信息断裂，校准等式直接失效。第三个：团树是万能升级版，建了就比消元强。也错——单次查询时建树加两遍传播比一次消元更贵；树宽大的网络里，团表本身就存不下。团树的价值场景是多查询、在线证据、要全部边缘，不是任何推理场合。">
+    <div class="slide-head"><span class="sec">避坑</span><h3>三个高频误解：新模型、随便连、万能升级</h3></div>
+    <div class="slide-body">
+      <div class="trap">❌ <strong>团树是新模型 / 近似算法</strong><br>✅ 每步运算与消元完全相同，分布不变——它是消元的<strong>存档格式</strong>，是精确推理</div>
+      <div class="trap">❌ <strong>最大团随便连成树就行</strong><br>✅ 少了运行交性质，变量信息在途中断裂，校准等式失效——性质是底线，最大生成树只是构造法</div>
+      <div class="trap">❌ <strong>团树建了就比消元强</strong><br>✅ 单次查询建树更贵；树宽大时团表存不下。价值场景：<strong>多查询 / 在线证据 / 要全部边缘</strong></div>
+    </div>
+  </section>
+
+  <!-- 18 接口 -->
+  <section class="slide" data-narration="收尾前看看分工。第九章变量消去，管单次查询，图随便什么形状，代价是每来一个新查询就全网重扫。本章团树，管多次查询和在线证据，代价是必须先把图弦化成树，回报是一次校准后每个查询只做局部求和，结果精确。下一章置信传播，处理树宽太大、团树根本建不出来的图，直接在原图节点之间传消息——树上精确，带环就成了近似。注意三者的共同内核是同一个动作：因子相乘、对变量求和。区别只在于这个中间结果被丢弃、被缓存、还是被违规复用。下一章，我们就去做那件违规的事。">
+    <div class="slide-head"><span class="sec">接口</span><h3>同一个「乘起来再求和」：丢弃、缓存，还是违规复用</h3></div>
+    <div class="slide-body">
+      <table>
+        <thead><tr><th></th><th>Ch9 变量消去</th><th>Ch10 团树（本章）</th><th>Ch11 置信传播</th></tr></thead>
+        <tbody>
+          <tr><td class="l"><strong>场景</strong></td><td class="l">单次查询</td><td class="l">多查询 / 在线证据</td><td class="l">树宽太大、建不出团树</td></tr>
+          <tr><td class="l"><strong>结构</strong></td><td class="l">任意图，临时顺序</td><td class="l">先弦化，建成团树</td><td class="l">直接在原图节点间传消息</td></tr>
+          <tr><td class="l"><strong>中间因子</strong></td><td class="l">用完即弃</td><td class="l">缓存在边上（消息）</td><td class="l">环上迭代复用（违规）</td></tr>
+          <tr><td class="l"><strong>结果</strong></td><td class="l">精确，每查询 6 次运算</td><td class="l">精确，校准后局部求和</td><td class="l">树上精确 / 带环近似</td></tr>
+        </tbody>
+      </table>
+      <div class="tip">钩子：把消息公式搬进带环图，精确性在哪里崩掉？—— 下一章见分晓</div>
+    </div>
+  </section>
+
+  <!-- 19 小结 -->
+  <section class="slide" data-narration="三句话讲完本章。第一句，解决什么：变量消去每来一次查询就从头算一遍，同一批中间因子被反复重算；本章给消元加一个可复用的缓存，一次校准回答所有查询。第二句，核心机制：先弦化，中间因子的形状才能事先定为最大团；最大团按分隔集连成满足运行交性质的树；收集加分发两遍消息后全树校准，团信念就是未归一化边缘，任意查询只做局部边缘化。第三句，承上启下：第九章管一次查询怎么消元，本章管多次查询怎么复用；但树宽封顶、算法离不开树结构，带环图上的消息传播和各类近似推理，交给下一章。必背公式就一条：团信念等于初始势能乘上所有收到的消息。">
+    <div class="slide-head"><span class="sec">小结</span><h3>三句话讲完第10章</h3></div>
+    <div class="slide-body">
+      <div class="chain">
+        <div class="link"><span class="no">1</span><span class="txt"><strong>解决什么</strong>：消元对多查询重复劳动 → 给消元加缓存，一次校准回答所有查询</span></div>
+        <div class="link"><span class="no">2</span><span class="txt"><strong>核心机制</strong>：弦化定货架 → 最大团按分隔集连成满足运行交的树 → 收集＋分发两遍校准</span></div>
+        <div class="link"><span class="no">3</span><span class="txt"><strong>承上启下</strong>：Ch9 管单次消元，本章管多次复用；树宽封顶＋离不开树 → Ch11 近似推理</span></div>
+      </div>
+      <div class="formula formula-concl">$$\beta_i(C_i) = \psi_i(C_i) \cdot \prod_{k \in N(i)} \delta_{k\to i}(S_{ki}) = \tilde{P}(C_i) \quad\text{——合上书也要能默写}$$</div>
+    </div>
+  </section>
+
+  <!-- 20 结束页 -->
+  <section class="slide slide-cover" data-narration="第十章到此结束。毕业挑战，合上书拿一张纸：第一，用同一网络查 A 再查 C 的例子，指出变量消去哪两步在重复计算；第二，画出四元环，按 D、C、B 的顺序消元，写出引入的填充边并解释为什么非弦不可；第三，写出消息公式与团信念公式，标出分隔集的位置；第四，对两团树手算两条消息，二十六、十、十、二十六，并用校准等式查出六百六十那个错误；第五，说出树宽的定义，解释它如何决定精确推理还行不行。全部拿下，就带着这棵缓存树走进第十一章——置信传播：把消息规则搬到带环图上，看精确性在哪里崩掉。我们下一章见。">
+    <div class="kicker">本 章 结 束</div>
+    <h1>团树 = 变量消去的可复用存档</h1>
+    <div class="sub">毕业挑战：合上书，拿一张纸</div>
+    <div class="divider"></div>
+    <div class="meta">
+      ☑ 指出两次查询中重复计算的两步　　☑ 四元环弦化：写出填充边 A—C<br>
+      ☑ 默写消息公式与团信念公式　　☑ 手算两条消息 26/10/10/26 并用校准等式查错<br>
+      ☑ 说出树宽定义及其对精确推理的判决<br><br>
+      下一章 · 第11章 近似推理：置信传播——树上精确，带环只是驻点
+    </div>
+  </section>
+
+  <!-- 页脚 -->
+  <div id="footer">
+    <span class="brand">第10章 精确推理：团树算法 · PGM 课件</span>
+    <span id="pagenum">1 / 20</span>
+  </div>
+
+  <!-- 导航 -->
+  <div class="nav">
+    <button id="prev" title="上一页 (←)">‹</button>
+    <button id="next" title="下一页 (→ / 空格)">›</button>
+  </div>
+  <div id="hint">← → 翻页 · 空格下一页 · 推导页逐步显示 · 点击左右半屏翻页</div>
+
+</div>
+
+<!-- mermaid 本地引用，保证离线可用 -->
+<script src="assets/mermaid.min.js"></script>
+<script>
+mermaid.initialize({
+  startOnLoad: false,   // 必须为 false：display:none 的隐藏页渲染会得到 0 宽高的退化 SVG，
+                        // 改为页面激活时懒渲染（见 renderMermaid）
+  theme: "base",
+  themeVariables: {
+    primaryColor: "#ebf8ff",
+    primaryBorderColor: "#2b6cb0",
+    primaryTextColor: "#1a365d",
+    lineColor: "#718096",
+    fontFamily: "-apple-system, PingFang SC, sans-serif",
+    fontSize: "15px"
+  },
+  flowchart: { curve: "linear", htmlLabels: false }
+});
+</script>
+<script>
+(function(){
+  const slides = Array.from(document.querySelectorAll('.slide'));
+  const total = slides.length;
+  let idx = 0;
+
+  const params = new URLSearchParams(location.search);
+  const startSlide = parseInt(params.get('slide'), 10);
+  if (params.get('autohide') === '1') document.body.classList.add('autohide');
+  if (!isNaN(startSlide) && startSlide >= 1 && startSlide <= total) idx = startSlide - 1;
+
+  const progress = document.getElementById('progress');
+  const pagenum = document.getElementById('pagenum');
+  const prevBtn = document.getElementById('prev');
+  const nextBtn = document.getElementById('next');
+
+  // 推导分步：每页记住已展开的步数；autohide（截图）模式下 CSS 强制全显
+  const stepState = new Map();
+  function stepsOf(i){ return Array.from(slides[i].querySelectorAll('.step')); }
+  function applySteps(){
+    stepsOf(idx).forEach((el, k)=> el.classList.toggle('on', k < (stepState.get(idx) || 0)));
+  }
+  // 前进一步：先展开本页下一步，全部展开后才翻页
+  function forward(){
+    const steps = stepsOf(idx);
+    const shown = stepState.get(idx) || 0;
+    if (shown < steps.length){ stepState.set(idx, shown + 1); applySteps(); return; }
+    go(idx + 1);
+  }
+  // 后退一步：先收起本页最后一步，收完才回上一页
+  function backward(){
+    const steps = stepsOf(idx);
+    const shown = stepState.get(idx) || 0;
+    if (shown > 0){ stepState.set(idx, shown - 1); applySteps(); return; }
+    go(idx - 1);
+  }
+
+  // mermaid 懒渲染：只在页面激活（有真实宽高）时渲染该页的图，渲染后打 data-done 防重复
+  function renderMermaid(slide){
+    if (typeof mermaid === 'undefined') return;
+    const nodes = Array.from(slide.querySelectorAll('.mermaid:not([data-done])'));
+    if (!nodes.length) return;
+    nodes.forEach(n => n.setAttribute('data-done', ''));
+    mermaid.run({ nodes }).catch(err => {
+      nodes.forEach(n => n.removeAttribute('data-done'));
+      console.error('mermaid 渲染失败：', err);
+    });
+  }
+
+  function render(){
+    slides.forEach((s,i)=> s.classList.toggle('active', i===idx));
+    progress.style.width = ((idx+1)/total*100) + '%';
+    pagenum.textContent = (idx+1) + ' / ' + total;
+    prevBtn.disabled = (idx===0);
+    nextBtn.disabled = (idx===total-1);
+    applySteps();
+    renderMermaid(slides[idx]);
+  }
+  function go(n){ idx = Math.max(0, Math.min(total-1, n)); render(); }
+
+  prevBtn.addEventListener('click', e=>{ e.stopPropagation(); backward(); });
+  nextBtn.addEventListener('click', e=>{ e.stopPropagation(); forward(); });
+
+  document.addEventListener('keydown', e=>{
+    if(e.key==='ArrowRight'||e.key===' '||e.key==='PageDown'){ e.preventDefault(); forward(); }
+    else if(e.key==='ArrowLeft'||e.key==='PageUp'){ e.preventDefault(); backward(); }
+    else if(e.key==='Home'){ stepState.set(idx, 0); go(0); }
+    else if(e.key==='End'){ go(total-1); }
+  });
+
+  document.getElementById('stage').addEventListener('click', e=>{
+    if(e.target.closest('.nav')) return;
+    const x = e.clientX;
+    if(x < window.innerWidth*0.5) backward(); else forward();
+  });
+
+  function fit(){
+    const s = Math.min(window.innerWidth/1280, window.innerHeight/720);
+    document.getElementById('stage').style.transform = 'translate(-50%,-50%) scale(' + s + ')';
+  }
+  window.addEventListener('resize', fit);
+  fit();
+  render();
+})();
+</script>
+</body>
+</html>

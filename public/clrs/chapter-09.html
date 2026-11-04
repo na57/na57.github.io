@@ -1,0 +1,784 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第9章 贪心与摊还分析 · 算法导论互动讲义</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+<nav class="topbar">
+  <div class="topbar-inner">
+    <span class="brand"><a href="index.html" style="color:inherit">← 学习地图</a></span>
+    <span class="crumb">阶段④ · 设计范式与难解性 / 第9章</span>
+  </div>
+</nav>
+
+<div class="wrap">
+
+  <div class="lecture-head">
+    <span class="ch-label">CHAPTER 09 · 设计范式与难解性</span>
+    <h1>贪心与摊还分析</h1>
+    <p class="lead">本章回答两个问题：什么时候"每步拿当前最好"就是全局最优（贪心）？以及，当单次操作代价剧烈波动时，如何诚实地报出"平均每步多少钱"（摊还）？</p>
+  </div>
+
+  <!-- ===== 章首四件套之 1：全书定位 ===== -->
+  <div class="position-bar">
+    <strong>本章在主线上的位置：</strong>第8章用填表解决了有最优子结构的问题 → <u>本章发现：部分问题多一个"贪心选择性质"，连表都不用填；同时给数据结构操作提供"摊还"这把成本会计尺子</u> → 第10章处理贪心和 DP 都失败的 NP 难问题。<br>
+    第9章回答主线上的第9个问题：<strong>什么时候局部最优就是全局最优？单次最坏代价难看时，如何公平计价？</strong>
+    <div class="map-inline">
+      ① 分析基础：
+      <span class="node">Ch1 算法分析与增长率</span><span class="arrow">→</span>
+      <span class="node">Ch2 分治与递归式</span><br>
+      ② 排序与检索：
+      <span class="node">Ch3 排序算法</span><span class="arrow">→</span>
+      <span class="node">Ch4 哈希表</span><span class="arrow">→</span>
+      <span class="node">Ch5 二叉搜索树与红黑树</span><br>
+      ③ 图算法：
+      <span class="node">Ch6 图的基本算法</span><span class="arrow">→</span>
+      <span class="node">Ch7 最小生成树与单源最短路</span><br>
+      ④ 设计范式与难解性：
+      <span class="node">Ch8 动态规划</span><span class="arrow">→</span>
+      <span class="node here">Ch9 贪心与摊还分析</span><span class="arrow">→</span>
+      <span class="node">Ch10 NP完全与近似算法</span>
+    </div>
+  </div>
+
+  <!-- ===== 章首四件套之 2：学习目标 ===== -->
+  <div class="objectives">
+    <h4>🎯 学完本章，合上书你应该能：</h4>
+    <ol>
+      <li>说出贪心算法正确的两个必要条件，并解释矩阵链乘为什么不满足贪心选择性质；</li>
+      <li>用交换论证证明活动选择问题中"选最早结束"的安全性；</li>
+      <li>在给定字符频率上完整建出 Huffman 树，算出编码与总码长；</li>
+      <li>分别用聚合、记账、势能三种方法，证明动态表每次插入的摊还代价为 3；</li>
+      <li>解释摊还代价与平均情况代价的本质区别（一个不涉概率，一个涉分布）。</li>
+    </ol>
+  </div>
+
+  <div class="lecture">
+
+    <!-- ===== 章首四件套之 3：推导主线图 ===== -->
+    <div class="figure">
+      <div class="mermaid">
+flowchart TB
+  A["第8章：DP 要填整张表"] --> B["追问：能不能每步只做局部最优选择"]
+  B --> C["贪心选择性质：局部最优安全"]
+  B --> D["交换论证：把最优解改造成贪心解"]
+  C --> E["活动选择、Huffman：O(n log n) 解决"]
+  D --> E
+  E --> F["失败案例：矩阵链乘贪心必错"]
+  F --> G["追问二：单次操作代价剧烈波动怎么报价"]
+  G --> H["摊还分析：聚合 / 记账 / 势能"]
+  H --> I["代价：势能函数设计靠灵感；摊还不含概率保证"]
+  classDef hot fill:#fbeedd,stroke:#c4651f,stroke-width:2.5px,color:#c4651f;
+  classDef danger fill:#fae9e7,stroke:#b03a2e,stroke-width:2.5px,color:#b03a2e;
+  class E hot;
+  class I danger;
+      </div>
+      <div class="caption">本章推导主线：从"DP 太重"出发追问贪心何时安全，再从"单次代价波动"引出摊还分析，两处都落在"证明"上——贪心要证明安全，摊还要证明账平。</div>
+    </div>
+
+    <!-- ================= 9.1 ================= -->
+    <h2><span class="sec-no">9.1</span>贪心何时是对的：活动选择问题</h2>
+
+    <p>第8章的矩阵链乘里我们看到："先乘最小相邻对"这个贪心直觉是错的。它带出一个问题：<strong>到底什么问题允许每步只拿当前最优？</strong>最干净的正面例子是<span class="term">活动选择</span>（Activity Selection）。</p>
+
+    <p><strong>问题。</strong>n 个活动争用同一间教室，活动 i 占用区间 [sᵢ, fᵢ)。选最多的互不重叠活动。CLRS 的经典实例（已按结束时间排序）：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>i</th><th>1</th><th>2</th><th>3</th><th>4</th><th>5</th><th>6</th><th>7</th><th>8</th><th>9</th><th>10</th><th>11</th></tr>
+        <tr><th>sᵢ</th><td>1</td><td>3</td><td>0</td><td>5</td><td>3</td><td>5</td><td>6</td><td>8</td><td>8</td><td>2</td><td>12</td></tr>
+        <tr><th>fᵢ</th><td>4</td><td>5</td><td>6</td><td>7</td><td>9</td><td>9</td><td>10</td><td>11</td><td>12</td><td>14</td><td>16</td></tr>
+      </table>
+    </div>
+
+    <p><strong>贪心策略：每步选"结束最早且与已选兼容"的活动。</strong>完整手算：</p>
+    <ul>
+      <li>选 a₁（结束 4）。跳过 a₂（开始 3 &lt; 4）、a₃（0 &lt; 4）。</li>
+      <li>选 a₄（开始 5 ≥ 4，结束 7）。跳过 a₅（3&lt;7）、a₆（5&lt;7）、a₇（6&lt;7）。</li>
+      <li>选 a₈（开始 8 ≥ 7，结束 11）。跳过 a₉（8&lt;11）、a₁₀（2&lt;11）。</li>
+      <li>选 a₁₁（开始 12 ≥ 11，结束 16）。</li>
+    </ul>
+    <p>结果 {a₁, a₄, a₈, a₁₁}，共 <strong>4</strong> 个活动，即最优。总耗时排序 Θ(n log n) + 扫描 Θ(n)。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>贪心 = DP 的特权版。DP 在每个决策点枚举所有选择并比较子问题结果；有贪心选择性质的问题里，<strong>有一个选择可以直接判定为安全</strong>，于是每步只看一个分支，表都不用填。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>以为"直观的贪心规则"都行。活动选择还有三个看似合理的规则全部失败：选<strong>开始最早</strong>（反例：一个占全天的活动）、选<strong>时长最短</strong>（反例：短活动卡在两个长活动中间，挤掉两个）、选<strong>冲突最少</strong>（可构造反例）。只有"结束最早"正确——直觉不值钱，证明才算数。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 9.1-1</div>
+              <div class="q-text">活动选择的贪心规则是什么？在上述 11 个活动上选出哪几个？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              按结束时间升序，每步选与已选兼容的第一个。结果 {a₁, a₄, a₈, a₁₁}，共 4 个。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 9.1-2</div>
+              <div class="q-text">为什么"选时长最短的活动"不是正确策略？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              短活动可能与两个本可同时入选的活动都冲突（如 [1,4]、[3,6]、[5,8] 与短活动 [4,5]……取最短者会挤掉两个兼容活动）。贪心规则必须经交换论证检验，不能凭直觉。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ================= 9.2 ================= -->
+    <h2><span class="sec-no">9.2</span>贪心的正确性：两种证明套路</h2>
+
+    <p>上一节给了"结束最早"这个规则，但它带出一个问题：<strong>凭什么相信它？</strong>贪心算法的工程难度为零，全部难度在证明。需要两个性质，对应两种论证技术。</p>
+
+    <p><strong>性质一：<span class="term">贪心选择性质</span>（Greedy-Choice Property）—— 用<span class="term">交换论证</span>（Exchange Argument）证明。</strong>要证：存在某个最优解包含贪心选择。以活动选择为例：</p>
+    <ol>
+      <li>设 a₁ 是结束最早的活动，OPT 是任意一个最优解，设 OPT 中最早结束的活动是 aₖ。</li>
+      <li>若 aₖ = a₁，得证。否则 f₁ ≤ fₖ（a₁ 结束最早）。</li>
+      <li><strong>交换：</strong>把 OPT 中的 aₖ 换成 a₁。OPT 中其余活动都在 fₖ 之后开始，因而也在 f₁ 之后开始，与 a₁ 兼容。</li>
+      <li>交换后解仍合法、大小不变——得到一个包含 a₁ 的最优解。∎</li>
+    </ol>
+    <p>剩下的子问题（与 a₁ 兼容的活动）与原问题同构，配合第二张入场券<span class="term">最优子结构</span>（第8章已讲），归纳即得全局正确性。</p>
+
+    <p><strong>性质二的推广：<span class="term">拟阵</span>（Matroid）直觉。</strong>CLRS 指出：一大类贪心问题（最小生成树、单位时间任务调度等）的底层结构都是拟阵——一个集合系统，满足"遗传性"（独立集的子集仍独立）与"交换性"（小的独立集总能从大的独立集里借一个元素扩充）。对拟阵，"按权重贪心选取"被统一证明最优——这就是第7章 Kruskal 算法正确的深层原因。<strong>懂拟阵不是为了证明更快，而是为了知道"贪心何时一定有救"。</strong></p>
+
+    <div class="box insight">
+      <span class="box-tag">✅ 判定规则</span>
+      <p>判断一个贪心策略对不对的流程：① 猜测规则；② 试图构造反例（10 分钟找不到再进③）；③ 交换论证：任取最优解，把它的第一个非贪心选择换成贪心选择，证明解不变差；④ 换完确认剩余是同类子问题。③过不去就回第8章填表。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>把"交换后没有变差"误证成"交换后一样好"。交换论证只需要"不差"，因为我们只要证明<strong>存在</strong>含贪心选择的最优解，不需要所有最优解都长这样。这个"存在性"定位是整个证明最常被写错的地方。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 9.2-1</div>
+              <div class="q-text">交换论证的标准四步是什么？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              ① 任取最优解 OPT；② 找到 OPT 与贪心解的第一个分歧；③ 把 OPT 的选择换成贪心选择，证明解仍合法且不变差；④ 归纳到剩余子问题。结论：存在包含贪心选择的最优解。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 9.2-2</div>
+              <div class="q-text">拟阵的两条公理是什么？它为什么能统一解释 Kruskal 和活动选择的贪心正确性？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              遗传性（独立集的子集仍独立）与交换性（|A|&lt;|B| 时 A 可从 B 借元素扩充）。拟阵上按权重贪心被证明最优，所以同属拟阵结构的问题（MST、任务调度）贪心必然安全。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ================= 9.3 ================= -->
+    <h2><span class="sec-no">9.3</span>Huffman 编码：完整建树手算</h2>
+
+    <p>交换论证说服了我们"结束最早"安全。上一节留下一个问题：<strong>贪心选择性质在长不出"区间排序"形态的问题里还找得到吗？</strong><span class="term">Huffman 编码</span>（Huffman Coding）给出的答案是：找得到，只是贪心的对象从"选哪个"变成"合并哪两个"。</p>
+
+    <p><strong>问题。</strong>给 6 个字符的出现频率（单位：千次），设计二元<span class="term">前缀码</span>（Prefix Code：任何码字不是另一码字的前缀，可无歧义解码），使总码长最小。目标等价于：建一棵二叉树，使 Σ f(c)·depth(c) 最小。</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>字符</th><th>a</th><th>b</th><th>c</th><th>d</th><th>e</th><th>f</th></tr>
+        <tr><th>频率（千次）</th><td>45</td><td>13</td><td>12</td><td>16</td><td>9</td><td>5</td></tr>
+      </table>
+    </div>
+
+    <p><strong>贪心规则：每步合并频率最小的两棵树</strong>（用最小堆维护）。完整过程：</p>
+    <ol>
+      <li>堆中：f5, e9, c12, b13, d16, a45。合并 <strong>f+e → 14</strong>。堆：c12, b13, 14, d16, a45。</li>
+      <li>合并 <strong>c+b → 25</strong>。堆：14, d16, 25, a45。</li>
+      <li>合并 <strong>14+d → 30</strong>（即子树 (f+e) 与 d）。堆：25, 30, a45。</li>
+      <li>合并 <strong>25+30 → 55</strong>。堆：a45, 55。</li>
+      <li>合并 <strong>a+55 → 100</strong>。结束。</li>
+    </ol>
+
+    <p><strong>读码</strong>（左 0 右 1，从根到叶）：</p>
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>字符</th><th>a</th><th>b</th><th>c</th><th>d</th><th>e</th><th>f</th></tr>
+        <tr><th>码字</th><td>0</td><td>101</td><td>100</td><td>111</td><td>1101</td><td>1100</td></tr>
+        <tr><th>码长 × 频率</th><td>1×45=45</td><td>3×13=39</td><td>3×12=36</td><td>3×16=48</td><td>4×9=36</td><td>4×5=20</td></tr>
+      </table>
+    </div>
+    <p>总码长 = 45+39+36+48+36+20 = <strong>224 千位</strong>。对比定长 3 位编码需 3×100 = 300 千位，省约 25%。贪心正确性的证明仍是交换论证：频率最低的两个字符必可作为最深层的兄弟出现在某棵最优树中（把最优树里最深的兄弟叶子与它们交换，总代价不增）。建堆 Θ(n)，共 n−1 次合并，每次 O(log n)，总 Θ(n log n)。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>Huffman 把"编码问题"翻译成"树的代价问题"后，贪心对象变成了<strong>合并操作</strong>：每次合并最小两棵，等于让最稀有的字符待在最深的层。前缀码与二叉树一一对应——这是"问题翻译"比"算法设计"更重要的又一例。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>以为 Huffman 码唯一。同频率节点的左右位置、同值合并的先后都可以不同，得到不同码字表——但所有最优树的<strong>总码长相同</strong>。考试写码字时注明左右约定即可，不必和别人逐位一致。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 9.3-1</div>
+              <div class="q-text">Huffman 算法的贪心规则与正确性的交换论证要点？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              每步合并频率最小的两棵树。证明：任取最优树，把最深层的兄弟叶子换成频率最低的两个字符，代价不增——故存在最优树含该贪心合并。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 9.3-2</div>
+              <div class="q-text">频率 45/13/12/16/9/5 时，Huffman 编码的总码长是多少？比定长码省多少？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              224 千位（45·1+13·3+12·3+16·3+9·4+5·4）。定长 3 位需 300 千位，省 76 千位（约 25%）。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ================= 9.4 ================= -->
+    <h2><span class="sec-no">9.4</span>摊还分析：动态表扩容的三本账</h2>
+
+    <p>换个话题。第4、5章的数据结构操作大多代价平稳，但有一类操作单次代价剧烈波动：动态数组（如 vector、ArrayList）<strong>容量满时翻倍扩容</strong>，一次插入要搬移全部旧元素。它带出一个问题：<strong>最坏一次 O(n) 的操作，能对外报价多少？</strong><span class="term">摊还分析</span>（Amortized Analysis）给出三本记账法。</p>
+
+    <p><strong>设定。</strong>表从容量 1 开始，插入元素；满则容量翻倍并把旧元素全部复制过去。复制 k 个元素计代价 k。连续插入 n 个元素，扩容发生在第 2、3、5、9、…（即 2^j+1）次插入，复制量 1、2、4、8、…</p>
+
+    <p><strong>账法一：<span class="term">聚合分析</span>（Aggregate Analysis）——算总账再平摊。</strong></p>
+    <div class="formula">总代价 = n（每次插入本身）+ Σ<sub>j=0..⌊lg n⌋</sub> 2<sup>j</sup>（扩容复制） &lt; n + 2n = 3n</div>
+    <p>n 次操作总代价 &lt; 3n，故<strong>每次插入摊还代价 3</strong>。例如 n=9：插入 9 次计 9；扩容复制 1+2+4+8 = 15？不对——第 9 次插入时表容量 8 已满，扩到 16 复制 8。9+1+2+4+8 = 24 &lt; 27 = 3×9 ✓。</p>
+
+    <p><strong>账法二：<span class="term">记账法</span>（Accounting Method）——每次收费 3 元。</strong>给每次插入收 3 元摊还费：1 元付本次插入；1 元存起来付"自己将来被搬移"；1 元存给"表中某个老元素将来被搬移"。扩容从 k 扩到 2k 时，需搬 k 个元素：其中 k/2 个是上一轮扩容后新插入的（各带 1 元自用存款），另外 k/2 个老元素靠新一轮 k/2 次插入各存的 1 元支付。账永远平衡，故摊还代价 3。</p>
+
+    <p><strong>账法三：<span class="term">势能法</span>（Potential Method）——给数据结构定义"势能"Φ。</strong>取</p>
+    <div class="formula">Φ(T) = 2·num − size（num 为元素数，size 为容量）</div>
+    <p>摊还代价 ĉ = 实际代价 + ΔΦ：</p>
+    <ul>
+      <li><strong>不扩容的插入：</strong>ĉ = 1 + [2(num+1)−size] − [2·num−size] = 1+2 = <strong>3</strong>。</li>
+      <li><strong>触发扩容的插入</strong>（插入前 num = size = k）：实际代价 k+1（搬 k 个+插 1 个）；扩容后 size′=2k，num′=k+1，Φ′=2(k+1)−2k=2；扩容前 Φ=2k−k=k。ĉ = (k+1) + (2−k) = <strong>3</strong>。</li>
+    </ul>
+    <p>两种情形摊还代价都是 3。总摊还 = Σ实际 + Φ(末) − Φ(初) ≥ Σ实际（Φ 非负），故摊还代价是实际总代价的上界。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>三种方法算的是同一笔账，只是记账视角不同：聚合看总量，记账法给每次操作发"货币"，势能法把存款挂在数据结构状态上。势能法最抽象也最强大——复杂结构（斐波那契堆、伸展树）只有它算得动。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>误以为扩容"扩 1.5 倍"摊还代价会变坏。设增长因子为 r，总复制量约为 n/(r−1)·……精确说：r 倍扩容的总复制量上界为 r·n/(r−1)，r=1.5 时为 3n，摊还约 4——仍是常数。任何大于 1 的固定增长因子都给常数摊还，只有"加固定大小"（如每次 +100）才是灾难：那时总代价 Θ(n²)，摊还 Θ(n)。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 9.4-1</div>
+              <div class="q-text">用聚合分析证明动态表翻倍扩容时插入的摊还代价是 3。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              n 次插入：自身代价 n；扩容复制总量 Σ2^j &lt; 2n。总代价 &lt; 3n，除以 n 得摊还 3。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 9.4-2</div>
+              <div class="q-text">势能法中 Φ = 2·num − size，扩容那次插入的摊还代价怎么算出 3？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              实际代价 k+1；Φ 从 k 降到 2，ΔΦ = 2−k。ĉ = (k+1)+(2−k) = 3。势能的"存款释放"恰好支付搬移费用。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ================= 9.5 ================= -->
+    <h2><span class="sec-no">9.5</span>摊还 ≠ 平均：两种"听起来很像"的代价</h2>
+
+    <p>上一节算出"摊还 3"。它带出一个极易混淆的问题：<strong>这和第3章快排的平均情况 O(n log n) 有什么区别？</strong>区别在"保证"二字上。</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>维度</th><th>摊还代价（Amortized）</th><th>平均情况代价（Average-Case）</th></tr>
+        <tr><td>是否涉及概率</td><td>完全不涉及</td><td>对输入分布取期望</td></tr>
+        <tr><td>保证对象</td><td>任何操作序列的总代价上界</td><td>随机输入下期望代价</td></tr>
+        <tr><td>最坏序列</td><td>依然成立（如动态表连插 n 次）</td><td>不成立（快排遇坏划分退到 Θ(n²)）</td></tr>
+        <tr><td>典型例子</td><td>动态表插入摊还 O(1)</td><td>快排平均 O(n log n)</td></tr>
+        <tr><td>证明工具</td><td>聚合 / 记账 / 势能</td><td>概率期望（第1、3章）</td></tr>
+      </table>
+    </div>
+
+    <p>一句话：<strong>摊还是对"最坏的操作序列"打包报价，平均是对"随机的单次运行"取期望。</strong>动态表的摊还 O(1) 意味着：哪怕对手故意构造最坏插入序列，总账仍不超过 3n；而快排的平均分析管不了恶意输入（这才需要随机化快排把"坏运气"转移到算法内部）。</p>
+
+    <div class="box insight">
+      <span class="box-tag">✅ 判定规则</span>
+      <p>面试/论文里写复杂度时自检：如果说的是"任何操作序列的总代价 ÷ 操作数"，用摊还；如果依赖"输入随机/哈希随机"，用期望（平均）。混用会被追问到哑口无言。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 9.5-1</div>
+              <div class="q-text">摊还代价和平均情况代价的本质区别是什么？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              摊还不涉概率，是对最坏操作序列总代价的上界平摊；平均是对输入概率分布取期望，管不了恶意构造的输入。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 9.5-2</div>
+              <div class="q-text">为什么动态表"每次扩容加固定大小（如 +100）"摊还代价是 Θ(n)，而翻倍扩容是 O(1)？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              固定扩容每 100 次插入就搬一次全表，总代价 Θ(n²/100)=Θ(n²)，摊还 Θ(n)；翻倍扩容的复制总量是等比数列 &lt; 2n，摊还 O(1)。增长因子必须大于 1 的<strong>倍数</strong>，不能是常数增量。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===== 概念卡 ===== -->
+    <h2><span class="sec-no">🃏</span>概念卡：本章概念的一分钟画像</h2>
+    <p>翻面前先自问：这个概念我能用一句话讲清楚吗？</p>
+    <div class="flip-grid">
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 1</div>
+            <div class="q-text">贪心选择性质（Greedy-Choice Property）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">存在某个最优解，其第一步选择正是贪心选择。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">让算法每步只走一个分支，免去 DP 的全表枚举。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">这一步棋有"不败走法"，直接走，不用算后面的变化。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">凭直觉认定规则正确——活动选择的"最短时长"规则就是错的。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">活动选择、Huffman、MST（第7章）；与 DP 的选择是同一问题的两条路。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 2</div>
+            <div class="q-text">交换论证（Exchange Argument）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">把任意最优解逐步"交换"成贪心解且不变差，证明贪心选择安全的证明技术。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">贪心算法几乎全部的正确性证明都靠它。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">你的最优解和我的贪心解第一个不同处，我换成我的选择，不亏。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">证成"交换后一样好"——只需"不差"，因为只要存在性。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">活动选择、Huffman、调度类问题；第10章近似算法分析也用类似思想。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 3</div>
+            <div class="q-text">拟阵（Matroid）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">满足遗传性（独立集的子集仍独立）与交换性（小独立集可从大独立集借元素扩充）的集合系统。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">统一回答"贪心何时必有救"：拟阵上按权重贪心恒最优。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">线性无关向量组的抽象化——"无关性"的两个基本法则。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为所有贪心问题都是拟阵——活动选择严格说是拟阵的推广（且需额外论证），背包问题则不是。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">解释 Kruskal（第7章）、单位时间任务调度的贪心正确性。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 4</div>
+            <div class="q-text">前缀码与 Huffman 编码（Prefix Code / Huffman Coding）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">任何码字不是其他码字前缀的可变长编码；Huffman 用"合并最小两棵树"构造最优前缀码。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">按字符频率最小化总码长 Σf·depth。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">常见字给短码、生僻字给长码——莫尔斯电码的严格最优版。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为最优码唯一——左右约定不同码字不同，但总码长唯一。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">gzip、JPEG 等压缩标准的内层；信息论中逼近熵的构造性方案。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 5</div>
+            <div class="q-text">摊还分析（Amortized Analysis）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">对任意操作序列的总代价取上界再平摊到单次操作的代价分析框架。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">单次最坏代价剧烈波动（如扩容搬移）时给出诚实的对外报价。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">月底看总账：偶尔大出血没关系，全年平均下来每天花得不多。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">与平均情况分析混淆——摊还不含任何概率假设，对最坏序列也成立。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">vector/ArrayList 扩容、并查集、伸展树、斐波那契堆。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 6</div>
+            <div class="q-text">势能法（Potential Method）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">给数据结构状态定义势函数 Φ，摊还代价 = 实际代价 + ΔΦ 的摊还分析技术。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">操作类型多、相互预付关系复杂时仍能算清账。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">把"未来要花的钱"存进结构的高度/混乱度里，便宜操作存钱、昂贵操作取钱。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">忘记验证 Φ 非负且 Φ(初)≤Φ(任意)——否则摊还不是实际的上界。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">动态表（Φ=2·num−size）、伸展树、斐波那契堆摊还界。</span></div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- ===== 分层习题 ===== -->
+    <h2><span class="sec-no">📝</span>分层习题</h2>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>判断：只要问题有最优子结构，就一定存在正确的贪心算法。</div>
+      <details>
+        <summary>提示</summary>
+        <p>矩阵链乘有最优子结构（第8章），它有正确的贪心算法吗？</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">错。最优子结构只是必要条件之一，还需要贪心选择性质。矩阵链乘有最优子结构但贪心（先乘最小相邻对）必错——第8章正是为此用 DP。易错点：最优子结构是 DP 和贪心<strong>共用</strong>的地基，区分两者的是"贪心选择性质"。</div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>判断：动态表插入的摊还代价 O(1)，意味着任何一次插入都不会超过常数时间。</div>
+      <details>
+        <summary>提示</summary>
+        <p>摊还是对谁的上界？单次还是序列总和？</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">错。摊还保证的是<strong>任意 n 次操作的总代价</strong> ≤ 3n，单次扩容插入的实际代价仍是 Θ(k)（搬移 k 个元素）。对延迟敏感的实时系统（如游戏主循环、嵌入式中断）不能只看摊还界——这正是惰性重建、渐进式扩容等技术的存在理由。易错点：把"序列平均"当成"单次上界"。</div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>活动选择：s = [1, 3, 0, 5, 8, 5]，f = [2, 4, 6, 7, 9, 9]（活动 a₁…a₆）。先按结束时间排序，再完整执行贪心，给出选中集合。</div>
+      <details>
+        <summary>提示</summary>
+        <p>排序后依次为 a₁(1,2)、a₂(3,4)、a₃(0,6)、a₄(5,7)、a₅(8,9)、a₆(5,9)。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          排序后顺序：a₁[1,2) → a₂[3,4) → a₃[0,6) → a₄[5,7) → a₅[8,9) → a₆[5,9)。<br>
+          ① 选 a₁（结束 2）；<br>
+          ② a₂ 开始 3 ≥ 2，选 a₂（结束 4）；<br>
+          ③ a₃ 开始 0 &lt; 4，跳过；a₄ 开始 5 ≥ 4，选 a₄（结束 7）；<br>
+          ④ a₅ 开始 8 ≥ 7，选 a₅（结束 9）；a₆ 开始 5 &lt; 9，跳过。<br>
+          结果 <strong>{a₁, a₂, a₄, a₅}</strong>，共 4 个活动（兼容区间 [1,2)、[3,4)、[5,7)、[8,9)，即为最优）。
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>对字符频率 {a:7, b:3, c:2, d:2, e:1} 完整执行 Huffman：写出每次合并、最终码字表与总码长。</div>
+      <details>
+        <summary>提示</summary>
+        <p>每步合并最小两个频率；总频率 15，需合并 4 次。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          合并过程：e1+d2 → <strong>3</strong>；3(ed) + b3 → <strong>6</strong>（取并列最小，e、d 子树与 b）；c2 与刚才的 3？——需严格按堆序：堆 [c2, d2, b3, e1, a7]，第一步 e1+d2=3 → 堆 [c2, b3, 3, a7]；第二步 c2+3(ed)=5 → 堆 [b3, 5, a7]；第三步 b3+5=8 → 堆 [a7, 8]；第四步 a7+8=15。<br>
+          读码（左 0 右 1）：a = 0；b = 10；c = 110；e = 1110；d = 1111。<br>
+          总码长 = 7·1 + 3·2 + 2·3 + 2·4 + 1·4 = 7+6+6+8+4 = <strong>31</strong>。定长 3 位需 3×15 = 45，省 14。<br>
+          （注：第二步若合并次序不同，码字表可能不同，但总码长 31 不变。）
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l3">L3 建模应用</span>你在设计一个日志系统的内存缓冲队列：写少读多，但每天 0 点要把缓冲批量落盘一次（代价与缓冲中条目数成正比）。老板要求"对外承诺每次写入的代价上限"。请说明：该用摊还、平均还是最坏分析来报价？若用记账法，每次写入应收多少"费用"，存款在 0 点怎么花？</div>
+      <details>
+        <summary>提示</summary>
+        <p>"承诺上限 + 偶发大清理"是哪种分析的标准场景？参考动态表扩容的账法二。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          用<strong>摊还分析</strong>——它是唯一不依赖概率假设、能对"最坏写入序列"给出承诺的工具（平均分析需要假设写入到达的分布，最坏分析则必须按落盘那次报价，过于悲观）。<br>
+          记账法建模：设每条日志落盘代价 1。每次写入收 2 元：1 元付"写入缓冲"本身，1 元存为"该条目将来落盘"的费用。0 点批量落盘 k 条，恰好由这 k 条各自存的 1 元支付。账平衡，故摊还代价 = 2 = O(1)。<br>
+          对老板的报价口径："任何连续 n 次写入的总代价 ≤ 2n"，而非"单次写入永远 ≤ 2"——这正是摊还承诺与单次承诺的区别。
+        </div>
+      </details>
+    </div>
+
+    <!-- ===== 自测 ===== -->
+    <h2><span class="sec-no">✍️</span>本章自测</h2>
+    <p class="quiz-hint">点击选项判分，答错会给出原因。</p>
+
+    <div class="quiz-block" data-answer="c">
+      <div class="q-no">自测 1</div>
+      <div class="q-stem">活动选择问题中，被证明正确的贪心规则是？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 选开始最早的活动</li>
+        <li data-opt="b">B. 选时长最短的活动</li>
+        <li data-opt="c">C. 选结束最早且兼容的活动</li>
+        <li data-opt="d">D. 选与其他活动冲突最少的活动</li>
+      </ul>
+      <div class="quiz-explain">解析：C 对，交换论证可证。A 错——一个占全天的活动即可构造反例；B 错——短活动可能挤掉两个兼容活动；D 错——可构造冲突最少但非最优的实例。三个"直觉规则"全部阵亡，说明贪心规则必须证明。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 2</div>
+      <div class="q-stem">交换论证证明"存在含贪心选择的最优解"时，交换后需要保证解？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 严格更好</li>
+        <li data-opt="b">B. 不变差（保持合法且大小不减小）</li>
+        <li data-opt="c">C. 与贪心解完全相同</li>
+        <li data-opt="d">D. 包含所有贪心选择</li>
+      </ul>
+      <div class="quiz-explain">解析：B 对——只需"不差"即可推出"存在含贪心选择的最优解"。A 错——若严格更好则与 OPT 最优矛盾，反而证不下去；C 错——交换只处理第一个分歧点，归纳继续；D 错——一步到位证明过强且不必要。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="a">
+      <div class="q-no">自测 3</div>
+      <div class="q-stem">频率 {45,13,12,16,9,5} 的 Huffman 编码总码长（千位）是？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 224</li>
+        <li data-opt="b">B. 300</li>
+        <li data-opt="c">C. 100</li>
+        <li data-opt="d">D. 248</li>
+      </ul>
+      <div class="quiz-explain">解析：A 对（45·1+13·3+12·3+16·3+9·4+5·4=224）。B 错——那是定长 3 位码的长度，没压缩；C 错——100 是总频率，把"字符数"当成了"位数"；D 错——常见算错：给 a 也分配 2 位（a 频率 45 应得最短码长 1）。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="d">
+      <div class="q-no">自测 4</div>
+      <div class="q-stem">动态表翻倍扩容，用势能法 Φ=2·num−size，触发扩容的那次插入摊还代价为？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. num+1（即实际代价）</li>
+        <li data-opt="b">B. O(n)</li>
+        <li data-opt="c">C. 2</li>
+        <li data-opt="d">D. 3</li>
+      </ul>
+      <div class="quiz-explain">解析：D 对——实际代价 k+1，势能下降 k−2，ĉ=(k+1)+(2−k)=3。A 错——那是实际代价，忘了势能释放；B 错——把单次实际代价当摊还代价；C 错——2 是不扩容情形中势能增量的数值，不是摊还代价。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 5</div>
+      <div class="q-stem">关于摊还代价与平均情况代价，正确的是？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 两者都需要对输入分布做概率假设</li>
+        <li data-opt="b">B. 摊还不涉概率、对最坏操作序列也成立；平均是对随机输入取期望</li>
+        <li data-opt="c">C. 摊还代价一定不小于平均代价的期望</li>
+        <li data-opt="d">D. 快排的 O(n log n) 是摊还界</li>
+      </ul>
+      <div class="quiz-explain">解析：B 对。A 错——摊还不含任何概率；C 错——两者作用对象不同（序列总量 vs 单次期望），没有这种普适大小关系；D 错——快排是平均情况界（随机划分），最坏仍是 Θ(n²)，"摊还"概念不适用于它。</div>
+    </div>
+
+    <!-- ===== 三句话复述 ===== -->
+    <div class="retell">
+      <h3>🗣️ 用自己的话，三句话讲完本章</h3>
+      <p>对着空气（或室友）说出这三句。说卡壳的那句，回去重读对应小节。</p>
+      <details>
+        <summary>句1：这章解决什么问题？——</summary>
+        <div class="retell-answer">参考答案：两件事。① 有最优子结构的问题中，哪些还能再进一步——每步只做局部最优选择就安全（贪心）；② 数据结构单次操作代价剧烈波动时，如何对任意操作序列给出诚实的平均报价（摊还）。</div>
+      </details>
+      <details>
+        <summary>句2：核心机制是什么？——</summary>
+        <div class="retell-answer">参考答案：贪心靠"贪心选择性质 + 最优子结构"，用交换论证证明局部最优安全（活动选择、Huffman）；摊还靠聚合/记账/势能三本账，把偶发大代价预摊到日常小操作上（动态表插入摊还 3）。</div>
+      </details>
+      <details>
+        <summary>句3：它和前后章怎么分工？——</summary>
+        <div class="retell-answer">参考答案：第8章的 DP 是"保守通解"，本章贪心是"结构更好时的特权快解"，摊还是给第4/5章数据结构补的成本会计工具；第10章处理贪心与 DP 都失败的 NP 难问题，用近似算法兜底。</div>
+      </details>
+    </div>
+
+    <!-- ===== 复习计划 ===== -->
+    <div class="review-plan">
+      <h3>🔁 间隔复习计划</h3>
+      <p>回忆本身比重读有效 10 倍。到点只做一件事：翻卡 + 重做标记题。</p>
+      <table>
+        <tr><th>时间点</th><th>复习内容</th><th>预计用时</th></tr>
+        <tr><td>第 1 天</td><td>概念卡 1–6 + 回忆卡 9.1-1、9.2-1、9.4-1、9.5-1</td><td>10 分钟</td></tr>
+        <tr><td>第 3 天</td><td>概念卡（重点翻错的）+ 重做 L2 活动选择 + 自测错题</td><td>10 分钟</td></tr>
+        <tr><td>第 7 天</td><td>三句话复述 + 重推 Huffman {45,13,12,16,9,5} 建树全过程</td><td>12 分钟</td></tr>
+        <tr><td>第 15 天</td><td>只做合上书挑战；能全过就毕业</td><td>15 分钟</td></tr>
+      </table>
+    </div>
+
+    <!-- ===== 合上书挑战 ===== -->
+    <div class="final-challenge">
+      <h3>📕 合上书挑战</h3>
+      <p class="fc-sub">现在关掉这个页面，拿一张纸，凭记忆完成以下任务。全部做完再回来核对——这是本章真正的毕业考试。</p>
+      <ol id="challenge-list">
+        <li><span class="fc-check"></span>写出贪心算法正确的两个必要条件，并用四步交换论证证明活动选择的贪心规则</li>
+        <li><span class="fc-check"></span>在活动集 s=[1,3,0,5,8,5]、f=[2,4,6,7,9,9] 上完整执行贪心（答案 {a₁,a₂,a₄,a₅}）</li>
+        <li><span class="fc-check"></span>对频率 {45,13,12,16,9,5} 建 Huffman 树、写码字表、算总码长 224</li>
+        <li><span class="fc-check"></span>用聚合、记账、势能三种方法各证一遍动态表插入摊还代价 3</li>
+        <li><span class="fc-check"></span>说清摊还与平均的区别，并举"扩容加固定大小"导致摊还 Θ(n) 的例子</li>
+        <li><span class="fc-check"></span>回答本章的主线问题：什么时候局部最优就是全局最优？代价剧烈波动时如何公平计价？（各一句话）</li>
+      </ol>
+    </div>
+
+    <div class="complete-zone">
+      <button class="btn-complete" id="btn-complete" onclick="markDone()">✓ 我已完成本章（含合上书挑战）</button>
+    </div>
+
+    <div class="chapter-nav">
+      <a href="chapter-08.html"><span class="nav-dir">← 上一章</span>第8章 动态规划</a>
+      <a href="chapter-10.html" class="next"><span class="nav-dir">下一章 →</span>第10章 NP完全与近似算法</a>
+    </div>
+
+  </div>
+</div>
+
+<footer class="footer">
+  <div class="wrap">第9章 贪心与摊还分析 · 算法导论互动讲义 · 基于 Cormen et al.《算法导论》(CLRS, 第3版)</div>
+</footer>
+
+<script src="assets/mermaid.min.js"></script>
+<script>
+mermaid.initialize({
+  startOnLoad: true,
+  theme: "base",
+  themeVariables: {
+    primaryColor: "#e3edf7",
+    primaryBorderColor: "#1d5f9e",
+    primaryTextColor: "#1d5f9e",
+    lineColor: "#5c554b",
+    secondaryColor: "#fbeedd",
+    tertiaryColor: "#f5f1e8",
+    fontFamily: "-apple-system, PingFang SC, sans-serif",
+    fontSize: "14px"
+  },
+  flowchart: { curve: "linear", htmlLabels: false }
+});
+</script>
+<script>
+// 自测题判分
+document.querySelectorAll(".quiz-block").forEach(block => {
+  const answer = block.dataset.answer;
+  const explain = block.querySelector(".quiz-explain");
+  block.querySelectorAll(".quiz-opts li").forEach(li => {
+    li.addEventListener("click", () => {
+      const opts = block.querySelectorAll(".quiz-opts li");
+      opts.forEach(o => o.classList.add("disabled"));
+      if (li.dataset.opt === answer) {
+        li.classList.add("correct");
+      } else {
+        li.classList.add("wrong");
+        block.querySelector(`[data-opt="${answer}"]`).classList.add("correct");
+      }
+      explain.classList.add("show");
+    });
+  });
+});
+
+// 合上书清单打勾
+document.querySelectorAll("#challenge-list li").forEach(li => {
+  li.addEventListener("click", () => li.classList.toggle("checked"));
+});
+
+// 完成标记 → localStorage
+const KEY = "algo_progress_v1";
+function loadProgress() {
+  try { return JSON.parse(localStorage.getItem(KEY)) || {}; } catch (e) { return {}; }
+}
+const progress = loadProgress();
+const btn = document.getElementById("btn-complete");
+if (progress["9"] && progress["9"].done) {
+  btn.textContent = "✓ 已完成 · 再次点击重置";
+  btn.classList.add("done");
+}
+function markDone() {
+  const p = loadProgress();
+  if (p["9"] && p["9"].done) {
+    delete p["9"];
+    btn.textContent = "✓ 我已完成本章（含合上书挑战）";
+    btn.classList.remove("done");
+  } else {
+    p["9"] = { done: true, completedAt: Date.now(), reviewsDone: 0 };
+    btn.textContent = "✓ 已完成 · 复习提醒已开启";
+    btn.classList.add("done");
+  }
+  localStorage.setItem(KEY, JSON.stringify(p));
+}
+</script>
+
+</body>
+</html>

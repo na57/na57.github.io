@@ -1,0 +1,850 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第8章 空间复杂性 · 计算理论互动讲义</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+<nav class="topbar">
+  <div class="topbar-inner">
+    <span class="brand"><a href="index.html" style="color:inherit">← 学习地图</a></span>
+    <span class="crumb">段三 · 复杂性 / 第8章</span>
+  </div>
+</nav>
+
+<div class="wrap">
+
+  <div class="lecture-head">
+    <span class="ch-label">CHAPTER 08 · 复杂性（空间）</span>
+    <h1>空间复杂性</h1>
+    <p class="lead">第 7 章给问题按"时间"分级，本章换一把尺子量"内存"——并发现一个意外：在空间世界里，非确定性只卖平方价。</p>
+  </div>
+
+  <!-- ===== 章首四件套之 1：全书定位 ===== -->
+  <div class="position-bar">
+    <strong>本章在主线上的位置：</strong>第 7 章用"时间"给可判定问题分级（P、NP、NP 完全） → <u>本章用"空间"再量一遍：SPACE、PSPACE、L、NL 四把尺子，并找出空间世界自己的完全问题 TQBF</u> → 第 9 章用对角线方法证明：资源给得更多，就真能算更多问题。<br>
+    第8章回答主线上的第八个问题：<strong>计算问题需要多少内存？空间和时间一样稀缺吗？</strong>
+    <div class="map-inline">
+      <span class="node">Ch1–3 语言与自动机（什么是计算）</span><span class="arrow">→</span>
+      <span class="node">Ch4–6 可计算性（什么算得出）</span><span class="arrow">→</span>
+      <span class="node here">Ch7–8 复杂性（本章 Ch8：算多省）</span><span class="arrow">→</span>
+      <span class="node">Ch9–10 难解性与前沿（算不动怎么办）</span>
+    </div>
+  </div>
+
+  <!-- ===== 章首四件套之 2：学习目标 ===== -->
+  <div class="objectives">
+    <h4>🎯 学完本章，合上书你应该能：</h4>
+    <ol>
+      <li>写出 SPACE(f(n)) 与 NSPACE(f(n)) 的定义，解释为什么模型要把输入带设为只读、空间只计工作带格子</li>
+      <li>完整写出 SAT ∈ SPACE(n) 的算法与工作带账目，说清"空间可复用"与时间的本质差别</li>
+      <li>复述 Savitch 定理的证明：reach(c₁, c₂, t) 怎么递归、深度多少、每层存什么、总空间为什么 O(f²)、时间代价是什么</li>
+      <li>写出 PSPACE 与 PSPACE 完全的定义，逐环论证包含链 P ⊆ NP ⊆ PSPACE ⊆ EXPTIME</li>
+      <li>手算 TQBF 递归求值在小公式上的全过程并报出空间账目，概述 TQBF 是 PSPACE 难的归约骨架</li>
+      <li>写出 L 与 NL 的定义，证明 PATH ∈ NL 与 NL ⊆ P，指出"空间和时间一样贵""PSPACE 完全等于无解"两个误区各错在哪</li>
+    </ol>
+  </div>
+
+  <div class="lecture">
+
+    <!-- ===== 章首四件套之 3：推导主线图 ===== -->
+    <div class="figure">
+      <div class="mermaid">
+flowchart LR
+  A["第7章：按时间分级<br>P 对 NP 悬而未决"] --> B["换一把尺<br>内存要多少"]
+  B --> C["工作带模型<br>空间只计草稿纸"]
+  C --> D["空间可复用<br>SAT 只要线性空间"]
+  D --> E["Savitch 定理<br>非确定空间平方可消除"]
+  E --> F["PSPACE 与 TQBF<br>空间版完全问题"]
+  F --> G["L 与 NL<br>对数空间世界"]
+  G --> H["遗留问题<br>L 对 NL 无人知晓"]
+  classDef hot fill:#fbeedd,stroke:#c4651f,stroke-width:2.5px,color:#c4651f;
+  classDef danger fill:#fae9e7,stroke:#b03a2e,stroke-width:2.5px,color:#b03a2e;
+  class E hot;
+  class H danger;
+      </div>
+      <div class="caption">本章推导主线：换尺子（时间→空间）→ 定模型（工作带）→ 第一直觉（空间可复用）→ 核心定理（Savitch）→ 分级与完全问题（PSPACE/TQBF、L/NL）→ 落到新的悬案（L 对 NL），交给第 9 章的层级定理收网。</div>
+    </div>
+
+    <!-- ============ 8.1 ============ -->
+    <h2><span class="sec-no">8.1</span>空间怎么度量：只读输入带 + 读写工作带</h2>
+
+    <p>第 7 章问"算多快"，本章问"占多少"。但一动手就碰到一个模型问题：输入本身就占 n 个格子，如果把它计入空间消耗，那任何算法的空间都至少是 n——"只用 log n 空间"这种话就永远说不出口，而恰恰是这类亚线性空间（8.4 节的 L 与 NL）最有意思。</p>
+
+    <p>解决办法是把"题目"和"草稿纸"分开。空间复杂性使用如下模型：图灵机有两条带——</p>
+
+    <ul>
+      <li><span class="term">输入带</span>（input tape）：<strong>只读</strong>，存放输入 w，不占空间额度；</li>
+      <li><span class="term">工作带</span>（work tape）：可读可写，是算法的草稿纸，<strong>空间只计这条带上被扫过的格子数</strong>。</li>
+    </ul>
+
+    <p>于是：<span class="term">SPACE(f(n))</span>（deterministic space）= 能被确定性图灵机在 O(f(n)) 工作带格子内判定的语言全体；<span class="term">NSPACE(f(n))</span>（nondeterministic space）= 同一界限的非确定版。输入"免费看"，但每看一眼都得靠工作带上的指针记住看到哪了——这个细节 8.4 节会反复用。</p>
+
+    <h3>例 1（完整手算）：SAT ∈ SPACE(n)</h3>
+    <p>SAT = {⟨φ⟩ | 布尔公式 φ 存在满足赋值}。第 7 章只知道它最坏指数时间。它的空间消耗是多少？算法一句话：<strong>按字典序枚举全部 2ⁿ 个赋值，逐个子句代入求值，碰到满足的立刻接受，全部试完则拒绝。</strong>工作带上从头到尾只放三样东西：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>工作带内容</th><th>占用格子</th><th>作用</th></tr>
+        <tr><td>当前赋值 (x₁, …, xₙ)</td><td><strong>n 格</strong></td><td>兼作 n 位二进制计数器：每次 +1 得到下一个赋值</td></tr>
+        <tr><td>子句扫描指针</td><td>O(log m) ⊆ O(n)</td><td>记住正在检查第几个子句（m = 子句数 ≤ 输入长）</td></tr>
+        <tr><td>求值暂存</td><td>O(1)</td><td>代入当前字面量、算当前子句的真值，用完即弃</td></tr>
+        <tr><td><strong>合计</strong></td><td><strong>O(n)</strong></td><td>时间 2ⁿ·poly(n)，空间线性</td></tr>
+      </table>
+    </div>
+
+    <p>关键动作发生在循环体内部：检查完一个赋值，<strong>同一批格子直接覆写</strong>给下一个赋值用——2ⁿ 次求值从头到尾只占 n + O(log n) 个格子。对照第 7 章：同一个问题，时间上我们只会指数枚举，空间上却只需线性。差别不在机器，在资源本身的性质。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键直觉：空间可复用，时间不可复用</span>
+      <p>时间像车票，用一张少一张；空间像白板，擦了能再写。一枚格子可以服务任意多次计算——所以"枚举指数多个候选"在空间上是免费的（逐个生成、逐个丢弃），在时间上却是真金白银。本章几乎所有结果（Savitch、TQBF、NL）都是这条直觉的形式化。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 误区预警：枚举 2ⁿ 个赋值 ≠ 需要 2ⁿ 个格子</span>
+      <p>初学者的第一反应是"候选太多，存不下"。但枚举从来不需要同时存下所有候选——只需要存<strong>当前这一个</strong>加一点点簿记。把"有多少种可能"误当成"要多少存储"，是把时间账和空间账混为一谈，8.5 节还会清算它。</p>
+    </div>
+
+    <p>最后记一条模型事实，8.2 与 8.4 直接引用：一台用 f(n) 格工作带的机器，一个<span class="term">格局</span>（configuration，瞬时描述）由"状态 + 输入头位置 + 工作头位置 + 工作带内容"四元组成，总数为 |Q|·n·f(n)·|Γ|<sup>f(n)</sup>。当 f(n) ≥ log n 时这就是 2<sup>O(f(n))</sup>——多项式空间的机器有指数多个格局，对数空间的机器只有多项式个格局。这个计数是后面两节共同的发动机。</p>
+
+    <!-- 回忆卡片 8.1 -->
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 8.1-1</div>
+              <div class="q-text">写出 SPACE(f(n)) 的定义。为什么空间模型把输入带设为只读、只计工作带格子？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              SPACE(f) = 确定图灵机用 O(f(n)) 工作带格子可判定的语言类。若输入也计费，任何算法空间 ≥ n，log n 等亚线性空间类（L、NL）无从定义；只读输入带把"题目"与"草稿纸"分开，空间度量的才是算法自己花的。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 8.1-2</div>
+              <div class="q-text">SAT ∈ SPACE(n) 的算法是什么？工作带上存哪三样东西？"空间可复用"体现在哪一步？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              枚举 2ⁿ 个赋值逐个子句验证。工作带：当前赋值（n 格，兼作计数器）+ 子句指针 O(log m) + 求值暂存 O(1)。复用体现在：每试完一个赋值，同一批格子直接覆写给下一个用——2ⁿ 次求值只占 O(n) 格。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 8.2 ============ -->
+    <h2><span class="sec-no">8.2</span>Savitch 定理：非确定性的空间代价只有平方</h2>
+
+    <p>第 7 章留下一个尴尬的对比：非确定时间（NP）能不能免费确定化（变成 P），无人知晓——最好的确定性模拟要付指数代价。换成空间再问一遍：<strong>NSPACE(f) 的机器，确定机要花多少空间来模拟？</strong><span class="term">Savitch 定理</span>（Savitch's theorem，1970）给出的答案好得出乎意料：<strong>只要平方</strong>。</p>
+
+    <div class="box insight">
+      <span class="box-tag">✅ Savitch 定理</span>
+      <p>对任何 f(n) ≥ log n：<strong>NSPACE(f(n)) ⊆ SPACE(f(n)²)</strong>。非确定空间可以只用平方代价确定化。</p>
+    </div>
+
+    <h3>证明：把"可达性"对半砍</h3>
+    <p>设 N 是一台 f(n) 空间的非确定机。8.1 末尾算过：它的格局只有 t₀ = 2<sup>O(f)</sup> 个。于是"N 接受 w"⟺ 在<strong>格局图</strong>（顶点是格局、边是一步转移）中，从起始格局 c_start 可达接受格局 c_accept；而且若可达，必有一条不超过 t₀ 步的路径（更长的路径必有重复格局，绕圈段可删）。问题化成：<strong>用尽量少的空间判定"c₁ 到 c₂ 是否存在至多 t 步的路径"</strong>。</p>
+
+    <div class="box insight">
+      <span class="box-tag">✅ reach(c₁, c₂, t)：存在从 c₁ 到 c₂ 至多 t 步的路径吗？</span>
+      <p>① <strong>基例</strong> t = 1：检查 c₁ = c₂，或模拟一步看 c₁ 能否直接转移到 c₂，O(f) 空间。<br>
+      ② <strong>递归</strong> t &gt; 1：路径若存在，其中点 c_m 必存在。逐个枚举所有格局 c_m（复用同一 O(f) 格区），对每个候选先后递归 reach(c₁, c_m, ⌈t/2⌉) 与 reach(c_m, c₂, ⌈t/2⌉)；两段都为真则返回真。所有候选都失败则返回假。</p>
+    </div>
+
+    <p>正确性两个方向都不许跳：⇒ 真路径上走 ⌈t/2⌉ 步所到的那个格局，就是能通过检查的中点 c_m；⇐ 两段不超过 t/2 的半路径首尾相接，就是一条不超过 t 步的整路径。∎（这是"中点存在性"的纯逻辑，与机器细节无关。）</p>
+
+    <div class="figure">
+      <div class="mermaid">
+flowchart TB
+  R["reach(c1, c2, t)<br>枚举中点 cm"]
+  A["reach(c1, cm, t/2)<br>先算 用完擦掉"]
+  B["reach(cm, c2, t/2)<br>复用同一批格子"]
+  A1["继续对半砍<br>每深一层 t 减半"]
+  B1["继续对半砍<br>直到 t 等于 1"]
+  R --> A
+  R --> B
+  A --> A1
+  B --> B1
+  classDef hot fill:#fbeedd,stroke:#c4651f,stroke-width:2.5px,color:#c4651f;
+  class R hot;
+      </div>
+      <div class="caption">图 8.1 Savitch 的递归二分。两次递归调用<strong>先后</strong>进行，第二次把第一次用过的格子擦了再用——任意时刻的空间是"深度 × 每层"，不是"全部节点之和"，这就是平方而非指数的来源。</div>
+    </div>
+
+    <p><strong>空间账（不许跳步）：</strong></p>
+    <ul>
+      <li><strong>每层栈帧存什么：</strong>当前枚举到的中点 c_m（一个格局，O(f) 格）+ 枚举进度簿记（O(f)）。每层共 O(f)。</li>
+      <li><strong>递归多深：</strong>每层把 t 减半，深度 = O(log t)。代入 t = t₀ = 2<sup>O(f)</sup>，得深度 O(f)。</li>
+      <li><strong>兄弟调用复用：</strong>reach(c₁, c_m, ·) 返回后，它占的格子全部释放给 reach(c_m, c₂, ·) 用——任何时刻栈上只有 O(f) 层活着。</li>
+      <li><strong>合计：</strong>深度 × 每层 = O(f) × O(f) = <strong>O(f²)</strong>。∎</li>
+    </ul>
+
+    <p><strong>时间账（必须泼的冷水）：</strong>设 T(t) 为 reach 的耗时。枚举 c_m 有 2<sup>O(f)</sup> 个候选，每个触发两次规模减半的递归：T(t) ≈ 2<sup>O(f)</sup> · 2 · T(t/2)。展开 log t = O(f) 层后 T(t₀) = 2<sup>O(f²)</sup>——<strong>指数时间</strong>。Savitch 定理从头到尾只承诺空间，时间被打回原形：这是"省空间费时间"的标准标本。</p>
+
+    <h3>两条立刻能用的推论</h3>
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>推论</th><th>推导链</th><th>对照时间维度</th></tr>
+        <tr><td><strong>NL ⊆ SPACE(log²n)</strong></td><td>取 f(n) = log n：NSPACE(log n) ⊆ SPACE((log n)²)，非确定对数空间可用 log²n 确定化</td><td>时间类比"NP ⊆ ?"：只有指数上界，是否多项式未知</td></tr>
+        <tr><td><strong>PSPACE = NPSPACE</strong></td><td>取 f 为任意多项式 p：NSPACE(p) ⊆ SPACE(p²)，而 p² 仍是多项式；反向包含显然</td><td>P ?= NP 是世纪悬案；空间世界里非确定几乎免费</td></tr>
+      </table>
+    </div>
+
+    <div class="box idea">
+      <span class="box-tag">💡 为什么时间不能照抄这个证明</span>
+      <p>reach 省空间的机关是"兄弟调用复用同一批格子"。时间没有这个性质：两次递归调用必须<strong>先后真实发生</strong>，耗时是加和而不是取最大值。空间可以"轮流坐庄"，时间只能"排队买单"——这个不对称是本章与第 7 章全部分歧的根。</p>
+    </div>
+
+    <!-- 回忆卡片 8.2 -->
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 8.2-1</div>
+              <div class="q-text">reach(c₁, c₂, t) 怎么递归？每层栈帧存什么？为什么两个子调用可以复用空间？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              枚举中点 c_m，递归验 reach(c₁, c_m, ⌈t/2⌉) 与 reach(c_m, c₂, ⌈t/2⌉)。每层存 c_m 与枚举进度，O(f) 格。两个子调用先后执行，第二个把第一个用过的格子擦了再用——空间取 max 而非求和。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 8.2-2</div>
+              <div class="q-text">总空间 O(f²) 怎么算出来的（深度、每层各多少）？时间代价是什么？PSPACE = NPSPACE 怎么推？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              深度 O(log t) = O(f)（因 t = 2^O(f)），每层 O(f)，合计 O(f²)。时间 T = 2^O(f²)，指数级——定理只保空间。PSPACE = NPSPACE：多项式 p 代入得 NSPACE(p) ⊆ SPACE(p²)，p² 仍多项式。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 8.3 ============ -->
+    <h2><span class="sec-no">8.3</span>PSPACE 与 TQBF：空间世界的"Cook–Levin"</h2>
+
+    <p>8.1–8.2 在单条空间界限上做文章；现在仿照 P 的定义，把所有多项式空间合成一个类：<span class="term">PSPACE</span> = ⋃<sub>k</sub> SPACE(nᵏ)，即确定性多项式空间可判定的语言全体。由 Savitch 定理，PSPACE = NPSPACE，所以不必区分确定与非确定版本——这是它与 P 的第一个不同。</p>
+
+    <h3>它卡在哪个位置：一条四环包含链</h3>
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>包含关系</th><th>论证（每环一句话，不许跳步）</th></tr>
+        <tr><td>P ⊆ NP</td><td>第 7 章：判定算法本身就是无视证书的验证者</td></tr>
+        <tr><td>P ⊆ PSPACE</td><td>多项式时间内工作头最多走多项式格——时间花在哪，空间就用到哪</td></tr>
+        <tr><td>NP ⊆ PSPACE</td><td>SAT ∈ SPACE(n)（例 1）；任意 A ∈ NP 有 A ≤ₚ SAT（Cook–Levin），多项式时间归约的输出只有多项式长，所用空间也就多项式——归约 + 线性空间算法复合仍是多项式空间</td></tr>
+        <tr><td>PSPACE ⊆ EXPTIME</td><td>nᵏ 空间的机器只有 2<sup>O(nᵏ)</sup> 个格局；跑超过这个步数必有格局重复即死循环，超时拒绝——指数时间足够判定</td></tr>
+      </table>
+    </div>
+    <p>注意第三环的杠杆结构：<strong>用一个完全问题 + 归约封闭性，把整个类抬进去</strong>——和第 7 章"SAT 进 P 则全 NP 进 P"是同一件工具，方向相反。至于这些包含是否严格：P ≠ PSPACE、PSPACE ≠ EXPTIME 都未证（第 9 章只能用对角线给出 P ≠ EXPTIME 这种"跨档"分离）。</p>
+
+    <h3>PSPACE 完全问题：TQBF</h3>
+    <p>照搬 NP 完全的配方：<span class="term">PSPACE 完全</span>（PSPACE-complete）：B 满足 ① B ∈ PSPACE；② 每个 A ∈ PSPACE 都 A ≤ₚ B。它们是 PSPACE 中最难的一批：任何一个若有多项式时间算法，整个 PSPACE（连带全部 NP）都塌进 P。</p>
+
+    <p>候选问题是 SAT 的"量词加强版"。<span class="term">TQBF</span>（True Quantified Boolean Formula，真量词布尔公式，也叫 QBF）：判定一个所有变量都被量词束缚的公式是否为真，例如 ∀x ∃y [(x ∨ y) ∧ (¬x ∨ ¬y)]。∃ 读"存在一步"，∀ 读"对任意应手"——公式像在下一盘棋：∃ 方走一步，∀ 方应一步，轮流赋值后看残局真假。</p>
+
+    <h3>定理 1：TQBF ∈ PSPACE（完整算法 + 空间账）</h3>
+    <div class="box insight">
+      <span class="box-tag">✅ 递归求值算法 eval(φ)</span>
+      <p>① φ 无量词：直接代入求真值，O(1) 工作格。<br>
+      ② φ = ∃x ψ：剥去量词，先后递归 eval(ψ 代 x=T) 与 eval(ψ 代 x=F)，<strong>第二次复用第一次的空间</strong>；一支为真即真。<br>
+      ③ φ = ∀x ψ：同样两支递归，<strong>都真才真</strong>。</p>
+    </div>
+
+    <p><strong>空间账：</strong>递归深度 = 量词数 ≤ 变量数 ≤ n；每层只需记下"当前处理哪个变量、代了什么值"，O(log n) 格。总计 O(n log n)，当然是多项式。∎ <strong>时间账</strong>照旧难看：分支因子 2、深度 n，叶节点 2ⁿ 个——又一次"指数时间、多项式空间"，与例 1 同族。</p>
+
+    <h3>手算：同一副身体，两种量词顺序</h3>
+    <p>取 ψ(x, y) = (x ∨ y) ∧ (¬x ∨ ¬y)。先看清它的语义：两个子句分别排除"x、y 同假"与"x、y 同真"，所以 ψ 为真 ⟺ <strong>x 与 y 恰好一真一假</strong>（异或）。</p>
+    <p><strong>∀x ∃y ψ：</strong>x = T 时 ψ 化简为 (T ∨ y) ∧ (F ∨ ¬y) = ¬y，内层 ∃y 取 y = F，得真 ✓；x = F 时 ψ 化简为 y ∧ T = y，内层 ∃y 取 y = T，得真 ✓。∀ 节点两支全真 → <strong>公式为真</strong>。</p>
+    <p><strong>∃x ∀y ψ（量词换序）：</strong>x = T 时 ψ = ¬y，∀y 要求 y = T 处也真，但 ¬T = F，支为假；x = F 时 ψ = y，∀y 在 y = F 处失败，支为假。∃ 节点两支全假 → <strong>公式为假</strong>。量词换序，答案翻转——这正是"博弈先后手"的直觉：先走方承诺一个 x 后，对方握着 y 的反手。</p>
+
+    <div class="figure">
+      <div class="mermaid">
+flowchart TB
+  R["∀x ∃y ψ<br>ψ 意为 x y 恰一真"]
+  T["x = T<br>ψ 化简为 ¬y"]
+  F["x = F<br>ψ 化简为 y"]
+  TT["∃y 取 y = F<br>得真 ✓"]
+  FT["∃y 取 y = T<br>得真 ✓"]
+  R --> T
+  R --> F
+  T --> TT
+  F --> FT
+  classDef hot fill:#fbeedd,stroke:#c4651f,stroke-width:2.5px,color:#c4651f;
+  class R hot;
+      </div>
+      <div class="caption">图 8.2 TQBF 递归求值树。∀ 节点要求两支全真，∃ 节点只需一支真；工作带任何时刻只存"根到当前叶"的一条路径——这就是空间省、时间费的画面。</div>
+    </div>
+
+    <h3>定理 2：TQBF 是 PSPACE 难的（归约骨架）</h3>
+    <p>对任意 A ∈ PSPACE（由 nᵏ 空间机器 M 判定）与输入 w，要把"M 接受 w"编译成一个量词公式 φ<sub>M,w</sub>，且长度必须多项式。</p>
+    <p><strong>困难：</strong>M 可以跑 2<sup>O(nᵏ)</sup> 步。照搬 Cook–Levin 铺一张"步数 × 空间"的 tableau 公式，行数指数——公式超长，归约失败。</p>
+    <p><strong>出路（与 Savitch 同构）：</strong>不铺整张表，改用中点递归表达可达性。把"c₁ 在 ≤ t 步内可达 c₂"写成公式：</p>
+    <div class="formula">∃c<sub>m</sub> ∀(c, d) ∈ {(c₁, c<sub>m</sub>), (c<sub>m</sub>, c₂)} ： c 在 ≤ ⌈t/2⌉ 步内可达 d</div>
+    <p>∃ 量词猜中点，∀ 量词"并查"两段半程——注意两个子目标<strong>共享同一段后续公式</strong>，这正是 Savitch 里"两次递归复用同一空间"的公式版：公式长度每层只加一个量词前缀，不翻倍。递归 log(2<sup>O(nᵏ)</sup>) = O(nᵏ) 层，每层添多项式长；基例 t = 1（一步可达）用 Cook–Levin 的局部窗口公式，也是多项式长。总长度多项式，构造过程本身多项式时间可输出。等价性：φ<sub>M,w</sub> 为真 ⟺ c_start 可达 c_accept ⟺ M 接受 w ⟺ w ∈ A。∎（骨架完）</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 一句话记住 TQBF</span>
+      <p>SAT 问"存在一步好棋吗"，TQBF 问"这盘棋 ∃ 方有必胜策略吗"——∀ 与 ∃ 交替 = 两位玩家轮流落子。所以广义象棋、围棋、五子棋的"必胜判定"清一色是 PSPACE 完全问题：博弈的天花板比"找解"的天花板（NP 完全）整整高一层。</p>
+    </div>
+
+    <!-- 回忆卡片 8.3 -->
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 8.3-1</div>
+              <div class="q-text">写出 PSPACE 的定义，并逐环给出 P ⊆ NP ⊆ PSPACE ⊆ EXPTIME 的论证。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              PSPACE = ⋃ SPACE(nᵏ)。P ⊆ NP：判定算法即验证者；NP ⊆ PSPACE：SAT ∈ SPACE(n) 且任意 NP 语言 ≤ₚ SAT，归约只耗多项式空间；PSPACE ⊆ EXPTIME：nᵏ 空间只有 2^O(nᵏ) 个格局，超时即循环可拒绝。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 8.3-2</div>
+              <div class="q-text">TQBF ∈ PSPACE 的递归求值：深度多少、每层存什么、总空间多少？为什么时间是 2ⁿ 级？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              深度 = 量词数 ≤ n，每层存当前变量与所代值 O(log n)，总空间 O(n log n) 多项式；兄弟分支复用同一空间。但分支因子 2、深度 n，叶节点 2ⁿ 个，故时间指数——又一次空间省、时间费。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 8.4 ============ -->
+    <h2><span class="sec-no">8.4</span>L 与 NL：几张便签纸能算什么</h2>
+
+    <p>PSPACE 太粗，log n 是另一头最有内容的刻度。定义 <span class="term">L</span>（Logspace）= SPACE(log n)，<span class="term">NL</span>（Nondeterministic Logspace）= NSPACE(log n)。</p>
+
+    <p>为什么 log n 是"有意义的下限"：输入带只读免费，工作带的 log n 位恰好够存 <strong>O(1) 个指向输入的指针</strong>（一个位置编号 log n 位）加几个计数器。它正是"大数据流式处理"的数学化身：输入可以反复读但不能改，手边只有几张便签纸。Savitch 定理要求 f ≥ log n，就是为这个尺度量身定做的。</p>
+
+    <h3>例 2（完整论证）：PATH ∈ NL</h3>
+    <p>PATH = {⟨G, s, t⟩ | 有向图 G 中 s 可达 t}。第 7 章证过 PATH ∈ P（标记法，O(n·m) 时间）——但标记法要给所有顶点打标记，空间 Ω(n)。换成非确定对数空间：</p>
+
+    <div class="box insight">
+      <span class="box-tag">✅ NL 算法：边走边猜</span>
+      <p>从 s 出发，重复至多 n 次：非确定地猜当前顶点的一条出边，走到邻居；走到 t 即接受，步数用尽则拒绝。工作带只存两样东西：<strong>当前顶点编号</strong>（log n 位）+ <strong>步数计数器</strong>（数到 n 为止，log n 位）。合计 O(log n)。✓</p>
+    </div>
+
+    <p>对照标记法：确定性算法要"记住所有去过的地方"（Ω(n)），非确定算法只记"我在哪、走了几步"（O(log n)）——<strong>把"记住历史"换成了"猜对未来"</strong>。正确性：存在 s 到 t 的路径 ⟺ 某支猜测序列恰好沿它走通 ⟺ 机器接受。✓</p>
+
+    <h3>PATH 是 NL 完全（归约思路）</h3>
+    <p>空间版的归约要降级：<span class="term">对数空间归约</span>（log-space reduction，记 ≤<sub>L</sub>）要求翻译函数本身只用 O(log n) 工作空间——输出可以很长，逐位写出、格子复用即可。否则归约机比被归约的问题还强，"难度传递"就失效了。</p>
+    <p><strong>定理：PATH 在 ≤<sub>L</sub> 下是 NL 完全的。</strong>PATH ∈ NL 已证。取任意 A ∈ NL，设非确定机 N 用 c·log n 格判定 A。固定 w：N 的格局数 = 状态 × 输入头位置 × 工作头位置 × 工作带内容 = O(1)·n·O(log n)·2<sup>O(log n)</sup> = n<sup>O(1)</sup>——<strong>只有多项式个</strong>（这是对数空间机器的命门）。构造图 G<sub>w</sub>：顶点 = 全体格局；边 = 一步转移；起点 = c_start；终点 = c_accept（不妨设 N 接受前清空工作带、读写头归位，使接受格局唯一）。于是 w ∈ A ⟺ c_start 可达 c_accept ⟺ ⟨G<sub>w</sub>, c_start, c_accept⟩ ∈ PATH。输出方式：双重循环枚举格局对，逐对模拟一步验证、逐条边写出——任何时刻工作带只存两个格局各 O(log n) 位，归约确为 log 空间。✓ ∎（骨架完）</p>
+
+    <div class="figure">
+      <div class="mermaid">
+flowchart LR
+  cs(("c_start")) --> c1(("c1"))
+  cs --> c2(("c2"))
+  c1 --> c3(("c3"))
+  c2 --> c3
+  c3 --> ca(("c_accept"))
+  classDef hot fill:#fbeedd,stroke:#c4651f,stroke-width:2.5px,color:#c4651f;
+  class ca hot;
+      </div>
+      <div class="caption">图 8.3 把 NL 计算翻译成 PATH：顶点 = 格局（仅多项式个），边 = 一步转移。"接受"⟺"可达"——这就是 PATH 能代表整个 NL 的原因。</div>
+    </div>
+
+    <p><strong>推论网：</strong>NL ⊆ P（A ≤<sub>L</sub> PATH 且 PATH ∈ P）；L ⊆ NL（确定是特殊的非确定）；NL ⊆ SPACE(log²n)（Savitch）。Immerman–Szelepcsényi 定理（1987/88 独立获证）还给出 NL = coNL——"不可达性"也能在 NL 中判定，技巧是归纳计数可达顶点数。对比时间维度 NP ?= coNP 至今未知，空间世界再次更"温顺"。</p>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ L ?= NL：空间版的 P vs NP</span>
+      <p>PATH 是 NL 完全 ⇒ L = NL 当且仅当 PATH ∈ L，即"确定的、只用几张便签纸的可达性算法"。几十年无人找到（确定性最好成绩是 Savitch 的 log²n；另有随机化的 RL 结果），也没人证明不可能。它与 P ?= NP 同构，同样坚硬。</p>
+    </div>
+
+    <!-- 回忆卡片 8.4 -->
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 8.4-1</div>
+              <div class="q-text">写出 L 与 NL 的定义。为什么 log n 是"有意义的下限"——工作带上能放下什么？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              L = SPACE(log n)，NL = NSPACE(log n)。log n 位恰够存 O(1) 个指向输入位置的指针加几个计数器，是"输入只读、便签几张"的最小非平凡模型；再少连输入位置都记不住。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 8.4-2</div>
+              <div class="q-text">PATH ∈ NL 的算法工作带存什么？"PATH 是 NL 完全"归约的两个关键事实是什么？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              只存当前顶点编号 + 步数计数器，各 O(log n) 位。归约两关键：① log 空间机器的格局只有 n^O(1) 个（图多项式大）；② 双重循环枚举格局对、逐条边输出，本身只用 O(log n) 空间。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 8.5 ============ -->
+    <h2><span class="sec-no">8.5</span>错误直觉清算：空间不是时间</h2>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 误区一："空间和时间一样稀缺、一样贵"</span>
+      <p>两个反例钉死它。① 同一个 SAT：时间上只会 2ⁿ 枚举，空间上例 1 只用 n 格——枚举在时间上付费、在空间上免费。② 非确定性消除：时间维度 NP ⊆ P 是世纪悬案，最好上界指数；空间维度 Savitch 只收平方税，PSPACE = NPSPACE 直接相等。根源一句话：<strong>空间可复用，时间不可复用</strong>。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 误区二："PSPACE 完全问题 = 无解 / 不可判定"</span>
+      <p>TQBF 是可判定的（递归求值）、多项式空间可解的、有已知指数时间算法的。"PSPACE 完全"说的是它站在 PSPACE 难度的天花板：若它 ∈ P 则 P = PSPACE（连带 P = NP）。这与"不可判定"（第 4–6 章：算法根本不存在）隔着一整个可判定性理论；"比 NP 完全更难"也只是分级相对，不是无解宣判。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 误区三："NL 显然等于 P（或 L 显然等于 NL）"</span>
+      <p>PATH 既是 NL 完全又 ∈ P，容易让人以为两个类"P 化"了。但 NL ⊆ P 只说明非确定对数空间不超出多项式时间；反过来 PATH ∈ L（确定的 log 空间可达性）无人证得——L ?= NL 是公开问题。本章已知的等式（NL = coNL、PSPACE = NPSPACE）恰恰提醒：空间世界的每一个相等都是定理，不是显然。</p>
+    </div>
+
+    <!-- 回忆卡片 8.5 -->
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 8.5-1</div>
+              <div class="q-text">用哪两个结果说明"空间和时间不一样贵"？根源是什么？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              ① SAT：指数时间但线性空间；② Savitch：NSPACE(f) ⊆ SPACE(f²)，PSPACE = NPSPACE，而 P ?= NP 未知。根源：空间可复用（白板擦了再写），时间不可复用（车票用一张少一张）。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 8.5-2</div>
+              <div class="q-text">"PSPACE 完全 = 无解"错在哪？L ?= NL 目前的现状是什么？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              PSPACE 完全问题可判定、多项式空间可解、有指数时间算法，只是 PSPACE 中最难一档，与"不可判定"无关。L ?= NL 公开：等价于 PATH ∈ L，确定性最好仅 log²n（Savitch）。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 概念卡 ============ -->
+    <h2><span class="sec-no">🃏</span>概念卡：本章概念的一分钟画像</h2>
+    <p>翻面前先自问：这个概念我能用一句话讲清楚吗？</p>
+    <div class="flip-grid">
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 1</div>
+            <div class="q-text">空间复杂性 SPACE(f(n))</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">确定图灵机用 O(f(n)) 工作带格子可判定的语言类；输入带只读不计费。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">把"内存消耗"从输入长度中分离出来，使 log n 等亚线性空间可以定义。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">计的是草稿纸大小，不是题目长度。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为枚举 2ⁿ 个候选要 2ⁿ 格——候选逐个生成逐个弃，空间复用，SAT 只要 n 格。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">Savitch、L/NL、PSPACE 的定义基石；第 9 章空间层级定理的对象。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 2</div>
+            <div class="q-text">Savitch 定理</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">f(n) ≥ log n 时 NSPACE(f(n)) ⊆ SPACE(f(n)²)，非确定空间平方代价确定化。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">给出 PSPACE = NPSPACE、NL ⊆ SPACE(log²n)——空间维度对 P?=NP 式问题的部分回答。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">可达性对半砍：猜中点、两段递归、兄弟调用复用同一块白板。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为它连时间也省了——时间是 2^O(f²) 级，定理只承诺空间。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">TQBF 的 PSPACE 难归约与其同构；L?=NL 的确定性最好已知上界。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 3</div>
+            <div class="q-text">PSPACE / PSPACE 完全</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">PSPACE = ⋃ SPACE(nᵏ)；B 完全 ⟺ B ∈ PSPACE 且所有 A ∈ PSPACE 都 A ≤ₚ B。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">刻画"多项式内存可解"的全集及其中最难成员；包含链 P ⊆ NP ⊆ PSPACE ⊆ EXPTIME。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">博弈与规划的难度天花板。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">当成"不可解"——全部成员可判定、有指数时间算法；"最难"是分级相对。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">博弈 AI、自动规划的难度定位；第 10 章 IP = PSPACE 的主角。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 4</div>
+            <div class="q-text">TQBF（真量词布尔公式）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">判定全量化布尔公式 ∀x∃y… ψ 是否为真；PSPACE 完全。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">给 PSPACE 一个"代表问题"，地位如同 SAT 之于 NP。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">∃ 与 ∀ 交替 = 双人轮流走棋的必胜判定；量词换序答案可翻转。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为只是 SAT 换记号——量词交替把难度从 NP 抬到 PSPACE。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">一切 PSPACE 完全性归约的起点；第 10 章交互证明 IP = PSPACE。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 5</div>
+            <div class="q-text">L 与 NL（对数空间）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">L = SPACE(log n)，NL = NSPACE(log n)；工作带仅够 O(1) 个指针与计数器。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">刻画"流式/便签纸"计算；L ?= NL 是空间版的 P vs NP。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">输入随便翻，手边只有几张便签。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为 log n 太小算不了什么——PATH、图连通、2SAT 全在 NL 里。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">大数据流式算法、数据库查询复杂度的理论底盘。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 6</div>
+            <div class="q-text">NL 完全（PATH）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">在 log 空间归约 ≤_L 下：PATH ∈ NL 且一切 NL 语言 ≤_L PATH。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">给 NL 一个代表问题：L = NL ⟺ PATH ∈ L。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">一切对数空间非确定计算，都是其格局图上的可达性。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为归约还能用多项式时间 ≤ₚ——空间归约自身必须只用 log 空间，否则难度传递失效。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">证 NL 完全性的起点（2SAT、强连通等）；理解 L ?= NL 的钥匙。</span></div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- ============ 分层习题 ============ -->
+    <h2><span class="sec-no">📝</span>分层习题</h2>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>判断对错：<strong>"要枚举 2ⁿ 个赋值，就必须有能存 2ⁿ 个赋值的内存，所以 SAT 需要指数空间。"</strong>说明理由。</div>
+      <details>
+        <summary>提示</summary>
+        <p>枚举需要"同时"存下所有候选吗？回想 8.1 工作带账目表。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">错。枚举逐个生成、逐个验证、逐个丢弃：工作带只存当前赋值（n 格，兼作计数器）+ 子句指针 O(log m) + 求值暂存 O(1)，合计 O(n)。原命题把"候选数量"（时间维度）误当"存储需求"（空间维度）——空间可复用，同一批格子服务全部 2ⁿ 次求值。正确结论：SAT ∈ SPACE(n)，指数的是时间不是空间。</div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>判断对错：<strong>"由 Savitch 定理 NSPACE(n²) ⊆ SPACE(n⁴)，可见非确定空间类严格大于确定空间类。"</strong></div>
+      <details>
+        <summary>提示</summary>
+        <p>定理给出的是包含（上界）还是分离（下界）？⊆ 能读出"严格大于"吗？</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">前半对、后半错。代入 f = n² 确有 NSPACE(n²) ⊆ SPACE(n⁴)；但这是<strong>上界包含</strong>：非确定机器能算的，确定机器平方空间内也能算——恰恰说明非确定空间不更难模拟。在多项式尺度上结论更强：PSPACE = NPSPACE，两类相等。原命题把"⊆"误读为反向的严格分离，方向完全反了。</div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>对 ψ(x, y) = (x ∨ y) ∧ (¬x ∨ ¬y)，完整执行 TQBF 递归求值：(a) φ₁ = ∃x ∀y ψ；(b) φ₂ = ∀x ∃y ψ。写出每个节点的化简式与真值，给出两个结论并解释差异。</div>
+      <details>
+        <summary>提示</summary>
+        <p>先代外层量词的值，把公式化简成只含 y 的式子，再处理内层量词；注意 ∃ 与 ∀ 节点的"通过条件"不同。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p>(a) φ₁ = ∃x ∀y ψ：x = T 时 ψ = (T∨y) ∧ (F∨¬y) = ¬y；∀y 要求 y = T 处也真，但 ¬T = F → 此支<strong>假</strong>。x = F 时 ψ = (F∨y) ∧ (T∨¬y) = y；∀y 在 y = F 处得 F → 此支<strong>假</strong>。∃ 节点两支皆假 → <strong>φ₁ 为假</strong>。</p>
+          <p>(b) φ₂ = ∀x ∃y ψ：x = T 时 ψ = ¬y；∃y 取 y = F，¬F = T → 此支<strong>真</strong>。x = F 时 ψ = y；∃y 取 y = T → 此支<strong>真</strong>。∀ 节点两支皆真 → <strong>φ₂ 为真</strong>。</p>
+          <p>差异根源：∃x∀y 要求"存在一个 x 通吃所有 y"，∀x∃y 允许"y 随 x 换"（后手优势）。空间账验证：深度 2 层、每层存一个变量与值，O(1) 级；时间 4 个叶节点——与定理 1 的 O(n log n) 空间、2ⁿ 时间账同型。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>设非确定机 N 判定语言 A 用 f(n) = 3·log₂n 格工作带（n ≥ 16），其格局总数上界为 2^(6 log₂ n) = n⁶。对初始调用 reach(c_start, c_accept, t) 回答：(1) t 取多少？(2) 递归深度？(3) 每层栈帧存什么、占多少？(4) 总空间？(5) 最终结论与时间代价。</div>
+      <details>
+        <summary>提示</summary>
+        <p>深度 = log₂ t；每层存一个格局；格局含工作带内容、两个头位置、状态。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p>(1) 可达路径若存在，必有一条不超过格局总数的路径（更长必有重复格局可删），故 t = n⁶。</p>
+          <p>(2) 每层 t 减半：深度 = log₂(n⁶) = 6·log₂n = O(log n)。</p>
+          <p>(3) 每层存当前中点格局 c_m：工作带内容 3·log₂n 位 + 输入头位置 log₂n 位 + 工作头位置 O(log log n) + 状态 O(1)，合计 O(log n)；外加枚举进度 O(log n)。每层 O(log n)。</p>
+          <p>(4) 总空间 = 深度 × 每层 = O(log n) × O(log n) = <strong>O(log²n)</strong>（常数 6 × 3 等被吸收）。</p>
+          <p>(5) 结论：A ∈ SPACE(log²n)，即 NSPACE(3 log n) ⊆ SPACE(9 log²n)。时间代价 T ≈ 2^O(log²n)（准多项式，大于任何多项式）——Savitch 只保空间。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l3">L3 建模应用</span>某公司两个项目：① 仓库机器人："在 10⁶ 格的仓库地图里，从货架 A 能否走到出口？"——地图存在只读光盘上，算法只允许 O(log n) 级额外内存的流式读取；② 双人棋类残局分析："甲方是否有必胜策略？"分别判断两个功能背后的判定问题属于哪个类、依据是什么，并说明工程上敢承诺什么。</div>
+      <details>
+        <summary>提示</summary>
+        <p>一个是没有对手的可达性；一个是 ∃/∀ 交替的博弈。注意①的内存硬约束对应哪个类，②的"轮流走棋"对应哪个公式结构。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p>① 本质是 PATH。非确定对数空间算法 ∈ NL（边走边猜，只存当前格子编号 + 步数）；但"确定性 + O(log n) 内存"正是 PATH ∈ L 吗——公开问题！已知可承诺：Savitch 风格 log²n 空间的确定性算法（时间准多项式），或退到多项式内存的标记法（O(n) 空间、O(n·m) 时间）。工程结论：<strong>敢承诺多项式时间，不敢承诺严格对数内存的确定性算法</strong>。</p>
+          <p>② 本质是 TQBF 型博弈："∃ 我方走法 ∀ 对方应手 ∃ … 终局胜"，量词交替深度 = 对局长度——PSPACE 完全。工程结论：只能承诺多项式空间（递归搜索复用栈）与指数时间；精确最优不现实，应转向限时 α-β 搜索、启发式评估——与第 7 章 NP 完全的"换赛道"逻辑相同。</p>
+          <p>同一张"状态图"，① 只是单人可达（NL/P 层），② 多了一个 ∀ 对手（PSPACE 层）——难度跃迁的全部原因。</p>
+        </div>
+      </details>
+    </div>
+
+    <!-- ============ 本章自测 ============ -->
+    <h2><span class="sec-no">✍️</span>本章自测</h2>
+    <p class="quiz-hint">点击选项判分，答错会给出原因。</p>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 1</div>
+      <div class="q-stem">空间复杂性模型把输入带设为只读、只计工作带格子，主要原因是：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 只读带的制造成本更低</li>
+        <li data-opt="b">B. 否则输入本身占 n 格，任何算法空间 ≥ n，log n 等亚线性空间类无从定义</li>
+        <li data-opt="c">C. 只读带的读取速度更快</li>
+        <li data-opt="d">D. 非确定机不允许改写输入</li>
+      </ul>
+      <div class="quiz-explain">选 B。空间若计入输入，下界永远是 n，L 与 NL 不复存在；只读输入带把"题目"与"草稿纸"分开，度量的才是算法自身的消耗。A、C 是硬件理由，与理论模型无关；D 错：限制对确定与非确定机一致，且工作带照常可写。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 2</div>
+      <div class="q-stem">Savitch 定理的准确陈述是：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. NSPACE(f) ⊆ SPACE(f)，非确定空间可以无损确定化</li>
+        <li data-opt="b">B. f(n) ≥ log n 时 NSPACE(f(n)) ⊆ SPACE(f(n)²)，且模拟的时间代价可达指数级</li>
+        <li data-opt="c">C. NSPACE(f) ⊆ TIME(f²)，非确定空间可用平方时间模拟</li>
+        <li data-opt="d">D. SPACE(f) ⊆ NSPACE(f)，且已知两个类严格分离</li>
+      </ul>
+      <div class="quiz-explain">选 B。A 错：代价是平方不是无损；C 错：这是空间类之间的包含，且确定性模拟的时间是 2^O(f²) 级而非 f²；D 前半是平凡包含（确定是特殊的非确定），后半错——无人证明分离，多项式尺度上反而相等（PSPACE = NPSPACE）。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 3</div>
+      <div class="q-stem">包含链中 NP ⊆ PSPACE 的标准论证是：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 枚举 NP 证书需要指数空间，而 PSPACE 有指数空间</li>
+        <li data-opt="b">B. SAT ∈ SPACE(n)，且任意 A ∈ NP 都有 A ≤ₚ SAT，多项式归约本身只耗多项式空间</li>
+        <li data-opt="c">C. PSPACE 的定义就是"NP 的空间版"，两者按定义包含</li>
+        <li data-opt="d">D. NP 完全问题不在 PSPACE 中</li>
+      </ul>
+      <div class="quiz-explain">选 B。A 错且自相矛盾：枚举证书逐一生成、复用空间，只要多项式空间；C 错：PSPACE 是多项式空间可判定类，NP 是证书可验证类，定义不同，包含关系必须证明；D 错：NP 完全问题 ∈ NP ⊆ PSPACE。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 4</div>
+      <div class="q-stem">TQBF ∈ PSPACE 的递归求值算法，其资源账目是：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 每层递归保存整棵子树的真值表，共需指数空间</li>
+        <li data-opt="b">B. 深度 = 量词数，每层只存当前变量与所代值，总空间多项式；总时间 2ⁿ 级</li>
+        <li data-opt="c">C. 需要同时存储全部 2ⁿ 个赋值才能比较</li>
+        <li data-opt="d">D. 只需常数空间，因此 TQBF ∈ L</li>
+      </ul>
+      <div class="quiz-explain">选 B。A 错：子树算完即弃，任何时刻只存根到当前叶的路径；C 是"枚举要全存"的误区再现，兄弟分支复用同一空间；D 错：深度可达 n 层、每层要记变量编号与值（Ω(log n)），远超常数，且 TQBF 是 PSPACE 完全，若 ∈ L 则 PSPACE = L。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 5</div>
+      <div class="q-stem">PATH ∈ NL 的非确定算法，其工作带上存放的是：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 从 s 到当前顶点的整条猜测路径</li>
+        <li data-opt="b">B. 当前顶点编号 + 步数计数器，各 O(log n) 位</li>
+        <li data-opt="c">C. 所有已访问顶点的集合，防止走回头路</li>
+        <li data-opt="d">D. 图的完整邻接矩阵副本</li>
+      </ul>
+      <div class="quiz-explain">选 B。A 错：存整条路径要 Ω(n log n) 位，超支——算法只记"我在哪"，把"记住历史"换成"猜对未来"；C 错：已访问集合 Ω(n) 位，那是确定标记法的开销；D 错：邻接矩阵 n² 位，且输入带上的图只读免费，无需复制。</div>
+    </div>
+
+    <!-- ============ 三句话复述 ============ -->
+    <div class="retell">
+      <h3>🗣️ 用自己的话，三句话讲完本章</h3>
+      <p>对着空气（或室友）说出这三句。说卡壳的那句，回去重读对应小节。</p>
+      <details>
+        <summary>句1：这章解决什么问题？——</summary>
+        <div class="retell-answer">参考答案：可判定的问题需要多少内存，空间是否像时间一样稀缺。用"只读输入带 + 工作带"模型定义 SPACE 与 NSPACE，第一个发现就是空间可复用：SAT 最坏指数时间，却只要线性空间。</div>
+      </details>
+      <details>
+        <summary>句2：核心机制是什么？——</summary>
+        <div class="retell-answer">参考答案：Savitch 的 reach 过程把格局可达性对半砍——猜中点、两段递归、兄弟调用复用同一空间，深度 × 每层 = O(f²)，于是 NSPACE(f) ⊆ SPACE(f²)，PSPACE = NPSPACE。PSPACE 的代表是完全问题 TQBF（∀/∃ 交替的博弈公式，递归求值只花多项式空间）；对数尺度上 L/NL 由 PATH 代表，发动机是"log 空间机器的格局只有多项式个"。</div>
+      </details>
+      <details>
+        <summary>句3：它和前后章怎么分工？——</summary>
+        <div class="retell-answer">参考答案：第 7 章量时间（P、NP、NP 完全），本章量空间（L、NL、PSPACE、TQBF）；空间世界里非确定几乎免费（平方税），留下 L ?= NL、P ?= PSPACE 两个悬案。第 9 章用对角线证明资源层级严格分离（更多时间/空间确实能算更多），第 10 章讲算不动时的出路（近似、随机化、交互证明）。</div>
+      </details>
+    </div>
+
+    <!-- ============ 复习计划 ============ -->
+    <div class="review-plan">
+      <h3>🔁 间隔复习计划</h3>
+      <p>回忆本身比重读有效 10 倍。到点只做一件事：翻卡 + 重做标记题。</p>
+      <table>
+        <tr><th>时间点</th><th>复习内容</th><th>预计用时</th></tr>
+        <tr><td>第 1 天</td><td>概念卡 1–6 全部 + 回忆卡 8.1-1、8.2-1、8.3-1</td><td>12 分钟</td></tr>
+        <tr><td>第 3 天</td><td>概念卡 2、4、6（Savitch/TQBF/PATH）+ 重做 L2 两题 + 自测错题</td><td>12 分钟</td></tr>
+        <tr><td>第 7 天</td><td>三句话复述出声说一遍 + 重推 Savitch 空间账（深度 × 每层 = O(f²)）+ 回忆卡 8.3-2、8.4-2</td><td>15 分钟</td></tr>
+        <tr><td>第 15 天</td><td>只做合上书挑战；全过则本章毕业，卡在哪条就重读对应小节</td><td>15 分钟</td></tr>
+      </table>
+    </div>
+
+    <!-- 合上书挑战 -->
+    <div class="final-challenge">
+      <h3>📕 合上书挑战</h3>
+      <p class="fc-sub">现在关掉这个页面，拿一张纸，凭记忆完成以下任务。全部做完再回来核对——这是本章真正的毕业考试。</p>
+      <ol id="ch08-challenge-list">
+        <li><span class="fc-check"></span>写出 SPACE(f(n)) 与 NSPACE(f(n)) 的定义，解释为什么输入带必须只读、空间只计工作带</li>
+        <li><span class="fc-check"></span>完整写出 SAT ∈ SPACE(n) 的算法与工作带三栏账目，指出"空间可复用"发生在哪一步</li>
+        <li><span class="fc-check"></span>默写 Savitch 定理及其证明骨架：reach 怎么递归、深度 O(f)、每层 O(f)、总空间 O(f²)、时间代价指数</li>
+        <li><span class="fc-check"></span>逐环证明 P ⊆ NP ⊆ PSPACE ⊆ EXPTIME，并指出哪几环的严格性至今未证</li>
+        <li><span class="fc-check"></span>对 ∀x∃y[(x∨y)∧(¬x∨¬y)] 画出递归求值树并下结论；说明换成 ∃x∀y 后结论为何翻转</li>
+        <li><span class="fc-check"></span>证明 PATH ∈ NL，并概述"PATH 是 NL 完全"归约的两个关键（格局多项式个、log 空间逐边输出）</li>
+        <li><span class="fc-check"></span>回答本章的主线问题：计算问题需要多少内存？空间和时间一样稀缺吗？（一句话）</li>
+      </ol>
+    </div>
+
+    <div class="complete-zone">
+      <button class="btn-complete" id="ch08-btn-complete" onclick="markDone()">✓ 我已完成本章（含合上书挑战）</button>
+    </div>
+
+    <div class="chapter-nav">
+      <a href="chapter-07.html"><span class="nav-dir">← 上一章</span>第7章 时间复杂性</a>
+      <a href="chapter-09.html" class="next"><span class="nav-dir">下一章 →</span>第9章 难解性</a>
+    </div>
+
+  </div>
+</div>
+
+<footer class="footer">
+  <div class="wrap">第8章 空间复杂性 · 计算理论互动讲义 · 基于 Sipser《Introduction to the Theory of Computation》(3rd ed)</div>
+</footer>
+
+<script src="assets/mermaid.min.js"></script>
+<script>
+mermaid.initialize({
+  startOnLoad: true,
+  theme: "base",
+  themeVariables: {
+    primaryColor: "#e3edf7",
+    primaryBorderColor: "#1d5f9e",
+    primaryTextColor: "#1d5f9e",
+    lineColor: "#5c554b",
+    secondaryColor: "#fbeedd",
+    tertiaryColor: "#f5f1e8",
+    fontFamily: "-apple-system, PingFang SC, sans-serif",
+    fontSize: "14px"
+  },
+  flowchart: { curve: "linear", htmlLabels: false }
+});
+</script>
+<script>
+// 自测题判分
+document.querySelectorAll(".quiz-block").forEach(block => {
+  const answer = block.dataset.answer;
+  const explain = block.querySelector(".quiz-explain");
+  block.querySelectorAll(".quiz-opts li").forEach(li => {
+    li.addEventListener("click", () => {
+      const opts = block.querySelectorAll(".quiz-opts li");
+      opts.forEach(o => o.classList.add("disabled"));
+      if (li.dataset.opt === answer) {
+        li.classList.add("correct");
+      } else {
+        li.classList.add("wrong");
+        block.querySelector(`[data-opt="${answer}"]`).classList.add("correct");
+      }
+      explain.classList.add("show");
+    });
+  });
+});
+
+// 合上书清单打勾
+document.querySelectorAll("#ch08-challenge-list li").forEach(li => {
+  li.addEventListener("click", () => li.classList.toggle("checked"));
+});
+
+// 完成标记 → localStorage（第8章）
+const KEY = "ct_progress_v1";
+function loadProgress() {
+  try { return JSON.parse(localStorage.getItem(KEY)) || {}; } catch (e) { return {}; }
+}
+const progress = loadProgress();
+const btn = document.getElementById("ch08-btn-complete");
+if (progress["8"] && progress["8"].done) {
+  btn.textContent = "✓ 已完成 · 再次点击重置";
+  btn.classList.add("done");
+}
+function markDone() {
+  const p = loadProgress();
+  if (p["8"] && p["8"].done) {
+    delete p["8"];
+    btn.textContent = "✓ 我已完成本章（含合上书挑战）";
+    btn.classList.remove("done");
+  } else {
+    p["8"] = { done: true, completedAt: Date.now(), reviewsDone: 0 };
+    btn.textContent = "✓ 已完成 · 复习提醒已开启";
+    btn.classList.add("done");
+  }
+  localStorage.setItem(KEY, JSON.stringify(p));
+}
+</script>
+
+</body>
+</html>

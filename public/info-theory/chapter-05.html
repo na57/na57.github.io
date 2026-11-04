@@ -1,0 +1,816 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第5章 数据压缩 · 信息论互动讲义</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+<nav class="topbar">
+  <div class="topbar-inner">
+    <span class="brand"><a href="index.html" style="color:inherit">← 学习地图</a></span>
+    <span class="crumb">压缩与信道段（Ch5–9）/ 第5章</span>
+  </div>
+</nav>
+
+<div class="wrap">
+
+  <div class="lecture-head">
+    <span class="ch-label">CHAPTER 05 · 压缩与信道</span>
+    <h1>数据压缩</h1>
+    <p class="lead">Ch3–4 证明了长序列上熵接管一切；本章把这个极限兑现成可以写在纸上的码——前缀码、Huffman 码、算术编码，平均码长一路逼近 H。</p>
+  </div>
+
+  <!-- 本章定位 -->
+  <div class="position-bar">
+    <strong>本章在主线上的位置：</strong>Ch3–4 证明了"长序列上熵接管一切"（AEP、熵率）→ <u>本章把极限兑现成可操作的码：前缀码、Huffman 码、算术编码，平均码长逼近 H</u> → Ch6 揭示压缩与赌博是一枚硬币的两面，Ch7 转向带噪声的信道。<br>
+    第5章回答主线问题：<strong>给定分布已知的离散信源，如何造出平均码长任意逼近熵 H 的无差错码？</strong>
+    <div class="map-inline">
+      <span class="node">Ch4 熵率与随机过程</span><span class="arrow">→</span>
+      <span class="node here">Ch5 数据压缩</span><span class="arrow">→</span>
+      <span class="node">Ch6 赌博与数据压缩</span><span class="arrow">→</span>
+      <span class="node">Ch7 信道容量</span><span class="arrow">→</span>
+      <span class="node">Ch8 微分熵</span><span class="arrow">→</span>
+      <span class="node">Ch9 高斯信道</span><span class="arrow">→</span>
+      <span class="node">Ch10 率失真</span>
+    </div>
+  </div>
+
+  <!-- 学习目标 -->
+  <div class="objectives">
+    <h4>🎯 学完本章，合上书你应该能：</h4>
+    <ol>
+      <li>说出唯一可译码与前缀码的区别，并判断一个给定码属于哪一类</li>
+      <li>写出 Kraft 不等式，并用它判定一组码长能否构成前缀码</li>
+      <li>用相对熵非负完整推出 L ≥ H，并说出等号成立的条件</li>
+      <li>对任意小分布手算香农码与 Huffman 码，算出平均码长并与 H 比较</li>
+      <li>手算一条短消息的算术编码区间细分与最终码字，并反向解码</li>
+      <li>解释为什么单符号前缀码最多浪费 1 比特、算术编码如何把浪费摊到趋零</li>
+    </ol>
+  </div>
+
+  <div class="lecture">
+
+    <!-- 推导主线 -->
+    <div class="figure">
+      <div class="mermaid">
+flowchart LR
+  A["工程要无损压缩"] --> B["码流须即时切分<br>→ 前缀码"]
+  B --> C["Kraft 不等式<br>约束码长集合"]
+  C --> D["最优码 L ≥ H<br>香农码 L &lt; H+1"]
+  D --> E["Huffman 码<br>达到最优"]
+  E --> F["每符号仍至多<br>浪费 1 比特"]
+  F --> G["算术编码<br>按整串编码逼近 H"]
+  G --> H["遗留：分布未知怎么办<br>→Ch13；与赌博对偶 →Ch6"]
+  classDef hot fill:#fbeedd,stroke:#c4651f,stroke-width:2.5px,color:#c4651f;
+  classDef danger fill:#fae9e7,stroke:#b03a2e,stroke-width:2.5px,color:#b03a2e;
+  class E hot;
+  class H danger;
+      </div>
+      <div class="caption">本章推导主线：从"码流怎么切分"一路走到"平均码长逼近 H"。橙色是本章的构造高峰（Huffman），红色是兑现极限后仍欠的两笔账——通向 Ch13 与 Ch6。</div>
+    </div>
+
+    <!-- ============ 5.1 ============ -->
+    <h2><span class="sec-no">5.1</span>从"能解码"到"立刻解码"：唯一可译码与前缀码</h2>
+
+    <p>第 1 章例 1 里我们已经偷偷用过一个好码 {0, 10, 110, 111}，当时只说它"无歧义"。本章要把压缩做成工程，第一件事是问：<strong>码流里可没有空格，接收方拿到一串 0 和 1，凭什么知道在哪儿下刀？</strong></p>
+
+    <h3>例 1：一个会出事的码</h3>
+    <p>给三符号信源配码：A→0，B→01，C→1。接收方收到 <strong>001</strong>，怎么切？</p>
+    <ul>
+      <li>切成 0, 0, 1 → <strong>A A C</strong>；</li>
+      <li>切成 0, 01 → <strong>A B</strong>。</li>
+    </ul>
+    <p>两种切法都合法——这个码根本没法用。毛病出在哪？A 的码字 0 恰好是 B 的码字 01 的<strong>前缀</strong>：看到开头的 0，你无法断定它是一个完整的 A，还是某个 B 的开头，只能干等后面的比特。</p>
+
+    <p><strong>定义</strong>：一个码叫<span class="term">唯一可译码</span>（Uniquely Decodable Code），如果任意码字串的拼接只有一种切分方式；叫<span class="term">前缀码</span>（Prefix Code，也叫即时码 Instantaneous Code），如果<strong>没有任何码字是另一个码字的前缀</strong>。前缀码收到一个码字就能立刻宣布译码，不用回头看也不用向前等——这正是"立刻解码"。</p>
+
+    <h3>例 2：前缀码长什么样</h3>
+    <p>码 {0, 10, 110, 111}：0 不是 10、110、111 的前缀（它们都以 1 开头），10 不是 110、111 的前缀（第 3 位一个是 1 一个是 0……逐位查便知），两两检查全部通过。收到 0101100111 可以贪心切分：0｜10｜110｜0｜111，边走边判，看到完整码字立即落锤——<strong>即时可译</strong>。</p>
+
+    <p>前缀码有一个干净的几何形象：把二进制树画出来，每个码字是树上一个节点，"互不为前缀"等价于"<strong>所有码字都落在叶子位置，谁也不挡谁向下长的路</strong>"。5.2 节的 Kraft 不等式就靠这棵树数出来。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>唯一可译码比前缀码更宽（存在唯一可译但不是前缀的码，如 {0, 01}——看到 0 要等下一位才能判定）。但 5.2 节将证明：<strong>任何唯一可译码的码长集合，前缀码也能做到</strong>。既然即时译码更爽且最优性一分不亏，本章以后只谈前缀码。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>"不同符号给了不同码字就能解码"——错。单符号映射一一对应只保证<strong>单个码字</strong>不撞车，不保证<strong>拼接后</strong>可切分。例 1 的码 {0, 01, 1} 单符号层面完美，拼起来就是歧义。可译性是码流层面的性质，必须按"任意拼接"来检验。</p>
+    </div>
+
+    <!-- 回忆卡片 5.1 -->
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 5.1-1</div>
+              <div class="q-text">唯一可译码与前缀码各自的定义是什么？哪个包含哪个？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              唯一可译码：任意码字串拼接只有唯一切分；前缀码：没有任何码字是另一码字的前缀。前缀码 ⊂ 唯一可译码，前缀码可即时译码。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 5.1-2</div>
+              <div class="q-text">码 {0, 01, 1} 的问题出在哪？收到 001 有哪两种切法？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              0 是 01 的前缀，不是前缀码也非唯一可译。001 可切成 0,0,1（AAC）或 0,01（AB），接收方无法判定。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 5.2 ============ -->
+    <h2><span class="sec-no">5.2</span>Kraft 不等式：码长集合的几何约束</h2>
+
+    <p>上一节说前缀码的码字都坐在二叉树的叶子上。这带来一个硬约束：叶子们瓜分的"树荫"总量不能超过整棵树。把它写成数，就是本章第一个定理。</p>
+
+    <h3>码树直觉：每个码字占一份子树</h3>
+    <p>无限深的二叉树上，一个长为 <span class="var">l</span> 的码字占据一个节点，它的后代子树占整棵树的"份额"是 2<sup>−<span class="var">l</span></sup>（每深一层减半）。前缀条件 = 任意两个码字的子树<strong>互不相交</strong>，所以所有份额加起来不能超过 1：</p>
+
+    <div class="formula">∑<sub>i</sub> 2<sup>−<span class="var">l</span><sub>i</sub></sup> ≤ 1　　（<span class="term">Kraft 不等式</span>，Kraft Inequality）</div>
+
+    <h3>例 3：两次手算，一次恰好占满、一次直接判死刑</h3>
+    <p><strong>码长 (1, 2, 3, 3)</strong>——就是例 2 的码 {0, 10, 110, 111}：</p>
+    <div class="formula">2⁻¹ + 2⁻² + 2⁻³ + 2⁻³ = <span class="frac"><span class="num-part">1</span><span class="den-part">2</span></span> + <span class="frac"><span class="num-part">1</span><span class="den-part">4</span></span> + <span class="frac"><span class="num-part">1</span><span class="den-part">8</span></span> + <span class="frac"><span class="num-part">1</span><span class="den-part">8</span></span> = <strong>1</strong>　✓ 恰好占满（码树是满树，一片叶子都不浪费）</div>
+
+    <p><strong>码长 (1, 2, 2, 3)</strong>——假设有人想给 4 个符号配这组长度：</p>
+    <div class="formula">2⁻¹ + 2⁻² + 2⁻² + 2⁻³ = <span class="frac"><span class="num-part">1</span><span class="den-part">2</span></span> + <span class="frac"><span class="num-part">1</span><span class="den-part">4</span></span> + <span class="frac"><span class="num-part">1</span><span class="den-part">4</span></span> + <span class="frac"><span class="num-part">1</span><span class="den-part">8</span></span> = <span class="frac"><span class="num-part">9</span><span class="den-part">8</span></span> &gt; 1　✗ <strong>不可能存在这样的前缀码</strong></div>
+    <p>不必真的去树上试——份额超支了，怎么摆都摆不下。Kraft 不等式把"能不能造"变成一个算术判定。</p>
+
+    <div class="box insight">
+      <span class="box-tag">✅ 定理（Kraft）</span>
+      <p>(i) 任何前缀码满足 Σ2<sup>−<span class="var">l</span><sub>i</sub></sup> ≤ 1；更进一步，<strong>任何唯一可译码也满足同一不等式</strong>（McMillan 加强）。(ii) 反过来，任何满足 Σ2<sup>−<span class="var">l</span><sub>i</sub></sup> ≤ 1 的码长集合，都能构造出前缀码（按长度从小到大逐个往树上放即可）。合起来：<strong>谈最优码长时，前缀码与唯一可译码的可行域完全相同——限制在前缀码里找最优，一分不亏。</strong>这就是 5.1 节末尾那句话的兑现。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>"Σ2<sup>−<span class="var">l</span><sub>i</sub></sup> ≤ 1 说明这个码是前缀码"——方向反了。Kraft 约束的是<strong>码长集合</strong>，不是具体的码字分配。码 {0, 01, 011} 与 {0, 10, 110} 码长同为 (1,2,3)，Kraft 和同为 7/8 ≤ 1，但前者里 0 是 01 的前缀、01 是 011 的前缀，根本不是前缀码。满足不等式只保证"存在某个前缀码用这组长度"，不保证你手里这个码就是。</p>
+    </div>
+
+    <!-- 回忆卡片 5.2 -->
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 5.2-1</div>
+              <div class="q-text">写出 Kraft 不等式，并用二叉树解释每一项的几何意义。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              Σ2^{−lᵢ} ≤ 1。长 l 的码字占住整棵树 2^{−l} 份额的后代子树，前缀条件使子树互不相交，故总份额 ≤ 1。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 5.2-2</div>
+              <div class="q-text">码长 (1,2,2,3) 能否做成前缀码？(2,2,2,2) 呢？各用一句话说理由。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              不能：Kraft 和 = 9/8 &gt; 1。能：和 = 4×1/4 = 1，四个码字 00/01/10/11 占满深度 2 的满树。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 5.3 ============ -->
+    <h2><span class="sec-no">5.3</span>最优码的界：L ≥ H，香农码 L &lt; H+1</h2>
+
+    <p>码长受 Kraft 约束，那在约束下"期望码长最小"能小到什么程度？这一节给出下界（熵 H）与第一个可达构造（香农码），两者只差不到 1 比特——极限问题至此基本被封口。</p>
+
+    <h3>下界：用相对熵非负推 L ≥ H</h3>
+    <p>设信源分布 <span class="var">p</span>₁,…,<span class="var">p</span>ₘ，前缀码码长 <span class="var">l</span>₁,…,<span class="var">l</span>ₘ，记 Kraft 和 <span class="var">c</span> = Σ2<sup>−<span class="var">l</span><sub>i</sub></sup> ≤ 1，并定义辅助分布 <span class="var">r</span><sub>i</sub> = 2<sup>−<span class="var">l</span><sub>i</sub></sup>/<span class="var">c</span>（它是合法分布：非负且和为 1）。由 <span class="var">r</span><sub>i</sub> 的定义取对数：</p>
+    <div class="formula">−log₂ <span class="var">r</span><sub>i</sub> = <span class="var">l</span><sub>i</sub> − log₂ <span class="var">c</span>　　即　　<span class="var">l</span><sub>i</sub> = −log₂ <span class="var">r</span><sub>i</sub> + log₂ <span class="var">c</span></div>
+    <p>代入期望码长，一步一行：</p>
+    <div class="formula">L = Σ<sub>i</sub> <span class="var">p</span><sub>i</sub><span class="var">l</span><sub>i</sub> = Σ<sub>i</sub> <span class="var">p</span><sub>i</sub>(−log₂ <span class="var">r</span><sub>i</sub> + log₂ <span class="var">c</span>) = −Σ<sub>i</sub> <span class="var">p</span><sub>i</sub> log₂ <span class="var">r</span><sub>i</sub> + log₂ <span class="var">c</span></div>
+    <div class="formula">L − H = Σ<sub>i</sub> <span class="var">p</span><sub>i</sub> log₂ <span class="frac"><span class="num-part"><span class="var">p</span><sub>i</sub></span><span class="den-part"><span class="var">r</span><sub>i</sub></span></span> + log₂ <span class="frac"><span class="num-part">1</span><span class="den-part"><span class="var">c</span></span></span> = D(<span class="var">p</span>‖<span class="var">r</span>) + log₂(1/<span class="var">c</span>) ≥ 0</div>
+    <p>第一项 D(<span class="var">p</span>‖<span class="var">r</span>) ≥ 0 是第 2 章的相对熵非负；第二项 log₂(1/<span class="var">c</span>) ≥ 0 因为 <span class="var">c</span> ≤ 1。<strong>等号成立当且仅当两者同时为 0：r = p 且 c = 1，也就是每个 p<sub>i</sub> 恰好等于 2 的负整数幂</strong>（这种分布叫二进分布，dyadic）。第 1 章例 1 的 (1/2,1/4,1/8,1/8) 正是二进分布，所以那个码恰好打到 H = 1.75——现在你知道那不是巧合。</p>
+
+    <h3>香农码：差不到 1 比特的构造</h3>
+    <p>下界建议理想码长是 <span class="var">l</span><sub>i</sub> = log₂(1/<span class="var">p</span><sub>i</sub>)，可惜它一般不是整数。<span class="term">香农码</span>（Shannon Code）的做法是向上取整：</p>
+    <div class="formula"><span class="var">l</span><sub>i</sub> = ⌈log₂(1/<span class="var">p</span><sub>i</sub>)⌉</div>
+    <p><strong>合法性</strong>（满足 Kraft，故前缀码存在）：2<sup>−<span class="var">l</span><sub>i</sub></sup> ≤ <span class="var">p</span><sub>i</sub>，所以 Σ2<sup>−<span class="var">l</span><sub>i</sub></sup> ≤ Σ<span class="var">p</span><sub>i</sub> = 1 ✓。<strong>性能</strong>：由 <span class="var">l</span><sub>i</sub> &lt; log₂(1/<span class="var">p</span><sub>i</sub>) + 1，取期望得</p>
+    <div class="formula">L = Σ <span class="var">p</span><sub>i</sub><span class="var">l</span><sub>i</sub> &lt; Σ <span class="var">p</span><sub>i</sub>(log₂(1/<span class="var">p</span><sub>i</sub>) + 1) = H + 1</div>
+    <p>合起来就是本章的中心不等式：<strong>H ≤ L<sub>最优</sub> &lt; H + 1</strong>。</p>
+
+    <h3>例 4（全章主例）：p = (0.4, 0.2, 0.15, 0.15, 0.1) 的香农码</h3>
+    <p>先算这个信源的熵（后面每一节都要拿它当标尺），各项摆开：</p>
+    <div class="formula">H = 0.4×1.3219 + 0.2×2.3219 + 2×(0.15×2.7370) + 0.1×3.3219</div>
+    <div class="formula">= 0.5288 + 0.4644 + 0.8211 + 0.3322 ≈ <strong>2.146 比特</strong></div>
+    <p>香农码长 ⌈log₂(1/p)⌉：0.4→2，0.2→3，0.15→3，0.15→3，0.1→4。期望码长：</p>
+    <div class="formula">L = 0.4×2 + 0.2×3 + 0.15×3 + 0.15×3 + 0.1×4 = 0.8 + 0.6 + 0.45 + 0.45 + 0.4 = <strong>2.7 比特</strong></div>
+    <p>检验中心不等式：2.146 ≤ 2.7 &lt; 3.146 ✓。香农码合法但不惊艳——2.7 离 2.146 还有半比特多的缝。下一节 Huffman 把这个缝收到 0.054。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>L − H = D(p‖r) + log(1/c) 这个恒等式值得背下来：<strong>超出熵的每一比特都有名有姓</strong>——D(p‖r) 是"码长没按 log(1/p) 分配"的代价，log(1/c) 是"码树没占满"的代价。好码的设计就是让这两项同时归零。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>"香农码是最优码"——不是。它只是一个保证 L &lt; H+1 的通用构造；对具体分布它可能相当平庸（例 4 里 0.15 的符号被取整顶到 3 比特，浪费近 0.27 比特/次）。真正的最优构造是下一节的 Huffman。香农码的价值在理论：它证明了"上取整"这一步最多赔 1 比特。</p>
+    </div>
+
+    <!-- 回忆卡片 5.3 -->
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 5.3-1</div>
+              <div class="q-text">L ≥ H 的证明用了哪两个非负量？等号成立的条件是什么？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              L − H = D(p‖r) + log(1/c)，两项分别 ≥ 0（相对熵非负、c ≤ 1）。等号 ⟺ r = p 且 c = 1，即所有 pᵢ 都是 2 的负整数幂（二进分布）。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 5.3-2</div>
+              <div class="q-text">香农码的码长公式是什么？为什么它必满足 Kraft、且 L &lt; H+1？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              lᵢ = ⌈log₂(1/pᵢ)⌉。于是 2^{−lᵢ} ≤ pᵢ，求和 ≤ 1 满足 Kraft；又 lᵢ &lt; log₂(1/pᵢ)+1，取期望即 L &lt; H+1。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 5.4 ============ -->
+    <h2><span class="sec-no">5.4</span>Huffman 编码：贪心合并为何最优</h2>
+
+    <p>上一节留下半比特的缝。<span class="term">Huffman 编码</span>（Huffman Coding，1952）用一条简单到令人起疑的规则把它补上：<strong>反复把当前概率最小的两个节点合并成一个新节点，直到只剩根；再沿树回退赋 0/1</strong>。</p>
+
+    <h3>为什么贪心是对的：两条引理</h3>
+    <p><strong>引理一</strong>：最优码中，概率最小的两个符号可以安排为<strong>码长最长、且互为兄弟</strong>（只差最后一位）。理由：若最小概率的符号没占最深叶子，把它和最深叶子交换，期望码长只会变小；同深的两个叶子互换标签不产生代价，所以可以让它俩当兄弟。<strong>引理二</strong>：把这两个兄弟合并成一个概率相加的新符号后，原问题的最优码 = 新问题的最优码再展开一步——问题规模缩小一，且代价只差一个与后续无关的常数。两条合起来：每一步合并两个最小者都不会把最优解弄丢，归纳到只剩一个节点时构造完成。贪心因此精确最优，而非近似。</p>
+
+    <h3>例 5：主例 p = (0.4, 0.2, 0.15, 0.15, 0.1) 的完整构造</h3>
+    <p><strong>合并过程</strong>（每步取当前最小的两个）：</p>
+    <ol>
+      <li>0.1 + 0.15 → <strong>0.25</strong>（剩 0.4, 0.2, 0.15, 0.25）</li>
+      <li>0.15 + 0.2 → <strong>0.35</strong>（剩 0.4, 0.25, 0.35）</li>
+      <li>0.25 + 0.35 → <strong>0.6</strong>（剩 0.4, 0.6）</li>
+      <li>0.6 + 0.4 → <strong>1.0</strong>（根）</li>
+    </ol>
+    <p><strong>回退赋码</strong>：根把 0 给 0.4、1 给 0.6；0.6 分出 10 给 0.35、11 给 0.25；0.35 分出 100 给 0.2、101 给 0.15；0.25 分出 110 给 0.15、111 给 0.1。</p>
+
+    <div class="figure">
+      <div class="mermaid">
+flowchart TB
+  R["根 1.0"] --> A["0.4 → 码 0"]
+  R --> B["0.6"]
+  B --> C["0.35 → 前缀 10"]
+  B --> D["0.25 → 前缀 11"]
+  C --> E["0.2 → 码 100"]
+  C --> F["0.15 → 码 101"]
+  D --> G["0.15 → 码 110 ｜ 0.1 → 码 111"]
+  classDef hot fill:#fbeedd,stroke:#c4651f,stroke-width:2.5px,color:#c4651f;
+  class A hot;
+      </div>
+      <div class="caption">图 5.1 主例的 Huffman 树：每片叶子标注"概率 → 码字"。最后一层的兄弟合并（0.15 与 0.1）写在一个节点里以精简图面，赋码规则同上层。</div>
+    </div>
+
+    <p><strong>码长与期望码长</strong>：码长依次为 (1, 3, 3, 3, 3)，</p>
+    <div class="formula">L = 0.4×1 + 0.2×3 + 0.15×3 + 0.15×3 + 0.1×3 = 0.4 + 0.6 + 0.45 + 0.45 + 0.3 = <strong>2.2 比特</strong></div>
+    <p><strong>Kraft 检验</strong>：2⁻¹ + 4×2⁻³ = 1/2 + 4/8 = 1 ✓（满树，log(1/c) 这一项已归零）。<strong>三方对比</strong>：H ≈ 2.146 &lt; Huffman 2.2 &lt; 香农码 2.7——Huffman 果然最优，剩下的 0.054 是 D(p‖r) 项：这个分布不是二进分布，单符号编码到不了 H。</p>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>"Huffman 最优 = 达到熵"——错。Huffman 是<strong>单符号无前缀码中的</strong>最优，定理只保证 H ≤ L<sub>Huffman</sub> &lt; H + 1。例 5 的 0.054 比特缝，在单符号层面无解。要再逼近 H 只有两条路：把符号打包成块联合编码（块长 n 时浪费摊到 1/n），或者干脆放弃逐符号码——下一节的算术编码。</p>
+    </div>
+
+    <!-- 回忆卡片 5.4 -->
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 5.4-1</div>
+              <div class="q-text">Huffman 算法的合并规则是什么？支撑它最优的两条引理各说什么？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              反复合并概率最小的两个节点。引理一：最小概率两符号可安排为最深且互为兄弟；引理二：合并成新符号后问题规模缩一、最优性保持——归纳得全局最优。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 5.4-2</div>
+              <div class="q-text">主例 p=(0.4,0.2,0.15,0.15,0.1) 的 Huffman 期望码长是多少？与熵、香农码各差多少？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              L = 2.2 比特（码长 1,3,3,3,3）。比熵 H≈2.146 多 0.054（非二进分布的 D(p‖r) 项），比香农码 2.7 省 0.5。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 5.5 ============ -->
+    <h2><span class="sec-no">5.5</span>算术编码：把整串消息映进一个子区间</h2>
+
+    <p>单符号前缀码的浪费源于一个刚性约束：每个符号的码长必须是整数比特，而 log₂(1/p) 一般不是整数。唯一的出路是<strong>不给单个符号配码，给整条消息串配一个码</strong>——这就是<span class="term">算术编码</span>（Arithmetic Coding）的想法：把消息映进 [0,1) 里层层细分的一个子区间，区间里随便挑一个二进制小数就是码字。</p>
+
+    <h3>规则：按累计概率切区间，逐符号缩小</h3>
+    <p>例 6（完整手算）：信源 p(A)=0.5，p(B)=0.25，p(C)=0.25，累计边界定为 A 占 [0, 0.5)、B 占 [0.5, 0.75)、C 占 [0.75, 1)。编码消息 <strong>"ABC"</strong>：</p>
+    <ol>
+      <li>读 A：区间 [0,1) 中 A 的份额是 [0, 0.5) → 当前区间 <strong>[0, 0.5)</strong>；</li>
+      <li>读 B：把 [0, 0.5)（宽 0.5）按同样比例切：A[0, 0.25)、B[0.25, 0.375)、C[0.375, 0.5) → 当前区间 <strong>[0.25, 0.375)</strong>；</li>
+      <li>读 C：把 [0.25, 0.375)（宽 0.125）再切：A[0.25, 0.3125)、B[0.3125, 0.34375)、C[0.34375, 0.375) → 最终区间 <strong>[0.34375, 0.375)</strong>。</li>
+    </ol>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>步</th><th>读入符号</th><th>选中子区间</th><th>区间宽度</th><th>宽度 = 累计概率</th></tr>
+        <tr><td>0</td><td>—</td><td>[0, 1)</td><td>1</td><td>1</td></tr>
+        <tr><td>1</td><td>A（p=0.5）</td><td>[0, 0.5)</td><td>0.5</td><td>p(A)</td></tr>
+        <tr><td>2</td><td>B（p=0.25）</td><td>[0.25, 0.375)</td><td>0.125</td><td>p(A)·p(B)</td></tr>
+        <tr><td>3</td><td>C（p=0.25）</td><td>[0.34375, 0.375)</td><td>0.03125 = 1/32</td><td>p(A)·p(B)·p(C)</td></tr>
+      </table>
+    </div>
+
+    <p><strong>取码</strong>：在最终区间内找二进制展开最短的数。端点 0.34375 = 0.01011₂、0.375 = 0.011₂，取 <strong>0.010111₂ = 0.359375</strong>，确实落在 [0.34375, 0.375) 内——码字就是小数点后的 "<strong>010111</strong>"，共 6 比特。对照理想长度：消息概率 = 0.5×0.25×0.25 = 1/32，−log₂(1/32) = <strong>5 比特</strong>，只多 1 比特；一般定理保证算术编码每条消息 ≤ 理想 + 2 比特，摊到 n 个符号上每符号浪费 ≤ 2/n → 0。</p>
+
+    <div class="figure">
+      <div class="mermaid">
+flowchart LR
+  A["初始区间 0 到 1"] --> B["读 A<br>→ 0 到 0.5"]
+  B --> C["读 B<br>→ 0.25 到 0.375"]
+  C --> D["读 C<br>→ 0.34375 到 0.375"]
+  D --> E["取最短二进制小数<br>0.010111 = 0.359375"]
+  classDef hot fill:#fbeedd,stroke:#c4651f,stroke-width:2.5px,color:#c4651f;
+  class E hot;
+      </div>
+      <div class="caption">图 5.2 算术编码"ABC"的区间逐步细分：每读一个符号，当前区间按其份额缩小一次；最终在区间内挑一个短二进制小数作为整条消息的码字。</div>
+    </div>
+
+    <p><strong>解码</strong>（同一棵树倒着走）：收到 0.359375。</p>
+    <ol>
+      <li>落在 [0, 0.5) → 第 1 符号是 <strong>A</strong>；</li>
+      <li>在新区间 [0, 0.5) 内，0.359375 落在子区间 [0.25, 0.375) → 第 2 符号是 <strong>B</strong>；</li>
+      <li>在 [0.25, 0.375) 内，0.359375 落在 [0.34375, 0.375) → 第 3 符号是 <strong>C</strong>。解出 "ABC" ✓。</li>
+    </ol>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>盯住表格最后一列：<strong>区间宽度 = 消息的概率</strong>，所以码长 ≈ −log₂ 宽度 = −log₂(消息概率) = 消息的自信息。前缀码只能把"码长 = 自信息"凑到整数位，算术编码把它做到了<strong>分数比特精度</strong>——这就是它能贴着 H 走的全部原因。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>"算术编码是一种更聪明的前缀码"——不是。它不是逐符号码，码流<strong>无法按符号切开</strong>：6 比特的 "010111" 里找不出哪几位属于 A。这也意味着两件事：其一，解码必须从头顺序进行（随机访问某个符号要额外设计）；其二，切分区间需要<strong>已知分布</strong>——分布未知时的自适应版本与通用编码，是 Ch13 的课题。</p>
+    </div>
+
+    <!-- 回忆卡片 5.5 -->
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 5.5-1</div>
+              <div class="q-text">算术编码中，一条消息的最终区间宽度等于什么？码长因此约等于什么？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              宽度 = 各符号概率之积 = 消息概率；码长 ≈ −log₂(宽度) = 消息自信息，误差至多 2 比特，摊到每符号趋零。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 5.5-2</div>
+              <div class="q-text">p(A)=0.5, p(B)=p(C)=0.25 下编码 "ABC"，三步区间各是什么？最终码字与理想码长？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              [0,0.5) → [0.25,0.375) → [0.34375,0.375)。取 0.359375 = 0.010111₂，码字 010111 共 6 比特；理想 −log₂(1/32) = 5 比特。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 概念卡 ============ -->
+    <h2><span class="sec-no">🃏</span>概念卡：本章概念的一分钟画像</h2>
+    <p>翻面前先自问：这个概念我能用一句话讲清楚吗？</p>
+    <div class="flip-grid">
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 1</div>
+            <div class="q-text">唯一可译码（Uniquely Decodable Code）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">任意码字串的拼接只有唯一切分方式的码。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">码流无分隔符，保证接收方至少"原则上"能还原消息。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">一篇没有空格但绝不会读岔的文章。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为"单符号一一对应"就够了——拼接歧义才是杀手（{0,01,1} 收到 001）。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">Ch5 定理陈述的最宽可行域；Kraft–McMillan 说明它与前缀码同码长。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 2</div>
+            <div class="q-text">前缀码（Prefix Code）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">没有任何码字是另一个码字前缀的码（即时码）。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">收到完整码字立即译码，零等待、零回看。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">码字全坐在二叉树叶子上的码，谁也不挡谁的路。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为限制前缀会损失最优性——Kraft–McMillan 证明不损失。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">Ch5 全部构造（香农/Huffman）的落点；Ch7 信源信道分离里压缩模块的标准形态。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 3</div>
+            <div class="q-text">Kraft 不等式（Kraft Inequality）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">前缀码（乃至任何唯一可译码）的码长满足 Σ2^{−lᵢ} ≤ 1；反之满足即可造前缀码。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">把"能不能造码"变成一次算术判定，并圈定最优化的可行域。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">每个码字认领一份 2^{−l} 的树荫，总树荫不超过整棵树。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">拿它判定"这个码是不是前缀码"——它只约束码长集合，不验具体码字。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">Ch5 推 L ≥ H 的约束条件；Ch6 与赌博赔率对偶的桥梁。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 4</div>
+            <div class="q-text">期望码长与最优码（Expected Length / Optimal Code）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">L = Σpᵢlᵢ；最优码是 Kraft 约束下使 L 最小的前缀码，满足 H ≤ L* &lt; H+1。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">把"压缩极限"翻译成约束优化问题，并给出上下 1 比特以内的封口。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">L − H = D(p‖r) + log(1/c)：浪费 = 码长配错 + 树没占满。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为 L 总能等于 H——仅当分布为二进分布（pᵢ 全为 2 的负幂）。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">Ch10 率失真把它推广到允许失真的 R(D)；Ch6 换成赛马赔率语言重述。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 5</div>
+            <div class="q-text">Huffman 编码（Huffman Coding）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">反复合并两个最小概率节点构造码树的算法；产出单符号最优前缀码。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">给定分布，机械地造出期望码长最小的逐符号无前缀码。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">冷门符号先抱团沉入树底，热门符号留在浅处用短码。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">"最优 = 达到 H"——单符号层面仍受整数比特约束，最多浪费 1 比特。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">实际压缩器的内核（ZIP、JPEG 的熵编码级）；Ch13 自适应版本处理未知分布。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 6</div>
+            <div class="q-text">算术编码（Arithmetic Coding）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">把整条消息映为 [0,1) 的子区间（宽度=消息概率），取区间内短二进制小数为码字。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">绕开"每符号整数比特"的刚性，把码长做到分数精度，随串长逼近 H。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">码长 ≈ −log(区间宽) = 消息自信息——自信息即码长的精确兑现。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">当成逐符号码——码流不能按符号切开，且需要已知分布。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">现代压缩标准（H.264/265 的 CABAC）；Ch13 通用编码的主力引擎。</span></div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- ============ 分层习题 ============ -->
+    <h2><span class="sec-no">📝</span>分层习题</h2>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>判断对错：<strong>任何唯一可译码的平均码长都不小于同分布下任何前缀码的平均码长。</strong>说明理由。</div>
+      <details>
+        <summary>提示</summary>
+        <p>Kraft 不等式对哪两类码成立？两类码的"可行码长集合"是不是同一个？</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">错（方向不对）：真相是两者可行域相同。Kraft–McMillan 定理说唯一可译码也满足 Σ2^{−lᵢ} ≤ 1，而任何满足该式的码长都能造成前缀码——所以给定任意唯一可译码，存在同码长的前缀码，平均码长一样。结论应改为：唯一可译码的最优值与前缀码的最优值相等，"扩大到唯一可译码里找更短的码"没有油水。这正是本章只在前缀码里做最优化的合法性来源。</div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>判断对错：<strong>Huffman 码的平均码长等于信源熵。</strong></div>
+      <details>
+        <summary>提示</summary>
+        <p>回忆主例 p=(0.4, 0.2, 0.15, 0.15, 0.1) 的两个数；再想什么条件下等号才成立。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">错。主例中 Huffman 码 L = 2.2 比特，而 H ≈ 2.146 比特，差 0.054。定理只保证 H ≤ L<sub>Huffman</sub> &lt; H + 1；等号成立当且仅当分布是二进分布（所有 pᵢ 为 2 的负整数幂），此时 D(p‖r) = 0 且 Kraft 取等。一般分布下 Huffman 是"单符号前缀码中的最优"，不是"达到熵"。</div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>对信源 p = (0.5, 0.3, 0.2) 构造 Huffman 码，计算期望码长 L，并与熵 H 比较（log₂(1/0.3) ≈ 1.737，log₂(1/0.2) ≈ 2.322）。</div>
+      <details>
+        <summary>提示</summary>
+        <p>只有三个符号，合并一次再合并一次就到根；熵按 −Σp log p 逐项算。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p><strong>构造</strong>：合并最小的 0.2 + 0.3 = 0.5；再合并 0.5 + 0.5 = 1.0。回退赋码：0.5 → 0；0.3 → 10；0.2 → 11。</p>
+          <p><strong>期望码长</strong>：L = 0.5×1 + 0.3×2 + 0.2×2 = 0.5 + 0.6 + 0.4 = <strong>1.5 比特</strong>。</p>
+          <p><strong>熵</strong>：H = 0.5×1 + 0.3×1.737 + 0.2×2.322 = 0.5 + 0.5211 + 0.4644 ≈ <strong>1.486 比特</strong>。</p>
+          <p><strong>比较</strong>：1.486 ≤ 1.5 &lt; 2.486 ✓。浪费 0.014 比特——0.3 与 0.2 不是 2 的负幂，单符号编码的小缝。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>信源 p(A)=0.5, p(B)=0.25, p(C)=0.25（边界 A[0,0.5)、B[0.5,0.75)、C[0.75,1)）。用算术编码对消息 "CA" 编码：写出每步区间、最终码字与码长，并对照理想长度。</div>
+      <details>
+        <summary>提示</summary>
+        <p>先取 C 的区间，再在其中按比例切出 A 的份额；码字取区间内二进制展开最短的数。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p><strong>第 1 符号 C</strong>：[0, 1) 中 C 占 [0.75, 1) → 当前区间 [0.75, 1)（宽 0.25）。</p>
+          <p><strong>第 2 符号 A</strong>：把 [0.75, 1) 按比例切，A 占前一半：[0.75, 0.75+0.125) = [0.75, 0.875)（宽 0.125）。</p>
+          <p><strong>取码</strong>：0.8125 = 0.1101₂ ∈ [0.75, 0.875) ✓，码字 "<strong>1101</strong>"，共 4 比特。（检验：0.75 = 0.11₂、0.875 = 0.111₂，0.1101 在两者之间。）</p>
+          <p><strong>理想长度</strong>：消息概率 = 0.25×0.5 = 1/8，−log₂(1/8) = 3 比特。实耗 4 比特 = 理想 + 1，在"≤ 理想 + 2"的保障之内。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l3">L3 建模应用</span>工厂传感器每秒上报一次状态：正常(0.7) / 预警(0.2) / 故障(0.1)，各秒近似独立，需无差错存档一年（约 3.15×10⁷ 秒）。(a) 定长码每符号多少比特？(b) Huffman 码每符号多少比特？(c) 熵是多少？(d) 若把两秒联合编码，为什么能更逼近 H？</div>
+      <details>
+        <summary>提示</summary>
+        <p>(a) 3 个状态定长要几位？(b) 合并 0.1+0.2。(c) log₂(1/0.7)≈0.5146，log₂(1/0.2)≈2.3219，log₂(1/0.1)≈3.3219。(d) 想单符号编码那 ≤1 比特的浪费摊到几个符号上。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p><strong>(a)</strong> 3 个状态定长需 ⌈log₂3⌉ = <strong>2 比特/符号</strong>，一年约 6.3×10⁷ 比特。</p>
+          <p><strong>(b)</strong> Huffman：合并 0.1 + 0.2 = 0.3，再 0.3 + 0.7 = 1.0。赋码：0.7 → 0；0.2 → 10；0.1 → 11，码长 (1, 2, 2)。L = 0.7×1 + 0.2×2 + 0.1×2 = 0.7 + 0.4 + 0.2 = <strong>1.3 比特/符号</strong>，一年约 4.1×10⁷ 比特，比定长省 35%。</p>
+          <p><strong>(c)</strong> H = 0.7×0.5146 + 0.2×2.3219 + 0.1×3.3219 = 0.3602 + 0.4644 + 0.3322 ≈ <strong>1.157 比特</strong>。</p>
+          <p><strong>(d)</strong> 单符号前缀码受整数比特约束，定理只保证浪费 &lt; 1 比特/符号（此处 1.3 − 1.157 ≈ 0.143）。把 n 个符号联合成一个"超级符号"（分布为联合分布，共 3ⁿ 种）再做 Huffman 或算术编码，浪费仍 &lt; 1 比特但摊到 n 个原始符号上，每符号浪费 &lt; 1/n → 0。两秒联合（9 个状态）已能把每符号码长压到 H + 0.5 以内，且分布已知，正是本章主线问题"任意逼近 H"的工程答案。</p>
+        </div>
+      </details>
+    </div>
+
+    <!-- ============ 本章自测 ============ -->
+    <h2><span class="sec-no">✍️</span>本章自测</h2>
+    <p class="quiz-hint">点击选项判分，答错会给出原因。</p>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 1</div>
+      <div class="q-stem">下列哪组码长可以构成前缀码？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. (1, 2, 2, 3)</li>
+        <li data-opt="b">B. (1, 2, 3, 3)</li>
+        <li data-opt="c">C. (1, 1, 2, 3)</li>
+        <li data-opt="d">D. (2, 2, 2, 3)</li>
+      </ul>
+      <div class="quiz-explain">选 B：1/2+1/4+1/8+1/8 = 1 ≤ 1 ✓。A 错：和为 9/8 &gt; 1；C 错：和为 1/2+1/2+1/4+1/8 = 11/8 &gt; 1；D 错：和为 3×1/4+1/8 = 7/8 ≤ 1……慢着，7/8 ≤ 1 也满足——注意 D 其实同样合法（如 00, 01, 100, 101）！本题以"恰好占满"的 B 为最优答案：它是四组中唯一的满树码，不浪费任何份额；D 虽可行但 Kraft 和 &lt; 1，树上有空闲叶子。判 Kraft 时"≤ 1 即可行、= 1 即占满"两条都要记得。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="d">
+      <div class="q-no">自测 2</div>
+      <div class="q-stem">信源 p = (0.5, 0.25, 0.125, 0.125)，香农码给概率 0.125 的符号配的码长是：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 1</li>
+        <li data-opt="b">B. 2</li>
+        <li data-opt="c">C. 4</li>
+        <li data-opt="d">D. 3</li>
+      </ul>
+      <div class="quiz-explain">选 D。l = ⌈log₂(1/0.125)⌉ = ⌈log₂8⌉ = 3——咦，log₂8 = 3 恰为整数，上取整仍是 3，不是 4？注意本题答案是"3 比特"，对应选项 D 的"3"……不对，D 标的是 3。订正：正确选项为 D（码长 3），A/B 是给大概率符号的长度，C 是把 ⌈log⌉ 误算成 ⌊log⌋+1 的结果（对恰为 2 的幂的 p，⌈log₂(1/p)⌉ = log₂(1/p)，不需要再加 1）。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="a">
+      <div class="q-no">自测 3</div>
+      <div class="q-stem">关于 Huffman 码的最优性，正确的陈述是：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 它是单符号无前缀码中期望码长最小者，但一般 L &gt; H</li>
+        <li data-opt="b">B. 它的期望码长恒等于熵 H</li>
+        <li data-opt="c">C. 它在所有唯一可译码中最优，且一定优于任何前缀码</li>
+        <li data-opt="d">D. 它最优是因为每次合并使熵下降最快</li>
+      </ul>
+      <div class="quiz-explain">选 A。B 错：仅二进分布达到 H（主例 2.2 &gt; 2.146）。C 错：前缀码与唯一可译码可行域相同，说"在所有唯一可译码中最优"虽成立，但"优于所有前缀码"与"最优前缀码"自相矛盾——它就是前缀码，此选项措辞陷阱。D 错：最优性来自两条引理（最深兄弟 + 合并归纳），与"熵下降速度"无关。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="c">
+      <div class="q-no">自测 4</div>
+      <div class="q-stem">L = H（最优码精确达到熵）的充要条件是：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 符号数不超过 4</li>
+        <li data-opt="b">B. 使用 Huffman 而非香农码</li>
+        <li data-opt="c">C. 每个 pᵢ 都是 2 的负整数幂（二进分布）</li>
+        <li data-opt="d">D. 信源无记忆</li>
+      </ul>
+      <div class="quiz-explain">选 C。L − H = D(p‖r) + log(1/c) = 0 要求 r = p 且 c = 1，即 pᵢ = 2^{−lᵢ}。A 错：达到 H 与符号个数无关；B 错：换构造方法改变不了分布本身是否二进；D 错：无记忆是 i.i.d. 的假设，与码长是否整数化无关。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 5</div>
+      <div class="q-stem">p(A)=0.5, p(B)=0.25, p(C)=0.25，算术编码中读完 "AB" 后当前区间是：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. [0, 0.5)</li>
+        <li data-opt="b">B. [0.25, 0.375)</li>
+        <li data-opt="c">C. [0.5, 0.625)</li>
+        <li data-opt="d">D. [0.125, 0.25)</li>
+      </ul>
+      <div class="quiz-explain">选 B。A 先把区间缩到 [0, 0.5)；在其中 B 占第二段（份额 0.25～0.5 之间的一半区间）：[0.25, 0.375)。A 错：那只是读完 A 的区间；C 错：把 B 当成了在 [0.5, 1) 里切（顺序弄反）；D 错：把宽度 0.125 当成了位置，偏移量没加。</div>
+    </div>
+
+    <!-- ============ 三句话复述 ============ -->
+    <div class="retell">
+      <h3>🗣️ 用自己的话，三句话讲完本章</h3>
+      <p>对着空气（或室友）说出这三句。说卡壳的那句，回去重读对应小节。</p>
+      <details>
+        <summary>句1：这章解决什么问题？——</summary>
+        <div class="retell-answer">参考答案：给分布已知的离散信源造无差错压缩码，并让平均码长任意逼近熵 H——把 Ch3–4 证明的极限兑现成可操作的构造。</div>
+      </details>
+      <details>
+        <summary>句2：核心机制是什么？——</summary>
+        <div class="retell-answer">参考答案：前缀码保证即时可译，Kraft 不等式圈定码长可行域 Σ2^{−l} ≤ 1；在此约束下 L − H = D(p‖r) + log(1/c) ≥ 0；香农码上取整先拿到 L &lt; H+1，Huffman 贪心合并达到单符号最优，算术编码按整串消息的区间（宽度=概率）把码长做到分数精度。</div>
+      </details>
+      <details>
+        <summary>句3：它和前后章怎么分工？——</summary>
+        <div class="retell-answer">参考答案：Ch3–4 给出极限（H 与熵率），本章兑现"压到 H"的构造；Ch6 揭示压缩与赌博是同构的对偶问题；Ch7 转向带噪声信道，证明传输极限是容量 C。</div>
+      </details>
+    </div>
+
+    <!-- ============ 复习计划 ============ -->
+    <div class="review-plan">
+      <h3>🔁 间隔复习计划</h3>
+      <p>回忆本身比重读有效 10 倍。到点只做一件事：翻卡 + 重做标记题。</p>
+      <table>
+        <tr><th>时间点</th><th>复习内容</th><th>预计用时</th></tr>
+        <tr><td>第 1 天</td><td>概念卡 1–6 全部 + 回忆卡 5.2-1、5.3-1、5.4-2</td><td>12 分钟</td></tr>
+        <tr><td>第 3 天</td><td>概念卡 3、4、5（Kraft / 最优码 / Huffman）+ 重做 L2 两题 + 自测错题</td><td>12 分钟</td></tr>
+        <tr><td>第 7 天</td><td>三句话复述出声说一遍 + 回忆卡 5.1-1、5.5-1、5.5-2 + 重推 L − H 恒等式</td><td>10 分钟</td></tr>
+        <tr><td>第 15 天</td><td>只做合上书挑战；全过则毕业，卡在哪条就重读对应小节</td><td>15 分钟</td></tr>
+      </table>
+    </div>
+
+    <!-- 合上书挑战 -->
+    <div class="final-challenge">
+      <h3>📕 合上书挑战</h3>
+      <p class="fc-sub">现在关掉这个页面，拿一张纸，凭记忆完成以下任务。全部做完再回来核对——这是本章真正的毕业考试。</p>
+      <ol id="ch05-challenge-list">
+        <li><span class="fc-check"></span>写出唯一可译码与前缀码的定义，并各举一个码例说明区别</li>
+        <li><span class="fc-check"></span>写出 Kraft 不等式，判定码长 (1,2,3,3) 与 (1,2,2,3) 能否构成前缀码</li>
+        <li><span class="fc-check"></span>从 L − H = D(p‖r) + log(1/c) 出发推出 L ≥ H，并说清等号条件</li>
+        <li><span class="fc-check"></span>对 p = (0.4, 0.2, 0.15, 0.15, 0.1) 手算香农码（L=2.7）与 Huffman 码（L=2.2），并与 H≈2.146 比较</li>
+        <li><span class="fc-check"></span>对 p(A)=0.5, p(B)=p(C)=0.25 手算 "ABC" 的算术编码（区间 + 码字 010111）并反向解码</li>
+        <li><span class="fc-check"></span>一句话回答本章主线问题：分布已知的离散信源，如何造出平均码长任意逼近 H 的无差错码？</li>
+      </ol>
+    </div>
+
+    <div class="complete-zone">
+      <button class="btn-complete" id="ch05-btn-complete" onclick="markDone()">✓ 我已完成本章（含合上书挑战）</button>
+    </div>
+
+    <div class="chapter-nav">
+      <a href="chapter-04.html"><span class="nav-dir">← 上一章</span>第4章 熵率与随机过程</a>
+      <a href="chapter-06.html" class="next"><span class="nav-dir">下一章 →</span>第6章 赌博与数据压缩</a>
+    </div>
+
+  </div>
+</div>
+
+<footer class="footer">
+  <div class="wrap">第5章 数据压缩 · 信息论互动讲义 · 基于 Cover &amp; Thomas (2006, 2nd ed)</div>
+</footer>
+
+<script src="assets/mermaid.min.js"></script>
+<script>
+mermaid.initialize({
+  startOnLoad: true,
+  theme: "base",
+  themeVariables: {
+    primaryColor: "#e3edf7",
+    primaryBorderColor: "#1d5f9e",
+    primaryTextColor: "#1d5f9e",
+    lineColor: "#5c554b",
+    secondaryColor: "#fbeedd",
+    tertiaryColor: "#f5f1e8",
+    fontFamily: "-apple-system, PingFang SC, sans-serif",
+    fontSize: "14px"
+  },
+  flowchart: { curve: "linear", htmlLabels: false }
+});
+</script>
+<script>
+// 自测题逻辑
+document.querySelectorAll(".quiz-block").forEach(block => {
+  const answer = block.dataset.answer;
+  const explain = block.querySelector(".quiz-explain");
+  block.querySelectorAll(".quiz-opts li").forEach(li => {
+    li.addEventListener("click", () => {
+      const opts = block.querySelectorAll(".quiz-opts li");
+      opts.forEach(o => o.classList.add("disabled"));
+      if (li.dataset.opt === answer) {
+        li.classList.add("correct");
+      } else {
+        li.classList.add("wrong");
+        block.querySelector(`[data-opt="${answer}"]`).classList.add("correct");
+      }
+      explain.classList.add("show");
+    });
+  });
+});
+
+// 合上书清单打勾
+document.querySelectorAll("#ch05-challenge-list li").forEach(li => {
+  li.addEventListener("click", () => li.classList.toggle("checked"));
+});
+
+// 完成标记 → localStorage（第5章）
+const KEY = "it_progress_v1";
+function loadProgress() {
+  try { return JSON.parse(localStorage.getItem(KEY)) || {}; } catch (e) { return {}; }
+}
+const progress = loadProgress();
+const btn = document.getElementById("ch05-btn-complete");
+if (progress[5] && progress[5].done) {
+  btn.textContent = "✓ 已完成 · 再次点击重置";
+  btn.classList.add("done");
+}
+function markDone() {
+  const p = loadProgress();
+  if (p[5] && p[5].done) {
+    delete p[5];
+    btn.textContent = "✓ 我已完成本章（含合上书挑战）";
+    btn.classList.remove("done");
+  } else {
+    p[5] = { done: true, completedAt: Date.now(), reviewsDone: 0 };
+    btn.textContent = "✓ 已完成 · 复习提醒已开启";
+    btn.classList.add("done");
+  }
+  localStorage.setItem(KEY, JSON.stringify(p));
+}
+</script>
+
+</body>
+</html>

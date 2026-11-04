@@ -1,0 +1,814 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第14章 柯氏复杂度 · 信息论互动讲义</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+<nav class="topbar">
+  <div class="topbar-inner">
+    <span class="brand"><a href="index.html" style="color:inherit">← 学习地图</a></span>
+    <span class="crumb">阶段四 · 通用与网络 / 第14章</span>
+  </div>
+</nav>
+
+<div class="wrap">
+
+  <div class="lecture-head">
+    <span class="ch-label">CHAPTER 14 · 通用与网络</span>
+    <h1>柯氏复杂度</h1>
+    <p class="lead">一条序列"本身"有多复杂？抛开分布，给单个对象的信息量一个终极定义。</p>
+  </div>
+
+  <!-- 本章定位 -->
+  <div class="position-bar">
+    <strong>本章在主线上的位置：</strong>Ch13 在不知道分布的情况下把每条序列压到接近熵 → <u>追问单条序列的最短描述极限：柯氏复杂度 K(x)，它与熵在期望意义下会合</u> → 落地为 MDL 模型选择，并为 Ch15 把信息论推广到网络提供"描述长度"语言。<br>
+    第14章回答主线上的第十四个问题：<strong>一条序列本身的复杂度如何度量？它与熵是什么关系？</strong>
+    <div class="map-inline">
+      <span class="node">Ch1–4 基础（熵与AEP）</span><span class="arrow">→</span>
+      <span class="node">Ch5–9 压缩与信道</span><span class="arrow">→</span>
+      <span class="node">Ch10–12 率失真与统计</span><span class="arrow">→</span>
+      <span class="node">Ch13 通用信源编码</span><span class="arrow">→</span>
+      <span class="node here">Ch14 柯氏复杂度</span><span class="arrow">→</span>
+      <span class="node">Ch15 网络信息论</span><span class="arrow">→</span>
+      <span class="node">Ch16–17 多用户与不等式</span>
+    </div>
+  </div>
+
+  <!-- 学习目标 -->
+  <div class="objectives">
+    <h4>🎯 学完本章，合上书你应该能：</h4>
+    <ol>
+      <li>写出柯氏复杂度 K(x) 的定义，说清"固定一台通用计算机"这个前提为什么必不可少</li>
+      <li>用不变性定理解释：换一台通用机，K 至多相差一个与 x 无关的常数 c</li>
+      <li>借助 Berry 悖论复述"K 不可计算"的推理链</li>
+      <li>手算计数论证：n 位串中满足 K(x) &lt; n−k 的比例小于 2⁻ᵏ，并解释"压缩必有例外"</li>
+      <li>写出 (1/n)·E[K(Xⁿ)] → H 的双方向证明思路（典型集给上界、Kraft 不等式给下界）</li>
+      <li>给定候选模型与两部分码长表，用 MDL 原则选出最优模型并解释与奥卡姆剃刀的关系</li>
+    </ol>
+  </div>
+
+  <div class="lecture">
+
+    <!-- 推导主线 -->
+    <div class="figure">
+      <div class="mermaid">
+flowchart LR
+  A["Ch13 通用码<br>不知分布也能压到 H"] --> B["追问：单条序列本身<br>最短能描述到多短"]
+  B --> C["柯氏复杂度 K x<br>最短停机程序长度"]
+  C --> D["不变性定理<br>换机器只差常数"]
+  D --> E["坏消息：K 不可计算<br>Berry 悖论"]
+  E --> F["好消息：期望意义下<br>K 与熵会合"]
+  F --> G["落地：两部分码<br>MDL 模型选择"]
+  G --> H["代价：K 只能逼近<br>实用靠 MDL 网络化去 Ch15"]
+  classDef hot fill:#fbeedd,stroke:#c4651f,stroke-width:2.5px,color:#c4651f;
+  classDef danger fill:#fae9e7,stroke:#b03a2e,stroke-width:2.5px,color:#b03a2e;
+  class C hot;
+  class H danger;
+      </div>
+      <div class="caption">本章推导主线：从"压缩单条序列的极限"出发，定义 K，先付出"不可计算"的代价（红色），再换回"与熵会合"与"MDL 实用化"两笔收益。</div>
+    </div>
+
+    <!-- ============ 14.1 ============ -->
+    <h2><span class="sec-no">14.1</span>从"这条序列本身有多复杂"说起</h2>
+
+    <p>上一章的通用编码给了一个漂亮的承诺：不知道信源分布，也能把平均码长压到接近熵。但注意，那是<strong>对分布、对平均</strong>的承诺。现在换一个更"个人"的问题：桌上放着<strong>一条具体的 1000 位串</strong>，不谈它是哪个信源生的，就问它本身最短能被描述成多少位？这就是本章的主角——<span class="term">柯氏复杂度</span>（Kolmogorov Complexity，又译柯尔莫哥洛夫复杂度）。</p>
+
+    <p><strong>定义</strong>：固定一台<span class="term">通用计算机</span>（Universal Computer，可理解为通用图灵机或你手里的编程语言解释器）U，串 x 的柯氏复杂度是<strong>能让 U 输出 x 然后停机的最短程序的长度</strong>：</p>
+
+    <div class="formula">K<sub>U</sub>(x) = min<sub>p：U(p) = x 且停机</sub> ℓ(p)</div>
+
+    <p>其中 ℓ(p) 是程序 p 的比特长度。三个要点：程序必须<strong>无输入</strong>（一切信息都在程序里）、必须<strong>停机</strong>（死循环不算）、取<strong>最短</strong>（所有能输出 x 的程序里的最小值）。</p>
+
+    <h3>例 1：两条 1000 位的串，复杂度天差地别</h3>
+
+    <p><strong>串甲</strong>：0101…01，"01"重复 500 次，共 1000 位。它有一个短程序："循环 500 次，每次打印 01"。这个程序需要多少位？</p>
+
+    <ul>
+      <li>循环次数 500 要编码：log₂500 ≈ 8.97，向上取整 <strong>9 位</strong>；</li>
+      <li>"循环、打印 01"这套指令骨架是固定的一段代码，长度是与 1000 无关的常数，比如解释器里几十位，记为 <strong>c</strong>。</li>
+    </ul>
+
+    <p>合计 K(串甲) ≤ 9 + c——当串长翻倍到 2000 位，只需把 500 改成 1000，多 1 位；串长变 2ⁿ 位，程序只长 n + c 位。<strong>规律性把 1000 位压缩到了约 9 位加常数。</strong></p>
+
+    <p><strong>串乙</strong>：掷 1000 次公平硬币记下的随机串。它没有任何可总结的规律，最短的程序只能是"打印 0110100110…（原样照抄 1000 位）"——程序本身就得装进这 1000 位：K(串乙) ≈ 1000 + c′。14.3 节将严格证明：<strong>绝大多数串都像串乙</strong>。</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>串</th><th>最短程序</th><th>K 的上界估计</th></tr>
+        <tr><td>0101…01（1000 位）</td><td>循环打印 01 共 500 次</td><td>9 + c ≈ 几十位</td></tr>
+        <tr><td>圆周率 π 的前 1000 位二进制</td><td>调用 π 的生成算法算 1000 位</td><td>c″（常数，与 1000 无关）</td></tr>
+        <tr><td>随机掷币串（1000 位）</td><td>原样打印整串</td><td>≈ 1000 位</td></tr>
+      </table>
+    </div>
+
+    <div class="figure">
+      <div class="mermaid">
+flowchart LR
+  A["一条 1000 位串"] --> B["有规律<br>如 0101 循环"]
+  A --> C["无规律<br>如随机掷币"]
+  B --> D["程序：循环打印<br>K 约 9 位加常数"]
+  C --> E["程序：原样照抄<br>K 约 1000 位"]
+  classDef hot fill:#fbeedd,stroke:#c4651f,stroke-width:2.5px,color:#c4651f;
+  class D hot;
+      </div>
+      <div class="caption">图 14.1 同长不同命：规律性决定 K 的大小。K 度量的正是"串里可被程序利用的规律有多少"。</div>
+    </div>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>熵 H 度量的是<strong>一个分布</strong>的平均信息量，K(x) 度量的是<strong>一条具体序列</strong>的信息量——它把"信息"从统计学里解放出来，变成了纯粹的算法概念：一条串的信息 = 它的最短自包含描述。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>"K(x) 是某个编程语言的属性"——不完全是。定义里那台通用机 U 一旦固定，K 就是 x 的客观属性；换机器确实会改数值，但 14.2 的不变性定理保证改动被一个有界常数吸收。另一个误区是以为 π 的位数"随机所以 K 大"——π 的位由短程序生成，K 极小；<strong>看着乱 ≠ 复杂</strong>。</p>
+    </div>
+
+    <!-- 回忆卡片 14.1 -->
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 14.1-1</div>
+              <div class="q-text">写出 K(x) 的定义，并说清程序必须满足的两个条件。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              K(x) = min<sub>p：U(p)=x</sub> ℓ(p)：固定通用机 U 上输出 x 的最短程序长度。程序必须无输入且停机。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 14.1-2</div>
+              <div class="q-text">1000 位的"01"循环串与 1000 位随机掷币串，K 各约为多少？为什么？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              循环串约 log₂500 ≈ 9 位加固定常数（规律可被短程序利用）；随机串约 1000 位（无规律，只能原样照抄进程序）。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 14.2 ============ -->
+    <h2><span class="sec-no">14.2</span>不变性定理：换台机器，K 只差一个常数</h2>
+
+    <p>上一节的定义里写着"固定一台通用机 U"，这立刻引来质疑：用 Python 解释器和用 Java 虚拟机算出来的 K(x) 不一样，那这个定义还有什么客观性？<span class="term">不变性定理</span>（Invariance Theorem）正是来扑灭这个质疑的。</p>
+
+    <p><strong>定理</strong>：对任意两台通用机 U 与 U′，存在一个<strong>只取决于两台机器、不取决于 x</strong> 的常数 c，使得对一切串 x：</p>
+
+    <div class="formula">K<sub>U</sub>(x) ≤ K<sub>U′</sub>(x) + c</div>
+
+    <p><strong>证明思路（模拟器论证）</strong>：U 是通用机，所以它能在自身上模拟 U′——写一段固定程序 s，功能是"读入一个 U′ 程序并照着执行"。这段模拟器的长度 ℓ(s) = c 是固定的。现在任取 U′ 上输出 x 的最短程序 p′（长度 K<sub>U′</sub>(x)），把它交给"U 上的 s + p′"这个组合程序：s 先启动，模拟 U′ 跑 p′，输出 x 并停机。组合长度 = c + K<sub>U′</sub>(x)，于是 U 上存在长度不超过 c + K<sub>U′</sub>(x) 的程序输出 x，即 K<sub>U</sub>(x) ≤ K<sub>U′</sub>(x) + c。交换 U 与 U′ 得反向不等式，合起来 |K<sub>U</sub>(x) − K<sub>U′</sub>(x)| ≤ c。</p>
+
+    <div class="figure">
+      <div class="mermaid">
+flowchart LR
+  A["U撇 的最短程序 p撇<br>长度 K U撇 x"] --> B["前面拼接固定模拟器 s<br>长度常数 c"]
+  B --> C["U 上运行：s 模拟 U撇 跑 p撇"]
+  C --> D["输出 x 且停机<br>故 K U x 不超过 K U撇 x 加 c"]
+  classDef hot fill:#fbeedd,stroke:#c4651f,stroke-width:2.5px,color:#c4651f;
+  class B hot;
+      </div>
+      <div class="caption">图 14.2 不变性定理的证明一目了然：模拟器是把"方言"翻译成"普通话"的固定长度前缀，所以两台机器的 K 只相差一个有界常数。</div>
+    </div>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>模拟器常数 c 就像两种货币之间的一次性汇兑手续费：换机器只付一次，之后每个串的复杂度差异都被它封顶。因此所有<strong>渐近结论</strong>（随串长 n 增长的陈述）对机器的选择完全免疫——O(1) 的差异在 O(n) 的增长面前消失。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>"既然 K 依赖机器，纠结某台具体机器上 K 的精确值才有意义"——恰好相反。不变性定理告诉我们纠结具体常数没有理论价值：本章所有重要结论（不可计算性、(1/n)EK → H、不可压缩的普遍性）都在"相差常数"的意义下成立，对机器选择一视同仁。</p>
+    </div>
+
+    <!-- 回忆卡片 14.2 -->
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 14.2-1</div>
+              <div class="q-text">陈述不变性定理，并用一句话给出证明机制。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              任意两台通用机 U、U′，存在常数 c 使 K<sub>U</sub>(x) ≤ K<sub>U′</sub>(x) + c 对一切 x 成立。机制：U 用一段固定长度的模拟器程序模拟 U′。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 14.2-2</div>
+              <div class="q-text">为什么说渐近结论对机器选择"免疫"？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              换机器引起的差异被常数 c 封顶；当结论涉及随 n 增长的量（如 nH、log n）时，O(1) 的常数差异不改变任何极限与增长率。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 14.3 ============ -->
+    <h2><span class="sec-no">14.3</span>不可计算与不可压缩：K 的两大坏消息与一个大会合</h2>
+
+    <p>K 定义得漂亮，但接下来必须坦白三件事：它<strong>算不出来</strong>；它对<strong>几乎所有串都很大</strong>；以及——作为补偿——它在期望意义下<strong>恰好等于老朋友熵</strong>。这一节把三笔账一次算清。</p>
+
+    <h3>坏消息一：Berry 悖论 ⟹ K 不可计算</h3>
+
+    <p>假如存在一个算法，输入任意 x 都能输出 K(x)，看下面的推理链——这就是<span class="term">Berry 悖论</span>（Berry Paradox）的威力：</p>
+
+    <div class="figure">
+      <div class="mermaid">
+flowchart TB
+  A["定义 n 为：不能用少于1000字<br>描述的最小正整数"] --> B["上面这句话本身不足1000字"]
+  B --> C["它完整描述了 n<br>故 K n 小于 1000"]
+  C --> D["但 n 的定义要求 K n 至少 1000"]
+  D --> E["矛盾根源：假设了 K 可计算<br>故不存在这样的算法"]
+  classDef danger fill:#fae9e7,stroke:#b03a2e,stroke-width:2.5px,color:#b03a2e;
+  class E danger;
+      </div>
+      <div class="caption">图 14.3 Berry 悖论的推理链：若 K 可计算，就能用短描述构造出"不可短描述"的对象，矛盾。</div>
+    </div>
+
+    <p>把链条写细：假设有程序 Q 能计算任意串的 K。写一个程序 P：从小到大枚举所有正整数 m，用 Q 检查每个 m 的最短描述长度，输出第一个满足 K(m) ≥ 1000 的 m 并停机。P 的长度是多少？枚举与比较是固定代码，常数 c；数字 1000 本身只需 log₂1000 ≈ 10 位。所以 ℓ(P) ≈ 10 + c，远小于 1000。可是 P 输出的那个 m 按定义满足 K(m) ≥ 1000——<strong>P 用远少于 1000 位的程序描述了 K ≥ 1000 的对象</strong>，矛盾。唯一可推卸的前提就是"Q 存在"。结论：<strong>K(x) 是不可计算函数</strong>（Uncomputable Function），没有算法能对任意 x 求出它的最短描述。</p>
+
+    <h3>坏消息二（手算例 2）：计数论证——绝大多数串不可压缩</h3>
+
+    <p>长度严格小于 k 位的二元程序有多少个？长度为 0、1、…、k−1 的串分别是 1、2、…、2ᵏ⁻¹ 个，几何级数求和：</p>
+
+    <div class="formula">1 + 2 + 4 + … + 2ᵏ⁻¹ = 2ᵏ − 1</div>
+
+    <p>每个程序至多输出一条串，所以<strong>满足 K(x) &lt; k 的串至多有 2ᵏ − 1 条</strong>。现在取 n 位串全体（共 2ⁿ 条），问：能被压缩掉至少 10 位的串——即 K(x) &lt; n − 10——占多大比例？</p>
+
+    <div class="formula">比例 ≤ <span class="frac"><span class="num-part">2ⁿ⁻¹⁰ − 1</span><span class="den-part">2ⁿ</span></span> &lt; <span class="frac"><span class="num-part">2ⁿ⁻¹⁰</span><span class="den-part">2ⁿ</span></span> = 2⁻¹⁰ = <span class="frac"><span class="num-part">1</span><span class="den-part">1024</span></span> ≈ <strong>0.001</strong></div>
+
+    <p>逐步核对：分子是"长度 &lt; n−10 的程序数"上界 2ⁿ⁻¹⁰ − 1；分母是全体 n 位串数 2ⁿ；约分后 2ⁿ⁻¹⁰⁺⁽⁻ⁿ⁾ = 2⁻¹⁰。<strong>不到千分之一的 n 位串能被压缩哪怕 10 位。</strong>这同时是"万能压缩软件不存在"的严格证明：任何映射若把某些串变短，鸽笼原理就迫使它把另一些串变长——压缩必有例外。</p>
+
+    <p>K 接近串长的串叫<span class="term">不可压缩串</span>（Incompressible String），也称<span class="term">算法随机</span>（Algorithmic Randomness）的串：它没有任何规律可被程序利用。注意这是<strong>逐条串的性质</strong>，与"它是不是从某个均匀分布里抽出来的"无关。</p>
+
+    <h3>大会合（手算例 3）：K 与熵——期望意义下是同一个量</h3>
+
+    <p>设 Xⁿ = X₁…Xⁿ 为 i.i.d. Bern(p) 序列。两个方向各证一次，数字取 n = 1000、p = 0.11（回忆 H(0.11) = −0.11·log₂0.11 − 0.89·log₂0.89 ≈ 0.3503 + 0.1496 ≈ <strong>0.5 比特</strong>）。</p>
+
+    <p><strong>上界（用第 3 章典型集构造短程序）</strong>：给 Xⁿ 写这样一个程序——</p>
+    <ol>
+      <li>先编码 n：用 O(log₂n) 位（n = 1000 时约 10 位，可定长）；</li>
+      <li>再编码序列的类型（含 1 的个数 k，或等价地经验 p̂）：只有 n+1 种可能，再花 O(log₂n) 位；</li>
+      <li>该类型的所有序列等概率且数目为 C(n,k)，用 Stirling 近似 log₂C(n,k) ≈ nH(k/n)；对典型序列 k/n ≈ p，故只需 ≈ nH(p) = 1000 × 0.5 = <strong>500 位</strong>给出集内下标。</li>
+    </ol>
+
+    <p>合计 K(Xⁿ) ≤ nH(p) + O(log₂n)，取期望：</p>
+
+    <div class="formula">E[K(Xⁿ)] ≤ nH(X) + c·log₂n　（n=1000 时约 500 + 几十位）</div>
+
+    <p><strong>下界（用第 5 章 Kraft 不等式）</strong>：停机程序的集合可以组织成前缀码（任何程序都不是另一个程序的前缀，否则短程序跑完就停机了），故其码长满足 Kraft 不等式 Σ<sub>x</sub> 2^(−K(x)) ≤ 1。而第 5 章证明过：<strong>任何满足 Kraft 不等式的码长函数，期望码长不小于熵</strong>。于是</p>
+
+    <div class="formula">E[K(Xⁿ)] ≥ H(Xⁿ) = nH(X)　（n=1000 时 ≥ 500 位）</div>
+
+    <p>两界一夹：500 ≤ E[K(X¹⁰⁰⁰)] ≤ 500 + 几十。除以 n 取极限，得到本章最优美的结论：</p>
+
+    <div class="formula">lim<sub>n→∞</sub> <span class="frac"><span class="num-part">1</span><span class="den-part">n</span></span> E[K(Xⁿ)] = H(X)</div>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p><strong>柯氏复杂度是熵的"逐序列版本"</strong>：熵说"这个分布的序列平均要 nH 位"，K 说"这一条序列本身要 K(x) 位"；对长随机序列取平均，两者精确会合。香农从分布走向极限，柯尔莫哥洛夫从单条序列走向极限，终点是同一个 H。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>"K 不可计算，所以这套理论没用"——错。不可计算的是对<strong>任意</strong> x 求精确 K；但上界（给出具体短程序）永远可验证，下界可用计数论证批量给出（绝大多数串 K 大）。14.4 节的 MDL 正是把"最短描述"从理论对象变成每天可用的建模原则。</p>
+    </div>
+
+    <!-- 回忆卡片 14.3 -->
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 14.3-1</div>
+              <div class="q-text">Berry 悖论如何推出 K 不可计算？（说出推理链骨架）</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              若 K 可计算，写一个短程序枚举并输出第一个 K(m) ≥ 1000 的 m；该程序远短于 1000 位却描述了 K ≥ 1000 的对象，矛盾。故不存在计算 K 的通用算法。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 14.3-2</div>
+              <div class="q-text">n 位串中 K(x) &lt; n−10 的比例上界是多少？怎么算出来的？(1/n)EK(Xⁿ) 的极限呢？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              短于 n−10 位的程序至多 2ⁿ⁻¹⁰ − 1 个，除以 2ⁿ 条串得比例 &lt; 2⁻¹⁰ ≈ 0.001。极限：lim (1/n)E[K(Xⁿ)] = H(X)（典型集给上界，Kraft 给下界）。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 14.4 ============ -->
+    <h2><span class="sec-no">14.4</span>从复杂度到学习：两部分码与 MDL</h2>
+
+    <p>K 不可计算，但它的思想可以直接"贴现"成工程原则。建模的本质是什么？给数据 x 找一个短描述。把描述拆成两段——<strong>先描述模型，再描述给定模型后的数据</strong>——这就是<span class="term">两部分码</span>（Two-Part Code），而"选总描述长度最短的模型"就是<span class="term">最小描述长度</span>（Minimum Description Length, MDL）原则：</p>
+
+    <div class="formula">L<sub>总</sub>(M, x) = L(M) + L(x | M)　　选 M* = arg min<sub>M</sub> L<sub>总</sub></div>
+
+    <p>第一项惩罚模型的复杂，第二项奖励模型的贴合：模型越复杂，L(M) 越大，但残差 L(x|M) 越小；模型太简单，L(M) 小而残差大。<strong>总长度最短处就是偏差与方差的平衡点</strong>——<span class="term">奥卡姆剃刀</span>（Occam's Razor）"如无必要勿增实体"由此获得精确的比特度量。</p>
+
+    <div class="figure">
+      <div class="mermaid">
+flowchart LR
+  A["数据 x"] --> B["第一部分：模型 M<br>描述长度 L M"]
+  A --> C["第二部分：给定 M<br>数据的描述长度 L x 竖线 M"]
+  B --> D["总长相加<br>最短者胜出"]
+  C --> D
+  D --> E["过简单欠拟合 过复杂过拟合<br>最短总长即平衡点"]
+  classDef hot fill:#fbeedd,stroke:#c4651f,stroke-width:2.5px,color:#c4651f;
+  class D hot;
+      </div>
+      <div class="caption">图 14.4 两部分码：模型项与数据项此消彼长，总长最短处自动剪除过拟合与欠拟合。</div>
+    </div>
+
+    <p>更理论化的对应物是<span class="term">柯氏充分统计量</span>（Kolmogorov Sufficient Statistic）：把 x 拆成"结构 + 噪声"——选一个含 x 的集合 S，使 <strong>K(S) + log₂|S|</strong> 最小；S 的描述捕获 x 的全部规律（充分统计量），log₂|S| 位下标则是 x 在集合内的纯随机位置。最优 S* 恰好把"有意义的结构"与"无规律的噪声"切开，这与统计里充分统计量的角色一一对应。</p>
+
+    <p>两个漂亮但本书不展开的延伸，各记一句：<strong>其一</strong>，<span class="term">通用先验</span>（Universal Prior）P<sub>U</sub>(x) ≈ 2^(−K(x))——越简单的对象先验概率越大，把这当先验做贝叶斯预测就是所罗门诺夫的通用归纳理论；<strong>其二</strong>，<span class="term">停机概率</span>（Halting Probability）Ω = Σ<sub>p：U(p) 停机</sub> 2^(−ℓ(p))——Chaitin 的这个数是每个前缀程序随机被抽中时恰好停机的概率，它的每一位都不可计算，是算法信息论里"随机性的极限标本"。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>MDL 是 K 的"可计算替身"：把全集上的最短程序换成一个模型类里的两部分码，不可计算的优化就变成了可查表、可比较的实用准则。学统计学习时见过的 BIC、正则化，都是这条思想的不同近似。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>"MDL 说永远选最简单的模型"——不对，它选的是<strong>总码长最短</strong>的模型：若数据真有复杂结构，复杂模型靠残差项的大幅节省照样胜出。MDL 反对的不是复杂，而是"复杂度没有换来足够的描述节省"。</p>
+    </div>
+
+    <!-- 回忆卡片 14.4 -->
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 14.4-1</div>
+              <div class="q-text">写出两部分码总长公式，并解释两项各自的"推力"方向。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              L<sub>总</sub> = L(M) + L(x|M)。第一项随模型变复杂而增大（惩罚复杂），第二项随模型贴合数据而减小（奖励贴合）；总长最短即权衡点。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 14.4-2</div>
+              <div class="q-text">柯氏充分统计量把 x 拆成哪两部分？最优集合 S 最小化什么量？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              拆成"结构（集合 S 的描述）+ 噪声（集内下标）"；最优 S 最小化 K(S) + log₂|S|。通用先验 P<sub>U</sub>(x) ≈ 2^(−K(x)) 体现同一思想：简单者先验大。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 概念卡 ============ -->
+    <h2><span class="sec-no">🃏</span>概念卡：本章概念的一分钟画像</h2>
+    <p>翻面前先自问：这个概念我能用一句话讲清楚吗？</p>
+    <div class="flip-grid">
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 1</div>
+            <div class="q-text">柯氏复杂度（Kolmogorov Complexity）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">K(x) = min<sub>p：U(p)=x</sub> ℓ(p)：固定通用机上输出 x 并停机的最短程序长度。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">给"单条序列本身含多少信息"一个不依赖分布的终极定义。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">一条串的最短"自包含说明书"的厚度。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为看着乱就是 K 大——π 的位看着乱但由短程序生成，K 很小。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">本章全程；MDL、通用先验、算法随机性都建立在它上面。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 2</div>
+            <div class="q-text">不变性定理（Invariance Theorem）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">任意两台通用机间存在常数 c，使 |K<sub>U</sub>(x) − K<sub>U′</sub>(x)| ≤ c 对一切 x 成立。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">消除"K 依赖具体机器"的定义危机，保证渐近结论客观。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">换机器只付一次性的"模拟器手续费"，之后逐条串都被它封顶。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">纠结某台机器上的精确 K 值——理论上只有相差常数的陈述才有意义。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">一切关于 K 的渐近命题（如 (1/n)EK → H）的合法性来源。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 3</div>
+            <div class="q-text">不可计算性与 Berry 悖论（Uncomputability / Berry Paradox）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">不存在对任意 x 输出 K(x) 的算法；Berry 悖论给出对角线式证明。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">划定算法信息论的边界：最短描述是理论上存在、实践上不可全求的对象。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">"不能用少于一千字描述的最小整数"被这句话用不到一千字描述了。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为不可计算 = 不可研究——上界可构造、下界可计数、期望可渐近。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">14.4 MDL 的动机：正因为 K 求不出，才需要可计算的替身。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 4</div>
+            <div class="q-text">算法随机性 / 不可压缩（Algorithmic Randomness / Incompressibility）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">K(x) ≥ |x| 量级（压不出水分）的串称为不可压缩串，即算法随机串。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">把"随机"从分布属性变成单条序列的可判定性质。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">最短描述就是原样照抄——这条串是它自己最短的摘要。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为随机串罕见——恰恰相反，n 位串中可压缩 10 位以上的不足 0.1%。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">计数论证的主角；"万能压缩软件不存在"的严格依据。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 5</div>
+            <div class="q-text">K 与熵的渐近等价（lim (1/n)EK = H）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">i.i.d. 序列上 nH ≤ E[K(Xⁿ)] ≤ nH + O(log n)，故 (1/n)E[K(Xⁿ)] → H(X)。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">证明算法信息论与香农信息论是同一枚硬币的两面。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">K 是熵的逐序列版本：平均下来，单条最短描述就是 nH。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为对每条串都有 K(xⁿ) ≈ nH——只在期望/大概率意义下成立。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">连接 Ch3 典型集、Ch5 码长下界与本章的枢纽结论。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 6</div>
+            <div class="q-text">两部分码与 MDL（Two-Part Code / Minimum Description Length）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">L<sub>总</sub> = L(M) + L(x|M)，选总长度最短的模型 M。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">把 K 的"最短描述"思想变成可计算的模型选择准则。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">模型是压缩工具：工具本身要花钱（L(M)），用它压数据省钱（L(x|M)）。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为 MDL 永远选最简单模型——它选的是总码长最短，不是第一项最小。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">模型/阶数选择、正则化、BIC 的共同源头；统计学习与机器学习处处可见。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 7</div>
+            <div class="q-text">柯氏充分统计量（Kolmogorov Sufficient Statistic）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">含 x 的集合 S 中使 K(S) + log₂|S| 最小者；S 是结构，集内下标是噪声。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">把一条序列严格切成"全部规律"与"纯随机残差"两半。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">x = 一份浓缩的结构说明 + 一个骰子在该结构允许范围内的落点。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为 S 越精确越好——S 太细（如 S={x}）K(S) 飙升，总长度反而变大。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">MDL 的理论原型；理解"充分统计量"在算法信息论中的镜像。</span></div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- ============ 分层习题 ============ -->
+    <h2><span class="sec-no">📝</span>分层习题</h2>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>判断对错：<strong>既然 K 依赖所选通用机，那么"换一台机器 K 最多差常数 c"说明关于 K 的渐近结论（如 (1/n)EK → H）不牢靠。</strong>说明理由。</div>
+      <details>
+        <summary>提示</summary>
+        <p>常数 c 随 n 增长吗？(1/n)·c 在 n→∞ 时是多少？</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">错。不变性定理中的常数 c 只取决于两台机器，与 x、与串长 n 都无关。渐近结论的两端 nH 与 nH + O(log n) 都随 n 增长，附加一个 O(1) 的常数后除以 n 趋于 0，极限丝毫不变。恰恰是不变性定理保证了渐近结论对机器选择的"免疫"，而不是削弱它。</div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>判断对错：<strong>"因为 K(x) 不可计算，所以对任何具体序列我们都无法说出关于它复杂度的任何话。"</strong></div>
+      <details>
+        <summary>提示</summary>
+        <p>要证明 K(x) ≤ 某个数，需要做什么？要证明"几乎所有串 K 大"，需要逐条算 K 吗？</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">错。不可计算指的是"没有算法能对任意 x 求出精确 K(x)"，但两类陈述仍然可行：其一，<strong>上界可构造</strong>——只要写出一个输出 x 的短程序（如"循环打印 01 共 500 次"），就证明了 K(x) 不超过它的长度；其二，<strong>批量下界可计数</strong>——计数论证表明 n 位串中 K(x) &lt; n−10 的比例不足 2⁻¹⁰，无需逐条计算。不可计算挡住的是精确值，不是理论本身。</div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>完整重做计数论证：在全部 100 位二元串中，满足 K(x) &lt; 90 的串至多占多大比例？写出从程序计数到比例约分的每一步。</div>
+      <details>
+        <summary>提示</summary>
+        <p>先数"长度小于 90 位的程序"总数（几何级数），再除以串的总数 2¹⁰⁰，然后约分。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p><strong>第一步：数短程序。</strong>长度恰好为 i 位的二元串有 2ⁱ 条，故长度 &lt; 90 的程序总数 ≤ Σ<sub>i=0</sub><sup>89</sup> 2ⁱ = 2⁹⁰ − 1（几何级数：首项 1、公比 2、共 90 项）。</p>
+          <p><strong>第二步：程序→串至多一一对应。</strong>每个程序停机后只输出一条串，故满足 K(x) &lt; 90 的 100 位串至多有 2⁹⁰ − 1 条。</p>
+          <p><strong>第三步：除以串总数并约分。</strong>100 位串共 2¹⁰⁰ 条，比例 &lt; 2⁹⁰ / 2¹⁰⁰ = 2<sup>90−100</sup> = 2⁻¹⁰ = 1/1024 ≈ 0.00098。</p>
+          <p><strong>结论</strong>：在 100 位串中，能被压缩超过 10 位的串不足千分之一。一般地，K(x) &lt; n−k 的比例 &lt; 2⁻ᵏ——可压缩性是指数稀缺的。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>用两部分码给 8 个数据点选模型。三个候选：常数模型（均值）、线性模型、二次模型。各自的两部分码长如下表，手算总码长并用 MDL 选出最优模型，解释为什么二次模型落败。</div>
+      <details>
+        <summary>提示</summary>
+        <p>总码长 = 模型描述长度 + 残差（数据|模型）描述长度，逐行相加再取最小。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <div class="tbl-wrap">
+            <table>
+              <tr><th>模型</th><th>L(M) 模型位</th><th>L(x|M) 残差位</th><th>L<sub>总</sub></th></tr>
+              <tr><td>常数（1 个参数）</td><td>2</td><td>40</td><td><strong>42</strong></td></tr>
+              <tr><td>线性（2 个参数）</td><td>8</td><td>18</td><td><strong>26</strong></td></tr>
+              <tr><td>二次（3 个参数）</td><td>12</td><td>16</td><td><strong>28</strong></td></tr>
+            </table>
+          </div>
+          <p>逐行相加：42、26、28。MDL 选<strong>线性模型</strong>（总长 26 位最短）。二次模型的残差只比线性少 2 位（18→16），却要多花 4 位描述自己（8→12），净亏 2 位——新增的复杂度没换来足够的描述节省，这正是过拟合在码长语言里的样子；常数模型则相反，省了 6 位模型位却多付 22 位残差，是欠拟合。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l3">L3 建模应用</span>实验课上你测得某物理量随时间变化的曲线（12 个采样点，带测量噪声），要在多项式模型中选定阶数：0 阶（常数）、1 阶、2 阶、3 阶。用 MDL 语言写出完整的决策流程，并说明它与奥卡姆剃刀、过拟合的关系。</div>
+      <details>
+        <summary>提示</summary>
+        <p>两部分码的两项分别对应什么？阶数升高时两项各自怎么变？决策规则取什么的最小值？</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p><strong>决策流程（MDL 版）</strong>：</p>
+          <ol>
+            <li>约定编码方案：每个参数用固定位宽编码（如 16 位浮点），阶数越高参数越多，L(M) 越大；</li>
+            <li>对每个候选阶数 k ∈ {0,1,2,3}，用最小二乘拟合出最优参数，计算残差平方和 RSS<sub>k</sub>；</li>
+            <li>残差码长用高斯噪声模型给出：L(x|M<sub>k</sub>) ≈ (n/2)·log₂(RSS<sub>k</sub>/n) + 常数（n = 12）；</li>
+            <li>计算 L<sub>总</sub>(k) = L(M<sub>k</sub>) + L(x|M<sub>k</sub>)，选 arg min<sub>k</sub> L<sub>总</sub>(k)。</li>
+          </ol>
+          <p><strong>与奥卡姆剃刀</strong>：剃刀说"如无必要勿增实体"，MDL 把"必要"量化成比特——新参数必须靠自己的加入让残差码长下降<strong>超过</strong>它的身价，否则不增。剃刀从美学口号变成可执行的不等式。</p>
+          <p><strong>与过拟合</strong>：3 阶多项式能把 12 个带噪点拟合得很漂亮（RSS 很小），但它把噪声当成了结构记进了参数；MDL 的模型项对这种行为直接收费，只有当残差的真实节省超过参数成本时才放行。两部分码的总长最小点，就是统计学习里偏差—方差权衡的算法信息论版本。</p>
+        </div>
+      </details>
+    </div>
+
+    <!-- ============ 本章自测 ============ -->
+    <h2><span class="sec-no">✍️</span>本章自测</h2>
+    <p class="quiz-hint">点击选项判分，答错会给出原因。</p>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 1</div>
+      <div class="q-stem">柯氏复杂度 K(x) 的定义是：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 输出 x 的任意程序的平均长度</li>
+        <li data-opt="b">B. 固定通用机上输出 x 并停机的最短程序长度</li>
+        <li data-opt="c">C. 用最优压缩软件压缩 x 后得到的文件长度</li>
+        <li data-opt="d">D. 产生 x 的概率分布的熵</li>
+      </ul>
+      <div class="quiz-explain">选 B。两个要点：固定通用机、最短停机程序。A 错：取的是最小值而非平均；C 错：压缩软件只是给出 K 的某个上界，且结果依赖软件；D 错：K 是单条序列的属性，熵是分布的属性——二者只在期望渐近意义下相等（14.3）。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="c">
+      <div class="q-no">自测 2</div>
+      <div class="q-stem">不变性定理声明：对两台通用机 U 与 U′——</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. K<sub>U</sub>(x) = K<sub>U′</sub>(x) 对一切 x 严格相等</li>
+        <li data-opt="b">B. K<sub>U</sub>(x) ≤ c·K<sub>U′</sub>(x)，差一个常数倍</li>
+        <li data-opt="c">C. 存在与 x 无关的常数 c，使 K<sub>U</sub>(x) ≤ K<sub>U′</sub>(x) + c</li>
+        <li data-opt="d">D. 两台机器的 K 之差随 |x| 线性增长</li>
+      </ul>
+      <div class="quiz-explain">选 C。证明靠固定长度的模拟器：U 模拟 U′ 的开销是一次性常数。A 错：模拟器有正长度，严格相等不成立；B 错：是加性常数而非乘性因子；D 错：恰恰相反，差值被常数封顶，与 |x| 无关——这正是渐近结论免疫于机器选择的原因。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="a">
+      <div class="q-no">自测 3</div>
+      <div class="q-stem">在全部 1000 位二元串中，满足 K(x) &lt; 990 的串至多占：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 约 0.1%（2⁻¹⁰）</li>
+        <li data-opt="b">B. 约 1%（2⁻⁷ 量级）</li>
+        <li data-opt="c">C. 约 10%</li>
+        <li data-opt="d">D. 无法估计，因为 K 不可计算</li>
+      </ul>
+      <div class="quiz-explain">选 A。短于 990 位的程序至多 2⁹⁹⁰ − 1 个，除以 2¹⁰⁰⁰ 条串得 2⁻¹⁰ = 1/1024 ≈ 0.001。B、C 低估了指数级数的稀缺性；D 错：计数论证只数程序个数、不求 K 的精确值，不可计算性丝毫不妨碍这个上界。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="d">
+      <div class="q-no">自测 4</div>
+      <div class="q-stem">对 i.i.d. 序列 Xⁿ，关于 E[K(Xⁿ)] 的正确陈述是：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. E[K(Xⁿ)] = nH 对所有 n 精确成立</li>
+        <li data-opt="b">B. E[K(Xⁿ)] 可以显著小于 nH，因为存在更聪明的程序</li>
+        <li data-opt="c">C. E[K(Xⁿ)] 必然大于 nH + n（至少多一个线性项）</li>
+        <li data-opt="d">D. nH ≤ E[K(Xⁿ)] ≤ nH + O(log n)，故 (1/n)E[K(Xⁿ)] → H</li>
+      </ul>
+      <div class="quiz-explain">选 D。下界由前缀程序的 Kraft 不等式加"期望码长 ≥ 熵"给出；上界由"描述 n 与类型 O(log n) 位 + 典型集内下标 nH 位"的构造给出。A 错：有 O(log n) 的附加项；B 错：违反熵的码长下界；C 错：上界只多一个对数项，不是线性项。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 5</div>
+      <div class="q-stem">用 MDL 为数据选模型，三部分候选的两部分码长为：甲（模型 2 位 + 残差 40 位）、乙（8 + 18）、丙（12 + 16）。MDL 的选择与理由是：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 选甲，因为奥卡姆剃刀要求最简单的模型</li>
+        <li data-opt="b">B. 选乙，因为总码长 26 位最短</li>
+        <li data-opt="c">C. 选丙，因为它的残差最小、拟合最好</li>
+        <li data-opt="d">D. 三个模型等效，因为模型位与残差位此消彼长</li>
+      </ul>
+      <div class="quiz-explain">选 B。MDL 比较的是总码长 L(M) + L(x|M)：42、26、28，乙最短。A 错：剃刀在 MDL 里是"总长最短"而非"第一项最小"，甲欠拟合；C 错：残差最小往往意味着过拟合，丙为残差省 2 位却多花 4 位模型位；D 错：此消彼长不等于等效，总和不同就有优劣。</div>
+    </div>
+
+    <!-- ============ 三句话复述 ============ -->
+    <div class="retell">
+      <h3>🗣️ 用自己的话，三句话讲完本章</h3>
+      <p>对着空气（或室友）说出这三句。说卡壳的那句，回去重读对应小节。</p>
+      <details>
+        <summary>句1：这章解决什么问题？——</summary>
+        <div class="retell-answer">参考答案：此前一切压缩极限都针对"分布的平均"；本章回答"一条具体序列本身最短能被描述成多少位"，给出不依赖分布的信息量定义——柯氏复杂度 K(x) = 输出 x 的最短停机程序长度。</div>
+      </details>
+      <details>
+        <summary>句2：核心机制是什么？——</summary>
+        <div class="retell-answer">参考答案：不变性定理（模拟器只差常数）让 K 良定义；Berry 悖论证明 K 不可计算；计数论证证明几乎所有串不可压缩；典型集 + Kraft 两界一夹得到 (1/n)EK → H；两部分码把 K 贴现成可用的 MDL 模型选择。</div>
+      </details>
+      <details>
+        <summary>句3：它和前后章怎么分工？——</summary>
+        <div class="retell-answer">参考答案：Ch13 解决"不知分布怎么压"，本章追问"单条序列的压缩极限是什么"并发现答案仍是熵的逐序列版；MDL 的"描述长度"语言通向统计学习，而单机信息论的终点之后，Ch15 起把熵与互信息推广到多用户网络。</div>
+      </details>
+    </div>
+
+    <!-- ============ 复习计划 ============ -->
+    <div class="review-plan">
+      <h3>🔁 间隔复习计划</h3>
+      <p>回忆本身比重读有效 10 倍。到点只做一件事：翻卡 + 重做标记题。</p>
+      <table>
+        <tr><th>时间点</th><th>复习内容</th><th>预计用时</th></tr>
+        <tr><td>第 1 天</td><td>概念卡 1–7 全部 + 回忆卡 14.1-1、14.3-2</td><td>10 分钟</td></tr>
+        <tr><td>第 3 天</td><td>概念卡 2、4、5（不变性/不可压缩/K↔H）+ 重做 L2 两题 + 自测错题</td><td>12 分钟</td></tr>
+        <tr><td>第 7 天</td><td>三句话复述出声说一遍 + 回忆卡 14.2-2、14.4-1 + 默写计数论证</td><td>10 分钟</td></tr>
+        <tr><td>第 15 天</td><td>只做合上书挑战；全过则毕业，卡在哪条就重读对应小节</td><td>15 分钟</td></tr>
+      </table>
+    </div>
+
+    <!-- 合上书挑战 -->
+    <div class="final-challenge">
+      <h3>📕 合上书挑战</h3>
+      <p class="fc-sub">现在关掉这个页面，拿一张纸，凭记忆完成以下任务。全部做完再回来核对——这是本章真正的毕业考试。</p>
+      <ol id="ch14-challenge-list">
+        <li><span class="fc-check"></span>写出 K(x) 的定义（含"无输入、停机、最短"三要素），并算出 1000 位"01"循环串的 K 上界约 log₂500 ≈ 9 位加常数</li>
+        <li><span class="fc-check"></span>陈述不变性定理并用"模拟器"一句话说清证明</li>
+        <li><span class="fc-check"></span>写出 Berry 悖论推出 K 不可计算的完整推理链</li>
+        <li><span class="fc-check"></span>手算：100 位串中 K(x) &lt; 90 的比例 &lt; 2⁹⁰/2¹⁰⁰ = 2⁻¹⁰ ≈ 0.001</li>
+        <li><span class="fc-check"></span>写出 nH ≤ E[K(Xⁿ)] ≤ nH + O(log n) 两个方向各自用什么工具（典型集 / Kraft）</li>
+        <li><span class="fc-check"></span>写出 MDL 两部分码公式，并用 42 / 26 / 28 的表说明为什么选线性模型</li>
+        <li><span class="fc-check"></span>回答本章的主线问题：一条序列本身的复杂度如何度量，它与熵是什么关系？（一句话）</li>
+      </ol>
+    </div>
+
+    <div class="complete-zone">
+      <button class="btn-complete" id="ch14-btn-complete" onclick="markDone()">✓ 我已完成本章（含合上书挑战）</button>
+    </div>
+
+    <div class="chapter-nav">
+      <a href="chapter-13.html"><span class="nav-dir">← 上一章</span>第13章 通用信源编码</a>
+      <a href="chapter-15.html" class="next"><span class="nav-dir">下一章 →</span>第15章 网络信息论</a>
+    </div>
+
+  </div>
+</div>
+
+<footer class="footer">
+  <div class="wrap">第14章 柯氏复杂度 · 信息论互动讲义 · 基于 Cover &amp; Thomas《Elements of Information Theory》第2版</div>
+</footer>
+
+<script src="assets/mermaid.min.js"></script>
+<script>
+mermaid.initialize({
+  startOnLoad: true,
+  theme: "base",
+  themeVariables: {
+    primaryColor: "#e3edf7",
+    primaryBorderColor: "#1d5f9e",
+    primaryTextColor: "#1d5f9e",
+    lineColor: "#5c554b",
+    secondaryColor: "#fbeedd",
+    tertiaryColor: "#f5f1e8",
+    fontFamily: "-apple-system, PingFang SC, sans-serif",
+    fontSize: "14px"
+  },
+  flowchart: { curve: "linear", htmlLabels: false }
+});
+</script>
+<script>
+// 自测题逻辑
+document.querySelectorAll(".quiz-block").forEach(block => {
+  const answer = block.dataset.answer;
+  const explain = block.querySelector(".quiz-explain");
+  block.querySelectorAll(".quiz-opts li").forEach(li => {
+    li.addEventListener("click", () => {
+      const opts = block.querySelectorAll(".quiz-opts li");
+      opts.forEach(o => o.classList.add("disabled"));
+      if (li.dataset.opt === answer) {
+        li.classList.add("correct");
+      } else {
+        li.classList.add("wrong");
+        block.querySelector(`[data-opt="${answer}"]`).classList.add("correct");
+      }
+      explain.classList.add("show");
+    });
+  });
+});
+
+// 合上书清单打勾
+document.querySelectorAll("#ch14-challenge-list li").forEach(li => {
+  li.addEventListener("click", () => li.classList.toggle("checked"));
+});
+
+// 完成标记 → localStorage（第14章）
+const KEY = "it_progress_v1";
+function loadProgress() {
+  try { return JSON.parse(localStorage.getItem(KEY)) || {}; } catch (e) { return {}; }
+}
+const progress = loadProgress();
+const btn = document.getElementById("ch14-btn-complete");
+if (progress["14"] && progress["14"].done) {
+  btn.textContent = "✓ 已完成 · 再次点击重置";
+  btn.classList.add("done");
+}
+function markDone() {
+  const p = loadProgress();
+  if (p["14"] && p["14"].done) {
+    delete p["14"];
+    btn.textContent = "✓ 我已完成本章（含合上书挑战）";
+    btn.classList.remove("done");
+  } else {
+    p["14"] = { done: true, completedAt: Date.now(), reviewsDone: 0 };
+    btn.textContent = "✓ 已完成 · 复习提醒已开启";
+    btn.classList.add("done");
+  }
+  localStorage.setItem(KEY, JSON.stringify(p));
+}
+</script>
+
+</body>
+</html>

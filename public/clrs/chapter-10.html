@@ -1,0 +1,885 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第10章 NP完全与近似算法 · 算法导论互动讲义</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+<nav class="topbar">
+  <div class="topbar-inner">
+    <span class="brand"><a href="index.html" style="color:inherit">← 学习地图</a></span>
+    <span class="crumb">阶段④ · 设计范式与难解性 / 第10章（终章）</span>
+  </div>
+</nav>
+
+<div class="wrap">
+
+  <div class="lecture-head">
+    <span class="ch-label">CHAPTER 10 · 设计范式与难解性</span>
+    <h1>NP完全与近似算法</h1>
+    <p class="lead">当分治、DP、贪心全部失败，问题可能不是"你没想到"，而是"没人想到"。本章给出"难"的精确定义、证明一个问题的标准流程，以及面对难题时的最后退路——近似算法。章末附全书地图与毕业三问。</p>
+  </div>
+
+  <!-- ===== 章首四件套之 1：全书定位 ===== -->
+  <div class="position-bar">
+    <strong>本章在主线上的位置：</strong>第9章处理了"结构好"的问题 → <u>本章处理"结构差"的问题：用 NP 完全性证明"它和几千个难题一样难"，再用近似算法给出有质量保证的退让方案</u> → 全书到此闭环。<br>
+    第10章回答主线上的第10个问题：<strong>当所有算法范式都失败时，如何证明"难"是问题本身的属性，并给出实用的退路？</strong>
+    <div class="map-inline">
+      ① 分析基础：
+      <span class="node">Ch1 算法分析与增长率</span><span class="arrow">→</span>
+      <span class="node">Ch2 分治与递归式</span><br>
+      ② 排序与检索：
+      <span class="node">Ch3 排序算法</span><span class="arrow">→</span>
+      <span class="node">Ch4 哈希表</span><span class="arrow">→</span>
+      <span class="node">Ch5 二叉搜索树与红黑树</span><br>
+      ③ 图算法：
+      <span class="node">Ch6 图的基本算法</span><span class="arrow">→</span>
+      <span class="node">Ch7 最小生成树与单源最短路</span><br>
+      ④ 设计范式与难解性：
+      <span class="node">Ch8 动态规划</span><span class="arrow">→</span>
+      <span class="node">Ch9 贪心与摊还分析</span><span class="arrow">→</span>
+      <span class="node here">Ch10 NP完全与近似算法</span>
+    </div>
+  </div>
+
+  <!-- ===== 章首四件套之 2：学习目标 ===== -->
+  <div class="objectives">
+    <h4>🎯 学完本章，合上书你应该能：</h4>
+    <ol>
+      <li>解释为什么 NP 完全性理论只讨论判定问题，且这几乎不失一般性；</li>
+      <li>准确说出 P、NP、NP 完全三个类的定义，以及 P=NP 问题的含义；</li>
+      <li>完整执行一次 3SAT → 独立集的多项式归约（构造图、双向论证）；</li>
+      <li>在具体图上运行顶点覆盖 2-近似算法，并与最优解比较；</li>
+      <li>用一句话说出 Cook-Levin 定理的含义与它在归约链中的地位；</li>
+      <li>画出全书十章的四段因果链，回答毕业三问。</li>
+    </ol>
+  </div>
+
+  <div class="lecture">
+
+    <!-- ===== 章首四件套之 3：推导主线图 ===== -->
+    <div class="figure">
+      <div class="mermaid">
+flowchart TB
+  A["现实问题：所有范式都失败"] --> B["先改问判定版：答案只有是否"]
+  B --> C["定义难度类：P 与 NP"]
+  C --> D["多项式归约：A 不比 B 难"]
+  D --> E["Cook-Levin：SAT 是 NP 中最难"]
+  E --> F["NP 完全：几千个问题互相归约"]
+  F --> G["证明新问题难：从已知 NPC 归约过来"]
+  G --> H["退路：近似算法给出近似比保证"]
+  H --> I["遗留：P 对 NP 未解；有些问题连近似都难"]
+  classDef hot fill:#fbeedd,stroke:#c4651f,stroke-width:2.5px,color:#c4651f;
+  classDef danger fill:#fae9e7,stroke:#b03a2e,stroke-width:2.5px,color:#b03a2e;
+  class F hot;
+  class I danger;
+      </div>
+      <div class="caption">本章推导主线：失败后先精确化"难"（判定问题 + 难度类 + 归约），Cook-Levin 给出第一个"最难问题"，归约链扩散出整个 NP 完全家族，最后落到实用退路——近似。</div>
+    </div>
+
+    <!-- ================= 10.1 ================= -->
+    <h2><span class="sec-no">10.1</span>为什么只讨论判定问题：优化问题的"降级"</h2>
+
+    <p>第8、9章解决的都有多项式算法。本章面对的却是旅行商、布尔可满足这类"所有范式都失败"的问题。研究它们的第一步出人意料：<strong>把优化问题降级成判定问题</strong>。</p>
+
+    <p><strong><span class="term">判定问题</span>（Decision Problem）：</strong>答案只有"是/否"的问题。任何优化问题都可配套一个判定版：</p>
+    <ul>
+      <li>优化：图 G 的最小顶点覆盖是多大？ → 判定：G 是否存在大小 ≤ k 的顶点覆盖？</li>
+      <li>优化：最短环游路线多长？ → 判定：是否存在长度 ≤ B 的环游？</li>
+    </ul>
+
+    <p><strong>为什么"降级"不失一般性。</strong>两个方向的难度互相绑定：</p>
+    <ul>
+      <li>优化 ≥ 判定：会解优化就会解判定（算出最优值，与 k 比较即可）。</li>
+      <li>判定 ≥ 优化（至多差对数倍）：会解判定，用二分查找 k（k 的范围多项式有界时），log 次调用即得最优值。</li>
+    </ul>
+    <p>所以"判定版都难"⟹"优化版更难"——<strong>要证明一个优化问题难，只需证明它的判定版难</strong>。而判定问题的答案空间只有 {是, 否}，可以用形式语言精确化（一个判定问题 = 一个语言 L ⊆ {0,1}*），这是整个复杂度理论能数学化的原因。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>判定化不是把问题变弱，而是把"难度"这件事变得可定义、可比较。就像把"力气大"换成"能不能举起 100 公斤"——有了是非标准，才能排序。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>以为判定问题"太简单所以理论没意义"。恰恰相反：判定版是优化版的<strong>下界探针</strong>——判定版 NP 完全，优化版必然 NP 难。降级是为了证明难，不是为了求解。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 10.1-1</div>
+              <div class="q-text">优化问题和它的判定版之间，难度关系是什么？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              优化版不难于判定版的对数次调用（二分 k），判定版不难于优化版（算最优值再比较）。二者多项式等价，故证"难"只需证判定版难。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 10.1-2</div>
+              <div class="q-text">把顶点覆盖的优化版改写成判定版。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              "给定图 G 与整数 k，G 是否存在一个大小不超过 k 的顶点覆盖（覆盖所有边的顶点集）？"
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ================= 10.2 ================= -->
+    <h2><span class="sec-no">10.2</span>P、NP、NP 完全：三个类的精确定义</h2>
+
+    <p>上一节把问题统一成判定形式。它带出一个问题：<strong>"难"和"易"的边界画在哪？</strong>答案按"求解"与"验证"两种能力各画一条线。</p>
+
+    <p><strong><span class="term">P</span>：</strong>存在多项式时间算法能<strong>求解</strong>的判定问题类。排序、最短路、LCS（判定版）都在 P 中——前九章的主角几乎全在这里。</p>
+
+    <p><strong><span class="term">NP</span>（Nondeterministic Polynomial）：</strong>存在多项式长度的"证书"（certificate），可在多项式时间内<strong>验证</strong>"是"答案的判定问题类。例：顶点覆盖的证书就是那个顶点集——给我 k 个顶点，我 O(E) 就能检查它是否覆盖所有边。注意：<strong>验证容易 ≠ 求解容易</strong>。</p>
+
+    <p><strong>P ⊆ NP</strong> 是显然的（能求解就能验证，证书都不需要）。<strong>P = NP？</strong>——"验证容易的问题是否求解也容易"——是计算机科学最大的未解之谜，悬赏百万美元，主流猜测是否定。</p>
+
+    <p><strong><span class="term">NP 完全</span>（NP-Complete, NPC）：</strong>问题 L 满足两条：</p>
+    <ol>
+      <li>L ∈ NP（证书可验证）；</li>
+      <li>每个 NP 问题都能多项式归约到 L（L 是 NP 中"最难"的）。</li>
+    </ol>
+    <p>推论极锋利：<strong>任何一个 NPC 问题若有多项式算法，则 P = NP，几千个难题一夜之间全部可解。</strong>所以"证明某问题是 NPC"在实践中等价于宣布"别找多项式精确算法了"。不在 NP 里但至少和 NPC 一样难的（如对应优化版）叫 <span class="term">NP 难</span>（NP-Hard）。</p>
+
+    <div class="box insight">
+      <span class="box-tag">✅ 判定规则</span>
+      <p>记忆锚点：P = 能快速<strong>解题</strong>；NP = 能快速<strong>验答案</strong>；NPC = NP 中人人可归约到它 = 最难的一群。P = NP 问的是"验题容易是否意味着解题容易"。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 10.2-1</div>
+              <div class="q-text">NP 的定义里，"证书"是什么？以顶点覆盖为例说明。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              证书是"是"答案的多项式长度证据，可在多项式时间内验证。顶点覆盖的证书是 ≤k 个顶点，逐边检查是否被覆盖即可，O(E)。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 10.2-2</div>
+              <div class="q-text">NP 完全的两个条件是什么？为什么找到一个 NPC 的多项式算法就等于 P=NP？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              ① L∈NP；② 一切 NP 问题多项式归约到 L。若 L 有多项式算法，则任何 NP 问题先归约到 L 再求解，全程多项式——故 P=NP。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ================= 10.3 ================= -->
+    <h2><span class="sec-no">10.3</span>多项式归约：3SAT → 独立集完整构造</h2>
+
+    <p>上一节定义了"最难"，但定义里的条件②涉及"每个 NP 问题"，怎么可能逐一验证？它带出一个问题：<strong>如何证明一个具体问题是 NPC？</strong>工具是<span class="term">多项式归约</span>（Polynomial-Time Reduction）：A ≤<sub>p</sub> B 表示"存在多项式可计算的变换 f，使 x 是 A 的是-实例 ⟺ f(x) 是 B 的是-实例"——即 A 不比 B 难。若已知 A 是 NPC 且 A ≤<sub>p</sub> B、B ∈ NP，则 B 也是 NPC。归约把"证明难"变成了"做一次构造"。</p>
+
+    <p><strong>完整手算：3SAT ≤<sub>p</sub> 独立集。</strong>给定 3CNF 公式（每子句 3 个文字）：</p>
+    <div class="formula">φ = (x₁ ∨ x₂ ∨ x₃) ∧ (¬x₁ ∨ ¬x₂ ∨ x₃) ∧ (x₁ ∨ ¬x₂ ∨ ¬x₃)</div>
+
+    <p><strong>构造（多项式时间）：</strong>每个子句建成一个三角形（3 个顶点互连，顶点 = 文字）；<strong>跨子句</strong>把每个文字与其所有否定形式连边（x₁ 与 ¬x₁ 连边等）。令 k = 子句数 = 3。</p>
+
+    <div class="figure">
+      <div class="mermaid">
+flowchart TB
+  subgraph C1["子句1"]
+    a1["x1"] --- a2["x2"]
+    a2 --- a3["x3"]
+    a3 --- a1
+  end
+  subgraph C2["子句二"]
+    b1["非x1"] --- b2["非x2"]
+    b2 --- b3["x3"]
+    b3 --- b1
+  end
+  subgraph C3["子句三"]
+    c1["x1"] --- c2["非x2"]
+    c2 --- c3["非x3"]
+    c3 --- c1
+  end
+  a1 -.- b1
+  a2 -.- b2
+  a2 -.- c2
+  a3 -.- c3
+  b3 -.- c3
+  classDef hot fill:#fbeedd,stroke:#c4651f,stroke-width:2.5px,color:#c4651f;
+      </div>
+      <div class="caption">图 10.1 归约构造：每个子句一个三角形；虚线是跨子句的"矛盾边"（文字与其否定相连）。看：独立集大小能否达到 k=3？</div>
+    </div>
+
+    <p><strong>双向论证：</strong></p>
+    <ul>
+      <li><strong>φ 可满足 ⟹ 有大小 3 的独立集：</strong>取赋值 x₁=T, x₂=F, x₃=T。子句1 由 x₁ 满足，子句2 由 ¬x₂ 满足，子句3 由 x₁（或 ¬x₂）满足。从每个三角形各取一个"为真"的顶点：{x₁（句1), ¬x₂（句2), x₁（句3)}。三角形内只取一个（不互邻）；跨子句无矛盾边相连（赋值一致，不会同时取到 x 与 ¬x）。故是大小 3 的独立集。</li>
+      <li><strong>有大小 3 的独立集 ⟹ φ 可满足：</strong>独立集至多从每个三角形取一个顶点，取满 3 个必然每句一个；把取到的文字置真（矛盾边保证不会冲突），每个子句至少一个文字为真，φ 被满足。</li>
+    </ul>
+    <p>构造规模：3k 个顶点、3k + O(文字对数) 条边，多项式。故 3SAT ≤<sub>p</sub> 独立集，独立集是 NPC。同理独立集 ≤<sub>p</sub> 顶点覆盖（S 是独立集 ⟺ V∖S 是顶点覆盖，k 换成 n−k），归约链继续生长。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>归约证明的方向感是新手最大的坑：要证新问题 B 难，是把<strong>已知难题 A 归约到 B</strong>（A ≤<sub>p</sub> B），即"B 强到能当 A 的解题器"。方向反了，整个证明作废。口诀：<strong>从已知难的，变到你想证的。</strong></p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>忘记验证归约是<strong>多项式时间</strong>的。构造本身若需指数时间（如枚举所有赋值再画图），归约无效。所有构造步骤的复杂度必须明确报出——本例建图只需 O(k²) 扫文字对。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 10.3-1</div>
+              <div class="q-text">3SAT → 独立集的归约怎么构造图？k 取多少？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              每个子句建一个三角形（文字为顶点）；跨子句把文字与其否定连边；k = 子句数。φ 可满足 ⟺ 存在大小 k 的独立集。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 10.3-2</div>
+              <div class="q-text">要证明新问题 B 是 NPC，归约方向是什么？还需验证哪两件事？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              从已知 NPC 问题 A 归约到 B（A ≤p B）。还要验证：B ∈ NP（证书可验证）；归约变换本身是多项式时间的。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ================= 10.4 ================= -->
+    <h2><span class="sec-no">10.4</span>顶点覆盖：2-近似完整手算</h2>
+
+    <p>上一节证明了独立集、顶点覆盖是 NPC——精确求解无望（除非 P=NP）。它带出一个问题：<strong>工程上还要用，怎么办？</strong>答案是<span class="term">近似算法</span>（Approximation Algorithm）：多项式时间给出保证不比最优差 ρ 倍的解，ρ 称<span class="term">近似比</span>（Approximation Ratio）。</p>
+
+    <p><strong>顶点覆盖的 2-近似算法（CLRS 的 APPROX-VERTEX-COVER）：</strong></p>
+    <ol>
+      <li>C ← ∅；E′ ← E 的副本。</li>
+      <li>当 E′ 非空：任取一条边 (u,v)，把 <strong>u 和 v 都</strong>加入 C；从 E′ 删去所有与 u 或 v 关联的边。</li>
+      <li>返回 C。</li>
+    </ol>
+
+    <p><strong>完整手算。</strong>取路径图 a—b—c—d—e（5 个顶点，4 条边）：</p>
+    <ul>
+      <li>取边 (a,b)：C = {a,b}；删去 (a,b)、(b,c)。剩余 (c,d)、(d,e)。</li>
+      <li>取边 (c,d)：C = {a,b,c,d}；删去 (c,d)、(d,e)。E′ 空，结束。</li>
+    </ul>
+    <p>算法给出大小 <strong>4</strong> 的覆盖。最优解是 {b, d}（验证：b 覆盖 (a,b)、(b,c)；d 覆盖 (c,d)、(d,e)），大小 <strong>2</strong>。比值 4/2 = <strong>2</strong>，恰好打满保证。</p>
+
+    <p><strong>为什么至多 2 倍。</strong>算法取出的边集合 M 是一个匹配（两两无公共端点——因为取完就删关联边）。任何顶点覆盖至少要覆盖 M 中每条边，而匹配边互不共享端点，故 OPT ≥ |M|。算法 |C| = 2|M| ≤ 2·OPT。∎</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>近似比证明的通用骨架：<strong>找一个可计算的下界 L ≤ OPT，再证算法输出 ≤ ρ·L</strong>。这里 L = |M|（匹配大小）。你不需要知道 OPT 是多少，只需要一个"OPT 不可能低于它"的锚点。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 10.4-1</div>
+              <div class="q-text">顶点覆盖 2-近似的算法步骤与近似比证明的下界锚点各是什么？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              反复任取未覆盖边并把两端点都加入 C。锚点是算法取出的匹配 M：OPT ≥ |M|，而 |C| = 2|M| ≤ 2·OPT。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 10.4-2</div>
+              <div class="q-text">在路径图 a—b—c—d—e 上，2-近似算法与最优解各给出什么结果？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              算法 {a,b,c,d} 大小 4（取边 (a,b)、(c,d)）；最优 {b,d} 大小 2。比值恰为 2，打满近似比保证。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ================= 10.5 ================= -->
+    <h2><span class="sec-no">10.5</span>Cook-Levin 与装箱：归约链的起点与另一条近似</h2>
+
+    <p>上一节用了"已知 NPC 问题"，但归约链总得有个起点——第一个被证明 NPC 的问题从哪来？这就是 <span class="term">Cook-Levin 定理</span>（1971）：</p>
+
+    <div class="box insight">
+      <span class="box-tag">✅ 一句话含义</span>
+      <p><strong>布尔可满足问题 SAT 是 NP 完全的。</strong>证明思路一句话版：任何 NP 问题的验证器都是多项式规模电路，把"存在一个证书使电路输出 1"整个编码成一个布尔公式——于是所有 NP 问题归约到 SAT。从此不再需要碰验证器：由 SAT 归约出 3SAT，再由 3SAT 长出独立集、顶点覆盖、团、哈密顿回路、TSP……整棵 NPC 家族树。</p>
+    </div>
+
+    <p><strong>另一条近似线：<span class="term">装箱问题</span>（Bin Packing）。</strong>物品大小 s₁…sₙ ∈ (0,1]，箱子容量 1，用最少的箱子装完。判定版是 NPC，精确无望。用<span class="term">首次适配</span>（First Fit, FF）：按顺序处理物品，每个放入第一个装得下的箱子，都装不下才开新箱。</p>
+
+    <p><strong>完整手算。</strong>物品序列：0.2, 0.5, 0.4, 0.7, 0.1, 0.3, 0.8（容量 1）：</p>
+    <ul>
+      <li>0.2 → 箱1（余 0.8）；0.5 → 箱1（余 0.3）；0.4 → 箱1 放不下，开 <strong>箱2</strong>（余 0.6）；</li>
+      <li>0.7 → 箱1、箱2 都放不下，开 <strong>箱3</strong>（余 0.3）；0.1 → 箱1（余 0.2）；</li>
+      <li>0.3 → 箱1 余 0.2 放不下 → 箱2（余 0.3）；0.8 → 箱1/2/3 都放不下，开 <strong>箱4</strong>。</li>
+    </ul>
+    <p>FF 用 <strong>4</strong> 箱：{0.2,0.5,0.1}、{0.4,0.3}、{0.7}、{0.8}。最优 <strong>3</strong> 箱：{0.2,0.8}、{0.5,0.4,0.1}、{0.7,0.3}。</p>
+
+    <p><strong>近似比证明（FF ≤ 2·OPT）。</strong>关键观察：FF 结束时，<strong>至多一个箱子装了不到一半</strong>——若有两个箱子 B₁、B₂ 都不到一半，B₂ 的第一个物品本可放入 B₁，矛盾。故 Σsᵢ &gt; (FF−1)/2。而 OPT ≥ Σsᵢ（容量约束），得 FF &lt; 2·Σsᵢ + 1 ≤ 2·OPT + 1，渐近近似比 2。</p>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>以为"NPC 问题都有近似算法"。远非如此：TSP（无边权三角不等式）与最大团在 P≠NP 下<strong>任何常数近似比都不可达</strong>。难解性是分层的：有的可常数近似（顶点覆盖 2）、有的可对数近似（集合覆盖 ln n）、有的完全不可近似。证明 NPC 只是第一步，查它的可近似性才是工程起点。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 10.5-1</div>
+              <div class="q-text">Cook-Levin 定理的一句话含义是什么？它解决了归约链的什么问题？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              "SAT 是 NP 完全的"（把任意 NP 验证电路编码成布尔公式）。它提供了归约链的起点：之后证明任何问题 NPC 只需从已知 NPC 归约，无需再碰验证器。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 10.5-2</div>
+              <div class="q-text">First Fit 装箱的近似比证明用了什么关键观察？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              结束时至多一个箱子装不满一半（否则后开箱的物品能放进前面的箱子）。故 FF &lt; 2Σsᵢ + 1 ≤ 2·OPT + 1。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ================= 10.6 ================= -->
+    <h2><span class="sec-no">10.6</span>全书地图与毕业三问</h2>
+
+    <p>走到这里，十章的内容可以收成一张图。每个箭头都是一句"因为…所以必须…"：</p>
+
+    <div class="figure">
+      <div class="mermaid">
+flowchart TB
+  subgraph S1["① 分析基础"]
+    C1["Ch1 增长率：给算法定价"]
+    C2["Ch2 分治与递归式：拆小求解"]
+    C1 --> C2
+  end
+  subgraph S2["② 排序与检索"]
+    C3["Ch3 排序：下界与达到下界"]
+    C4["Ch4 哈希：期望 O1 检索"]
+    C5["Ch5 红黑树：最坏 O(logn) 检索"]
+    C3 --> C4
+    C4 --> C5
+  end
+  subgraph S3["③ 图算法"]
+    C6["Ch6 BFS与DFS：图的遍历骨架"]
+    C7["Ch7 MST与最短路：遍历上加优化"]
+    C6 --> C7
+  end
+  subgraph S4["④ 设计范式与难解性"]
+    C8["Ch8 动态规划：重叠子问题存答案"]
+    C9["Ch9 贪心与摊还：结构更好更快"]
+    C10["Ch10 NPC与近似：失败后的退路"]
+    C8 --> C9
+    C9 --> C10
+  end
+  C2 -->|递归式是复杂度语言| C3
+  C5 -->|树结构即图特例| C6
+  C7 -->|图问题暴露组合爆炸| C8
+  classDef hot fill:#fbeedd,stroke:#c4651f,stroke-width:2.5px,color:#c4651f;
+  class C10 hot;
+      </div>
+      <div class="caption">图 10.2 全书十章四段因果链：先学会定价（①），再在经典问题上练手（②③），最后掌握通用范式并承认边界（④）。</div>
+    </div>
+
+    <h3>毕业三问</h3>
+    <p>合上书回答。这三问不是考点，是你带走全书的方式。</p>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l3">毕业第一问</span>面对一个从未见过的计算问题，你的完整决策顺序是什么？</div>
+      <details>
+        <summary>参考答案</summary>
+        <div class="ex-answer">① 先形式化：输入输出是什么、优化还是判定；② 找结构：有无最优子结构（→DP）、贪心选择性质（→贪心）、图结构（→第6、7章工具）、可序性（→排序检索工具）；③ 都无则怀疑难解：尝试从已知 NPC 问题归约证明之；④ 证明是 NPC 后不退场：查可近似性，上近似算法或指数精确算法（分支限界），并用摊还/复杂度语言报告代价。整条链就是全书目录的倒序使用。</div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l3">毕业第二问</span>"这个问题很难"在算法语言里到底意味着什么？和"我还没想到好算法"有什么区别？</div>
+      <details>
+        <summary>参考答案</summary>
+        <div class="ex-answer">"很难"= 该问题（的判定版）被证明是 NP 完全的：它和 SAT、TSP 等几千个问题多项式等价，其中任何一个有多项式算法则全部有。这把"我没想到"的个人困境升级为"整个人类没想到"的客观证据——这就是归约的意义：把无能为力的<strong>责任</strong>从算法设计者转移到问题本身的结构上。而"我还没想到"只是尚未找到结构，两种状态用一次归约尝试来区分。</div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l3">毕业第三问</span>用一句话串起全书十章——这门课到底在教什么？</div>
+      <details>
+        <summary>参考答案</summary>
+        <div class="ex-answer">参考答案：这门课教的是一套"问题—结构—代价"的翻译术——先给代价精确计价（①），再发现问题的结构决定代价的下限与算法上限（②③），最后用 DP/贪心榨干结构、用 NPC/近似承认并管理结构的尽头（④）；算法是表象，结构才是本体。</div>
+      </details>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 10.6-1</div>
+              <div class="q-text">说出全书四段的名字与每段回答的核心问题。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              ① 分析基础：怎么给算法计价；② 排序与检索：经典问题上练下界与数据结构；③ 图算法：遍历骨架上的优化；④ 设计范式与难解性：通用范式及其边界（DP→贪心→NPC/近似）。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 10.6-2</div>
+              <div class="q-text">毕业三问分别是哪三问？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              ① 新问题的决策顺序（形式化→找结构→归约证难→近似兜底）；② "很难"的精确含义（NPC = 难度转嫁的客观证据）；③ 一句话串全书（问题—结构—代价的翻译术）。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===== 概念卡 ===== -->
+    <h2><span class="sec-no">🃏</span>概念卡：本章概念的一分钟画像</h2>
+    <p>翻面前先自问：这个概念我能用一句话讲清楚吗？</p>
+    <div class="flip-grid">
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 1</div>
+            <div class="q-text">P（Polynomial Time）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">存在多项式时间算法求解的判定问题类。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">给"易解"一个精确定义，是复杂度分层的地基层。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">能直接考及格的科目。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为 P = "实际够快"——n¹⁰⁰ 也在 P 中；它是理论边界，非工程边界。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">全书前九章的算法都是 P 成员的存在性证明。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 2</div>
+            <div class="q-text">NP 与证书（Nondeterministic Polynomial / Certificate）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">"是"实例有多项式长度证书、可多项式验证的判定问题类。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">给"验证容易"下定义，从而把"求解可能很难"的问题圈进来。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">数独：填出来难，检查别人的答案容易。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为 NP = "非多项式"——它是"非确定多项式"，P ⊆ NP。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">证 NPC 的第一步永远是先证"属于 NP"（给出证书与验证器）。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 3</div>
+            <div class="q-text">多项式归约（Polynomial-Time Reduction）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">A ≤p B：存在多项式变换 f，x∈A ⟺ f(x)∈B。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">把"证明一个新问题难"变成"做一次构造"，难度得以传递。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">翻译器：能把中文题自动译成英文题，则英文题不比中文题容易。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">方向搞反：证 B 难要把已知难的 A 归约<strong>到</strong> B，不是从 B 出发。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">一切 NPC 证明的第二步；也用于算法复用（把新问题译成已解问题）。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 4</div>
+            <div class="q-text">NP 完全（NP-Complete）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">属于 NP 且所有 NP 问题都可归约到它的问题类。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">给"难"提供可证明的客观标准，终止无效的多项式算法搜寻。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">几千把锁共用同一把钥匙：开任何一把 = 开所有。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为 NPC 是"最难的问题"——它只是 NP 中最难；NP 之外还有更难的类。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">顶点覆盖、独立集、3SAT、TSP（判定版）、装箱……实践中"宣布放弃精确解"的依据。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 5</div>
+            <div class="q-text">Cook-Levin 定理（Cook-Levin Theorem）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">SAT 是 NP 完全的（1971，Cook；Levin 独立证明）。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">提供归约链的起点，之后所有 NPC 证明不再需要直接面对"所有 NP 问题"。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">第一个被证明"全能"的翻译目标：验证电路本身可以写成公式。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为它给 SAT 找了快速算法——恰恰相反，它给 SAT 发了"最难"证书。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">复杂度理论的基石；理解"为什么 3SAT 是归约的通用出发点"。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 6</div>
+            <div class="q-text">近似算法与近似比（Approximation Algorithm / Ratio）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">多项式时间给出保证 ≤ρ·OPT（最小化）的解；ρ 为近似比。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">NPC 问题的工程退路：不要最优，要有质量担保的够用。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">买不起正品就买个有检测报告的平替——报告就是 ρ。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为所有 NPC 问题都可近似——最大团等连常数比都不可达（P≠NP 下）。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">顶点覆盖 2-近似、装箱 FF 2-近似、度量 TSP 1.5-近似（Christofides）。</span></div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- ===== 分层习题 ===== -->
+    <h2><span class="sec-no">📝</span>分层习题</h2>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>判断：因为顶点覆盖是 NP 完全的，所以任何顶点覆盖实例都不可能在多项式时间内求解。</div>
+      <details>
+        <summary>提示</summary>
+        <p>NPC 说的是"所有实例"还是"存在一族实例"？想想二分图。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">错。NPC 是最坏情况复杂性：存在一族难实例，不代表每个实例都难。二分图上的顶点覆盖有多项式算法（Kőnig 定理：等于最大匹配）。易错点：把"最坏情况难"误读为"处处难"——实践中大量实例（稀疏图、小规模）依然可解。</div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>判断：已知 A ≤p B 且 A ∈ P，则 B ∈ P。</div>
+      <details>
+        <summary>提示</summary>
+        <p>归约传递的是哪个方向的难度信息？"A 不比 B 难"说明谁更难？</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">错。A ≤p B 的意思是 A 不比 B 难（B 至少和 A 一样难）。A 容易完全管不住 B：把排序归约到顶点覆盖也是合法归约，但 B 依然可以是 NPC。正确方向是：A ≤p B 且 <strong>B</strong> ∈ P ⟹ A ∈ P；或 A ≤p B 且 A 是 NPC 且 B∈NP ⟹ B 是 NPC。易错点：把归约当成"难度从 A 流向 B"的箭头，实际流动方向相反。</div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>对公式 φ = (x₁ ∨ x₂ ∨ ¬x₃) ∧ (¬x₁ ∨ ¬x₂ ∨ x₃) 执行 3SAT→独立集归约：画出图的结构描述（顶点、两类边），给出 k，并用满足赋值 x₁=T, x₂=T, x₃=T 找出对应的独立集。</div>
+      <details>
+        <summary>提示</summary>
+        <p>两个子句 = 两个三角形；矛盾边只连文字与其否定。赋值下每个子句哪些文字为真？</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          顶点：句1 {x₁, x₂, ¬x₃}，句2 {¬x₁, ¬x₂, x₃}，共 6 个；k = 2。<br>
+          三角形边：句1 三顶点两两相连；句2 同理。<br>
+          矛盾边：x₁—¬x₁，x₂—¬x₂，¬x₃—x₃，共 3 条。<br>
+          赋值 x₁=x₂=x₃=T：句1 中 x₁、x₂ 为真；句2 中 x₃ 为真。取独立集 {<strong>x₂（句1）, x₃（句2）</strong>}：不同三角形 ✓；二者间无矛盾边（x₂ 的否定 ¬x₂ 不在其中，x₃ 的否定 ¬x₃ 不在其中）✓。大小 2 = k，归约验证通过。
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>在星图上运行顶点覆盖 2-近似：中心 c 连接叶子 v₁, v₂, v₃（共 3 条边）。给出算法可能的最坏输出与最优解，验证近似比不超过 2。</div>
+      <details>
+        <summary>提示</summary>
+        <p>算法的取边顺序是任意的——若第一步取 (c,v₁)，会发生什么？最优覆盖是哪个顶点？</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          最坏执行：取边 (c,v₁) → C={c,v₁}，删去所有与 c、v₁ 关联的边——三条边全被删除（都关联 c），E′ 空，算法结束。输出大小 <strong>2</strong>。<br>
+          最优解：{c}，大小 <strong>1</strong>（中心一个顶点覆盖所有边）。<br>
+          比值 2/1 = 2，恰好达到近似比上界。这个例子说明 2-近似的界是<strong>紧的</strong>（tight）：存在实例让算法打满保证，分析无法再改进。
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l3">L3 建模应用</span>你的团队要为物流公司做"车辆装载系统"：n 件货物（各有重量）、若干载重上限相同的卡车，目标用最少卡车运完。产品经理问："这周能上线精确最优版吗？"请用本章语言写一段回复：问题的判定版叫什么、属于哪个类、依据是什么；上线方案推荐什么算法、能承诺什么。</div>
+      <details>
+        <summary>提示</summary>
+        <p>把"最少卡车"改写成判定版；从哪个已知 NPC 问题能归约过来？工程上用什么近似？</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          回复要点：<br>
+          ① 这是装箱问题（Bin Packing）。判定版："能否用 k 辆卡车装完"是 NP 完全的（可由划分问题 PARTITION 归约：k=2 的特例已是 NPC）。<br>
+          ② 因此在 P≠NP 的主流假设下，不存在多项式精确算法，"本周上线精确最优版"在原理上不可行（不是工期问题，是问题结构问题）——这就是"难"的客观含义，可以用归约链向上级解释。<br>
+          ③ 上线方案：First Fit Decreasing（先按重量降序排再 FF），可承诺渐近近似比 11/9·OPT+1（经典结果），实现成本一天以内；货物规模小（n≤20）时也可用分支限界给精确解。<br>
+          ④ 若需更强保证，报告应写明"近似比 ρ"而非含糊的"基本够用"。
+        </div>
+      </details>
+    </div>
+
+    <!-- ===== 自测 ===== -->
+    <h2><span class="sec-no">✍️</span>本章自测</h2>
+    <p class="quiz-hint">点击选项判分，答错会给出原因。</p>
+
+    <div class="quiz-block" data-answer="c">
+      <div class="q-no">自测 1</div>
+      <div class="q-stem">NP 的准确定义是？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 不存在多项式算法的问题类</li>
+        <li data-opt="b">B. 需要非确定性机器才能求解的问题类</li>
+        <li data-opt="c">C. "是"实例有多项式长度证书且可多项式验证的判定问题类</li>
+        <li data-opt="d">D. 所有指数时间问题的类</li>
+      </ul>
+      <div class="quiz-explain">解析：C 对。A 错——NP 含 P（P 的问题也有证书：不用证书直接算）；B 错——非确定性是历史定义，且非确定机不是真实机器，证书定义才是工作定义；D 错——NP 与指数时间没有包含关系（NP 中也有 P 的问题，指数类 EXP 严格更大）。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 2</div>
+      <div class="q-stem">要证明新问题 B 是 NP 完全的，正确的步骤组合是？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 证明 B ≤p 3SAT，且 B ∈ NP</li>
+        <li data-opt="b">B. 证明 3SAT ≤p B（多项式构造 + 双向等价论证），且 B ∈ NP</li>
+        <li data-opt="c">C. 证明 B ≤p 3SAT 即可</li>
+        <li data-opt="d">D. 找到 B 的一个指数算法</li>
+      </ul>
+      <div class="quiz-explain">解析：B 对——方向是"已知难的归约到 B"，加上 B∈NP 与归约的多项式性。A 错——方向反了，B≤p3SAT 只说明 B 不比 3SAT 难（所有 NP 问题都满足）；C 错——同 A 且缺成员性；D 错——NPC 问题都有平凡指数算法，这证明不了任何事。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="a">
+      <div class="q-no">自测 3</div>
+      <div class="q-stem">3SAT→独立集归约中，跨子句的"矛盾边"连接的是？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 每个文字与其所有否定形式（x 与 ¬x）</li>
+        <li data-opt="b">B. 相邻子句的对应位置文字</li>
+        <li data-opt="c">C. 所有含相同变量的顶点，无论正负</li>
+        <li data-opt="d">D. 每个子句的第一个文字</li>
+      </ul>
+      <div class="quiz-explain">解析：A 对——矛盾边保证独立集取出的文字集合不自相矛盾，从而能翻译成合法赋值。B、D 错——无此构造，无法保证一致性；C 错——把 x 与 x 也连边会导致同一变量永远只能出现在一个子句的选择里，归约的双向等价立刻破裂。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="d">
+      <div class="q-no">自测 4</div>
+      <div class="q-stem">顶点覆盖 2-近似算法的正确性证明依赖于？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 贪心选择性质与交换论证</li>
+        <li data-opt="b">B. 最优子结构与重叠子问题</li>
+        <li data-opt="c">C. 势能法</li>
+        <li data-opt="d">D. 算法取出的边构成匹配 M，OPT ≥ |M| 且输出 |C| = 2|M|</li>
+      </ul>
+      <div class="quiz-explain">解析：D 对——"可计算下界锚点"技术。A 错——该算法不是精确贪心，没有交换论证位置；B 错——顶点覆盖是 NPC，没有多项式 DP；C 错——势能法是摊还分析工具，与近似比无关。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 5</div>
+      <div class="q-stem">Cook-Levin 定理在 NP 完全理论中的作用是？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 证明了 P ≠ NP</li>
+        <li data-opt="b">B. 给出第一个 NPC 问题 SAT（所有 NP 验证器可编码为布尔公式），成为归约链起点</li>
+        <li data-opt="c">C. 给出 SAT 的多项式算法</li>
+        <li data-opt="d">D. 证明 3SAT 比 SAT 更难</li>
+      </ul>
+      <div class="quiz-explain">解析：B 对。A 错——P vs NP 至今未解，Cook-Levin 没碰它；C 错——恰恰相反，它宣布 SAT 最难；D 错——SAT ≤p 3SAT 说明二者多项式等价（都是 NPC），不存在谁更难。</div>
+    </div>
+
+    <!-- ===== 三句话复述 ===== -->
+    <div class="retell">
+      <h3>🗣️ 用自己的话，三句话讲完本章</h3>
+      <p>对着空气（或室友）说出这三句。说卡壳的那句，回去重读对应小节。</p>
+      <details>
+        <summary>句1：这章解决什么问题？——</summary>
+        <div class="retell-answer">参考答案：当所有算法范式都失败时，如何把"难"从主观感受变成可证明的客观属性（判定问题 + P/NP/NPC + 多项式归约），以及在证明难之后如何继续交付价值（近似算法与近似比保证）。</div>
+      </details>
+      <details>
+        <summary>句2：核心机制是什么？——</summary>
+        <div class="retell-answer">参考答案：用 Cook-Levin 确立 SAT 为第一个 NPC 问题，再用多项式归约把难度沿"从已知难到新问题"的方向传播（3SAT→独立集→顶点覆盖…）；对 NPC 问题用"可计算下界锚点"技术设计并分析近似算法（顶点覆盖 2、装箱 FF 2）。</div>
+      </details>
+      <details>
+        <summary>句3：它和前后章怎么分工？——</summary>
+        <div class="retell-answer">参考答案：第8、9章榨干"好结构"问题的多项式算法；本章处理没有好结构的问题，给出难度证明（归约）与实用退路（近似）。它是全书的边界线：线内是算法，线外是复杂性；整条"问题—结构—代价"主线到此闭环。</div>
+      </details>
+    </div>
+
+    <!-- ===== 复习计划 ===== -->
+    <div class="review-plan">
+      <h3>🔁 间隔复习计划</h3>
+      <p>回忆本身比重读有效 10 倍。到点只做一件事：翻卡 + 重做标记题。</p>
+      <table>
+        <tr><th>时间点</th><th>复习内容</th><th>预计用时</th></tr>
+        <tr><td>第 1 天</td><td>概念卡 1–6 + 回忆卡 10.2-1、10.3-1、10.4-1、10.6-1</td><td>10 分钟</td></tr>
+        <tr><td>第 3 天</td><td>概念卡（重点翻错的）+ 重做 L2 归约手算 + 自测错题</td><td>10 分钟</td></tr>
+        <tr><td>第 7 天</td><td>三句话复述 + 重画 3SAT→独立集构造 + 顶点覆盖星图手算</td><td>12 分钟</td></tr>
+        <tr><td>第 15 天</td><td>只做合上书挑战 + 毕业三问；能全过，全书毕业</td><td>20 分钟</td></tr>
+      </table>
+    </div>
+
+    <!-- ===== 合上书挑战 ===== -->
+    <div class="final-challenge">
+      <h3>📕 合上书挑战</h3>
+      <p class="fc-sub">现在关掉这个页面，拿一张纸，凭记忆完成以下任务。全部做完再回来核对——这是本章、也是全书的毕业考试。</p>
+      <ol id="challenge-list">
+        <li><span class="fc-check"></span>写出 P、NP、NP 完全的精确定义，解释 P=NP 问题的含义</li>
+        <li><span class="fc-check"></span>完整执行 3SAT→独立集归约（构造两类边、k=子句数、双向论证）</li>
+        <li><span class="fc-check"></span>在路径图 a—b—c—d—e 上跑顶点覆盖 2-近似并与最优解比较</li>
+        <li><span class="fc-check"></span>用一句话说 Cook-Levin 定理的含义，并说明归约链为什么从它开始</li>
+        <li><span class="fc-check"></span>对物品 0.2, 0.5, 0.4, 0.7, 0.1, 0.3, 0.8 执行 First Fit 并证近似比 2</li>
+        <li><span class="fc-check"></span>画出全书十章的四段因果链地图</li>
+        <li><span class="fc-check"></span>回答全书主线问题：面对任意计算问题，"结构 → 范式 → 边界 → 退路"的完整决策链是什么？（一句话）</li>
+      </ol>
+    </div>
+
+    <div class="complete-zone">
+      <button class="btn-complete" id="btn-complete" onclick="markDone()">✓ 我已完成本章（含合上书挑战）</button>
+    </div>
+
+    <div class="chapter-nav">
+      <a href="chapter-09.html"><span class="nav-dir">← 上一章</span>第9章 贪心与摊还分析</a>
+      <a href="index.html" class="next"><span class="nav-dir">下一步 →</span>回到学习地图（全书完）</a>
+    </div>
+
+  </div>
+</div>
+
+<footer class="footer">
+  <div class="wrap">第10章 NP完全与近似算法 · 算法导论互动讲义 · 基于 Cormen et al.《算法导论》(CLRS, 第3版)</div>
+</footer>
+
+<script src="assets/mermaid.min.js"></script>
+<script>
+mermaid.initialize({
+  startOnLoad: true,
+  theme: "base",
+  themeVariables: {
+    primaryColor: "#e3edf7",
+    primaryBorderColor: "#1d5f9e",
+    primaryTextColor: "#1d5f9e",
+    lineColor: "#5c554b",
+    secondaryColor: "#fbeedd",
+    tertiaryColor: "#f5f1e8",
+    fontFamily: "-apple-system, PingFang SC, sans-serif",
+    fontSize: "14px"
+  },
+  flowchart: { curve: "linear", htmlLabels: false }
+});
+</script>
+<script>
+// 自测题判分
+document.querySelectorAll(".quiz-block").forEach(block => {
+  const answer = block.dataset.answer;
+  const explain = block.querySelector(".quiz-explain");
+  block.querySelectorAll(".quiz-opts li").forEach(li => {
+    li.addEventListener("click", () => {
+      const opts = block.querySelectorAll(".quiz-opts li");
+      opts.forEach(o => o.classList.add("disabled"));
+      if (li.dataset.opt === answer) {
+        li.classList.add("correct");
+      } else {
+        li.classList.add("wrong");
+        block.querySelector(`[data-opt="${answer}"]`).classList.add("correct");
+      }
+      explain.classList.add("show");
+    });
+  });
+});
+
+// 合上书清单打勾
+document.querySelectorAll("#challenge-list li").forEach(li => {
+  li.addEventListener("click", () => li.classList.toggle("checked"));
+});
+
+// 完成标记 → localStorage
+const KEY = "algo_progress_v1";
+function loadProgress() {
+  try { return JSON.parse(localStorage.getItem(KEY)) || {}; } catch (e) { return {}; }
+}
+const progress = loadProgress();
+const btn = document.getElementById("btn-complete");
+if (progress["10"] && progress["10"].done) {
+  btn.textContent = "✓ 已完成 · 再次点击重置";
+  btn.classList.add("done");
+}
+function markDone() {
+  const p = loadProgress();
+  if (p["10"] && p["10"].done) {
+    delete p["10"];
+    btn.textContent = "✓ 我已完成本章（含合上书挑战）";
+    btn.classList.remove("done");
+  } else {
+    p["10"] = { done: true, completedAt: Date.now(), reviewsDone: 0 };
+    btn.textContent = "✓ 已完成 · 复习提醒已开启";
+    btn.classList.add("done");
+  }
+  localStorage.setItem(KEY, JSON.stringify(p));
+}
+</script>
+
+</body>
+</html>

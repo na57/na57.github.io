@@ -1,0 +1,873 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第6章 时序差分学习 · 强化学习互动讲义</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+<nav class="topbar">
+  <div class="topbar-inner">
+    <span class="brand"><a href="index.html" style="color:inherit">← 学习地图</a></span>
+    <span class="crumb">第二段 · 表格型无模型方法 / 第6章</span>
+  </div>
+</nav>
+
+<div class="wrap">
+
+  <div class="lecture-head">
+    <span class="ch-label">CHAPTER 06 · 表格型无模型方法</span>
+    <h1>时序差分学习</h1>
+    <p class="lead">不等回合结束，每走一步就用"一步自举"的目标更新价值——蒙特卡洛与动态规划在这一点汇合。</p>
+  </div>
+
+  <!-- 本章定位 -->
+  <div class="position-bar">
+    <strong>本章在主线上的位置：</strong>第5章蒙特卡洛用完整回合回报替代模型 → <u>本章 TD 用"一步自举"消除等待回合结束</u> → 第7章在两者之间取 n 步折中。<br>
+    第6章回答主线上的一个问题：<strong>能否不等回合结束，每走一步就用自举目标更新价值？</strong>
+    <div class="map-inline">
+      <span class="node">Ch1–4 表格法基础（老虎机 · MDP · 动态规划）</span><span class="arrow">→</span>
+      <span class="node">Ch5 蒙特卡洛（等回合结束）</span><span class="arrow">→</span>
+      <span class="node here">Ch6 时序差分</span><span class="arrow">→</span>
+      <span class="node">Ch7 n步自举（MC 与 TD 之间）</span><span class="arrow">→</span>
+      <span class="node">Ch8 统一视图与规划</span><span class="arrow">→</span>
+      <span class="node">Ch9–11 函数逼近</span><span class="arrow">→</span>
+      <span class="node">Ch12–13 策略与前沿</span>
+    </div>
+  </div>
+
+  <!-- 学习目标 -->
+  <div class="objectives">
+    <h4>🎯 学完本章，合上书你应该能：</h4>
+    <ol>
+      <li>写出 TD(0) 的更新式，并在 5×5 gridworld 的一步转移上手算出更新后的 V 值</li>
+      <li>写出 TD 误差 δ 的定义，解释"δ 大不等于学得差"，并把 MC 误差表示成各步 δ 的折扣和</li>
+      <li>写出 Sarsa 的五元组更新式，解释"在策略（on-policy）"的确切含义，并预测它在 Cliff Walking 中的行为</li>
+      <li>写出 Q-learning 的更新式，在同一条转移上分别算出 Sarsa 与 Q-learning 的更新结果并解释差异来源</li>
+      <li>手算期望 Sarsa 的目标值（含 ε-贪心概率权重），说明它消除了哪一部分方差</li>
+      <li>用一个小算例说明最大化偏差的产生机制，并写出双 Q 学习消除偏差的做法</li>
+    </ol>
+  </div>
+
+  <div class="lecture">
+
+    <!-- 推导主线图 -->
+    <div class="figure">
+      <div class="mermaid">
+flowchart LR
+  A["MC 必须等<br>回合结束"] --> B["走一步就<br>自举更新"]
+  B --> C["TD 目标<br>R 加 γV 后继"]
+  C --> D["TD 误差 δ<br>驱动一切更新"]
+  D --> E["Sarsa 沿<br>行为策略学"]
+  D --> F["Q-learning<br>盯贪心策略学"]
+  E --> G["期望 Sarsa<br>消除选动作方差"]
+  F --> H["max 引来<br>最大化偏差"]
+  G --> H
+  H --> I["代价 目标有偏<br>函数逼近下有<br>致命三联隐患"]
+  classDef hot fill:#fbeedd,stroke:#c4651f,stroke-width:2.5px,color:#c4651f;
+  classDef danger fill:#fae9e7,stroke:#b03a2e,stroke-width:2.5px,color:#b03a2e;
+  class D hot;
+  class I danger;
+      </div>
+      <div class="caption">图 6.0 本章推导主线：从"等待"到"一步自举"，再到三种控制算法。末端的红点——有偏目标与最大化偏差——是本章内部就要清算、并将在第9章放大的代价。</div>
+    </div>
+
+    <!-- ============ 6.1 ============ -->
+    <h2><span class="sec-no">6.1</span>为什么不等回合结束：TD(0) 的一步自举</h2>
+
+    <p>第5章的蒙特卡洛有两个绕不开的代价：<strong>① 必须等回合结束</strong>——回报 G<sub>t</sub> 要到终止时刻才算得出，持续性任务（没有终止态）根本无法更新，长回合任务则学习信号严重延迟；<strong>② 高方差</strong>——G<sub>t</sub> 是整条随机轨迹的累加，轨迹里每一个随机环节都把噪声灌进这一个数里。</p>
+
+    <p>回想第4章的动态规划：它也更新价值，却从来不等回合结束——因为它用贝尔曼方程<strong>自举</strong>：拿后继状态的旧估计 V(S′) 当替身。DP 的死穴是需要模型。那么自然的问题是：<strong>能不能像 MC 一样只采样一步、又像 DP 一样拿旧估计自举？</strong>这就是<span class="term">时序差分学习</span>（Temporal-Difference Learning, TD）的全部出发点。</p>
+
+    <p>最简单的 TD——<span class="term">表格型 TD(0)</span>（Tabular TD(0)）——在每经历一步转移 (S, R, S′) 后立刻更新：</p>
+
+    <div class="formula">V(S) ← V(S) + α · [ R + γV(S′) − V(S) ]</div>
+
+    <p>对比 MC 的更新 V(S) ← V(S) + α(G − V(S))：结构一模一样（旧估计 + 步长 ×（目标 − 旧估计）），唯一区别是<strong>目标</strong>——MC 用等到底才拿到的 G，TD 用一步之后立刻可得的 R + γV(S′)，称为 <span class="term">TD 目标</span>（TD Target）。这里有两个关键操作同时发生：<span class="term">采样</span>（Sampling）——R 和 S′ 是真实经历的一步，不对模型求期望；<span class="term">自举</span>（Bootstrapping）——目标里掺了旧估计 V(S′)，用自己的猜测更新自己的猜测。</p>
+
+    <h3>真算例：5×5 gridworld 上的一次更新</h3>
+
+    <p>沿用第5章的环境：5×5 gridworld，每步奖励 −1，进入右下角终点 +10，γ = 0.9。设当前 V((1,4)) = 0.5，智能体从 (1,4) 向右走到 (1,5)，得奖励 −1，而表中存着 V((1,5)) = 4.0，步长 α = 0.1。一步步算：</p>
+
+    <ul>
+      <li><strong>第一步，算 TD 目标</strong>：R + γV(S′) = −1 + 0.9 × 4.0 = −1 + 3.6 = <strong>2.6</strong></li>
+      <li><strong>第二步，算目标与旧估计的差</strong>：2.6 − 0.5 = 2.1</li>
+      <li><strong>第三步，按步长靠拢</strong>：新 V((1,4)) = 0.5 + 0.1 × 2.1 = 0.5 + 0.21 = <strong>0.71</strong></li>
+    </ul>
+
+    <p>对比一下：第5章的 MC 在这条轨迹上要等到回合结束，才能用倒推出的 G = 3.122 做目标更新 (1,4)；TD 只用了一步，拿自举目标 2.6 当场更新。2.6 不是"真值"——它掺了旧估计 4.0——但它<strong>现在就可用</strong>，而且会随着 V((1,5)) 自己被反复更新而越来越准。</p>
+
+    <p>三种方法在"是否采样、是否自举"两个维度上的位置：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>方法</th><th>采样（免模型）</th><th>自举（不等结束）</th><th>更新目标</th></tr>
+        <tr><td>动态规划 DP</td><td>否（对模型求期望）</td><td>是</td><td>Σ p(s′,r|s,a)[r + γV(s′)]</td></tr>
+        <tr><td>蒙特卡洛 MC</td><td>是</td><td>否</td><td>G<sub>t</sub>（完整回合回报）</td></tr>
+        <tr><td>TD(0)</td><td>是</td><td>是</td><td>R + γV(S′)</td></tr>
+      </table>
+    </div>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>TD 目标 R + γV(S′) 是对"这一步之后世界会值多少"的<strong>一步截断估计</strong>：真实奖励只有一步，剩下的路全部用旧猜测顶上。MC 说"走完再信"，DP 说"查表再信"，TD 说"走一步、信一半"——用一点偏差（旧估计不准）换两样东西：不用等待、方差大降。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>"自举是循环论证，所以 TD 不可能收敛。" 错。自举听起来像拽着自己的鞋带站起来，但表格型 MDP 的贝尔曼算子是压缩映射，R 里携带的<strong>真实奖励</strong>每一步都注入了新信息，反复迭代后 V 会被真实奖励"锚定"到 v<sub>π</sub> 上。表格型 + 适当步长（满足 Σα = ∞、Σα² &lt; ∞）下 TD(0) 收敛有严格保证。</p>
+    </div>
+
+    <!-- 回忆卡片 6.1 -->
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <p class="recall-hint">不要直接点开。先在心里或纸上说出答案，再翻面核对。</p>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 6.1-1</div>
+              <div class="q-text">写出 TD(0) 的更新式，指出它与 MC 更新式的唯一差别在哪里。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              V(S) ← V(S) + α[R + γV(S′) − V(S)]。与 MC 的 V(S) ← V(S) + α(G − V(S)) 结构完全相同，唯一差别是更新目标：MC 用必须等回合结束的完整回报 G，TD 用一步之后立即可得的自举目标 R + γV(S′)。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 6.1-2</div>
+              <div class="q-text">在"是否采样、是否自举"两个维度上，DP、MC、TD 各占哪个象限？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              DP：不采样（对模型求期望）、自举；MC：采样、不自举；TD：既采样又自举。所以 TD 被看作"采样版的 DP"或"一步截断版的 MC"。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 6.2 ============ -->
+    <h2><span class="sec-no">6.2</span>TD 误差 δ：一切更新的信号</h2>
+
+    <p>上一节的算例里，第二步算出的"目标 − 旧估计"= 2.1 出现得很自然。这个量重要到有专门的名字和符号——<span class="term">TD 误差</span>（TD Error）：</p>
+
+    <div class="formula">δ = R + γV(S′) − V(S)</div>
+
+    <p>整个更新式可以写成 V(S) ← V(S) + α·δ。δ 衡量的是：<strong>这一步实际发生的情况，比我原来以为的好（或差）多少</strong>。在 6.1 的算例中 δ = 2.6 − 0.5 = 2.1 &gt; 0，说明这一步比预期好，于是 V((1,4)) 被上调。</p>
+
+    <p>δ 的直觉是<strong>"意外程度"</strong>：δ = 0 意味着现实与预期完全一致，无可学习；δ 越大，这一步带来的新信息越多。神经科学里有个著名的对应：多巴胺神经元的放电模式与 TD 误差的时序特征高度吻合——奖励意外到来时放电（δ &gt; 0）、预期中的奖励到来时平静（δ ≈ 0）、预期奖励落空时抑制（δ &lt; 0）。<strong>注意这只是一个类比</strong>：它帮助记忆 δ 的角色，不构成任何生物学断言。</p>
+
+    <p>δ 还有一个漂亮的结构性质：<strong>蒙特卡洛误差可以写成沿途各步 TD 误差的折扣和</strong>：</p>
+
+    <div class="formula">G<sub>t</sub> − V(S<sub>t</sub>) = ∑<sub>k=0</sub><sup>T−t−1</sup> γ<sup>k</sup> · δ<sub>t+k</sub></div>
+
+    <p>不必死记推导，抓住直觉：MC 等到底才知道的总误差，等于把一路上每步的"小意外"折现累加起来。TD 是每走一步就结算一次小意外，MC 是攒到最后一起结算——这正是两者"更新时机"差异的代数表达（第7章 n 步方法将把这个观察推广成完整的谱系）。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>δ 是强化学习里唯一的"通货"。TD(0)、Sarsa、Q-learning、后面的 Actor-Critic，更新式长得各不相同，但全是"估计 ← 估计 + 步长 × δ"的变装。读懂 δ，就读懂了整条主线的更新语法。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>"δ 是估计误差，所以 δ 越小学习越好。" 错把信号当病灶。δ 大说明这一步<strong>信息量大</strong>——学习正在吸收新东西。策略改进期（价值函数还在剧烈变化）δ 天然偏大，这是健康的；真正的收敛标志是 δ 在<strong>期望意义下</strong>趋近于零，而不是每个样本的 δ 都小。强行追求小 δ，等于要求"别告诉我任何我不知道的事"。</p>
+    </div>
+
+    <!-- 回忆卡片 6.2 -->
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 6.2-1</div>
+              <div class="q-text">写出 δ 的定义，并用 6.1 的算例数字算出 δ 的值。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              δ = R + γV(S′) − V(S)。代入 R = −1、γ = 0.9、V(S′) = 4.0、V(S) = 0.5：δ = −1 + 0.9×4.0 − 0.5 = 2.6 − 0.5 = 2.1。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 6.2-2</div>
+              <div class="q-text">"δ 越小学习越好"错在哪？δ 大说明什么？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              δ 是学习信号而非病灶：δ 大表示该步新信息量大。策略改进期 δ 天然大；收敛的判据是 E[δ] → 0（期望意义下无系统性意外），而非单个 δ 小。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 6.3 ============ -->
+    <h2><span class="sec-no">6.3</span>Sarsa：沿着自己的行为策略学</h2>
+
+    <p>前两节解决的是<strong>预测</strong>（给固定策略估价值）。要做<strong>控制</strong>（找更好的策略），与第5章同理，我们要学动作价值 Q(s, a)。TD 控制的最直接方案来自一个五元组——每一步更新用到：</p>
+
+    <div class="formula">( S, A, R, S′, A′ )</div>
+
+    <p>五个字母念出来就是 "S-A-R-S-A"——<span class="term">Sarsa</span> 的名字由来。其中 A′ 是行为策略（通常是 ε-贪心）在 S′ 处<strong>实际选出的下一个动作</strong>。更新式：</p>
+
+    <div class="formula">Q(S, A) ← Q(S, A) + α · [ R + γQ(S′, A′) − Q(S, A) ]</div>
+
+    <p>Sarsa 是<span class="term">在策略</span>（On-Policy，又译"同策略"）方法：<strong>它评估和改进的，就是产生数据的那个策略本身</strong>——包括其中 ε-贪心的探索成分。目标 R + γQ(S′, A′) 里的 A′ 来自行为策略的真实采样，所以 Sarsa 学的价值忠实地反映了"我这个偶尔手滑的策略，继续执行下去值多少"。</p>
+
+    <h3>Cliff Walking 上的表现</h3>
+
+    <p>本章第二个环境：<strong>Cliff Walking</strong>（悬崖行走），4×12 网格，起点在左下角，终点在右下角，底排中间一整段是悬崖——踏入悬崖奖励 −100 并被送回起点，其余每步奖励 −1。理论上最短路径贴着悬崖边走（全程 −13 左右），但贴着悬崖意味着：<strong>ε-贪心每一次"手滑"探索，都可能一步踏空掉下去</strong>。</p>
+
+    <p>Sarsa 学到的是什么？因为它的目标里包含"下一步我可能手滑"这件事（A′ 是真实采样的，手滑动作会真的被算进价值），悬崖边的状态在 Sarsa 眼里价值会被探索风险拉低，于是它学到一条<strong>绕开悬崖的"安全路径"</strong>——走得远一些，但全程几乎不掉下去。从"含 ε 探索的策略的真实回报"角度看，这是更优的选择。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>On-policy 学的是"我会成为的那个我"，不是"理想中的我"。Sarsa 把探索噪声当作自身性格的一部分计入价值——所以它天生风险敏感，在危险环境里自动变得保守。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>"Sarsa 保守，所以它比 Q-learning 差。" 看评价标准。若比"学到的确定性策略的质量"（学完后把 ε 关掉再跑），Q-learning 学到的才是最优策略；但若比<strong>在线学习期间的真实累积回报</strong>（学习过程中一直在被探索拖累），Sarsa 常常更好。安全攸关、边学边跑的场景里，"保守"是优点而不是缺点。</p>
+    </div>
+
+    <!-- 回忆卡片 6.3 -->
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 6.3-1</div>
+              <div class="q-text">Sarsa 的名字从哪来？写出它的更新式。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              来自一次更新用到的五元组 (S, A, R, S′, A′)，其中 A′ 是行为策略在 S′ 实际选中的动作。更新式：Q(S,A) ← Q(S,A) + α[R + γQ(S′,A′) − Q(S,A)]。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 6.3-2</div>
+              <div class="q-text">"在策略（on-policy）"的确切含义是什么？它如何解释 Sarsa 在 Cliff Walking 中学到安全路径？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              On-policy 指评估和改进的对象就是产生数据的行为策略本身（含 ε-贪心探索）。Sarsa 的目标用实际采样的 A′，探索动作的后果被算进价值，悬崖边状态因"可能手滑掉下去"而被压低估值，于是策略学到绕远的安全路径。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 6.4 ============ -->
+    <h2><span class="sec-no">6.4</span>Q-learning：盯着最优策略学（离策略）</h2>
+
+    <p>Sarsa 的目标用"实际选中的 A′"。如果我根本不想管行为策略下一步会做什么，只想知道"从 S′ 起<strong>按最优动作</strong>走值多少"呢？把 Q(S′, A′) 换成 max<sub>a</sub> Q(S′, a)，就是<span class="term">Q-learning</span>：</p>
+
+    <div class="formula">Q(S, A) ← Q(S, A) + α · [ R + γ · max<sub>a</sub> Q(S′, a) − Q(S, A) ]</div>
+
+    <p>Q-learning 是<span class="term">离策略</span>（Off-Policy）方法：<strong>目标策略</strong>（想学的）是纯贪心策略，<strong>行为策略</strong>（实际跑数据的）是 ε-贪心——两者不是同一个策略。更新目标 max<sub>a</sub> Q(S′, a) 与"行为策略下一步实际选了什么"完全无关，这就是"离"字的含义：学习目标脱离了行为策略的采样。</p>
+
+    <h3>同一条转移上的对比算例（核心）</h3>
+
+    <p>设状态 s 执行动作 a，当前 Q(s, a) = 1.0，得奖励 R = −1，进入 s′。在 s′ 处的 Q 表：Q(s′, 右) = 4.0——这恰好是 ε-贪心行为策略<strong>实际选中</strong>的动作；而 max<sub>a</sub> Q(s′, ·) = 4.5，对应最优动作"下"。γ = 0.9，α = 0.1。同一条转移，两个算法各算一遍：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>算法</th><th>目标计算</th><th>目标值</th><th>更新计算</th><th>新 Q(s,a)</th></tr>
+        <tr><td>Sarsa</td><td>−1 + 0.9 × 4.0</td><td>2.6</td><td>1.0 + 0.1 × (2.6 − 1.0) = 1.0 + 0.16</td><td><strong>1.16</strong></td></tr>
+        <tr><td>Q-learning</td><td>−1 + 0.9 × 4.5</td><td>3.05</td><td>1.0 + 0.1 × (3.05 − 1.0) = 1.0 + 0.205</td><td><strong>1.205</strong></td></tr>
+      </table>
+    </div>
+
+    <p>差异的来源一目了然：<strong>Sarsa 的目标包含"下一步我可能手滑"</strong>——它信任的是行为策略实际选中的那个动作（哪怕它是探索产物）；<strong>Q-learning 假装下一步一定走最优</strong>，用 max 把"理想下一步"当目标。同一份数据，Sarsa 学"我现在这套带噪声的打法值多少"，Q-learning 学"把噪声关掉后的极限打法值多少"。</p>
+
+    <p>放回 Cliff Walking：Q-learning 的目标策略是贪心的，它会学到<strong>贴着悬崖边的最短路径</strong>——那是真最优。但学习期间它还在用 ε-贪心跑数据，贴着悬崖走意味着每次探索手滑就掉下悬崖吃 −100。于是出现教科书里的经典现象：<strong>Q-learning 学到的策略更优，但在线学习期间它的累积回报反而比 Sarsa 差</strong>——它不断为自己向往的险路付出探索的学费，而 Sarsa 早就绕着走了。（此处只做定性描述；不同随机种子与参数下的具体曲线数值以实验为准。）</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>Sarsa 与 Q-learning 的全部差别，浓缩在一个问题上："更新目标里的下一步，按<strong>现实</strong>（我实际会怎么走）算，还是按<strong>理想</strong>（最优会怎么走）算？" 前者在策略、风险敏感；后者离策略、直奔最优但要承受探索的代价。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>"Q-learning 更新时用了 max，所以它学的是贪心策略，因此它也是 on-policy。" 前半对、结论错。on/off-policy 的判据是"<strong>评估的目标策略与产生数据的行为策略是不是同一个</strong>"。Q-learning 的目标策略是纯贪心，行为策略是 ε-贪心，两者明确分离——它是离策略的教科书例子。详见 6.6 节的清算。</p>
+    </div>
+
+    <!-- 回忆卡片 6.4 -->
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 6.4-1</div>
+              <div class="q-text">写出 Q-learning 更新式，并指出它与 Sarsa 更新式的唯一差别。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              Q(S,A) ← Q(S,A) + α[R + γ max_a Q(S′,a) − Q(S,A)]。与 Sarsa 的唯一差别：目标里的 Q(S′,A′)（行为策略实际选中的动作）被换成 max_a Q(S′,a)（最优动作），与下一步实际选择无关。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 6.4-2</div>
+              <div class="q-text">为什么 Q-learning 在 Cliff Walking 上学到更优策略，在线表现却比 Sarsa 差？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              Q-learning 学的贪心策略会贴悬崖边走最短路径；但学习期间行为策略仍是 ε-贪心，贴悬崖走时每次探索手滑就掉下去吃 −100，累积回报被拖累。Sarsa 学到绕远的安全路径，学习期间几乎不掉悬崖，在线回报反而更高。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 6.5 ============ -->
+    <h2><span class="sec-no">6.5</span>期望 Sarsa 与最大化偏差</h2>
+
+    <p>Sarsa 用"采样出来的 A′"，Q-learning 用"max"。两者之间还有一个选项：对下一步动作<strong>按策略求期望</strong>——<span class="term">期望 Sarsa</span>（Expected Sarsa）：</p>
+
+    <div class="formula">Q(S, A) ← Q(S, A) + α · [ R + γ · ∑<sub>a</sub> π(a | S′) Q(S′, a) − Q(S, A) ]</div>
+
+    <h3>手算：同一个 s′，三种目标</h3>
+
+    <p>接 6.4 的设定，补充完整 s′ 处 4 个动作的 Q 值：下 4.5（贪心动作）、右 4.0、上 3.0、左 2.0。ε = 0.1 的 ε-贪心策略给出的概率：π(下) = 1 − ε + ε/4 = 0.9 + 0.025 = <strong>0.925</strong>，其余三个动作各 π = ε/4 = <strong>0.025</strong>。期望 Sarsa 的目标分两步算：</p>
+
+    <ul>
+      <li><strong>第一步，对 s′ 求期望</strong>：0.925 × 4.5 + 0.025 × (4.0 + 3.0 + 2.0) = 4.1625 + 0.025 × 9.0 = 4.1625 + 0.225 = <strong>4.3875</strong></li>
+      <li><strong>第二步，组装 TD 目标</strong>：−1 + 0.9 × 4.3875 = −1 + 3.94875 = <strong>2.94875 ≈ 2.949</strong></li>
+    </ul>
+
+    <p>更新：Q(s, a) = 1.0 + 0.1 × (2.94875 − 1.0) = 1.0 + 0.194875 = <strong>1.194875 ≈ 1.195</strong>——恰好落在 Sarsa 的 1.16 与 Q-learning 的 1.205 之间。三个算法在同一条转移上的目标并排：Sarsa 2.6（采样谁信谁）＜ 期望 Sarsa 2.949（按策略取期望）＜ Q-learning 3.05（只信最优）。</p>
+
+    <p>期望 Sarsa 消除了什么？Sarsa 的目标里，"采样到哪个 A′"本身是随机的——同样一条转移，A′ 抽到 4.0 和抽到 2.0 给出不同目标，这是额外的方差来源。期望 Sarsa 用解析的期望替代这次采样，<strong>把"选哪个 a′"的方差整个消掉</strong>，代价是每个更新要多算一个加权和（表格型下很便宜）。注意它可以两用：π 取行为策略时是 on-policy 的期望版 Sarsa；π 取贪心策略时就退化成 Q-learning 的确定性目标。</p>
+
+    <h3>最大化偏差：max 的隐藏税</h3>
+
+    <p>Q-learning 的 max 看着无辜，其实藏着一个系统性陷阱——<span class="term">最大化偏差</span>（Maximization Bias）：<strong>对含噪声的估计取 max，期望意义下会得到正偏差</strong>。一个小算例：设 s′ 有 3 个动作，真实价值全是 −0.1，但小样本下我们的估计是 +0.3、−0.4、+0.1——估计本身无偏（噪声均值为零），可 max(0.3, −0.4, 0.1) = <strong>+0.3</strong>，而真实的 max 是 −0.1。max 专门挑出"噪声最走运"的那个动作，于是 max 的期望系统性高于期望的 max。</p>
+
+    <p>解法是<span class="term">双 Q 学习</span>（Double Q-learning）：维护两张 Q 表 Q₁、Q₂，每次更新随机选一张。若选 Q₁：<strong>用 Q₁ 选 argmax 动作，用 Q₂ 评估该动作</strong>。接上面的例子：设 Q₁ 认为 +0.3 的动作最优，但用独立的 Q₂ 去评估它，得 Q₂（该动作） = −0.05——目标就用 −0.05 而非 0.3，正偏差被消除。直观地说：挑选和打分用了两套独立的噪声，"挑中走运者"的运气就无法传到分数里。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>三种目标的谱系：Sarsa 信一次采样（方差大、含探索）→ 期望 Sarsa 信策略期望（方差小、忠实于 π）→ Q-learning 信 max（零方差于选动作，但引入最大化偏差）。双 Q 学习则是给 max 配的解药。选择目标，就是在"方差、偏差、保真于哪个策略"之间点菜。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>"最大化偏差只存在于 Q-learning。" 错。任何对噪声估计取 max 的更新都有此风险——DP 的策略改进、函数逼近下的一切贪心化操作都在危险区内。Q-learning 只是它最典型的案发地。反过来也要记住：真值完全已知时 max 没有偏差——偏差来自"噪声 + max"的组合，不是 max 本身。</p>
+    </div>
+
+    <!-- 回忆卡片 6.5 -->
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 6.5-1</div>
+              <div class="q-text">写出期望 Sarsa 的目标，并说明它相比 Sarsa 消除了哪一部分方差。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              目标 = R + γ·Σ_a π(a|S′)Q(S′,a)。Sarsa 目标中"采样到哪个 A′"是随机的，期望 Sarsa 用解析期望替代这次采样，消除了选动作的方差；其余随机性（R、S′ 的采样）仍在。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 6.5-2</div>
+              <div class="q-text">用真值 −0.1、估计 (0.3, −0.4, 0.1) 的例子解释最大化偏差，并说明双 Q 学习如何消除它。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              估计无偏但 max(0.3,−0.4,0.1)=0.3 远高于真实 max −0.1——max 专挑噪声最走运的动作，E[max] > max(E)。双 Q：Q₁ 选 argmax、Q₂ 独立评估该动作（如 −0.05），用 −0.05 做目标，挑选与评估的噪声解耦，正偏差消除。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 6.6 ============ -->
+    <h2><span class="sec-no">6.6</span>错误直觉清算："TD 比 MC 更准"、"Q-learning 是 on-policy"</h2>
+
+    <p>TD 家族讲完了，趁概念还热，清算三条最容易带走的错误直觉。</p>
+
+    <ul>
+      <li><strong>"TD 比 MC 准。"</strong> 错。准不准要看偏差–方差两端：MC 目标 G 是完整回报，<strong>无偏但方差大</strong>；TD 目标 R + γV(S′) 掺了旧估计，<strong>有偏但方差小</strong>。这是一场偏差–方差权衡（bias–variance tradeoff），不是谁"更准"——在不同任务、不同学习阶段，赢家不同。第7章的 n 步方法正是要在这条权衡曲线上自由移动。</li>
+      <li><strong>"Q-learning 是 on-policy。"</strong> 错。它的更新目标是 max——即<strong>贪心目标策略</strong>下的自举，而数据由 ε-贪心行为策略产生，目标策略与行为策略明确分离，是离策略的教科书例子。Sarsa（目标用实际采样的 A′）才是 on-policy。判据永远只有一条：学的那个策略，和跑数据的那个策略，是不是同一个？</li>
+      <li><strong>"TD 收敛了就是学对了。"</strong> 仅在<strong>表格型 + 适当步长</strong>下成立。一旦进入函数逼近（第9章起），自举 + 函数逼近 + 离策略三者叠加会形成"致命三联"（deadly triad），Q-learning 式更新可能发散。本章所有收敛保证，离开表格这个温室都要重新审查。</li>
+    </ul>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>本章真正的结构是一组"权衡坐标"：更新时机（立即 vs 等结束）、目标来源（采样 vs 期望 vs max）、学的策略（行为策略 vs 贪心策略）。Sarsa、Q-learning、期望 Sarsa 不是三个孤立的算法，而是这三根坐标轴上的三个点。</p>
+    </div>
+
+    <!-- 回忆卡片 6.6 -->
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 6.6-1</div>
+              <div class="q-text">"TD 比 MC 准"错在哪？用偏差–方差框架给出正确说法。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              MC 目标无偏、方差大；TD 目标有偏（含旧估计）、方差小。两者是偏差–方差权衡的两端，不存在绝对"更准"。均方误差 = 偏差² + 方差，谁优取决于任务与样本量。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 6.6-2</div>
+              <div class="q-text">判定 on-policy / off-policy 的唯一标准是什么？据此判定 Sarsa 与 Q-learning。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              标准：被评估/改进的目标策略与产生数据的行为策略是否为同一个。Sarsa：是（目标用实际采样的 A′），on-policy；Q-learning：否（目标用贪心 max，数据来自 ε-贪心），off-policy。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 概念卡 ============ -->
+    <h2><span class="sec-no">🃏</span>概念卡：本章概念的一分钟画像</h2>
+    <p>翻面前先自问：这个概念我能用一句话讲清楚吗？</p>
+    <div class="flip-grid">
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 1</div>
+            <div class="q-text">TD(0)（表格型时序差分）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">每经历一步就用 V(S) ← V(S) + α[R + γV(S′) − V(S)] 更新的预测方法。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">MC 必须等回合结束才更新；持续性任务没有"结束"，长回合任务信号延迟。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">考完一科就估总分（用旧估的其余科成绩），而非等全部出分。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为自举是循环论证不能收敛——真实奖励每步注入新信息，表格型下收敛有保证。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">在线/持续性任务的策略评估；是 Sarsa、Q-learning、Actor-Critic 的共同骨架。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 2</div>
+            <div class="q-text">TD 误差 δ（TD Error）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">δ = R + γV(S′) − V(S)，即 TD 目标与当前估计之差。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">把"这一步比我预期好多少"量化成一个可驱动更新的标量信号。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">意外程度：工资到账比预期多两千的喜悦（正 δ），预期落空的心凉（负 δ）。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为 δ 越小越好——δ 大说明信息量大，策略改进期天然大；收敛看 E[δ]→0。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">一切 TD 族算法的更新核心；第7章 MC 误差 = Σγᵏδ；第12章 Actor-Critic 的优势信号。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 3</div>
+            <div class="q-text">Sarsa（在策略 TD 控制）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">Q(S,A) ← Q(S,A) + α[R + γQ(S′,A′) − Q(S,A)]，A′ 为行为策略实际选中的动作。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">在无模型、在线条件下评估并改进"当前这套含探索的策略"本身。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">评估自己的真实水平——把考试时可能粗心的毛病也算进估分。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为它保守所以更差——在线学习与安全攸关场景下，风险敏感正是优点。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">Cliff Walking 式危险环境、在线学习；第7章 n 步 Sarsa 的直接前身。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 4</div>
+            <div class="q-text">Q-learning（离策略 TD 控制）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">Q(S,A) ← Q(S,A) + α[R + γ max_a Q(S′,a) − Q(S,A)]，目标策略贪心、行为策略 ε-贪心。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">想用带探索的数据直接学最优（贪心）策略，不等探索关掉。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">按"下一手一定走最佳"来复盘棋局，不管自己实际可能走岔。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为用了 max 就是"更贪心的 on-policy"——目标与行为策略分离，是离策略的教科书例子。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">离线/仿真训练、只关心最终策略质量；第11章 DQN 的直接祖先。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 5</div>
+            <div class="q-text">期望 Sarsa（Expected Sarsa）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">目标 = R + γ·Σ_a π(a|S′)Q(S′,a)，对下一步动作按策略取期望而非采样。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">Sarsa 目标中"随机抽到哪个 A′"引入无谓方差。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">不掷骰子决定下一步，直接把骰子的期望点数写进账本。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为它只是 Sarsa 的小改版——π 取贪心时它退化为 Q-learning，是 Sarsa 与 Q-learning 之间的桥。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">动作空间小、表格型、追求低方差在线学习时；也是理解 n 步期望目标的入口。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 6</div>
+            <div class="q-text">最大化偏差与双 Q 学习</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">对含噪声估计取 max 产生系统性正偏差；双 Q 用 Q₁ 选动作、Q₂ 评估来消除。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">Q-learning 式 max 目标长期高估动作价值，拖慢甚至带偏学习。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">选秀评委既当裁判又打分必然偏袒；双 Q 让"选人"和"打分"用两套独立眼光。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为 max 本身有偏——偏差来自"噪声 + max"组合，真值已知时 max 无偏。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">一切含 max 的更新（第11章 Double DQN 直接继承）；估计噪声大时尤为必要。</span></div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- ============ 分层习题 ============ -->
+    <h2><span class="sec-no">📝</span>分层习题</h2>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>判断并说明理由：「Q-learning 因为用了 max 选动作，所以它是 on-policy 方法的一个更贪心版本。」这个说法对吗？</div>
+      <details>
+        <summary>提示</summary>
+        <p>回到 on/off-policy 的唯一判据：被学习的目标策略与产生数据的行为策略是不是同一个？</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p><strong>说法错误。</strong>逐层拆：</p>
+          <p>① on-policy / off-policy 的判据与"用不用 max"无关，只看一件事：<strong>更新目标所对应的策略，与跑出这条数据的行为策略，是否为同一个</strong>。</p>
+          <p>② Q-learning 的目标 R + γ max_a Q(S′,a) 对应的是<strong>纯贪心目标策略</strong>；而它跑数据用的是 ε-贪心行为策略。两者明确分离，是离策略的教科书例子。"max"恰恰是它"离"的证据，不是"在"的证据。</p>
+          <p>③ 若真想要"更贪心的 on-policy"，应沿着 GLIE 思路让行为策略的 ε 渐近衰减到 0——那时 Sarsa 学的就是极限贪心策略。这是 on-policy 路线收敛到最优的正道，与 Q-learning 的离策略路线是两种设计。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>当 ε = 0 时，期望 Sarsa 退化成什么？它和 Q-learning 此时完全等价吗？Sarsa 在 ε = 0 时又如何？</div>
+      <details>
+        <summary>提示</summary>
+        <p>ε = 0 时 ε-贪心策略的概率分布长什么样？把它代入期望 Sarsa 的加权和，再代入 Sarsa 的采样目标。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p><strong>ε = 0 时</strong>，ε-贪心退化为纯贪心策略：最优动作概率 1，其余 0。</p>
+          <p>① 代入期望 Sarsa：Σ_a π(a|S′)Q(S′,a) = 1 × Q(S′, argmax) = max_a Q(S′,a)。<strong>目标退化为与 Q-learning 完全相同</strong>；此时行为策略也即贪心（无探索），两算法完全等价。</p>
+          <p>② Sarsa 在 ε = 0 时，A′ 由贪心策略确定性选出，也恰好是 argmax，更新目标同样变成 R + γ max——数值上三者在此退化点合一。<strong>但本质不同</strong>：ε = 0 的 Sarsa 已停止探索，各 (s,a) 覆盖不再保证，控制收敛的前提被破坏；且一旦 ε &gt; 0，Sarsa 与 Q-learning 立刻分道扬镳（6.4 的 1.16 vs 1.205），而期望 Sarsa 与 Q-learning 的差异则随 ε 连续变化。所以说"期望 Sarsa 在 ε=0 时与 Q-learning 等价"对，"Sarsa 在 ε=0 时也是"在数值上对、在算法性质上不成立（它牺牲了探索保证）。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>用 6.1 的条件重做一次 TD(0) 更新：V((1,4)) = 0.5，走到 (1,5)，R = −1，V((1,5)) = 4.0，γ = 0.9。先按 α = 0.1 算，再把 α 换成 0.5 算一次，对比两次结果并解释 α 的作用。</div>
+      <details>
+        <summary>提示</summary>
+        <p>TD 目标两次相同；变的只是"向目标靠拢的比例"。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p><strong>共同的目标与 δ</strong>：TD 目标 = −1 + 0.9 × 4.0 = 2.6；δ = 2.6 − 0.5 = 2.1。</p>
+          <p><strong>α = 0.1</strong>：新 V = 0.5 + 0.1 × 2.1 = 0.5 + 0.21 = <strong>0.71</strong>。</p>
+          <p><strong>α = 0.5</strong>：新 V = 0.5 + 0.5 × 2.1 = 0.5 + 1.05 = <strong>1.55</strong>。</p>
+          <p><strong>对比与解释</strong>：同一目标 2.6，α = 0.1 只靠拢了差距的 10%（0.71），α = 0.5 靠拢了一半（1.55）。α 控制的是<strong>对新信息的信任速度</strong>：α 大学得快但对单个噪声样本反应剧烈（方差大），α 小学得稳但慢。这也解释了第5章的取舍：非平稳环境用常数 α 保持跟踪，但要承受真值附近的持续波动。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>Q(s,a) = 2.0，执行 a 得 R = −1，进入 s′。s′ 处 Q 值：a₁ = 3.0（行为策略实际选中）、a₂ = 5.0（最大值）。γ = 0.9，α = 0.1。分别写出 Sarsa 与 Q-learning 的完整更新过程。</div>
+      <details>
+        <summary>提示</summary>
+        <p>Sarsa 用实际选中的 a₁；Q-learning 无视实际选择，用 max。各自先算目标，再走"旧 + α×（目标 − 旧）"。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p><strong>Sarsa（用 a₁ = 3.0）</strong>：</p>
+          <p>① 目标 = R + γQ(s′,a₁) = −1 + 0.9 × 3.0 = −1 + 2.7 = 1.7</p>
+          <p>② δ = 1.7 − 2.0 = −0.3（这一步比预期差）</p>
+          <p>③ 新 Q = 2.0 + 0.1 × (−0.3) = 2.0 − 0.03 = <strong>1.97</strong></p>
+          <p><strong>Q-learning（用 max = 5.0）</strong>：</p>
+          <p>① 目标 = R + γ max_a Q(s′,a) = −1 + 0.9 × 5.0 = −1 + 4.5 = 3.5</p>
+          <p>② δ = 3.5 − 2.0 = 1.5</p>
+          <p>③ 新 Q = 2.0 + 0.1 × 1.5 = 2.0 + 0.15 = <strong>2.15</strong></p>
+          <p><strong>对比</strong>：同一条转移，Sarsa 把 Q 往下调（它忠实记录了"实际选了个次优动作"），Q-learning 把 Q 往上调（它只关心最优动作的前景）。这正是 6.4 节"现实 vs 理想"差异的又一次现身。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l3">L3 建模应用</span>某仓库用送货机器人沿货架边缘的窄道送货：窄道旁就是 2 米高的装卸平台边缘，掉下去机器人报废（类比 Cliff Walking）。机器人装有仿真器，也可以在真实仓库里边干边学。团队讨论：用 Sarsa 还是 Q-learning？请分"真实在线学习"与"仿真离线训练后部署"两种模式给出选择与理由，并画出决策流程图（mermaid）。</div>
+      <details>
+        <summary>提示</summary>
+        <p>关键问题：学习期间的探索代价由谁承担？真实机器人掉下去谁赔？仿真里掉下去又如何？</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p><strong>① 真实在线学习（边送货边学）→ 选 Sarsa 或期望 Sarsa。</strong>探索代价由真实资产承担：Q-learning 会向往贴边的最短路径，学习期间 ε-贪心每次手滑都可能让机器人掉下平台；Sarsa 把"我可能手滑"计入价值，自动学到远离边缘的安全路径，在线累积回报（含事故成本）更好。期望 Sarsa 还能进一步降低选动作的方差。安全攸关 + 在线，on-policy 是正解。</p>
+          <p><strong>② 仿真离线训练后部署 → 选 Q-learning（可配双 Q）。</strong>仿真里掉下去零成本，探索随便浪；目标是学到<strong>真正最短的最优策略</strong>再部署到真实仓库，Q-learning 直奔贪心目标策略，正是所需。噪声大时配双 Q 学习抑制最大化偏差。部署后若要继续在线微调，切回 Sarsa 类方法。</p>
+          <p><strong>一句话判据</strong>：探索代价谁承担——真实世界承担就选 on-policy，仿真器承担就选 off-policy。</p>
+          <div class="figure">
+            <div class="mermaid">
+flowchart LR
+  A["明确训练发生在哪"] --> B["真实仓库在线学习"]
+  A --> C["仿真器离线训练"]
+  B --> D["探索代价由真实资产承担"]
+  D --> E["选 Sarsa 或期望 Sarsa 学安全路径"]
+  C --> F["探索零成本 目标是部署最优策略"]
+  F --> G["选 Q-learning 必要时加双Q"]
+  G --> H["部署后如需在线微调切回 Sarsa"]
+            </div>
+            <div class="caption">参考答案附图：按"探索代价谁承担"做算法选型。</div>
+          </div>
+        </div>
+      </details>
+    </div>
+
+    <!-- ============ 自测 ============ -->
+    <h2><span class="sec-no">✍️</span>本章自测</h2>
+    <p class="quiz-hint">点击选项判分，答错会给出原因。</p>
+
+    <div class="quiz-block" data-answer="c">
+      <div class="q-no">自测 1</div>
+      <div class="q-stem">TD(0) 的更新目标是什么？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 完整回合回报 G<sub>t</sub></li>
+        <li data-opt="b">B. 对模型求期望的 Σp(s′,r|s,a)[r + γV(s′)]</li>
+        <li data-opt="c">C. 采样一步的自举目标 R + γV(S′)</li>
+        <li data-opt="d">D. 当前估计 V(S) 本身</li>
+      </ul>
+      <div class="quiz-explain">解析：C 正确——TD(0) 每走一步用 R + γV(S′) 做目标。A 错：那是 MC 的目标，要等回合结束。B 错：那是 DP 的目标，需要模型。D 错：若目标是自身，δ 恒为零，什么也学不到。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 2</div>
+      <div class="q-stem">V(S) = 0.5，一步转移得 R = −1，S′ 处 V(S′) = 4.0，γ = 0.9。TD 误差 δ = ？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 1.6</li>
+        <li data-opt="b">B. 2.1</li>
+        <li data-opt="c">C. 2.6</li>
+        <li data-opt="d">D. 0.21</li>
+      </ul>
+      <div class="quiz-explain">解析：B 正确。δ = R + γV(S′) − V(S) = −1 + 0.9×4.0 − 0.5 = 2.6 − 0.5 = 2.1。A 错：−1+0.9×4.0−0.5 误算成 0.9×(4.0−0.5)−…之类的乱序；C 错：2.6 是 TD 目标，忘了减去旧估计 V(S)；D 错：0.21 = α·δ，是更新量而不是 δ 本身（α=0.1 时）。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="a">
+      <div class="q-no">自测 3</div>
+      <div class="q-stem">关于 Sarsa 的 on-policy 属性，正确的是：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 它的目标用行为策略实际选中的 A′，学的就是含 ε-探索的那个策略本身</li>
+        <li data-opt="b">B. 它用了 max，所以学的是纯贪心策略</li>
+        <li data-opt="c">C. 它需要重要性采样来纠偏</li>
+        <li data-opt="d">D. 它的目标策略与行为策略分离</li>
+      </ul>
+      <div class="quiz-explain">解析：A 正确。B 错：用 max 的是 Q-learning，不是 Sarsa。C 错：Sarsa 目标策略就是行为策略，分布一致，无需重要性采样（那是第5章离策略 MC 的工具）。D 错：目标与行为策略分离描述的是 Q-learning，恰与 Sarsa 相反。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="d">
+      <div class="q-no">自测 4</div>
+      <div class="q-stem">Q(s,a) = 1.0，R = −1，进入 s′；Q(s′,右) = 4.0（实际选中），max_a Q(s′,·) = 4.5，γ = 0.9，α = 0.1。Sarsa 与 Q-learning 更新后的 Q 分别是：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 1.16 与 1.16</li>
+        <li data-opt="b">B. 1.205 与 1.16</li>
+        <li data-opt="c">C. 2.6 与 3.05</li>
+        <li data-opt="d">D. 1.16 与 1.205</li>
+      </ul>
+      <div class="quiz-explain">解析：D 正确。Sarsa 目标 −1+0.9×4.0 = 2.6，更新 1.0+0.1×1.6 = 1.16；Q-learning 目标 −1+0.9×4.5 = 3.05，更新 1.0+0.1×2.05 = 1.205。A 错：让 Q-learning 也用了实际选中的 4.0。B 错：两者写反。C 错：2.6 与 3.05 是两个目标值，还没走"旧 + α×(目标 − 旧)"那一步。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 5</div>
+      <div class="q-stem">某 s′ 处三个动作真值都是 −0.1，估计值为 +0.3、−0.4、+0.1。关于最大化偏差与双 Q 学习，正确的是：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. max(0.3, −0.4, 0.1) = 0.3 是无偏的，因为三个估计的均值噪声为零</li>
+        <li data-opt="b">B. max 会系统性高估，双 Q 用 Q₁ 选动作、Q₂ 评估（如 −0.05），用 −0.05 做目标消除正偏差</li>
+        <li data-opt="c">C. 最大化偏差只出现在 Sarsa 中</li>
+        <li data-opt="d">D. 双 Q 学习需要环境模型才能工作</li>
+      </ul>
+      <div class="quiz-explain">解析：B 正确——E[max] &gt; max(E)，挑选与评估用两套独立估计后偏差消除。A 错：估计无偏推不出 max 无偏，max 专挑噪声最走运者。C 错：Sarsa 目标无 max，不受此偏差影响；案发地是 Q-learning 及一切贪心化更新。D 错：双 Q 仍是纯采样的无模型方法，只是维护两张 Q 表。</div>
+    </div>
+
+    <!-- ============ 复述 ============ -->
+    <div class="retell">
+      <h3>🗣️ 用自己的话，三句话讲完本章</h3>
+      <p>对着空气（或室友）说出这三句。说卡壳的那句，回去重读对应小节。</p>
+      <details>
+        <summary>句1：这章解决什么问题？——</summary>
+        <div class="retell-answer">参考答案：蒙特卡洛必须等回合结束才能更新，持续性任务无法使用、长回合任务信号延迟且方差大。本章解决"能否每走一步就用自举目标立刻更新价值"。</div>
+      </details>
+      <details>
+        <summary>句2：核心机制是什么？——</summary>
+        <div class="retell-answer">参考答案：一步自举——用 R + γV(S′) 替代完整回报 G 做更新目标，由 TD 误差 δ 驱动；控制上按"目标里下一步怎么算"分化为三个算法：Sarsa 用实际采样的 A′（在策略）、Q-learning 用 max（离策略）、期望 Sarsa 用策略期望（消方差），max 带来的最大化偏差由双 Q 学习消除。</div>
+      </details>
+      <details>
+        <summary>句3：它和前后章怎么分工？——</summary>
+        <div class="retell-answer">参考答案：第5章 MC 提供"采样、不自举"的一端，本章 TD 占据"采样 + 一步自举"，第7章 n 步自举把目标长度参数化，在两者之间连续取值，统一成完整的偏差–方差谱系；本章的 Q-learning 与最大化偏差问题还将在第11章（DQN/Double DQN）以函数逼近的形式回归。</div>
+      </details>
+    </div>
+
+    <!-- ============ 复习计划 ============ -->
+    <div class="review-plan">
+      <h3>🔁 间隔复习计划</h3>
+      <p>回忆本身比重读有效 10 倍。到点只做一件事：翻卡 + 重做标记题。</p>
+      <table>
+        <tr><th>时间点</th><th>复习内容</th><th>预计用时</th></tr>
+        <tr><td>第 1 天</td><td>全部 6 张概念卡 + 12 张回忆卡；重做 L2 两道手算题</td><td>15 分钟</td></tr>
+        <tr><td>第 3 天</td><td>概念卡 1、3、4（TD(0)/Sarsa/Q-learning）+ 自测错题 + 重算 6.4 节的 1.16 与 1.205</td><td>10 分钟</td></tr>
+        <tr><td>第 7 天</td><td>三句话复述 + 默写三个更新式（TD(0)/Sarsa/Q-learning）并说出目标差异 + 重算期望 Sarsa 的 1.195 + 合上书挑战</td><td>15 分钟</td></tr>
+        <tr><td>第 15 天</td><td>只重做合上书挑战；能全过就毕业，卡哪条回去重读对应小节</td><td>15 分钟</td></tr>
+      </table>
+    </div>
+
+    <!-- 合上书挑战 -->
+    <div class="final-challenge">
+      <h3>📕 合上书挑战</h3>
+      <p class="fc-sub">现在关掉这个页面，拿一张纸，凭记忆完成以下任务。全部做完再回来核对——这是本章真正的毕业考试。</p>
+      <ol id="ch06-challenge-list">
+        <li><span class="fc-check"></span>写出 TD(0) 更新式与 δ 的定义，用 V=0.5、R=−1、V(S′)=4.0、γ=0.9、α=0.1 算出新 V = 0.71（δ = 2.1）</li>
+        <li><span class="fc-check"></span>在"是否采样、是否自举"坐标系里摆出 DP、MC、TD 的位置，并各写一句更新目标</li>
+        <li><span class="fc-check"></span>写出 Sarsa 与 Q-learning 的更新式，用 Q=1.0、R=−1、Q(s′,右)=4.0、max=4.5、γ=0.9、α=0.1 算出 1.16 与 1.205 并解释差异</li>
+        <li><span class="fc-check"></span>解释 Sarsa 在 Cliff Walking 学到安全路径、Q-learning 学到悬崖边最短路径但在线表现更差的原因</li>
+        <li><span class="fc-check"></span>用 π(下)=0.925、其余各 0.025 与 Q 值 (4.5, 4.0, 3.0, 2.0) 算出期望 Sarsa 目标 2.94875 与新 Q ≈ 1.195</li>
+        <li><span class="fc-check"></span>一句话回答本章主线问题：能否不等回合结束，每走一步就用自举目标更新价值？</li>
+      </ol>
+    </div>
+
+    <div class="complete-zone">
+      <button class="btn-complete" id="ch06-btn-complete" onclick="markDone()">✓ 我已完成本章（含合上书挑战）</button>
+    </div>
+
+    <div class="chapter-nav">
+      <a href="chapter-05.html"><span class="nav-dir">← 上一章</span>第5章 蒙特卡洛方法</a>
+      <a href="chapter-07.html" class="next"><span class="nav-dir">下一章 →</span>第7章 n步自举</a>
+    </div>
+
+  </div>
+</div>
+
+<footer class="footer">
+  <div class="wrap">第6章 时序差分学习 · 强化学习互动讲义 · 基于 Sutton &amp; Barto《Reinforcement Learning: An Introduction》(2nd ed, 2018)</div>
+</footer>
+
+<script src="assets/mermaid.min.js"></script>
+<script>
+mermaid.initialize({
+  startOnLoad: true,
+  theme: "base",
+  themeVariables: {
+    primaryColor: "#e3edf7",
+    primaryBorderColor: "#1d5f9e",
+    primaryTextColor: "#1d5f9e",
+    lineColor: "#5c554b",
+    secondaryColor: "#fbeedd",
+    tertiaryColor: "#f5f1e8",
+    fontFamily: "-apple-system, PingFang SC, sans-serif",
+    fontSize: "14px"
+  },
+  flowchart: { curve: "linear", htmlLabels: false }
+});
+</script>
+<script>
+// 自测题判分
+document.querySelectorAll(".quiz-block").forEach(block => {
+  const answer = block.dataset.answer;
+  const explain = block.querySelector(".quiz-explain");
+  block.querySelectorAll(".quiz-opts li").forEach(li => {
+    li.addEventListener("click", () => {
+      const opts = block.querySelectorAll(".quiz-opts li");
+      opts.forEach(o => o.classList.add("disabled"));
+      if (li.dataset.opt === answer) {
+        li.classList.add("correct");
+      } else {
+        li.classList.add("wrong");
+        block.querySelector(`[data-opt="${answer}"]`).classList.add("correct");
+      }
+      explain.classList.add("show");
+    });
+  });
+});
+
+// 合上书清单打勾
+document.querySelectorAll("#ch06-challenge-list li").forEach(li => {
+  li.addEventListener("click", () => li.classList.toggle("checked"));
+});
+
+// 完成标记 → localStorage（键 rl_progress_v1，章号字符串 "6"）
+const CH06_KEY = "rl_progress_v1";
+function loadProgress() {
+  try { return JSON.parse(localStorage.getItem(CH06_KEY)) || {}; } catch (e) { return {}; }
+}
+const progress = loadProgress();
+const btn = document.getElementById("ch06-btn-complete");
+if (progress["6"] && progress["6"].done) {
+  btn.textContent = "✓ 已完成 · 再次点击重置";
+  btn.classList.add("done");
+}
+function markDone() {
+  const p = loadProgress();
+  if (p["6"] && p["6"].done) {
+    delete p["6"];
+    btn.textContent = "✓ 我已完成本章（含合上书挑战）";
+    btn.classList.remove("done");
+  } else {
+    p["6"] = { done: true, completedAt: Date.now(), reviewsDone: 0 };
+    btn.textContent = "✓ 已完成 · 复习提醒已开启";
+    btn.classList.add("done");
+  }
+  localStorage.setItem(CH06_KEY, JSON.stringify(p));
+}
+</script>
+
+</body>
+</html>

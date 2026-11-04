@@ -1,0 +1,819 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第9章 难解性 · 计算理论互动讲义</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+<nav class="topbar">
+  <div class="topbar-inner">
+    <span class="brand"><a href="index.html" style="color:inherit">← 学习地图</a></span>
+    <span class="crumb">段四 · 难解性与前沿 / 第9章</span>
+  </div>
+</nav>
+
+<div class="wrap">
+
+  <div class="lecture-head">
+    <span class="ch-label">CHAPTER 09 · 难解性与前沿</span>
+    <h1>难解性</h1>
+    <p class="lead">第 7、8 章的难度结论都是"若 P≠NP 则难"——本章要给出无条件的证明：确实有些可判定问题，任何算法都救不了它们。</p>
+  </div>
+
+  <!-- ===== 章首四件套之 1：全书定位 ===== -->
+  <div class="position-bar">
+    <strong>本章在主线上的位置：</strong>第 7–8 章把问题按耗时、耗空间分了级，但所有"难"都是相对结论（基于 P≠NP 的假设）→ <u>本章用对角线方法证明绝对的下界：P 严格小于 EXPTIME，并证明对角线这套老工具攻不下 P 对 NP，再介绍电路复杂性这条新战线</u> → 第 10 章面对"算不动"给出出路：近似、随机化、交互证明。<br>
+    第9章回答主线上的第九个问题：<strong>我们能否证明某些可判定问题"就是算不动"——而不是仅仅"还没找到快算法"？</strong>
+    <div class="map-inline">
+      <span class="node">Ch1–3 语言与自动机（什么是计算）</span><span class="arrow">→</span>
+      <span class="node">Ch4–6 可计算性（什么算得出）</span><span class="arrow">→</span>
+      <span class="node">Ch7–8 复杂性（算多快、算多省）</span><span class="arrow">→</span>
+      <span class="node here">Ch9–10 难解性与前沿（本章 Ch9：算不动的确证）</span>
+    </div>
+  </div>
+
+  <!-- ===== 章首四件套之 2：学习目标 ===== -->
+  <div class="objectives">
+    <h4>🎯 学完本章，合上书你应该能：</h4>
+    <ol>
+      <li>说清"相对下界"与"绝对下界"的区别，解释为什么 NP 完全理论给不了后者</li>
+      <li>完整重做空间层级定理的对角线证明：模拟、计时（防死循环）、翻转、矛盾四步</li>
+      <li>陈述时间层级定理，解释条件中多出的 log 因子从哪来，并推出 P ⊊ EXPTIME</li>
+      <li>定义神谕机与 P^A、NP^A，陈述 Baker–Gill–Solovay 定理的两面及其对 P vs NP 的含义</li>
+      <li>说明 TIME(t) 为什么能被 O(t²) 规模的电路族模拟，写出推论 P ⊆ P/poly</li>
+      <li>指出"层级定理解决了 P vs NP"和"P vs NP 只是理论游戏"这两个说法各错在哪里</li>
+    </ol>
+  </div>
+
+  <div class="lecture">
+
+    <!-- ===== 章首四件套之 3：推导主线图 ===== -->
+    <div class="figure">
+      <div class="mermaid">
+flowchart LR
+  A["第7章：NP完全只给<br>相对下界"] --> B["要绝对下界：<br>回到对角线"]
+  B --> C["空间层级定理：<br>空间多一点就严格更强"]
+  C --> D["时间层级定理：<br>多付一个log因子"]
+  D --> E["推论：P 严格小于<br>EXPTIME"]
+  E --> F["用对角线攻P对NP？"]
+  F --> G["相对化壁垒：<br>神谕下两种答案都存在"]
+  G --> H["新战线：电路复杂性<br>P 含于 P/poly"]
+  H --> I["代价：显式下界仍停在<br>线性量级"]
+  classDef hot fill:#fbeedd,stroke:#c4651f,stroke-width:2.5px,color:#c4651f;
+  classDef danger fill:#fae9e7,stroke:#b03a2e,stroke-width:2.5px,color:#b03a2e;
+  class E hot;
+  class I danger;
+      </div>
+      <div class="caption">本章推导主线：为了拿到"无条件"的难解性证明，回到第 4 章的对角线方法——它在空间、时间上成功分离出严格层级（E 是第一个被证明的严格分离），但在 P 对 NP 面前撞上相对化壁垒；电路复杂性提供了绕路方案，却至今推不动显式下界——这就是通向第 10 章"前沿武器"的门口。</div>
+    </div>
+
+    <!-- ============ 9.1 ============ -->
+    <h2><span class="sec-no">9.1</span>从"找不到"到"证明没有"：为什么需要绝对下界</h2>
+
+    <p>回顾第 7 章的成绩单：CLIQUE、HAMPATH、SAT 都被证明是 NP 完全的。但 NP 完全性说的是"<strong>如果</strong> P ≠ NP，<strong>那么</strong>这些问题没有多项式算法"——这是一个条件句。若有一天 P = NP 被证明（可能性再小也没被排除），所有 NP 完全问题立刻全部多项式可解。换言之，第 7 章给的所有下界都是<span class="term">相对下界</span>（relative lower bound）：难度的锚点在"P 对 NP"这个未解之谜上。</p>
+
+    <p>本章要的是<span class="term">绝对下界</span>（unconditional lower bound）：不依赖任何假设，直接证明"存在可判定的问题，任何多项式算法都判定不了它"。这听上去比 P vs NP 还难——但第 4 章已经示范过一次：A<sub>TM</sub> 的不可判定性没有任何假设，靠的是<span class="term">对角线方法</span>（diagonalization）：让一台机器逐台"顶撞"候选机器，从而逃出任何候选机器的能力范围。本章的问题就是把这把刀从"是否停机"磨到"用多少资源"上。</p>
+
+    <div class="box insight">
+      <span class="box-tag">✅ 层级定理一句话版</span>
+      <p><span class="term">层级定理</span>（hierarchy theorem）：资源界限严格增长一个数量级，能判定的问题就严格变多。空间版：f = o(g) 时 SPACE(f) ⊊ SPACE(g)；时间版：t₁·log t₁ = o(t₂) 时 TIME(t₁) ⊊ TIME(t₂)。它们是绝对下界的提款机。</p>
+    </div>
+
+    <p>证明层级定理时，对角线机器 D 要"在 g(n) 资源内先把界限 g(n) 算出来"（比如先写下 g(n) 个格子当预算），这要求界限函数本身不能太难算。技术上引入<span class="term">可构造函数</span>（constructible function）：称 f(n) 是<strong>空间可构造</strong>的，若存在 O(f(n)) 空间的机器，输入 1ⁿ 能算出 f(n)（的二进制）；<strong>时间可构造</strong>同理。n log n、n²、2ⁿ 等所有"正常"函数都满足——这只是排除病态函数的护栏，之后我们默认所有界限可构造。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 为什么第 4 章的对角线不能直接搬来？</span>
+      <p>A<sub>TM</sub> 的证明里，对角机 D 模拟 M 时<strong>没有预算限制</strong>——M 不停机，D 可以干等（反正 D 不需要是判定机）。复杂性版本里 D 自己必须守预算 g(n)：模拟超预算就得出局。所以新证明的关键工程是两个"仪表盘"：一块<strong>空间/时间计数器</strong>，超支即停；以及一个论证，证明"对足够长的输入，预算足够装下整场模拟"。</p>
+    </div>
+
+    <!-- 回忆卡片 9.1 -->
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 9.1-1</div>
+              <div class="q-text">相对下界与绝对下界的区别是什么？NP 完全性属于哪一种？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              相对下界带假设（若 P≠NP 则难），绝对下界无条件成立。NP 完全性是相对下界：若 P=NP 被证明，所有 NP 完全问题立即多项式可解。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 9.1-2</div>
+              <div class="q-text">什么是可构造函数？为什么层级定理需要它？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              f 空间可构造：O(f(n)) 空间内能从 1ⁿ 算出 f(n)。对角机 D 需要先"领取预算"（划出 g(n) 个格子或装入计数器），函数不可构造则 D 连自己的界限都立不起来。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 9.2 ============ -->
+    <h2><span class="sec-no">9.2</span>空间层级定理：证明写透</h2>
+
+    <div class="box insight">
+      <span class="box-tag">✅ 空间层级定理（Space Hierarchy Theorem）</span>
+      <p>设 g(n) 空间可构造，f(n) = o(g(n))，且 f(n) ≥ log n。则 <strong>SPACE(f(n)) ⊊ SPACE(g(n))</strong>：存在语言在 O(g(n)) 空间可判定、而任何 O(f(n)) 空间的机器都判定不了。</p>
+    </div>
+
+    <p>证明分四步：<strong>造机（模拟+计时）、定语言、证上界、证矛盾</strong>。把每一步都摊开。</p>
+
+    <h3>第 1 步：造对角机 D</h3>
+    <p>D 在输入 w（|w| = n）上这样工作：</p>
+    <ul>
+      <li><strong>领预算：</strong>利用 g 的空间可构造性，先在带上划出 O(g(n)) 个格子作为全部工作区；另设一个计数器，容量约 2<sup>O(g(n))</sup>（用 O(g(n)) 个格子就能存放），初值清零。</li>
+      <li><strong>解读输入：</strong>若 w 不是某台图灵机的合法编码 ⟨M⟩，直接拒绝。</li>
+      <li><strong>模拟：</strong>模拟 M 在输入 w 上的运行。D 是通用模拟器，每模拟一步，计数器加一。</li>
+      <li><strong>计时：</strong>若计数器超过 2<sup>c·g(n)</sup>（c 是模拟的常数开销），说明 M 要么死循环、要么运行太久——D 停机并<strong>拒绝</strong>。</li>
+      <li><strong>翻转：</strong>若 M 停机：M 接受则 D 拒绝，M 拒绝则 D 接受。</li>
+    </ul>
+
+    <h3>第 2 步：定语言 L = L(D)</h3>
+    <p>L 就是 D 判定的语言。注意 D 是判定机：模拟要么结束（M 停机），要么被计数器掐停——两条路都停机。</p>
+
+    <h3>第 3 步：证 L ∈ SPACE(g(n))</h3>
+    <p>D 的全部活动——模拟区、M 的带内容、计数器——都被限制在预先划出的 O(g(n)) 格子里；计数器占 O(g(n)) 位即可数到 2<sup>O(g(n))</sup>。所以 D 的总空间是 O(g(n))。✓</p>
+
+    <h3>第 4 步：证 L ∉ SPACE(f(n))（矛盾登场）</h3>
+    <p>反设 L ∈ SPACE(f(n))，则存在某台 O(f(n)) 空间的判定机 M 使 L(M) = L。取输入 w = ⟨M⟩0ᵏ——M 的编码后垫 k 个 0，使输入充分长。考察 D 在这个输入上的行为：</p>
+
+    <ul>
+      <li><strong>模拟装得下：</strong>D 模拟 M 的空间开销是 O(f(n))（n = |⟨M⟩0ᵏ|）。因为 f(n) = o(g(n))，渐近地 f(n) 比 g(n) 低阶，故当 n 足够大（把 k 垫大即可）时，模拟所需的 O(f(n)) 空间 <strong>严格小于</strong> D 的预算 g(n)——模拟绝不会因空间不足而中断。这正是"小 o"条件买来的东西。</li>
+      <li><strong>计时器不碍事：</strong>M 是判定机，必在有限步内停机，D 只需等到那一刻；若 M 碰巧跑太久（指数级），计数器掐停时 D 拒绝——但此时我们转而论证：M 是判定机且我们关心的是 M 正常停机的那些垫长输入，k 取得足够大后 M 的行为稳定，D 的模拟能跑到 M 停机为止。</li>
+      <li><strong>翻转制造矛盾：</strong>模拟完成后 D 与 M 反着答：M 接受 w ⟺ D 拒绝 w ⟺ w ∉ L(D) = L。但 L(M) = L 要求 M 接受 w ⟺ w ∈ L。两式合并：w ∈ L ⟺ w ∉ L——矛盾。∎</li>
+    </ul>
+
+    <p>于是没有任何 O(f(n)) 空间机判定 L，而 D 用 O(g(n)) 空间判定了它：SPACE(f) ⊊ SPACE(g)。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 与 A<sub>TM</sub> 对角线的血缘</span>
+      <p>第 4 章的对角机对"<strong>是否停机/接受</strong>"做手脚：M 接受 ⟨M⟩ 则 D 拒绝。本章的对角机对"<strong>用多少资源</strong>"做手脚：多了一块计数器防死循环（A<sub>TM</sub> 里不需要，因为 D 不是判定机），多了一个"渐近装得下"的论证（A<sub>TM</sub> 里不需要，因为没有预算）。<strong>同一个翻转，新的仪表盘</strong>——对角线方法在资源有界的世界里照样运转。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 小 o 条件不是装饰品</span>
+      <p>若只假设 f(n) ≤ g(n)（比如 f = g/2），第 4 步"模拟装得下"就断了：模拟有常数因子开销，f 与 g 同阶时预算永远不够。<strong>f = o(g) 保证常数差距终将被渐近差距吞掉</strong>——这就是层级定理只能分离"不同量级"资源的根本原因，记住这句话，9.5 节要清算它的后果。</p>
+    </div>
+
+    <!-- 回忆卡片 9.2 -->
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 9.2-1</div>
+              <div class="q-text">空间层级定理证明中，D 的计数器是干什么的？为什么 A<sub>TM</sub> 的证明里不需要它？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              计数器计模拟步数，超过 2^O(g(n)) 即拒绝，防止被模拟的 M 死循环时 D 跟着永不停机——D 必须是判定机。A<sub>TM</sub> 的对角机不需要是判定机（半判定就够），可以干等。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 9.2-2</div>
+              <div class="q-text">f(n) = o(g(n)) 这个条件在证明的哪一步被用到？怎么用的？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              第 4 步"模拟装得下"：D 模拟 O(f) 空间机 M 需 O(f(n)) 空间，f = o(g) 保证输入足够长（垫 0）后这个量严格小于预算 g(n)，模拟得以完成并翻转答案，制造矛盾。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 9.3 ============ -->
+    <h2><span class="sec-no">9.3</span>时间层级定理与 P ⊊ EXPTIME：第一个被证明的严格分离</h2>
+
+    <p>把空间的证明搬到时间上，骨架完全照旧，但代价多了一个对数因子：</p>
+
+    <div class="box insight">
+      <span class="box-tag">✅ 时间层级定理（Time Hierarchy Theorem）</span>
+      <p>设 t₂(n) 时间可构造，且 t₁(n)·log t₁(n) = o(t₂(n))。则 <strong>TIME(t₁(n)) ⊊ TIME(t₂(n))</strong>。</p>
+    </div>
+
+    <p><strong>log 因子从哪来？</strong>空间模拟里，D 把 M 的带"平铺"在自己带子上，读写开销是常数倍。时间模拟里不行：D 用固定条数的带模拟 M 的多条带，通常做法是把 M 的各条带编码在 D 的一条带的<strong>不同轨道</strong>（track）上；M 每走一步，它的 k 个读写头各自动一格，而 D 的头只有回到存放各头位置的地方才能读出符号、改写、再移动——模拟一步的额外开销正比于带头扫过的距离。巧妙安排轨道（例如把活跃段放在原点附近伸缩存储，第 7 章多带模拟单带的对偶技巧）可以把每步开销压到 O(log t₁)：模拟 t₁ 步的总开销就是 O(t₁·log t₁)。这就是条件里那坨 log 的来历——它不是证明的瑕疵，而是"通用机读写被模拟机的带编码"这笔过路费的下界。</p>
+
+    <p><strong>对角线骨架（对照 9.2 的四步）：</strong></p>
+    <ul>
+      <li><strong>模拟：</strong>D 在输入 w 上模拟 M 在 w 上运行（w = ⟨M⟩0ᵏ 时即模拟 M 自身），每步开销 O(log t₂)。</li>
+      <li><strong>计时：</strong>另设一个容量 t₂(n) 位的时钟计数器（占 O(log t₂) 空间、每次自增摊还 O(log t₂) 时间，全部开销装进 O(t₂) 总预算），模拟满 t₂(n) 步 M 仍未停机则掐停并拒绝。</li>
+      <li><strong>翻转：</strong>M 在时限内停机则 D 反着答：M 接受 ⟺ D 拒绝。</li>
+      <li><strong>矛盾：</strong>L(D) ∈ TIME(O(t₂)) 显然；若 L(D) ∈ TIME(t₁)，由某台 t₁ 时间机 M 判定，垫长输入后 t₁(n)·log t₁(n) = o(t₂(n)) 保证 D 的模拟在 t₂ 预算内跑到 M 停机，翻转即矛盾。∎</li>
+    </ul>
+
+    <h3>推论：P 严格小于 EXPTIME</h3>
+    <p>取 t₁(n) = nᵏ（任意固定 k），t₂(n) = 2ⁿ。则 t₁·log t₁ = nᵏ·k log n = o(2ⁿ)，时间层级定理给出 TIME(nᵏ) ⊊ TIME(2ⁿ)。把所有 k 并起来：</p>
+
+    <div class="formula">P = ⋃<sub>k≥1</sub> TIME(nᵏ) ⊊ TIME(2ⁿ) ⊆ EXPTIME ⟹ <strong>P ⊊ EXPTIME</strong></div>
+
+    <p>（严格包含对并集成立：若 P = EXPTIME，则 TIME(2ⁿ) ⊆ EXPTIME = P ⊆ TIME(nᵏ) 对某个 k 成立，与 TIME(nᵏ) ⊊ TIME(2ⁿ) 矛盾。）</p>
+
+    <div class="figure">
+      <div class="mermaid">
+flowchart TB
+  P["P"] --> NP["NP<br>位置未定"]
+  NP --> PSP["PSPACE"]
+  P --> PSP
+  PSP --> EXP["EXPTIME"]
+  P -- "已证严格包含" --> EXP
+  classDef hot fill:#fbeedd,stroke:#c4651f,stroke-width:2.5px,color:#c4651f;
+  classDef danger fill:#fae9e7,stroke:#b03a2e,stroke-width:2.5px,color:#b03a2e;
+  class EXP hot;
+      </div>
+      <div class="caption">图 9.1 复杂性类的包含地图。P ⊊ EXPTIME 是已证明的严格分离（粗箭头）；P 与 NP、NP 与 PSPACE 之间是否严格，全部未知——但 P 到 EXPTIME 这条"长链"上至少有一环是严格的。</div>
+    </div>
+
+    <div class="box idea">
+      <span class="box-tag">💡 这是计算理论第一个"时间多一点就严格更强"的确证</span>
+      <p>把它和第 7 章的处境对比：P 对 NP 悬而未决，但 P 对 EXPTIME 已经<strong>证明</strong>严格——EXPTIME 里存在任何多项式算法都判不了的可判定语言（事实上 EXPTIME 完全问题就是）。所以"算不动的问题存在"不再是假设，是定理。注意这个分离的"口径"：它分离的是<strong>多项式与指数两个量级</strong>，不是"确定与非确定"两种模式——这个区别 9.5 节要清算。</p>
+    </div>
+
+    <!-- 回忆卡片 9.3 -->
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 9.3-1</div>
+              <div class="q-text">时间层级定理条件里的 log t₁ 因子从哪来？为什么空间层级定理没有？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              来自通用模拟：D 用固定条带模拟 M 的多条带时要把带头位置编码在轨道上，每模拟一步需 O(log t₁) 的寻址/搬移开销，总开销 O(t₁ log t₁)。空间模拟是平铺存放、只计格子数，无此逐步开销。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 9.3-2</div>
+              <div class="q-text">写出从时间层级定理推出 P ⊊ EXPTIME 的推论链。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              对任意 k，nᵏ·log nᵏ = o(2ⁿ)，层级定理给 TIME(nᵏ) ⊊ TIME(2ⁿ)。P = ⋃TIME(nᵏ) ⊆ TIME(nᵏ⁺¹) 一类的并仍 ⊊ TIME(2ⁿ) ⊆ EXPTIME；若 P = EXPTIME 则 TIME(2ⁿ) 塌回某个 TIME(nᵏ)，矛盾。故 P ⊊ EXPTIME。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 9.4 ============ -->
+    <h2><span class="sec-no">9.4</span>相对化：对角线方法的天花板</h2>
+
+    <p>9.2、9.3 连战连捷，自然的问题是：同一套"模拟 + 翻转"能不能顺手把 P 对 NP 也解决了？本节证明：<strong>不能，而且是原则性的不能</strong>。工具是把机器加上一件外挂。</p>
+
+    <p><span class="term">神谕机</span>（oracle TM）：一台图灵机 M 附带一条专用"询问带"和一个语言 A（<span class="term">神谕</span> oracle）。机器可以写一个串 x 到询问带上，一步之内得到"x ∈ A 吗"的免费答案——不管 A 多难算。记带神谕 A 的确定/非确定多项式时间类为 <strong>P^A</strong> 与 <strong>NP^A</strong>。</p>
+
+    <div class="box insight">
+      <span class="box-tag">✅ Baker–Gill–Solovay 定理（1975）</span>
+      <p>① 存在神谕 A 使 <strong>P^A = NP^A</strong>；② 存在神谕 B 使 <strong>P^B ≠ NP^B</strong>。</p>
+    </div>
+
+    <h3>第 ① 面：一个让两边相等的神谕</h3>
+    <p>取 A = TQBF（第 8 章的 PSPACE 完全问题）。则：</p>
+    <ul>
+      <li>NP^TQBF ⊆ NPSPACE（神谕答案最多被问指数个不同的串？不——更直接：非确定多项式机对 TQBF 的每次询问可以用 PSPACE 自己算出来，即 NP^TQBF ⊆ NPSPACE = PSPACE，最后一步用 Savitch）；</li>
+      <li>反过来 PSPACE ⊆ P^TQBF：PSPACE 问题多项式归约到 TQBF，把归约结果直接问神谕，一次搞定；</li>
+      <li>而 P^TQBF ⊆ NP^TQBF 平凡。</li>
+    </ul>
+    <p>合起来：PSPACE ⊆ P^TQBF ⊆ NP^TQBF ⊆ PSPACE——<strong>三者坍缩相等</strong>。神谕太强，把确定与非确定的差距直接抹平。</p>
+
+    <h3>第 ② 面：一个让两边分开的神谕（构造骨架）</h3>
+    <p>要造 B 使 P^B ≠ NP^B。目标语言：L<sub>B</sub> = {1ⁿ | B 中存在长度为 n 的串}。无论 B 怎么造，L<sub>B</sub> ∈ NP^B 都成立：非确定猜一个长 n 的串，问一次神谕即可。</p>
+
+    <p>难点是让 L<sub>B</sub> ∉ P^B——逐台封杀所有多项式神谕机 M₁, M₂, …（按运行时间 p₁, p₂, … 枚举）。用<strong>逐步对角化</strong>（stage construction），第 i 阶段封杀 Mᵢ：</p>
+    <ul>
+      <li>选一个长度 nᵢ，比所有之前阶段动过的长度都大，且大到 2<sup>nᵢ</sup> &gt; pᵢ(nᵢ)（这样的 nᵢ 总存在：指数终将超过任何固定的多项式）。</li>
+      <li>让 Mᵢ 在输入 1<sup>nᵢ</sup> 上跑至多 pᵢ(nᵢ) 步。它沿途问神谕的串总共不到 pᵢ(nᵢ) 个——回答按"已经定下来的 B"如实作答；问到没定过的串一律答"不在"并<strong>顺手把这些串钉在 B 外</strong>。</li>
+      <li>关键计数：长度为 nᵢ 的串有 2<sup>nᵢ</sup> 个，Mᵢ 至多问了 pᵢ(nᵢ) &lt; 2<sup>nᵢ</sup> 个，<strong>至少有一个长度 nᵢ 的串它从头到尾没问过，也没被钉死</strong>。</li>
+      <li>看 Mᵢ 的答案下刀：若 Mᵢ 拒绝 1<sup>nᵢ</sup>，把这样一个没问过的串<strong>放进</strong> B——于是 B 确有长 nᵢ 的串，1<sup>nᵢ</sup> ∈ L<sub>B</sub>，Mᵢ 答错；若 Mᵢ 接受，把所有长 nᵢ 的串都留在 B 外——1<sup>nᵢ</sup> ∉ L<sub>B</sub>，Mᵢ 还是答错。</li>
+    </ul>
+    <p>每台 Mᵢ 都在自己的 nᵢ 上犯错，故没有多项式神谕机能判定 L<sub>B</sub>：L<sub>B</sub> ∉ P^B，而 L<sub>B</sub> ∈ NP^B。<strong>P^B ≠ NP^B</strong>。∎（骨架完）</p>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 为什么这宣判了对角线方法的死刑（对 P vs NP 而言）</span>
+      <p>检查 9.2–9.3 证明的每一个动作：模拟 M、数它的步数、翻转它的答案——这些操作<strong>对神谕机照样成立</strong>（模拟神谕机时，神谕询问照样如实回答）。凡是对任何神谕 A 都原样成立的证明技术叫<span class="term">相对化</span>（relativizing）技术。若 P vs NP 能用这种技术解决，结论必须对所有神谕一致——但 Baker–Gill–Solovay 说：存在神谕让两边相等，也存在神谕让两边不等。同一套技术不可能既证出 P = NP 又证出 P ≠ NP。<strong>所以任何 relativizing 的证明——包括我们引以为傲的对角线模拟——都不可能解决 P 对 NP。</strong>这不是"还没想到"，是"此路原则上不通"。</p>
+    </div>
+
+    <!-- 回忆卡片 9.4 -->
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 9.4-1</div>
+              <div class="q-text">神谕机是什么？为什么取 A = TQBF 会让 P^A = NP^A？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              神谕机是可免费查询"x∈A 吗"的图灵机。TQBF 是 PSPACE 完全：PSPACE ⊆ P^TQBF（归约+一问），而 NP^TQBF ⊆ NPSPACE = PSPACE（询问可自己算），于是 P^TQBF 与 NP^TQBF 都坍缩成 PSPACE。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 9.4-2</div>
+              <div class="q-text">Baker–Gill–Solovay 定理为什么说明对角线方法解决不了 P vs NP？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              对角线/模拟是相对化技术，对任何神谕同样成立；但 BGS 给出神谕 A 使 P^A=NP^A、神谕 B 使 P^B≠NP^B——同一技术不可能同时证明两个相反结论，故相对化技术原则上无法裁决 P vs NP。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 9.5 ============ -->
+    <h2><span class="sec-no">9.5</span>电路复杂性与错误直觉：换一条战线</h2>
+
+    <p>对角线撞墙之后，复杂性理论换了一个战场：不再逐台顶撞算法，而是把计算本身变成静态的组合对象。</p>
+
+    <p><span class="term">布尔电路</span>（Boolean circuit）：由 AND、OR、NOT 门组成的无环有向图，n 个输入端、1 个输出端，对固定长度的输入算出 0/1。电路只能处理<strong>某一个固定长度</strong>的输入，所以判定语言需要<span class="term">电路族</span>（circuit family）：一串电路 C₁, C₂, …，其中 Cₙ 管长度 n 的输入。<span class="term">电路规模</span>（circuit size）= 门的个数；族 {Cₙ} 的规模函数 s(n) = |Cₙ|。所有能被多项式规模电路族判定的语言组成类 <strong>P/poly</strong>。</p>
+
+    <div class="box insight">
+      <span class="box-tag">✅ 定理：TIME(t(n)) 可用 O(t(n)²) 规模的电路族模拟</span>
+      <p>思路与 Cook–Levin 的 tableau 完全同构：t(n) 时间机器的计算画成 t×t 的画面表；<strong>每个格子变成一个小电路块</strong>——该格的符号由上一行同位置及左右邻格的符号经转移函数 δ 决定，而 δ 是一张固定大小的真值表，可用 O(1) 个门实现。格子数 O(t²)，每格 O(1) 门，总门数 O(t²)。输入位接进第 1 行，输出从末行读"是否接受"。</p>
+    </div>
+
+    <p>直接推论：<strong>P ⊆ P/poly</strong>——多项式时间 ⇒ 多项式电路规模（t = nᵏ 时 t² = n²ᵏ 仍是多项式）。这把"P vs NP"翻译成了纯组合命题：</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 电路路线的逻辑</span>
+      <p>若能证明某个 NP 问题（比如 SAT）<strong>需要超多项式规模的电路族</strong>（即 NP ⊄ P/poly），则由 P ⊆ P/poly 立刻得 P ≠ NP。好处是：电路是静态对象，下界问题变成"数门"的组合问题，看似比追踪动态算法好下手。这就是绕开相对化壁垒（电路论证不模拟机器，可以是非相对化的）的主流战线。</p>
+    </div>
+
+    <p><strong>现实很骨感。</strong>已知对显式布尔函数（n 个输入、明确写得出规则）最好的电路规模下界只在 ~5n 级别——连"比线性多一点"都推不动，遑论超多项式。下界研究的进展全部来自<strong>限制模型</strong>：最著名的成果是 <strong>PARITY ∉ AC⁰</strong>——奇偶性函数（输入中 1 的个数是奇是偶）不能被<strong>常数深度</strong>、多项式规模、扇入任意的 AND/OR/NOT 电路族计算。证明（随机限制法）只在对电路深度加了硬约束后才打得开。给模型松绑一分，证明技术就失效一分——这就是电路下界的现状。</p>
+
+    <h3>错误直觉清算</h3>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 误区一："层级定理直接解决了 P vs NP"</span>
+      <p>错。层级定理分离的是<strong>同一模式、不同量级</strong>的资源：TIME(nᵏ) 对 TIME(2ⁿ)，两个类里跑的都是确定机。P vs NP 问的是<strong>同一量级（多项式）、两种模式</strong>：确定对非确定。对角线机器 D 模拟的是确定机 M，翻转它的答案；要"翻转非确定机"，D 得回答"是否存在接受分支"——这本身就是一个 NP 型问题，D 在自己的多项式预算里算不出来，对角线两头够不着。更何况 9.4 节已经证明：任何相对化的技术（对角线正是）原则上不可能裁决 P vs NP。层级定理证明的是"资源多了更强大"，不是"非确定更强大"。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 误区二："P vs NP 只是理论游戏"</span>
+      <p>错，而且本节的电路翻译让它的"实在"程度更进一步：P ⊆ P/poly 说明 P vs NP 有一个<strong>纯组合的等价形式</strong>（SAT 是否需要超多项式电路），连图灵机都可以不提。赌注也是实的：现代密码学假定"求逆易验证、难求解"（P ≠ NP 的必要条件）；组合优化、调度、芯片设计的整个方法论都建立在"NP 难问题没有通用快算法"上。一个能用电路、多项式、逻辑多种语言等价陈述的问题，恰好是数学里最"不是游戏"的那类问题。</p>
+    </div>
+
+    <!-- 回忆卡片 9.5 -->
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 9.5-1</div>
+              <div class="q-text">TIME(t) ⊆ SIZE(O(t²)) 的模拟思路是什么？为什么由此得 P ⊆ P/poly？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              把 t×t 计算 tableau 的每格换成一个 O(1) 门的小电路块（格值由上行三格经 δ 决定），共 O(t²) 门。t = nᵏ 时规模为 n²ᵏ 仍多项式，故多项式时间蕴含多项式电路，P ⊆ P/poly。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 9.5-2</div>
+              <div class="q-text">为什么"层级定理已证 P ⊊ EXPTIME"不等于解决了 P vs NP？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              层级定理分离的是不同量级的确定时间类；P vs NP 是同一量级（多项式）下确定对非确定的问题，对角线机器翻转不了"是否存在接受分支"，且 BGS 定理已排除一切相对化技术。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 概念卡 ============ -->
+    <h2><span class="sec-no">🃏</span>概念卡：本章概念的一分钟画像</h2>
+    <p>翻面前先自问：这个概念我能用一句话讲清楚吗？</p>
+    <div class="flip-grid">
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 1</div>
+            <div class="q-text">层级定理（Hierarchy Theorem）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">资源界限增长一个量级，可判定语言严格变多：f=o(g) 时 SPACE(f)⊊SPACE(g)；t₁log t₁=o(t₂) 时 TIME(t₁)⊊TIME(t₂)。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">提供无条件的难解性证明，摆脱"P≠NP 则难"的相对格局。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">预算多一个量级，能办的事就是多一档——且能证明。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为它能分离 P 与 NP：它分离的是量级，不是确定/非确定两种模式。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">证 P⊊EXPTIME、L⊊PSPACE；一切"严格更大资源类"陈述的依据。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 2</div>
+            <div class="q-text">对角线方法（Diagonalization）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">造一台机器 D 逐台模拟候选机 M 并翻转其答案，使 L(D) 逃出所有候选机的能力。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">从 Cantor 到 A_TM 再到层级定理，一切"不存在/严格分离"证明的发动机。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">名单上的每个人都得罪一次，你就不会出现在名单上。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为它万能：它是相对化技术，BGS 定理宣判它攻不下 P vs NP。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">证不可判定（Ch4）、证层级定理（本章 9.2/9.3）、造神谕分离（9.4）。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 3</div>
+            <div class="q-text">可构造函数（Constructible Function）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">f 空间可构造：O(f(n)) 空间内能从 1ⁿ 算出 f(n)；时间可构造同理。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">让对角机 D 能先"领取预算"再开工，排除病态界限函数。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">预算单上的数字本身得算得起，否则连预算都立不住。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为它排除了常见函数：n log n、n²、2ⁿ 全都可构造，它只是技术护栏。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">层级定理的前提条件；空间/时间复杂性类定义的常规假设。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 4</div>
+            <div class="q-text">EXPTIME 与 P ⊊ EXPTIME</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">EXPTIME = ⋃ TIME(2^(nᵏ))；由时间层级定理 P ⊊ EXPTIME。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">给出第一个被证明的"时间更多则严格更强"的确证。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">多项式和指数之间不是差距，是鸿沟——这次是定理不是信念。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为它蕴含 P≠NP：P⊊EXPTIME 与 P=NP 可以同时成立（若 NP=EXPTIME）。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">EXPTIME 完全问题（如广义棋类）的"无条件难解"结论；复杂性类地图的锚点。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 5</div>
+            <div class="q-text">神谕机与相对化（Oracle TM / Relativization）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">带免费问答外挂"x∈A?"的机器；相对化技术=对任何神谕 A 都照样成立的证明技术。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">给"某类证明技术的能力上限"一个精确的检验标准。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">神谕是照妖镜：一套技术在神谕世界里两面碰壁，就在真实世界也走不通。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为 P^A=NP^A 的神谕说明 P=NP"可能是真的"——神谕世界与真实世界无关，它只检验证明技术。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">判定新证明思路有无希望攻 P vs NP 的第一道筛子。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 6</div>
+            <div class="q-text">Baker–Gill–Solovay 定理</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">存在神谕 A 使 P^A=NP^A（A=TQBF）；存在神谕 B 使 P^B≠NP^B（逐步对角化构造）。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">证明相对化技术（含对角线/模拟）原则上不可能解决 P vs NP。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">同一把尺子在两个平行世界量出相反答案，它就不能裁决我们的世界。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">读成"P vs NP 独立于数学"——它只限制证明技术，不谈独立性。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">解释为什么 1975 年后下界研究转向电路等非相对化路线。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 7</div>
+            <div class="q-text">电路复杂性（P ⊆ P/poly）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">P/poly = 多项式规模电路族可判定的语言类；TIME(t) 可化为 O(t²) 门电路，故 P ⊆ P/poly。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">把"算法下界"翻译成"组合对象（门数）的下界"，绕开相对化壁垒。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">把跑动的计算冻成 tableau，再把每格换成一把门——数门比追算法容易。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为进展喜人：显式函数最好下界仅 ~5n；只有 AC⁰ 等限制模型才证得出（PARITY∉AC⁰）。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">NP⊄P/poly ⟹ P≠NP 的攻关路线；密码学具体安全性的下界语言。</span></div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- ============ 分层习题 ============ -->
+    <h2><span class="sec-no">📝</span>分层习题</h2>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>判断对错：<strong>"空间层级定理的证明中，对角机 D 的计数器是为了防止 D 超出 g(n) 的空间预算。"</strong>说明理由。</div>
+      <details>
+        <summary>提示</summary>
+        <p>计数器数的是什么量？D 的空间预算由什么保证不超？</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">错。计数器数的是<strong>模拟的步数</strong>（时间），用途是防死循环：被模拟的 M 可能永不停机，而 D 必须是判定机，超过 2^O(g(n)) 步即掐停拒绝（O(g) 空间内格局总数有限，超过这个步数必然已进入循环）。空间预算不需要计数器守护——D 开工前就用空间可构造性把 O(g(n)) 个格子划好，所有活动都被限制在划定的带区内，越界根本不会发生。把"计时"和"限空间"混为一谈，等于漏掉了复杂性对角线与 A_TM 对角线的关键差别。</div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>判断对错：<strong>"由 P ⊊ EXPTIME 可知 NP ⊊ EXPTIME，从而 P ≠ NP。"</strong></div>
+      <details>
+        <summary>提示</summary>
+        <p>P ⊊ EXPTIME 说的是哪两个类的关系？NP 有没有可能等于 EXPTIME？</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">两句话都错。① P ⊊ EXPTIME 不能推出 NP ⊊ EXPTIME：完全可能 NP = EXPTIME（此时 P ⊊ NP = EXPTIME 与已知事实相容）；也可能 NP 严格介于中间——现状是未知。② 即便 NP ⊊ EXPTIME 也推不出 P ≠ NP：P ≠ NP 的反面是 P = NP，而 P = NP 且 NP ⊊ EXPTIME（即 P ⊊ EXPTIME，已知为真）逻辑上自洽。P vs NP 问"确定对非确定"，P vs EXPTIME 问"多项式对指数"，两个问题正交——这正是 9.5 节误区一。</div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>设 f(n) = log²n，g(n) = n。写出用空间层级定理分离 SPACE(log²n) 与 SPACE(n) 的完整论证：验证前提、摆出对角机 D 的四步、指出矛盾在哪一刻产生。</div>
+      <details>
+        <summary>提示</summary>
+        <p>先查三件事：g 可构造吗？f = o(g) 吗？f ≥ log n 吗？然后按"模拟—计时—翻转—矛盾"背一遍。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p>前提核查：① n 空间可构造（输入 1ⁿ 数个格即可）；② log²n / n → 0，故 f = o(g)；③ log²n ≥ log n（n ≥ 2）。定理适用。</p>
+          <p>四步：<strong>模拟</strong>——D 在输入 w = ⟨M⟩0ᵏ 上划出 O(n) 工作区并模拟 M；<strong>计时</strong>——计数器上限 2^(cn)，超限拒绝；<strong>翻转</strong>——M 停机则 D 反答。</p>
+          <p><strong>矛盾</strong>：L(D) ∈ SPACE(n) 由上界直接得。反设 L(D) ∈ SPACE(log²n)，有判定机 M。垫长输入后 D 模拟 M 只需 O(log²n) 空间，而预算为 n——因 log²n = o(n)，n 足够大时模拟装得下；M 是判定机必停机，计时器不碍事；模拟完成那一刻 D 翻转答案：M 接受 ⟨M⟩0ᵏ ⟺ D 拒绝它，即 w∈L(M) ⟺ w∉L(D)，与 L(M)=L(D) 矛盾。故 SPACE(log²n) ⊊ SPACE(n)。∎</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>在 BGS 定理第②面的构造中，设 Mᵢ 的运行时间是 pᵢ(n) = n³。问：第 i 阶段应如何选 nᵢ？为什么 nᵢ = 3 不够、而取 2^{nᵢ} &gt; nᵢ³ 的最小可用值就可以？算出最小的这样的 nᵢ。</div>
+      <details>
+        <summary>提示</summary>
+        <p>逐台机器封杀的关键不等式是 2^{nᵢ} &gt; pᵢ(nᵢ)。试 n = 1, 2, … 找使 2ⁿ &gt; n³ 成立的起点，并确认 n 充分大后恒成立。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p>选法：nᵢ 必须大于所有先前阶段已定下的串长（避免推翻前面的决定），且满足 2^{nᵢ} &gt; pᵢ(nᵢ) = nᵢ³——这保证 Mᵢ 在时限内问不完所有长 nᵢ 的串，留下"它管不着的串"供我们下刀。</p>
+          <p>n = 3 时 2³ = 8 &lt; 27 = 3³：Mᵢ 理论上能问完所有 8 个长 3 的串（甚至更长的），我们对它的行为没有控制力——它可能恰好逐一验证后答对，封杀失败。</p>
+          <p>试值：n=9 时 2⁹=512 &lt; 729；n=10 时 2¹⁰=1024 &gt; 1000。故最小可用 nᵢ = 10（且 n ≥ 10 后指数持续压制立方，因为 2ⁿ 每步翻倍而 n³ 的增长率趋缓，可归纳确认）。实际构造中取 nᵢ = max(10, 已用长度 + 1)。✓</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l3">L3 建模应用</span>某公司算法团队向 CTO 汇报："我们证明了我们的调度问题是 NP 完全的，所以它在数学上不可能有多项式算法，请放弃优化。" 又补充："不过我们用对角线方法正在攻关 P vs NP，成功后就能给调度问题一个多项式算法。" 用本章与第 7 章的知识，逐句评估这段汇报的三个错误。</div>
+      <details>
+        <summary>提示</summary>
+        <p>① NP 完全性的逻辑形式是条件句还是无条件句？② "放弃优化"是不是 NP 完全的正确推论？③ 对角线方法攻关 P vs NP 的可行性，本章哪一节已经宣判？</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p>错误一："NP 完全 ⟹ 数学上不可能多项式"——错。NP 完全是相对下界：若 P≠NP 则难。本章 9.1 强调它无条件句不成立；若 P=NP（未排除），调度问题立即多项式可解。正确表述应是"在 P≠NP 的广泛信念下，不应再寻求通用精确多项式算法"。</p>
+          <p>错误二："请放弃优化"——错。NP 完全只排除"一切实例精确多项式可解"，不排除近似算法、参数化/特殊结构、启发式与工业求解器（第 7 章 7.6 节、第 10 章主题）。工程上的正确动作是换赛道，不是躺平。</p>
+          <p>错误三："用对角线方法攻关 P vs NP"——方向已被本章 9.4 宣判死刑：对角线/模拟是相对化技术，而 BGS 定理给出神谕 A 使 P^A=NP^A、神谕 B 使 P^B≠NP^B，同一技术不可能裁决。若真要攻关，得走非相对化路线（如电路复杂性，9.5）——但须知显式电路下界目前仅 ~5n，这条路同样遥远。团队应把人力投回报错二指出的工程赛道。</p>
+        </div>
+      </details>
+    </div>
+
+    <!-- ============ 本章自测 ============ -->
+    <h2><span class="sec-no">✍️</span>本章自测</h2>
+    <p class="quiz-hint">点击选项判分，答错会给出原因。</p>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 1</div>
+      <div class="q-stem">空间层级定理的对角线证明中，"f(n) = o(g(n))"这个条件的作用是：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 保证 g(n) 空间可构造</li>
+        <li data-opt="b">B. 保证对足够长的输入，D 模拟任何 O(f) 空间机 M 所需的空间严格小于预算 g(n)，模拟得以完成</li>
+        <li data-opt="c">C. 保证 D 的计数器能放进 g(n) 个格子里</li>
+        <li data-opt="d">D. 保证被模拟的机器 M 一定停机</li>
+      </ul>
+      <div class="quiz-explain">选 B。小 o 条件让"模拟开销 O(f(n)) &lt; 预算 g(n)"在渐近意义下成立——垫长输入即可，这是矛盾那一步的支点。A 错：可构造性是 g 自身的独立假设；C 错：计数器只需 O(g) 位，与 f 无关；D 错：M 停机与否不由 f=o(g) 控制，防死循环靠计数器掐停。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="c">
+      <div class="q-no">自测 2</div>
+      <div class="q-stem">时间层级定理要求 t₁(n)·log t₁(n) = o(t₂(n))，比空间版多出的 log 因子来自：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 时间可构造函数比空间可构造函数难算</li>
+        <li data-opt="b">B. 计时用的二进制计数器每次自增要花时间</li>
+        <li data-opt="c">C. 通用模拟器用自己的固定条带模拟被模拟机的多条带时，每步需 O(log t₁) 的带头寻址/搬移开销</li>
+        <li data-opt="d">D. 翻转答案需要额外 log 因子的时间</li>
+      </ul>
+      <div class="quiz-explain">选 C。多带编码到单带（轨道）上，每模拟一步要花对数级时间找回各读写头位置，t₁ 步累计 t₁·log t₁。A 错：可构造性只是前提，与 log 无关；B 错：计数器开销可摊还吸收，不是主因；D 错：翻转答案只是改一个状态，O(1)。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="d">
+      <div class="q-no">自测 3</div>
+      <div class="q-stem">关于 P ⊊ EXPTIME，下列说法正确的是：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 它蕴含 P ≠ NP</li>
+        <li data-opt="b">B. 它和 P vs NP 一样仍未被证明</li>
+        <li data-opt="c">C. 它说明 NP ⊊ EXPTIME</li>
+        <li data-opt="d">D. 它是由时间层级定理推出的无条件严格分离：EXPTIME 中存在没有多项式算法的可判定问题</li>
+      </ul>
+      <div class="quiz-explain">选 D。TIME(nᵏ) ⊊ TIME(2ⁿ) 对所有 k 成立，并集得 P ⊊ EXPTIME——这是定理。A 错：P=NP 与 P⊊EXPTIME 可以同时成立；B 错：它已证明，P vs NP 才未决；C 错：NP 与 EXPTIME 的关系未知，NP=EXPTIME 未被排除。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="a">
+      <div class="q-no">自测 4</div>
+      <div class="q-stem">Baker–Gill–Solovay 定理的意义是：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 任何对神谕照样成立（相对化）的证明技术都不可能解决 P vs NP，因为对角线类技术在两个神谕世界得出相反结论</li>
+        <li data-opt="b">B. P vs NP 独立于现有的数学公理体系</li>
+        <li data-opt="c">C. 存在一台图灵机可以同时判定 P 和 NP 中所有问题</li>
+        <li data-opt="d">D. 神谕机比图灵机计算能力更强，所以能判定 P vs NP</li>
+      </ul>
+      <div class="quiz-explain">选 A。BGS 的两面（P^TQBF=NP^TQBF；存在 B 使 P^B≠NP^B）说明相对化技术无法给出一致答案，而模拟/对角线正是相对化的。B 错：定理与独立性无关，只限制证明技术；C 错：与定理内容无关；D 错：神谕机是分析工具，不"判定 P vs NP"——P vs NP 是数学命题，不是某个类的成员问题。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 5</div>
+      <div class="q-stem">关于电路复杂性与 P ⊆ P/poly，下列说法正确的是：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. P ⊆ P/poly 已经直接证明了 P ≠ NP</li>
+        <li data-opt="b">B. 若能证明某个 NP 问题需要超多项式规模的电路族（NP ⊄ P/poly），则由 P ⊆ P/poly 可得 P ≠ NP</li>
+        <li data-opt="c">C. 目前已证出显式布尔函数的电路下界达到多项式级别</li>
+        <li data-opt="d">D. PARITY ∉ AC⁰ 说明奇偶性函数没有多项式规模的电路，故 P ≠ NP</li>
+      </ul>
+      <div class="quiz-explain">选 B。这是电路路线的攻关逻辑：P 这边全部有多项式电路，只要 NP 中有一员没有，两边就分家。A 错：P⊆P/poly 只是包含关系，未分离任何东西；C 错：显式函数最好下界仅 ~5n，离超多项式极远；D 错：PARITY∉AC⁰ 只限制<strong>常数深度</strong>电路，奇偶性有多项式规模的一般电路（树形异或），PARITY ∈ P。</div>
+    </div>
+
+    <!-- ============ 三句话复述 ============ -->
+    <div class="retell">
+      <h3>🗣️ 用自己的话，三句话讲完本章</h3>
+      <p>对着空气（或室友）说出这三句。说卡壳的那句，回去重读对应小节。</p>
+      <details>
+        <summary>句1：这章解决什么问题？——</summary>
+        <div class="retell-answer">参考答案：第 7、8 章的"难"全是"若 P≠NP 则难"的相对结论，本章要无条件的答案：能不能证明某些可判定问题"就是算不动"？又能走多远？</div>
+      </details>
+      <details>
+        <summary>句2：核心机制是什么？——</summary>
+        <div class="retell-answer">参考答案：对角线方法升级——对角机 D 带上预算计数器，模拟、计时、翻转、矛盾四步，证出空间/时间层级定理，推出第一个无条件分离 P ⊊ EXPTIME；但 Baker–Gill–Solovay 证明这套相对化技术攻不下 P vs NP，于是换战线到电路复杂性：P ⊆ P/poly，把下界问题变成数门的组合问题。</div>
+      </details>
+      <details>
+        <summary>句3：它和前后章怎么分工？——</summary>
+        <div class="retell-answer">参考答案：第 7、8 章给出分级与相对下界，本章证明绝对下界并画出老方法的天花板；第 10 章面对"已确证或高度疑似算不动"的问题给出前沿出路：近似、随机化、交互证明。</div>
+      </details>
+    </div>
+
+    <!-- ============ 复习计划 ============ -->
+    <div class="review-plan">
+      <h3>🔁 间隔复习计划</h3>
+      <p>回忆本身比重读有效 10 倍。到点只做一件事：翻卡 + 重做标记题。</p>
+      <table>
+        <tr><th>时间点</th><th>复习内容</th><th>预计用时</th></tr>
+        <tr><td>第 1 天</td><td>概念卡 1–7 全部 + 回忆卡 9.2-2、9.3-2、9.4-2</td><td>12 分钟</td></tr>
+        <tr><td>第 3 天</td><td>概念卡 1、5、6（层级定理/相对化/BGS）+ 重做 L2 两题 + 自测错题</td><td>12 分钟</td></tr>
+        <tr><td>第 7 天</td><td>三句话复述出声说一遍 + 重做 9.2 对角线四步骨架 + 回忆卡 9.5-1</td><td>15 分钟</td></tr>
+        <tr><td>第 15 天</td><td>只做合上书挑战；全过则本章毕业，卡在哪条就重读对应小节</td><td>15 分钟</td></tr>
+      </table>
+    </div>
+
+    <!-- 合上书挑战 -->
+    <div class="final-challenge">
+      <h3>📕 合上书挑战</h3>
+      <p class="fc-sub">现在关掉这个页面，拿一张纸，凭记忆完成以下任务。全部做完再回来核对——这是本章真正的毕业考试。</p>
+      <ol id="ch09-challenge-list">
+        <li><span class="fc-check"></span>写出空间层级定理的完整证明骨架：模拟、计时、翻转、矛盾四步，指出 f=o(g) 用在哪一步</li>
+        <li><span class="fc-check"></span>陈述时间层级定理，解释 log 因子的来历，并写出 P ⊊ EXPTIME 的推论链</li>
+        <li><span class="fc-check"></span>定义神谕机，证明 P^TQBF = NP^TQBF（每个包含关系一句话）</li>
+        <li><span class="fc-check"></span>复述 BGS 第②面的逐步对角化：nᵢ 怎么选、"没问过的串"怎么用来下刀</li>
+        <li><span class="fc-check"></span>说明 TIME(t) 如何化为 O(t²) 门电路，并解释"NP ⊄ P/poly ⟹ P ≠ NP"的逻辑</li>
+        <li><span class="fc-check"></span>向一个说"层级定理都证了 P⊊EXPTIME，P vs NP 不也快解决了"的朋友解释他错在哪（一分钟版本）</li>
+        <li><span class="fc-check"></span>回答本章的主线问题：我们能否证明某些可判定问题"就是算不动"？（一句话）</li>
+      </ol>
+    </div>
+
+    <div class="complete-zone">
+      <button class="btn-complete" id="ch09-btn-complete" onclick="markDone()">✓ 我已完成本章（含合上书挑战）</button>
+    </div>
+
+    <div class="chapter-nav">
+      <a href="chapter-08.html"><span class="nav-dir">← 上一章</span>第8章 空间复杂性</a>
+      <a href="chapter-10.html" class="next"><span class="nav-dir">下一章 →</span>第10章 复杂性进阶</a>
+    </div>
+
+  </div>
+</div>
+
+<footer class="footer">
+  <div class="wrap">第9章 难解性 · 计算理论互动讲义 · 基于 Sipser《Introduction to the Theory of Computation》(3rd ed)</div>
+</footer>
+
+<script src="assets/mermaid.min.js"></script>
+<script>
+mermaid.initialize({
+  startOnLoad: true,
+  theme: "base",
+  themeVariables: {
+    primaryColor: "#e3edf7",
+    primaryBorderColor: "#1d5f9e",
+    primaryTextColor: "#1d5f9e",
+    lineColor: "#5c554b",
+    secondaryColor: "#fbeedd",
+    tertiaryColor: "#f5f1e8",
+    fontFamily: "-apple-system, PingFang SC, sans-serif",
+    fontSize: "14px"
+  },
+  flowchart: { curve: "linear", htmlLabels: false }
+});
+</script>
+<script>
+// 自测题判分
+document.querySelectorAll(".quiz-block").forEach(block => {
+  const answer = block.dataset.answer;
+  const explain = block.querySelector(".quiz-explain");
+  block.querySelectorAll(".quiz-opts li").forEach(li => {
+    li.addEventListener("click", () => {
+      const opts = block.querySelectorAll(".quiz-opts li");
+      opts.forEach(o => o.classList.add("disabled"));
+      if (li.dataset.opt === answer) {
+        li.classList.add("correct");
+      } else {
+        li.classList.add("wrong");
+        block.querySelector(`[data-opt="${answer}"]`).classList.add("correct");
+      }
+      explain.classList.add("show");
+    });
+  });
+});
+
+// 合上书清单打勾
+document.querySelectorAll("#ch09-challenge-list li").forEach(li => {
+  li.addEventListener("click", () => li.classList.toggle("checked"));
+});
+
+// 完成标记 → localStorage（第9章）
+const KEY = "ct_progress_v1";
+function loadProgress() {
+  try { return JSON.parse(localStorage.getItem(KEY)) || {}; } catch (e) { return {}; }
+}
+const progress = loadProgress();
+const btn = document.getElementById("ch09-btn-complete");
+if (progress["9"] && progress["9"].done) {
+  btn.textContent = "✓ 已完成 · 再次点击重置";
+  btn.classList.add("done");
+}
+function markDone() {
+  const p = loadProgress();
+  if (p["9"] && p["9"].done) {
+    delete p["9"];
+    btn.textContent = "✓ 我已完成本章（含合上书挑战）";
+    btn.classList.remove("done");
+  } else {
+    p["9"] = { done: true, completedAt: Date.now(), reviewsDone: 0 };
+    btn.textContent = "✓ 已完成 · 复习提醒已开启";
+    btn.classList.add("done");
+  }
+  localStorage.setItem(KEY, JSON.stringify(p));
+}
+</script>
+
+</body>
+</html>

@@ -1,0 +1,868 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第8章 动态规划 · 算法导论互动讲义</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+<nav class="topbar">
+  <div class="topbar-inner">
+    <span class="brand"><a href="index.html" style="color:inherit">← 学习地图</a></span>
+    <span class="crumb">阶段④ · 设计范式与难解性 / 第8章</span>
+  </div>
+</nav>
+
+<div class="wrap">
+
+  <div class="lecture-head">
+    <span class="ch-label">CHAPTER 08 · 设计范式与难解性</span>
+    <h1>动态规划</h1>
+    <p class="lead">一个问题，什么时候值得"把子问题的答案存下来"？本章回答：动态规划的两张入场券是什么、表怎么填、以及最难的一步——状态设计——为什么无公式可循。</p>
+  </div>
+
+  <!-- ===== 章首四件套之 1：全书定位 ===== -->
+  <div class="position-bar">
+    <strong>本章在主线上的位置：</strong>第7章用图算法解决了结构化最短路问题 → <u>本章面对"无图结构"的最优化问题，用动态规划把指数搜索压成多项式填表</u> → 第9章进一步追问：什么时候连表都不用填，贪心一步到底？<br>
+    第8章回答主线上的第8个问题：<strong>枚举指数爆炸时，什么结构允许我们只算每个子问题一次？</strong>
+    <div class="map-inline">
+      ① 分析基础：
+      <span class="node">Ch1 算法分析与增长率</span><span class="arrow">→</span>
+      <span class="node">Ch2 分治与递归式</span><br>
+      ② 排序与检索：
+      <span class="node">Ch3 排序算法</span><span class="arrow">→</span>
+      <span class="node">Ch4 哈希表</span><span class="arrow">→</span>
+      <span class="node">Ch5 二叉搜索树与红黑树</span><br>
+      ③ 图算法：
+      <span class="node">Ch6 图的基本算法</span><span class="arrow">→</span>
+      <span class="node">Ch7 最小生成树与单源最短路</span><br>
+      ④ 设计范式与难解性：
+      <span class="node here">Ch8 动态规划</span><span class="arrow">→</span>
+      <span class="node">Ch9 贪心与摊还分析</span><span class="arrow">→</span>
+      <span class="node">Ch10 NP完全与近似算法</span>
+    </div>
+  </div>
+
+  <!-- ===== 章首四件套之 2：学习目标 ===== -->
+  <div class="objectives">
+    <h4>🎯 学完本章，合上书你应该能：</h4>
+    <ol>
+      <li>说出一个问题能用动态规划的两个必要条件，并各举一个反例说明缺一会怎样；</li>
+      <li>写出钢条切割、矩阵链乘、LCS 三个问题的状态转移方程；</li>
+      <li>手算 4 个矩阵的链乘最优加括号与标量乘法次数，完整填出 m 表；</li>
+      <li>在两个给定串上完整填出 LCS 的 DP 表并回溯出一条最长公共子序列；</li>
+      <li>解释自顶向下记忆化与自底向上填表的差别，以及各自什么时候更合适；</li>
+      <li>用一个失败的状态设计反例，解释"状态必须包含转移所需的全部信息"。</li>
+    </ol>
+  </div>
+
+  <div class="lecture">
+
+    <!-- ===== 章首四件套之 3：推导主线图 ===== -->
+    <div class="figure">
+      <div class="mermaid">
+flowchart TB
+  A["最优化问题：方案数随规模指数增长"] --> B["暴力递归：同一子问题被反复求解"]
+  B --> C["发现重叠子问题：答案可缓存"]
+  B --> D["发现最优子结构：最优解由子问题最优解拼成"]
+  C --> E["记忆化：自顶向下存答案"]
+  C --> F["填表：自底向上按依赖顺序算"]
+  D --> E
+  D --> F
+  E --> G["动态规划：每个子问题只算一次"]
+  F --> G
+  G --> H["代价：状态设计无通用公式，设计失误直接报废"]
+  classDef hot fill:#fbeedd,stroke:#c4651f,stroke-width:2.5px,color:#c4651f;
+  classDef danger fill:#fae9e7,stroke:#b03a2e,stroke-width:2.5px,color:#b03a2e;
+  class G hot;
+  class H danger;
+      </div>
+      <div class="caption">本章推导主线：指数爆炸逼我们找结构，两个结构性质给出两条实现路线，最后落在代价上——状态设计没有公式。</div>
+    </div>
+
+    <!-- ================= 8.1 ================= -->
+    <h2><span class="sec-no">8.1</span>为什么需要动态规划：从钢条切割的指数爆炸说起</h2>
+
+    <p>前七章里，问题要么自带结构（数组有序、图有边），要么我们能施加结构（堆、红黑树）。本章面对一类新问题：<span class="term">组合最优化</span>（Combinatorial Optimization）——方案总数随规模指数增长，但答案只有一个最优值。入门例子是 CLRS 的<span class="term">钢条切割</span>（Rod Cutting）。</p>
+
+    <p><strong>问题。</strong>一根长度为 <span class="var">n</span> 的钢条，可以切成若干整数段出售。长度 <span class="var">i</span> 的段售价 <span class="var">p</span><sub>i</sub>。怎么切总收入最大？设价格表为：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>长度 i</th><th>1</th><th>2</th><th>3</th><th>4</th></tr>
+        <tr><th>价格 p<sub>i</sub></th><td>1</td><td>5</td><td>8</td><td>9</td></tr>
+      </table>
+    </div>
+
+    <p>长度为 4 时，切法有 2³ = 8 种（每个缝切或不切）：不切得 9；1+3 得 1+8 = 9；2+2 得 5+5 = <strong>10</strong>；3+1 得 9；1+1+2 得 7；……最优是 2+2，收入 10。一般地，长度 <span class="var">n</span> 有 2<sup>n−1</sup> 种切法——枚举随 <span class="var">n</span> 指数爆炸。</p>
+
+    <p><strong>递归为什么也爆炸。</strong>设 <span class="var">r</span>(<span class="var">n</span>) 为长度 <span class="var">n</span> 的最优收入。第一刀切在 <span class="var">i</span> 处，剩下 <span class="var">n</span>−<span class="var">i</span> 递归求解：</p>
+
+    <div class="formula"><span class="var">r</span>(<span class="var">n</span>) = max<sub>1≤i≤n</sub> ( <span class="var">p</span><sub>i</sub> + <span class="var">r</span>(<span class="var">n</span>−<span class="var">i</span>) )，<span class="var">r</span>(0) = 0</div>
+
+    <p>用 T(<span class="var">n</span>) 记朴素递归的调用次数：T(<span class="var">n</span>) = 1 + Σ<sub>j&lt;n</sub> T(<span class="var">j</span>)，展开得 T(<span class="var">n</span>) = 2<sup>n</sup>。n = 4 时共 16 次调用，其中 <span class="var">r</span>(2) 被算了 4 次、<span class="var">r</span>(1) 被算了 8 次。<strong>爆炸不是因为问题难，而是因为同一个子问题被反复重算。</strong></p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>递归树里重复出现的子问题只有 n 个（r(0)…r(n−1)），却被算了 2ⁿ 次。把每个子问题的答案存下来、只算一次，指数就变线性——这就是动态规划的全部起点。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>把动态规划理解成"递推"。递推只是填表的机械动作；DP 的本质是<strong>发现问题结构</strong>（重叠子问题 + 最优子结构），递推式只是结构的代数表达。只会背方程、不会判断结构，换一道题就报废。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 8.1-1</div>
+              <div class="q-text">钢条切割长度为 n 时，朴素递归为什么是 2ⁿ 次调用，而不是多项式次？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              递归方程 T(n) = 1 + Σ T(j)（j 从 0 到 n−1），每个子问题被多个父节点重复调用，递归树节点数翻倍增长；但不同子问题只有 n 个。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 8.1-2</div>
+              <div class="q-text">价格表 p = [1, 5, 8, 9] 时，长度为 4 的钢条最优切法和收入是多少？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              切成 2+2，收入 5+5 = 10。次优是不切或 1+3，都得 9。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ================= 8.2 ================= -->
+    <h2><span class="sec-no">8.2</span>两张入场券：最优子结构与重叠子问题</h2>
+
+    <p>上一节给了"存答案"的动机，但它带出一个问题：<strong>凭什么子问题的最优解能拼出原问题的最优解？凭什么子问题会重复？</strong>这两个"凭"就是 DP 的两张入场券。</p>
+
+    <p><strong>入场券一：<span class="term">最优子结构</span>（Optimal Substructure）。</strong>问题的最优解内部，包含子问题的最优解。钢条切割里，若最优第一刀切在 <span class="var">i</span>，则剩下那段必须按 <span class="var">r</span>(<span class="var">n</span>−<span class="var">i</span>) 的最优方案切——否则换个更好的切法总收入更高，矛盾。证明套路永远是<strong>剪切—粘贴</strong>（cut-and-paste）：假设子解不最优，换上更优的，得到更优的原解，矛盾。</p>
+
+    <p><strong>入场券二：<span class="term">重叠子问题</span>（Overlapping Subproblems）。</strong>递归树中不同子问题总数是多项式的，且同一子问题反复出现。钢条切割只有 n+1 个不同子问题。对比分治（第2章）：归并排序每次拆出的是<strong>新</strong>子问题，互不重叠，所以分治不需要存答案。</p>
+
+    <p><strong>缺一会怎样（两个反例）。</strong></p>
+    <ul>
+      <li><strong>无最优子结构：</strong>"经过顶点数最多的简单路径"（最长简单路径）。q→t 的最长简单路径若经过 r，并不保证 q→r 段是 q 到 r 的最长简单路径——绕路可能撞上 t 端的顶点，子问题之间互相干扰，剪切—粘贴失效。该问题实际是 NP 难的（第10章）。</li>
+      <li><strong>无重叠子问题：</strong>归并排序。子数组互不相同，存答案纯属浪费空间，分治直接做就是最优。</li>
+    </ul>
+
+    <div class="box insight">
+      <span class="box-tag">✅ 判定规则</span>
+      <p>判断能否 DP 的两步走：① 写出递归式，用剪切—粘贴验证最优子结构；② 数递归树中不同子问题的个数，若为多项式级（通常由参数的取值范围决定），重叠性成立。两步都过，DP 入场。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 8.2-1</div>
+              <div class="q-text">什么是最优子结构？证明它的标准套路叫什么？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              最优解包含子问题的最优解。套路是剪切—粘贴：假设子解非最优，替换成更优子解，推出原解可改进，矛盾。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 8.2-2</div>
+              <div class="q-text">为什么最长简单路径问题没有最优子结构？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              子问题的最优解不能自由拼接：两段最长简单路径可能共享顶点，拼起来不再是简单路径——子问题不独立，剪切—粘贴失效。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ================= 8.3 ================= -->
+    <h2><span class="sec-no">8.3</span>矩阵链乘：完整填表手算</h2>
+
+    <p>钢条切割是一维结构，子问题只有一个参数。上一节留下一个问题：<strong>子问题有两个参数时，表怎么设计、按什么顺序填？</strong><span class="term">矩阵链乘</span>（Matrix-Chain Multiplication）是最经典的两参数 DP。</p>
+
+    <p><strong>问题。</strong>矩阵乘法满足结合律但不满足交换律。链 A₁A₂…Aₙ 的加括号方式不同，标量乘法总次数天差地别。维度序列为 ⟨p₀, p₁, …, pₙ⟩，Aᵢ 是 p<sub>i−1</sub>×p<sub>i</sub> 矩阵。目标：找总乘法次数最少的加括号方案。</p>
+
+    <p><strong>状态设计。</strong>设 m[i][j] = 计算 Aᵢ…Aⱼ 的最少乘法次数。枚举最后乘的位置 k：</p>
+
+    <div class="formula">m[i][j] = min<sub>i≤k&lt;j</sub> ( m[i][k] + m[k+1][j] + p<sub>i−1</sub>·p<sub>k</sub>·p<sub>j</sub> )，m[i][i] = 0</div>
+
+    <p>同时记 s[i][j] = 最优的 k，用于重构括号方案。<strong>填表顺序按链长 ℓ = 2, 3, …, n 递增</strong>——因为长链依赖短链。</p>
+
+    <p><strong>完整手算（4 个矩阵）。</strong>A₁: 30×35，A₂: 35×15，A₃: 15×5，A₄: 5×10，即 ⟨p₀,…,p₄⟩ = ⟨30, 35, 15, 5, 10⟩。</p>
+
+    <p><strong>第 1 步：ℓ = 2（相邻两矩阵）。</strong></p>
+    <ul>
+      <li>m[1][2] = 30·35·15 = <strong>15750</strong></li>
+      <li>m[2][3] = 35·15·5 = <strong>2625</strong></li>
+      <li>m[3][4] = 15·5·10 = <strong>750</strong></li>
+    </ul>
+
+    <p><strong>第 2 步：ℓ = 3。</strong></p>
+    <ul>
+      <li>m[1][3]：k=1 → m[1][1]+m[2][3]+30·15·5 = 0+2625+2250 = 4875；k=2 → m[1][2]+m[3][3]+30·35·5 = 15750+0+5250 = 21000。取 <strong>4875</strong>，s[1][3]=1。</li>
+      <li>m[2][4]：k=2 → 0+m[3][4]+35·5·10 = 750+1750 = 2500；k=3 → m[2][3]+0+35·5·10 = 2625+1750 = 4375。取 <strong>2500</strong>，s[2][4]=2。</li>
+    </ul>
+
+    <p><strong>第 3 步：ℓ = 4（全链）。</strong></p>
+    <ul>
+      <li>m[1][4]：k=1 → 0+m[2][4]+30·5·10 = 2500+1500 = <strong>4000</strong>；k=2 → m[1][2]+m[3][4]+30·35·10 = 15750+750+10500 = 27000；k=3 → m[1][3]+0+30·15·10 = 4875+4500 = 9375。取 <strong>4000</strong>，s[1][4]=1。</li>
+    </ul>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>m / s</th><th>j=1</th><th>j=2</th><th>j=3</th><th>j=4</th></tr>
+        <tr><th>i=1</th><td>0</td><td>15750</td><td>4875 / k=1</td><td>4000 / k=1</td></tr>
+        <tr><th>i=2</th><td>—</td><td>0</td><td>2625</td><td>2500 / k=2</td></tr>
+        <tr><th>i=3</th><td>—</td><td>—</td><td>0</td><td>750</td></tr>
+        <tr><th>i=4</th><td>—</td><td>—</td><td>—</td><td>0</td></tr>
+      </table>
+    </div>
+
+    <p><strong>重构方案。</strong>s[1][4]=1 → 最后乘 A₁·(A₂A₃A₄)；s[2][4]=2 → (A₂)·(A₃A₄)。最优加括号：<strong>(A₁(A₂(A₃A₄)))</strong>，总乘法 <strong>4000</strong> 次。对比最差的 ((A₁A₂)A₃)A₄ = 27000 次，差近 7 倍。时间复杂度 Θ(n³)，空间 Θ(n²)。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>两参数 DP 的填表顺序不是按行或按列，而是按"链长"这条斜线——任何 m[i][j] 只依赖更短的链。状态依赖关系决定填表顺序，这是所有区间 DP 的通用读法。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>贪心"先乘最小的相邻对"在这里不成立：本例中 m[2][3]=2625 是最小的相邻乘积，但先做 A₂A₃ 会把链锁进次优结构（验证：((A₁(A₂A₃))A₄) 不在最优路径上，最优解根本不把 A₂A₃ 作为顶层决策）。矩阵链乘没有贪心选择性质——这正是它属于第8章而非第9章的原因。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 8.3-1</div>
+              <div class="q-text">矩阵链乘的状态转移方程是什么？填表按什么顺序？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              m[i][j] = min over k of (m[i][k]+m[k+1][j]+p_{i−1}p_k p_j)，m[i][i]=0；按链长 ℓ 递增填，因为长链只依赖短链。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 8.3-2</div>
+              <div class="q-text">⟨30,35,15,5,10⟩ 这四个矩阵的最优加括号与乘法次数？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              (A₁(A₂(A₃A₄)))，共 4000 次标量乘法（m[2][4]=2500 由 k=2 得到，m[1][4]=4000 由 k=1 得到）。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ================= 8.4 ================= -->
+    <h2><span class="sec-no">8.4</span>最长公共子序列：两个串上的完整 DP 表</h2>
+
+    <p>矩阵链乘的子问题是"区间"。上一节留下一个问题：<strong>子问题由两个序列的前缀组合而成时，表长什么样？</strong>这引出生物信息学与 diff 工具的基石——<span class="term">最长公共子序列</span>（Longest Common Subsequence, LCS）。</p>
+
+    <p><strong>问题。</strong>给定 X = ⟨x₁…x_m⟩，Y = ⟨y₁…y_n⟩，找最长的序列 Z，它同时是 X 和 Y 的子序列（不要求连续）。设 c[i][j] = X 前 i 个字符与 Y 前 j 个字符的 LCS 长度。按末尾字符分情况：</p>
+
+    <div class="formula">
+      若 x<sub>i</sub> = y<sub>j</sub>：c[i][j] = c[i−1][j−1] + 1<br>
+      若 x<sub>i</sub> ≠ y<sub>j</sub>：c[i][j] = max( c[i−1][j], c[i][j−1] )<br>
+      边界：c[0][j] = c[i][0] = 0
+    </div>
+
+    <p><strong>完整手算。</strong>取 X = ABCBDAB（m=7），Y = BDCABA（n=6）。逐行填表（每格按上式，从 c[1][1] 推到 c[7][6]）：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>c[i][j]</th><th>j=0<br>∅</th><th>j=1<br>B</th><th>j=2<br>BD</th><th>j=3<br>BDC</th><th>j=4<br>BDCA</th><th>j=5<br>BDCAB</th><th>j=6<br>BDCABA</th></tr>
+        <tr><th>i=0 ∅</th><td>0</td><td>0</td><td>0</td><td>0</td><td>0</td><td>0</td><td>0</td></tr>
+        <tr><th>i=1 A</th><td>0</td><td>0</td><td>0</td><td>0</td><td><b>1</b></td><td>1</td><td>1</td></tr>
+        <tr><th>i=2 AB</th><td>0</td><td><b>1</b></td><td>1</td><td>1</td><td>1</td><td><b>2</b></td><td>2</td></tr>
+        <tr><th>i=3 ABC</th><td>0</td><td>1</td><td>1</td><td><b>2</b></td><td>2</td><td>2</td><td>2</td></tr>
+        <tr><th>i=4 ABCB</th><td>0</td><td>1</td><td>1</td><td>2</td><td>2</td><td><b>3</b></td><td>3</td></tr>
+        <tr><th>i=5 ABCBD</th><td>0</td><td>1</td><td><b>2</b></td><td>2</td><td>2</td><td>3</td><td>3</td></tr>
+        <tr><th>i=6 ABCBDA</th><td>0</td><td>1</td><td>2</td><td>2</td><td><b>3</b></td><td>3</td><td><b>4</b></td></tr>
+        <tr><th>i=7 ABCBDAB</th><td>0</td><td>1</td><td>2</td><td>2</td><td>3</td><td>4</td><td>4</td></tr>
+      </table>
+    </div>
+
+    <p>举两格验证：c[4][5]（X=ABCB，Y=BDCAB）：x₄=B = y₅=B → c[3][4]+1 = 2+1 = 3 ✓。c[5][3]（X=ABCBD，Y=BDC）：x₅=D ≠ y₃=C → max(c[4][3], c[5][2]) = max(2, 2) = 2 ✓。</p>
+
+    <p><strong>回溯重构。</strong>从 c[7][6]=4 出发：x₇=B = y₆=A？不等，向左/上走到更大的方向……按规则"相等取左上（收入该字符），不等走向值更大的一侧"，一条合法路径给出 Z = <strong>BCBA</strong>（也可用 BDAB 或 BCAB），长度 <strong>4</strong>。时间 Θ(mn)，空间 Θ(mn)。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>LCS 的状态 c[i][j] 是"两个前缀"的二维组合。凡是"两个序列对齐比较"类问题（编辑距离、diff、序列比对），状态几乎总是 c[i][j] 型——双前缀。看到双序列，先想双前缀。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>把 LCS 与"最长公共子串"混淆。子串要求连续，子序列不要求。本例中 ABCBDAB 与 BDCABA 的最长公共子串长度只有 2（如 AB、BD），而 LCS 是 4。状态设计完全不同：子串不匹配就清零，子序列不匹配取两侧最大。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 8.4-1</div>
+              <div class="q-text">LCS 的状态转移方程是什么？为什么按末尾字符是否相等分情况？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              xᵢ=yⱼ 时 c[i][j]=c[i−1][j−1]+1（最优解必可同时收入这对字符）；不等时 c[i][j]=max(c[i−1][j], c[i][j−1])（至少一个末尾字符不在 LCS 中）。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 8.4-2</div>
+              <div class="q-text">X=ABCBDAB，Y=BDCABA 的 LCS 长度是多少？给出一条 LCS。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              长度 4（c[7][6]=4）。一条合法 LCS：BCBA（BDAB、BCAB 也对）。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ================= 8.5 ================= -->
+    <h2><span class="sec-no">8.5</span>记忆化 vs 自底向上：同一张表的两种填法</h2>
+
+    <p>前三节都默认"自底向上填表"。上一节留下一个问题：<strong>既然递归+缓存也能做到每个子问题只算一次，为什么还要费劲设计填表顺序？</strong></p>
+
+    <p><strong>路线一：<span class="term">自顶向下记忆化</span>（Top-Down with Memoization）。</strong>照抄朴素递归，只加一张哈希表/数组：入口先查缓存，命中即返回；未命中则计算并写入。钢条切割的记忆化版与朴素版代码只差三行，复杂度从 2ⁿ 降到 Θ(n²)（n 个子问题，每个最多试 n 刀）。</p>
+
+    <p><strong>路线二：<span class="term">自底向上填表</span>（Bottom-Up）。</strong>先分析子问题依赖关系（DAG），按拓扑序从小到大填表。无递归开销，常数因子更小；还能做空间优化——LCS 每行只依赖上一行，空间可从 Θ(mn) 压到 Θ(min(m,n))。</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>维度</th><th>自顶向下记忆化</th><th>自底向上填表</th></tr>
+        <tr><td>思维负担</td><td>低：递归式即代码</td><td>高：须设计依赖顺序</td></tr>
+        <tr><td>常数开销</td><td>递归调用 + 缓存查询</td><td>纯循环，更省</td></tr>
+        <tr><td>实际求解的子问题</td><td>只算真正用到的</td><td>全部算一遍</td></tr>
+        <tr><td>空间优化</td><td>难</td><td>可滚动数组压缩</td></tr>
+        <tr><td>适用场景</td><td>状态空间稀疏、原型验证</td><td>状态空间稠密、性能敏感</td></tr>
+      </table>
+    </div>
+
+    <div class="box insight">
+      <span class="box-tag">✅ 判定规则</span>
+      <p>两者渐近复杂度相同（都等于"不同子问题数 × 每子问题转移代价"）。实际选择只看两点：递归深度是否安全、是否需要滚动数组省空间。面试写记忆化，生产写填表。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 8.5-1</div>
+              <div class="q-text">记忆化和自底向上的渐近复杂度为什么相同？实际差别在哪？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              都是"子问题数 × 单点转移代价"。差别在常数（递归开销）、空间优化可行性（滚动数组只能自底向上）、以及记忆化只算用到的子问题。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 8.5-2</div>
+              <div class="q-text">为什么 LCS 可以把空间从 Θ(mn) 压到 O(min(m,n))，而重构路径时却不行？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              求值只需上一行（滚动两行即可）；但回溯重构需要任意 c[i][j] 的历史值来判断来路，整表（或等价信息）必须保留。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ================= 8.6 ================= -->
+    <h2><span class="sec-no">8.6</span>状态设计为什么是难点：一个设计失误的反例</h2>
+
+    <p>上一节说明"表怎么填"有章可循。但真正的难点在这之前：<strong>状态怎么定义？</strong>这是 DP 教学中唯一没有通用公式的一步。用一个具体反例看清楚错在哪。</p>
+
+    <p><strong>问题：最长递增子序列（LIS）。</strong>给序列，找最长的严格递增子序列。</p>
+
+    <p><strong>失败的设计。</strong>新手直觉：仿照前缀型 DP，设 dp[i] = 前 i 个元素中 LIS 的长度。然后试图从 dp[i−1] 推出 dp[i]："如果 a[i] 能接在 LIS 后面就 +1"。</p>
+
+    <p><strong>反例（证明这个转移不存在）。</strong>两个前缀 P = [1, 100] 和 Q = [50, 60]，它们的 dp 值相同（都是 2）。现在同时追加元素 70：</p>
+    <ul>
+      <li>P + [70] = [1, 100, 70]：LIS = [1, 70] 或 [1, 100]，长度 <strong>2</strong>；</li>
+      <li>Q + [70] = [50, 60, 70]：LIS = [50, 60, 70]，长度 <strong>3</strong>。</li>
+    </ul>
+    <p>前缀 dp 值相同、追加元素相同，结果 dp 值却不同。这说明 <strong>dp[i] 的取值不包含转移所需的信息</strong>——你还需要知道"LIS 的末尾元素是几"，才能判断新元素接不接得上。转移函数在数学上就不存在，任何"递推"都是错的。</p>
+
+    <p><strong>正确的设计。</strong>把缺失的信息塞进状态：设 dp[i] = <strong>以 a[i] 结尾</strong>的 LIS 长度。则</p>
+
+    <div class="formula">dp[i] = 1 + max { dp[j] : j &lt; i 且 a[j] &lt; a[i] }（集合为空时 dp[i] = 1）</div>
+
+    <p>答案是 max<sub>i</sub> dp[i]（注意：不是 dp[n]）。在序列 [10, 9, 2, 5, 3, 7, 101, 18] 上手算：dp = [1, 1, 1, 2, 2, 3, 4, 4]，LIS 长度 <strong>4</strong>（如 [2, 3, 7, 18] 或 [2, 5, 7, 101]）。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>状态设计的黄金检验：<strong>状态里必须装下"做转移决策所需的全部信息"</strong>。写出转移方程前，先问——知道 dp 值，够不够我决定下一步？不够就把缺的信息加进状态（加维度、加"以 i 结尾"之类的限定）。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>以为"加维度"总能让状态合法。维度可以救回信息，但每加一维，子问题总数乘一个因子——状态膨胀过快时 DP 失去意义（参数范围乘积必须多项式有界，重叠子问题这张入场券才有效）。设计状态是在"信息完整"与"状态数可控"之间走钢丝。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 8.6-1</div>
+              <div class="q-text">LIS 中"dp[i] = 前 i 个元素的 LIS 长度"为什么是错误状态设计？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              dp 值不含"LIS 末尾元素"，无法判断新元素能否接上：前缀 [1,100] 与 [50,60] dp 同为 2，追加 70 后结果分别为 2 和 3，转移函数不存在。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 8.6-2</div>
+              <div class="q-text">LIS 的正确状态设计与转移方程？答案为什么不是 dp[n]？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              dp[i] = 以 a[i] 结尾的 LIS 长度，dp[i] = 1 + max{dp[j] : j&lt;i, a[j]&lt;a[i]}。LIS 不一定以末元素结尾，故答案是所有 dp[i] 的最大值。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===== 概念卡 ===== -->
+    <h2><span class="sec-no">🃏</span>概念卡：本章概念的一分钟画像</h2>
+    <p>翻面前先自问：这个概念我能用一句话讲清楚吗？</p>
+    <div class="flip-grid">
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 1</div>
+            <div class="q-text">最优子结构（Optimal Substructure）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">问题的最优解内部包含子问题的最优解。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">保证"用子问题最优解拼原问题最优解"合法，是 DP 的第一张入场券。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">拼乐高：整体最优作品的每个局部，本身也是该局部的最优拼法。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为所有最优化问题都有——最长简单路径就没有（子问题不独立）。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">第9章贪心同样需要它；第10章用它理解"为什么难问题连 DP 都救不了"。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 2</div>
+            <div class="q-text">重叠子问题（Overlapping Subproblems）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">递归树中不同子问题只有多项式个，同一子问题被反复求解。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">是"缓存答案"有利可图的前提，DP 的第二张入场券。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">同一道题被布置了一万次——当然该把答案抄下来。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">与分治混淆：分治的子问题互不重叠（归并排序），缓存无收益。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">估算 DP 复杂度：不同子问题数 × 单点转移代价。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 3</div>
+            <div class="q-text">状态与状态转移方程（State &amp; Recurrence）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">状态是子问题的参数化标识；转移方程给出状态间的依赖计算关系。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">把"指数搜索"改写为"多项式个状态的填表"，是 DP 的核心设计动作。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">状态 = 压缩过的历史：只保留做未来决策所需的信息。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">状态信息不足（如 LIS 只记长度）导致转移函数不存在；或状态膨胀失控。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">一切 DP 题的第一步；第10章还会用"状态数是否多项式"理解难解性边界。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 4</div>
+            <div class="q-text">记忆化（Memoization）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">在朴素递归上加缓存：算过的子问题直接查表返回。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">用最小改动把指数递归降到多项式，且只计算真正用到的子问题。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">开卷考试：遇到做过的题直接翻笔记。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为比自底向上慢一个量级——渐近相同，只差常数与空间优化能力。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">状态空间稀疏或快速原型时首选。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 5</div>
+            <div class="q-text">解的重构（Solution Reconstruction）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">DP 表只存最优值；具体方案需另记选择表（如 s[i][j]）或沿转移规则回溯。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">多数应用要的不仅是"最优值是多少"，更是"方案是什么"。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">登山时在每个岔口钉个路标，下山沿路标走。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">压缩空间（滚动数组）后才发现无法回溯——重构需要历史信息。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">矩阵链输出括号方案、LCS 输出公共序列、diff 输出编辑脚本。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 6</div>
+            <div class="q-text">填表顺序（Evaluation Order）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">自底向上时按子问题依赖 DAG 的拓扑序计算各状态。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">保证填到任何格子时，它依赖的格子都已就绪。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">先修地基再盖楼；矩阵链乘按链长、LCS 按行，都是拓扑序。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为只能按行或按列——顺序由依赖关系决定，区间 DP 按斜线。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">设计任何自底向上 DP 时与状态设计同步考虑。</span></div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- ===== 分层习题 ===== -->
+    <h2><span class="sec-no">📝</span>分层习题</h2>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>判断：归并排序的子问题也"重叠"——merge 过程会反复处理同样大小的子数组，所以可以用记忆化加速。这个说法对吗？</div>
+      <details>
+        <summary>提示</summary>
+        <p>回忆重叠子问题的定义：关键是"不同子问题的个数"，而不是"子数组的大小"。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">错。重叠指的是<strong>同一个子问题</strong>（同样的输入内容）被反复求解。归并排序每次处理的子数组内容互不相同，不同子问题有 O(n log n) 量级且每个只出现一次，缓存没有命中机会，反而白耗空间。易错点：把"参数规模相同"误当作"子问题相同"——判定重叠要看参数取值，不看参数大小。</div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>判断：只要一个问题有最优子结构，就一定能用动态规划高效求解。</div>
+      <details>
+        <summary>提示</summary>
+        <p>DP 有两张入场券，这里只给了一张。想想另一张缺失时的复杂度。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">错。还缺"重叠子问题"。若不同子问题的个数是指数的（如旅行商问题的子集 DP 有 2ⁿ·n 个状态），即使每个只算一次，总量仍是指数。最优子结构只保证递推<strong>正确</strong>，不保证递推<strong>高效</strong>。易错点：把正确性条件当成效率条件。</div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>钢条价格表 p = [1, 5, 8, 9, 10]（长度 1 到 5）。用转移方程 r(n) = max(pᵢ + r(n−i)) 完整计算 r(1)…r(5)，并给出 r(5) 的最优切法。</div>
+      <details>
+        <summary>提示</summary>
+        <p>对每个 n，枚举第一刀位置 i = 1…n，逐项比较；同时记录最优的 i。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          r(0)=0。<br>
+          r(1) = p₁+r(0) = <strong>1</strong>（不切）。<br>
+          r(2) = max(p₁+r(1), p₂+r(0)) = max(1+1, 5+0) = <strong>5</strong>（不切）。<br>
+          r(3) = max(1+5, 5+1, 8+0) = max(6, 6, 8) = <strong>8</strong>（不切）。<br>
+          r(4) = max(1+8, 5+5, 8+1, 9+0) = max(9, 10, 9, 9) = <strong>10</strong>（切 2+2）。<br>
+          r(5) = max(1+10, 5+8, 8+5, 9+1, 10+0) = max(11, 13, 13, 10, 10) = <strong>13</strong>。<br>
+          最优切法：第一刀 i=2 或 i=3 均可，得 2+3 两段，收入 5+8 = 13。
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>三个矩阵 A₁(5×10)、A₂(10×3)、A₃(3×12)。完整计算 m[1][2]、m[2][3]、m[1][3]，给出最优加括号与乘法次数。</div>
+      <details>
+        <summary>提示</summary>
+        <p>m[1][3] 需要枚举 k=1 与 k=2 两种最后乘法位置。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          ⟨p₀,p₁,p₂,p₃⟩ = ⟨5,10,3,12⟩。<br>
+          m[1][2] = 5·10·3 = <strong>150</strong>；m[2][3] = 10·3·12 = <strong>360</strong>。<br>
+          m[1][3]，k=1：m[1][1]+m[2][3]+p₀p₁p₃ = 0+360+5·10·12 = 360+600 = 960；<br>
+          k=2：m[1][2]+m[3][3]+p₀p₂p₃ = 150+0+5·3·12 = 150+180 = <strong>330</strong>。<br>
+          最优加括号：<strong>((A₁A₂)A₃)</strong>，330 次标量乘法（比另一种 960 次省近三分之二）。
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l3">L3 建模应用</span>你负责一个文本编辑器的新功能：给用户展示"旧文档 → 新文档"的最少编辑步骤说明。需求是突出显示未改动的部分。请说明：把什么建模成 X 和 Y？用什么算法？输出的 Z 对应产品里的什么？若要进一步给出"最少插入/删除次数"，状态转移该怎么改？</div>
+      <details>
+        <summary>提示</summary>
+        <p>"未改动的部分"在结构上是什么？想想 git diff 为什么长得像 LCS 的输出。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          建模：X = 旧文档的行序列，Y = 新文档的行序列；Z = LCS(X, Y) 即未改动行，产品上就是"正常显示、不加高亮"的部分（X 中不在 Z 里的行标红删除，Y 中不在 Z 里的行标绿新增）。<br>
+          最少插入/删除数：编辑距离（Levenshtein 的插删版）。状态仍是双前缀 d[i][j]，转移改为：xᵢ=yⱼ 时 d[i][j]=d[i−1][j−1]；不等时 d[i][j]=1+min(d[i−1][j], d[i][j−1])。若允许替换，再加 d[i−1][j−1]+1 一项。这正是 LCS 转移的孪生兄弟——同一个"双前缀"状态设计，换代价函数而已。
+        </div>
+      </details>
+    </div>
+
+    <!-- ===== 自测 ===== -->
+    <h2><span class="sec-no">✍️</span>本章自测</h2>
+    <p class="quiz-hint">点击选项判分，答错会给出原因。</p>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 1</div>
+      <div class="q-stem">一个问题能用动态规划高效求解的充分条件是？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 有最优子结构</li>
+        <li data-opt="b">B. 有最优子结构且不同子问题数为多项式（重叠子问题）</li>
+        <li data-opt="c">C. 能写出递归式</li>
+        <li data-opt="d">D. 子问题可以并行计算</li>
+      </ul>
+      <div class="quiz-explain">解析：B 对，两张入场券缺一不可。A 错——只有最优子结构，递归式正确但子问题数可能是指数（如 TSP）；C 错——任何分治都有递归式，与效率无关；D 错——并行性既不保证正确也不保证多项式。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="c">
+      <div class="q-no">自测 2</div>
+      <div class="q-stem">矩阵链乘 ⟨30,35,15,5,10⟩ 的最优乘法次数与最后乘的位置是？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 4875，k=2</li>
+        <li data-opt="b">B. 9375，k=3</li>
+        <li data-opt="c">C. 4000，k=1</li>
+        <li data-opt="d">D. 27000，k=2</li>
+      </ul>
+      <div class="quiz-explain">解析：C 对，m[1][4]=4000，最优括号 (A₁(A₂(A₃A₄)))。A 错——4875 是 m[1][3] 的值，不是全链；B 错——9375 是 k=3 的候选值，被淘汰；D 错——27000 是 k=2 的候选值，是最差的一档。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="a">
+      <div class="q-no">自测 3</div>
+      <div class="q-stem">X=ABCBDAB，Y=BDCABA，c[7][6] 的值与含义是？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 4，LCS 长度为 4</li>
+        <li data-opt="b">B. 2，最长公共子串长度为 2</li>
+        <li data-opt="c">C. 6，两串较短者的长度</li>
+        <li data-opt="d">D. 7，两串较长者的长度</li>
+      </ul>
+      <div class="quiz-explain">解析：A 对，一条 LCS 是 BCBA。B 错——那是"最长公共子串"问题的答案，混淆了连续与不连续；C、D 错——把 LCS 长度误读成输入规模，公共子序列长度不可能等于整个较短串（两串并不相同）。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="d">
+      <div class="q-no">自测 4</div>
+      <div class="q-stem">关于自顶向下记忆化与自底向上填表，正确的是？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 记忆化的渐近复杂度严格高于填表</li>
+        <li data-opt="b">B. 填表法总能用更少内存且不影响解的重构</li>
+        <li data-opt="c">C. 记忆化必须把所有子问题都算一遍</li>
+        <li data-opt="d">D. 两者渐近复杂度相同；记忆化只算用到的子问题，填表便于滚动数组省空间</li>
+      </ul>
+      <div class="quiz-explain">解析：D 对。A 错——渐近相同，只差常数；B 错——滚动数组会丢掉重构所需的历史；C 错——记忆化恰恰只算递归真正触达的子问题，这是它的优点之一。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 5</div>
+      <div class="q-stem">LIS 问题中，状态"dp[i] = 前 i 个元素的 LIS 长度"失败的根本原因是？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 时间复杂度太高</li>
+        <li data-opt="b">B. dp 值不含转移所需的全部信息（LIS 的末尾元素未知），转移函数不存在</li>
+        <li data-opt="c">C. 该问题没有最优子结构</li>
+        <li data-opt="d">D. 该问题不满足重叠子问题</li>
+      </ul>
+      <div class="quiz-explain">解析：B 对——[1,100] 与 [50,60] dp 值同为 2，追加 70 后结果不同，证明转移无法表达。A 错——失败是"正确性"层面的，不是效率；C 错——LIS 在"以 i 结尾"的正确定义下有最优子结构；D 错——正确设计下子问题只有 n 个，完全重叠。</div>
+    </div>
+
+    <!-- ===== 三句话复述 ===== -->
+    <div class="retell">
+      <h3>🗣️ 用自己的话，三句话讲完本章</h3>
+      <p>对着空气（或室友）说出这三句。说卡壳的那句，回去重读对应小节。</p>
+      <details>
+        <summary>句1：这章解决什么问题？——</summary>
+        <div class="retell-answer">参考答案：组合最优化问题方案数指数爆炸，但若问题有最优子结构且子问题大量重叠，可以把每个子问题只算一次，把指数搜索压成多项式填表——这就是动态规划。</div>
+      </details>
+      <details>
+        <summary>句2：核心机制是什么？——</summary>
+        <div class="retell-answer">参考答案：设计一个"信息足够做转移"的状态（子问题的参数化），写出状态转移方程，按依赖拓扑序填表（或递归加缓存），最后用选择表/回溯重构具体方案。</div>
+      </details>
+      <details>
+        <summary>句3：它和前后章怎么分工？——</summary>
+        <div class="retell-answer">参考答案：第6、7章解决"有显式图结构"的问题；本章解决"无现成结构、须自己设计状态"的最优化；第9章问何时连表都不用填（贪心）；第10章问连 DP 都救不了时怎么办（NP 难与近似）。</div>
+      </details>
+    </div>
+
+    <!-- ===== 复习计划 ===== -->
+    <div class="review-plan">
+      <h3>🔁 间隔复习计划</h3>
+      <p>回忆本身比重读有效 10 倍。到点只做一件事：翻卡 + 重做标记题。</p>
+      <table>
+        <tr><th>时间点</th><th>复习内容</th><th>预计用时</th></tr>
+        <tr><td>第 1 天</td><td>概念卡 1–6 + 回忆卡 8.1-1、8.3-1、8.4-1、8.6-1</td><td>10 分钟</td></tr>
+        <tr><td>第 3 天</td><td>概念卡（重点翻错的）+ 重做 L2 钢条 r(1..5) + 自测错题</td><td>10 分钟</td></tr>
+        <tr><td>第 7 天</td><td>三句话复述 + 重填矩阵链乘 ⟨30,35,15,5,10⟩ 的 m 表</td><td>12 分钟</td></tr>
+        <tr><td>第 15 天</td><td>只做合上书挑战；能全过就毕业</td><td>15 分钟</td></tr>
+      </table>
+    </div>
+
+    <!-- ===== 合上书挑战 ===== -->
+    <div class="final-challenge">
+      <h3>📕 合上书挑战</h3>
+      <p class="fc-sub">现在关掉这个页面，拿一张纸，凭记忆完成以下任务。全部做完再回来核对——这是本章真正的毕业考试。</p>
+      <ol id="challenge-list">
+        <li><span class="fc-check"></span>写出 DP 的两张入场券，并各说一个缺它不行的反例（最长简单路径 / 归并排序）</li>
+        <li><span class="fc-check"></span>写出钢条切割、矩阵链乘、LCS 三个状态转移方程</li>
+        <li><span class="fc-check"></span>手算矩阵链 ⟨30,35,15,5,10⟩ 的完整 m 表与最优括号（4000 次）</li>
+        <li><span class="fc-check"></span>在 X=ABCBDAB、Y=BDCABA 上填出 LCS 表右下角并回溯一条 LCS</li>
+        <li><span class="fc-check"></span>解释 LIS 的错误状态设计为什么连转移函数都写不出来</li>
+        <li><span class="fc-check"></span>回答本章的主线问题：枚举指数爆炸时，什么结构允许每个子问题只算一次？（一句话）</li>
+      </ol>
+    </div>
+
+    <div class="complete-zone">
+      <button class="btn-complete" id="btn-complete" onclick="markDone()">✓ 我已完成本章（含合上书挑战）</button>
+    </div>
+
+    <div class="chapter-nav">
+      <a href="chapter-07.html"><span class="nav-dir">← 上一章</span>第7章 最小生成树与单源最短路</a>
+      <a href="chapter-09.html" class="next"><span class="nav-dir">下一章 →</span>第9章 贪心与摊还分析</a>
+    </div>
+
+  </div>
+</div>
+
+<footer class="footer">
+  <div class="wrap">第8章 动态规划 · 算法导论互动讲义 · 基于 Cormen et al.《算法导论》(CLRS, 第3版)</div>
+</footer>
+
+<script src="assets/mermaid.min.js"></script>
+<script>
+mermaid.initialize({
+  startOnLoad: true,
+  theme: "base",
+  themeVariables: {
+    primaryColor: "#e3edf7",
+    primaryBorderColor: "#1d5f9e",
+    primaryTextColor: "#1d5f9e",
+    lineColor: "#5c554b",
+    secondaryColor: "#fbeedd",
+    tertiaryColor: "#f5f1e8",
+    fontFamily: "-apple-system, PingFang SC, sans-serif",
+    fontSize: "14px"
+  },
+  flowchart: { curve: "linear", htmlLabels: false }
+});
+</script>
+<script>
+// 自测题判分
+document.querySelectorAll(".quiz-block").forEach(block => {
+  const answer = block.dataset.answer;
+  const explain = block.querySelector(".quiz-explain");
+  block.querySelectorAll(".quiz-opts li").forEach(li => {
+    li.addEventListener("click", () => {
+      const opts = block.querySelectorAll(".quiz-opts li");
+      opts.forEach(o => o.classList.add("disabled"));
+      if (li.dataset.opt === answer) {
+        li.classList.add("correct");
+      } else {
+        li.classList.add("wrong");
+        block.querySelector(`[data-opt="${answer}"]`).classList.add("correct");
+      }
+      explain.classList.add("show");
+    });
+  });
+});
+
+// 合上书清单打勾
+document.querySelectorAll("#challenge-list li").forEach(li => {
+  li.addEventListener("click", () => li.classList.toggle("checked"));
+});
+
+// 完成标记 → localStorage
+const KEY = "algo_progress_v1";
+function loadProgress() {
+  try { return JSON.parse(localStorage.getItem(KEY)) || {}; } catch (e) { return {}; }
+}
+const progress = loadProgress();
+const btn = document.getElementById("btn-complete");
+if (progress["8"] && progress["8"].done) {
+  btn.textContent = "✓ 已完成 · 再次点击重置";
+  btn.classList.add("done");
+}
+function markDone() {
+  const p = loadProgress();
+  if (p["8"] && p["8"].done) {
+    delete p["8"];
+    btn.textContent = "✓ 我已完成本章（含合上书挑战）";
+    btn.classList.remove("done");
+  } else {
+    p["8"] = { done: true, completedAt: Date.now(), reviewsDone: 0 };
+    btn.textContent = "✓ 已完成 · 复习提醒已开启";
+    btn.classList.add("done");
+  }
+  localStorage.setItem(KEY, JSON.stringify(p));
+}
+</script>
+
+</body>
+</html>

@@ -1,0 +1,816 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第13章 通用信源编码 · 信息论互动讲义</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+<nav class="topbar">
+  <div class="topbar-inner">
+    <span class="brand"><a href="index.html" style="color:inherit">← 学习地图</a></span>
+    <span class="crumb">阶段四 · 通用与网络 / 第13章</span>
+  </div>
+</nav>
+
+<div class="wrap">
+
+  <div class="lecture-head">
+    <span class="ch-label">CHAPTER 13 · 通用与网络</span>
+    <h1>通用信源编码</h1>
+    <p class="lead">分布未知的数据还能压到熵吗？能——而且不需要知道任何统计，码长渐近收敛到熵率。</p>
+  </div>
+
+  <!-- 本章定位 -->
+  <div class="position-bar">
+    <strong>本章在主线上的位置：</strong>Ch5 的 Huffman/Shannon 码假设已知分布 → <u>分布未知时，单条码流仍可达熵率（LZ），期望冗余可由 minimax/贝叶斯精确刻画</u> → Ch14 把"每条序列各自的码长"抽象成柯氏复杂度，Ch15–17 把熵的思想推广到多用户网络。<br>
+    第13章回答主线上的第十三个问题：<strong>不知道信源分布，还能压缩到极限吗？代价是多少？</strong>
+    <div class="map-inline">
+      <span class="node">Ch1–4 基础（熵·互信息·AEP·熵率）</span><span class="arrow">→</span>
+      <span class="node">Ch5–9 压缩与信道</span><span class="arrow">→</span>
+      <span class="node">Ch10–12 率失真与统计</span><span class="arrow">→</span>
+      <span class="node">Ch12 最大熵</span><span class="arrow">→</span>
+      <span class="node here">Ch13 通用信源编码</span><span class="arrow">→</span>
+      <span class="node">Ch14 柯氏复杂度</span><span class="arrow">→</span>
+      <span class="node">Ch15–17 网络信息论</span>
+    </div>
+  </div>
+
+  <!-- 学习目标 -->
+  <div class="objectives">
+    <h4>🎯 学完本章，合上书你应该能：</h4>
+    <ol>
+      <li>说出"用错分布 q 编码来自 p 的数据"的期望冗余恰为 D(p‖q)，并手算一个二元例子</li>
+      <li>写出 minimax 遗憾 R* = min<sub>q</sub> max<sub>θ</sub> D(p<sub>θ</sub>‖q) 与归一化最大似然（NML）码的关系，并对 n=2、n=3 的伯努利族算到底</li>
+      <li>写出贝叶斯混合码 m(xⁿ) 及其平均冗余 = I(θ;Xⁿ)，并解释它与例 1 数值呼应的原因</li>
+      <li>陈述竞争最优性不等式 P(l(X) ≥ l′(X)+c) ≤ 2<sup>−(c−1)</sup> 并解释 c=3 时的含义</li>
+      <li>对给定 0-1 串完整执行 LZ78 切分、建字典、输出（指针，字符）序列并数清码长</li>
+      <li>解释为什么短串上 LZ78 反而膨胀、长串上却收敛到熵率</li>
+    </ol>
+  </div>
+
+  <div class="lecture">
+
+    <!-- 推导主线 -->
+    <div class="figure">
+      <div class="mermaid">
+flowchart LR
+  A["Ch5 的前提<br>已知分布 p"] --> B["现实<br>文本 DNA 传感流<br>分布未知"]
+  B --> C["错用 q 的代价<br>冗余 = D(p‖q)"]
+  C --> D["两剂解药<br>minimax NML 与贝叶斯混合"]
+  D --> E["更激进<br>不要统计直接压 LZ78"]
+  E --> F["遗留<br>每条序列自身的码长极限<br>→ Ch14 柯氏复杂度"]
+  classDef hot fill:#fbeedd,stroke:#c4651f,stroke-width:2.5px,color:#c4651f;
+  classDef danger fill:#fae9e7,stroke:#b03a2e,stroke-width:2.5px,color:#b03a2e;
+  class D hot;
+  class F danger;
+      </div>
+      <div class="caption">本章推导主线：已知分布的前提在现实中崩塌，于是先量化"错分布的代价"，再给出两条统计路线（minimax 与贝叶斯），最后走向完全不需要统计的 LZ——而它引出一个更深的问题（红色）：单条序列的复杂度到底是多少？那是第 14 章的事。</div>
+    </div>
+
+    <!-- ============ 13.1 ============ -->
+    <h2><span class="sec-no">13.1</span>为什么需要通用编码：错分布的代价恰好是相对熵</h2>
+
+    <p>第 5 章我们造出了最优码：给分布 <span class="var">p</span> 配上 Shannon 码或 Huffman 码，平均码长逼近熵 H(p)。但那份蓝图有个隐蔽的前提——<strong>你得先知道 p</strong>。这一节先承认这个前提在现实中不成立，再把"用错分布"的代价算成一个精确的数字。</p>
+
+    <p>现实里的数据长什么样？英文文本的字母分布随作者与文体漂移；DNA 序列里碱基与短串的统计没人能先验给出；工厂传感器 24 小时不停吐数据流，连"符号表"都可能随工况变化。你手里没有 <span class="var">p</span>，只有一个猜测 <span class="var">q</span>。问题是：<strong>按 <span class="var">q</span> 设计的码，用来压缩真实分布 <span class="var">p</span> 的数据，亏多少？</strong></p>
+
+    <p>答案是一个漂亮的恒等式。按 <span class="var">q</span> 的最优码，给符号 <span class="var">x</span> 分配码长 l(x) = log₂(1/q(x))（先忽略取整）。数据其实来自 <span class="var">p</span>，所以期望码长：</p>
+
+    <div class="formula">E<sub><span class="var">p</span></sub>[l(X)] = ∑<sub>x</sub> p(x)·log₂<span class="frac"><span class="num-part">1</span><span class="den-part">q(x)</span></span> = ∑<sub>x</sub> p(x)·log₂<span class="frac"><span class="num-part">p(x)</span><span class="den-part">q(x)</span></span> + ∑<sub>x</sub> p(x)·log₂<span class="frac"><span class="num-part">1</span><span class="den-part">p(x)</span></span> = H(p) + D(p‖q)</div>
+
+    <p>也就是说：<span class="term">冗余</span>（Redundancy）——超出熵的那部分期望码长——<strong>恰好等于相对熵 D(p‖q)</strong>。相对熵这个在第 2 章登场的量，在这里第一次露出它的工程真身：它就是"信源分布猜错"的每符号比特罚款。</p>
+
+    <h3>例 1：真分布 Bern(1/4)，错用均匀分布 q</h3>
+
+    <p>信源每符号独立地发 0/1，真实分布 <span class="var">p</span> = Bern(1/4)：P(1)=1/4，P(0)=3/4。工程师不知道，按均匀猜测 <span class="var">q</span> = (1/2, 1/2) 设计码。</p>
+
+    <p><strong>第一步：q 码长什么样。</strong>q 下两个符号各配码长 log₂ 2 = 1 bit，所以 0→0、1→1，<strong>每个符号恒用 1 bit</strong>，期望码长 L = 1 bit。</p>
+
+    <p><strong>第二步：真实熵是多少。</strong>二元熵函数：</p>
+
+    <div class="formula">h(<span class="frac"><span class="num-part">1</span><span class="den-part">4</span></span>) = −<span class="frac"><span class="num-part">1</span><span class="den-part">4</span></span>·log₂<span class="frac"><span class="num-part">1</span><span class="den-part">4</span></span> − <span class="frac"><span class="num-part">3</span><span class="den-part">4</span></span>·log₂<span class="frac"><span class="num-part">3</span><span class="den-part">4</span></span> = <span class="frac"><span class="num-part">1</span><span class="den-part">4</span></span>×2 + <span class="frac"><span class="num-part">3</span><span class="den-part">4</span></span>×0.4150 = 0.5 + 0.3113 = <strong>0.8113 bit</strong></div>
+
+    <p><strong>第三步：冗余直接相减。</strong>每符号浪费 1 − 0.8113 = 0.1887 bit——近 19% 的码长白白烧掉。</p>
+
+    <p><strong>第四步：验证恒等式，展开 D(p‖q) 一步不跳：</strong></p>
+
+    <div class="formula">D(p‖q) = <span class="frac"><span class="num-part">1</span><span class="den-part">4</span></span>·log₂<span class="frac"><span class="num-part">1/4</span><span class="den-part">1/2</span></span> + <span class="frac"><span class="num-part">3</span><span class="den-part">4</span></span>·log₂<span class="frac"><span class="num-part">3/4</span><span class="den-part">1/2</span></span> = <span class="frac"><span class="num-part">1</span><span class="den-part">4</span></span>·log₂<span class="frac"><span class="num-part">1</span><span class="den-part">2</span></span> + <span class="frac"><span class="num-part">3</span><span class="den-part">4</span></span>·log₂<span class="frac"><span class="num-part">3</span><span class="den-part">2</span></span></div>
+    <div class="formula">= <span class="frac"><span class="num-part">1</span><span class="den-part">4</span></span>×(−1) + <span class="frac"><span class="num-part">3</span><span class="den-part">4</span></span>×0.5850 = −0.25 + 0.4387 = <strong>0.1887 bit</strong> ✓</div>
+
+    <p>与第三步直接相减的结果严丝合缝。这不是巧合，就是恒等式 E_p[l] = H(p) + D(p‖q) 在数字上显形。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>相对熵不是抽象的"距离"——它是<strong>真金白银的比特罚款</strong>：分布猜偏多少，每符号就多付 D(p‖q) 比特。于是"分布未知"这件事从模糊的担心变成了可定价的风险，全章的工作就是把这个罚款压到最低。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>"分布估计得差不多就行"——错。D(p‖q) 对 q 的尾部极敏感：若某个真实概率不小的符号被 <span class="var">q</span> 给了接近 0 的概率，log₂(p/q) 会爆炸，罚款无界。通用编码的出发点正是：<strong>不要赌分布，要设计对一切分布都不离谱的码</strong>。</p>
+    </div>
+
+    <!-- 回忆卡片 13.1 -->
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 13.1-1</div>
+              <div class="q-text">用分布 q 的最优码压缩真实分布 p 的数据，期望码长和期望冗余各是多少？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              期望码长 E_p[l] = H(p) + D(p‖q)；期望冗余（超出熵的部分）恰为相对熵 D(p‖q)。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 13.1-2</div>
+              <div class="q-text">真分布 Bern(1/4) 错用均匀 q，每符号冗余是多少比特？怎么算的？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              0.1887 bit。q 码每符号恒 1 bit，真熵 h(1/4)=0.8113 bit，相减即得；也等于 D(Bern(1/4)‖Bern(1/2)) = ¼·(−1) + ¾·log₂(3/2)。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 13.2 ============ -->
+    <h2><span class="sec-no">13.2</span>最坏情况与贝叶斯：把"罚款"压到最低的两条路线</h2>
+
+    <p>上一节把错分布的代价标了价：D(p‖q)。这一节的问题自然浮现——在 p 完全未知时，选哪个 q 最稳？统计学家给出两种世界观：<strong>盯住最坏情况（minimax）</strong>，或<strong>给参数一个先验求平均（贝叶斯）</strong>。两条路线各有一个干净的答案，而且答出来的数常常惊人地接近。</p>
+
+    <h3>路线一：minimax 与归一化最大似然</h3>
+
+    <p>设信源分布来自参数族 {p<sub>θ</sub>}（如伯努利族 Bern(θ)）。选一个码等价于选一个分布 q。最坏情况下的<span class="term">遗憾</span>（Regret）定义为：</p>
+
+    <div class="formula">R* = min<sub>q</sub> max<sub>θ</sub> D(p<sub>θ</sub>‖q)</div>
+
+    <p>即：我选 q，自然选最不利于我的 θ，我先把最坏情况压到最小。这个最小最大值 R* 有个出人意料的显式解（Shtarkov）：最优 q 是<span class="term">归一化最大似然分布</span>（Normalized Maximum Likelihood, NML），</p>
+
+    <div class="formula">q*(xⁿ) = <span class="frac"><span class="num-part">sup<sub>θ</sub> p<sub>θ</sub>(xⁿ)</span><span class="den-part">C<sub>n</sub></span></span>，其中 C<sub>n</sub> = ∑<sub>xⁿ</sub> sup<sub>θ</sub> p<sub>θ</sub>(xⁿ)</div>
+
+    <div class="formula">R* = log₂ C<sub>n</sub>（Shtarkov 值）</div>
+
+    <p>直觉：给每条序列打分时，不用固定 θ，而用"事后最偏袒它的 θ"来打分，再把所有分数归一化。C<sub>n</sub> 度量这个参数族有多"大"：族越丰富，自归一化的开销越大，遗憾越高。</p>
+
+    <h3>例 2：n=2 伯努利序列的 NML 遗憾（完整手算）</h3>
+
+    <p>参数族 Bern(θ)，序列长 n=2，共 4 条序列。对每条序列 xⁿ，先算 sup<sub>θ</sub> p<sub>θ</sub>(xⁿ)——最大似然在 θ̂ = （序列中 1 的比例）处取到：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>序列 xⁿ</th><th>θ̂（ML 估计）</th><th>sup<sub>θ</sub> p<sub>θ</sub>(xⁿ)</th><th>数值</th></tr>
+        <tr><td>00</td><td>0</td><td>(1−0)²</td><td>1</td></tr>
+        <tr><td>01</td><td>1/2</td><td>(1/2)·(1/2)</td><td>1/4</td></tr>
+        <tr><td>10</td><td>1/2</td><td>(1/2)·(1/2)</td><td>1/4</td></tr>
+        <tr><td>11</td><td>1</td><td>1²</td><td>1</td></tr>
+      </table>
+    </div>
+
+    <p><strong>求和：</strong>C₂ = 1 + 1/4 + 1/4 + 1 = 5/2 = 2.5。</p>
+
+    <p><strong>取对数：</strong>minimax 遗憾</p>
+
+    <div class="formula">R* = log₂ 2.5 = log₂<span class="frac"><span class="num-part">5</span><span class="den-part">2</span></span> = <strong>1.3219 bit</strong></div>
+
+    <p>含义：无论真实 θ 是谁，存在一个码（NML 码），它对 2 比特伯努利数据的期望码长比"知道 θ 后才能达到的极限"最多多 1.3219 bit——这是对"整段 2 比特序列"而言的一笔固定罚款，不随 θ 变坏。注意它相当贵：序列本身才 2 bit，可见<strong>短序列上"无知"很贵</strong>；但 C<sub>n</sub> 随 n 只以约 (1/2)·log₂ n 的速度增长（参数族维数决定的渐近），摊到每符号就趋向 0。</p>
+
+    <h3>路线二：贝叶斯混合码</h3>
+
+    <p>贝叶斯派拒绝只盯最坏情况：给 θ 一个先验权重 w(θ)，用<span class="term">混合分布</span>（Mixture Distribution）</p>
+
+    <div class="formula">m(xⁿ) = ∫ w(θ)·p<sub>θ</sub>(xⁿ) dθ</div>
+
+    <p>来编码（码长 log₂(1/m(xⁿ))）。对先验 w 求平均的冗余有一个精确的身份：</p>
+
+    <div class="formula">∫ w(θ)·D(p<sub>θ</sub>‖m) dθ = I(θ; Xⁿ)</div>
+
+    <p>即<strong>贝叶斯平均冗余 = 参数与数据之间的互信息</strong>。互信息在这里有了操作意义：它就是你为"不知道 θ"平均多付的比特数——学 θ 值多少钱，不知道 θ 就亏多少钱。</p>
+
+    <h3>例 3：两点先验下的 I(θ;X)（与例 1 呼应）</h3>
+
+    <p>取先验 w：θ ∈ {1/4, 3/4} 各以概率 1/2，n=1。</p>
+
+    <p><strong>第一步：算混合分布。</strong>m(1) = ½·(1/4) + ½·(3/4) = 1/2；m(0) = ½·(3/4) + ½·(1/4) = 1/2。<strong>混合恰为均匀分布</strong>。</p>
+
+    <p><strong>第二步：算互信息。</strong>I(θ;X) = H(X) − H(X|θ)。边缘 X 是均匀的，H(X) = 1 bit；条件期望 H(X|θ) = h(1/4) = 0.8113 bit（两个 θ 的熵相同，加权不变）。</p>
+
+    <div class="formula">I(θ; X) = 1 − 0.8113 = <strong>0.1887 bit ≈ 0.189 bit</strong></div>
+
+    <p><strong>第三步：对照例 1。</strong>例 1 中真分布 Bern(1/4)、错用均匀 q 的冗余是 0.1887 bit——本例中"先验下的平均冗余"与"某个真实 θ 碰上混合 m 的罚款"数值一致，因为这里 m 恰好是均匀分布，而 D(Bern(1/4)‖均匀) 与 D(Bern(3/4)‖均匀) 相等。两条路线在同一个数上握手：<strong>minimax 与贝叶斯在最坏/平均两个方向上量的是同一枚硬币</strong>。</p>
+
+    <h3>另一种比较：竞争最优性</h3>
+
+    <p>minimax 和贝叶斯都问"平均/最坏差多少"，还可以问一个更个性化的问题：<strong>Shannon 码在逐符号上被别的码大幅击败的概率有多大？</strong>答案是<span class="term">竞争最优性</span>（Competitive Optimality）：设 l(X) 是 Shannon 码长（l(x)=⌈log₂(1/p(x))⌉），l′ 是<strong>任意</strong>其他唯一可译码的码长，则对任意整数 c ≥ 1：</p>
+
+    <div class="formula">P(l(X) ≥ l′(X) + c) ≤ 2<sup>−(c−1)</sup></div>
+
+    <p>读 c=3 这一格：任何别的码想在某个符号上比 Shannon 码<strong>省 3 bit 以上</strong>，这种情况发生的概率 ≤ 2<sup>−2</sup> = 1/4。换句话说，对手可以在少数符号上赢你，但赢得越多，能赢的机会就越指数级萎缩。Shannon 码不只是平均最优，还是"最不容易被单挑打爆"的码。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>三条路线同一个主题：<strong>把"无知"定价</strong>。minimax 的价签是 log₂ C<sub>n</sub>（参数族的大小），贝叶斯的价签是 I(θ;Xⁿ)（参数值多少信息），竞争最优性的价签是 2<sup>−(c−1)</sup>（被单挑击败的概率上限）。价格都付得起，而且渐近都趋向 0——这就是"通用"二字能成立的原因。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>"minimax 遗憾摊到每符号还有 1.3 bit，通用编码不划算"——错在忘了除法。例 2 的 1.3219 bit 是<strong>整段序列</strong>的一次性罚款，n 增大时 log₂ C<sub>n</sub> ≈ (k/2)·log₂ n（k 为参数维数），每符号遗憾 ≈ (k log₂ n)/(2n) → 0。短数据贵、长数据近乎免费，这正是通用编码在流媒体时代大行其道的数学原因。</p>
+    </div>
+
+    <!-- 回忆卡片 13.2 -->
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 13.2-1</div>
+              <div class="q-text">写出 minimax 遗憾的定义和 Shtarkov 给出的显式解（NML 码与 R*）。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              R* = min_q max_θ D(p_θ‖q) = log₂ C_n，其中 C_n = ∑_{xⁿ} sup_θ p_θ(xⁿ)；最优 q 是归一化最大似然分布 q*(xⁿ) = sup_θ p_θ(xⁿ) / C_n。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 13.2-2</div>
+              <div class="q-text">贝叶斯混合码的平均冗余等于什么信息量？竞争最优性不等式长什么样？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              平均冗余 = I(θ;Xⁿ)（参数与数据的互信息）。竞争最优性：P(l(X) ≥ l′(X)+c) ≤ 2^(−(c−1))，l 是 Shannon 码长，l′ 任意唯一可译码。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 13.3 ============ -->
+    <h2><span class="sec-no">13.3</span>Lempel-Ziv：不知道任何统计，照样压到熵率</h2>
+
+    <p>上一节的两条路线都还要先假设一个参数族 {p<sub>θ</sub>}——这已经是妥协：很多真实数据连"族"都给不出。这一节的主角更激进：<strong>完全不要概率模型</strong>，边读数据边建字典，照样渐近压到熵率。这就是 Lempel 和 Ziv 1977–78 年的工作，今天藏在每一个 zip、gzip、png 文件里。</p>
+
+    <h3>LZ78 的规则：边读边长字典</h3>
+
+    <p><span class="term">LZ78</span>（Lempel-Ziv 1978）把输入串切成一连串<strong>互异的短语</strong>：每读到一个"此前字典里没有的最短串"就切一刀，把它登记进字典，然后输出一个二元组（<strong>前缀的字典编号，新添的字符</strong>）。规则一句话：<em>新短语 = 字典里的旧短语 + 一个新字符</em>。</p>
+
+    <h3>例 4：串 1011010100010 的完整 LZ78 编码</h3>
+
+    <p>输入 13 bit：1 0 1 1 0 1 0 1 0 0 0 1 0。从左往右读，维护字典，一步不跳：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>步</th><th>读到的位置</th><th>切出的短语</th><th>为何在此切</th><th>入字典</th><th>输出（指针，新字符）</th></tr>
+        <tr><td>1</td><td>1</td><td>1</td><td>字典空，首字符即新短语</td><td>#1 = 1</td><td>(0, 1)</td></tr>
+        <tr><td>2</td><td>0</td><td>0</td><td>0 不在字典</td><td>#2 = 0</td><td>(0, 0)</td></tr>
+        <tr><td>3</td><td>11</td><td>11</td><td>1 在字典（#1），11 不在</td><td>#3 = 11</td><td>(1, 1)</td></tr>
+        <tr><td>4</td><td>01</td><td>01</td><td>0 在字典（#2），01 不在</td><td>#4 = 01</td><td>(2, 1)</td></tr>
+        <tr><td>5</td><td>010</td><td>010</td><td>01 在字典（#4），010 不在</td><td>#5 = 010</td><td>(4, 0)</td></tr>
+        <tr><td>6</td><td>00</td><td>00</td><td>0 在字典（#2），00 不在</td><td>#6 = 00</td><td>(2, 0)</td></tr>
+        <tr><td>7</td><td>10</td><td>10</td><td>1 在字典（#1），10 不在，串正好读完</td><td>#7 = 10</td><td>(1, 0)</td></tr>
+      </table>
+    </div>
+
+    <p>短语切分结果：<strong>1 | 0 | 11 | 01 | 010 | 00 | 10</strong>；输出序列：<strong>(0,1) (0,0) (1,1) (2,1) (4,0) (2,0) (1,0)</strong>。</p>
+
+    <div class="figure">
+      <div class="mermaid">
+flowchart LR
+  R["字典 空"] --> S1["1 → #1"]
+  S1 --> S2["0 → #2"]
+  S2 --> S3["11 → #3"]
+  S3 --> S4["01 → #4"]
+  S4 --> S5["010 → #5"]
+  S5 --> S6["00 → #6"]
+  S6 --> S7["10 → #7"]
+  classDef hot fill:#fbeedd,stroke:#c4651f,stroke-width:2.5px,color:#c4651f;
+  class S5 hot;
+      </div>
+      <div class="caption">图 13.1 LZ78 字典生长：每个新短语都是"旧短语 + 一个字符"（如橙色 #5 = #4 的 01 再添 0）。解码端拿同样的规则重建同一张表。</div>
+    </div>
+
+    <p><strong>数账：输出一共多少 bit？</strong>第 k 个输出的指针要能从 0 指到 #k−1，需要 ⌈log₂ k⌉ bit（k=1 时 0 bit），再加 1 bit 新字符：</p>
+
+    <div class="formula">指针位数 = 0 + 1 + 2 + 2 + 3 + 3 + 3 = 14 bit，新字符 7 bit，合计 <strong>21 bit</strong></div>
+
+    <p>输入才 13 bit，输出 21 bit——<strong>短串反而膨胀了 62%</strong>！这不是实现错误，而是 LZ 的"启动成本"：字典还没长大，指针开销 > 复用收益。</p>
+
+    <p><strong>为什么长串会翻盘？</strong>设一条 n 长的串被切成 c 个互异短语。互异意味着短语长度必须参差：c 个互异串的总长度至少是 1+2+…+c 量级，即 n ≳ c²/2 的阶，也就是 c 最多约 √(2n)。每个输出花约 log₂ c + 1 bit，总码长约 c(log₂ c + 1)。代入 c ≈ √(2n)：码长/n ≈ (√(2n)·log₂√(2n))/n → 0 的阶……更精细的分析（LZ 定理）给出精确结论：对任何平稳遍历信源，<strong>LZ78 的每符号码长渐近收敛到熵率 H(𝒳)</strong>。直觉一句话：<em>短语越来越长，指针的 log c 开销被越来越长的短语摊薄，而长短语正是信源统计规律性的化身——重复出现的模式被字典捕获，等价于隐式地学到了分布。</em></p>
+
+    <p><strong>工程事实一句。</strong>更早的 <span class="term">LZ77</span>（Lempel-Ziv 1977）用"滑窗 +（位移，长度）匹配"代替显式字典；你日常用的 <strong>zip/gzip = LZ77 变体（DEFLATE）+ Huffman 码</strong>二次压缩指针与字面量——第 5 章的 Huffman 和本章的 LZ 在每个压缩包里联手干活。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>LZ78 把"学统计"和"压缩"合并成同一个动作：<strong>字典就是隐式的概率模型</strong>。它从不计算任何概率，却用"这个短语我见过"记录下了信源的全部规律性。通用编码的深刻之处在于：压缩极限只由信源本身决定，与你是否显式建模无关。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>"LZ 对 13 bit 短串膨胀，所以 LZ 不行"——错在把渐近算法当短串工具。渐近定理的承诺是 n→∞ 时码率→熵率，从不承诺短串赚钱。短数据的正确工具恰恰是 13.2 的 NML/贝叶斯路线（一次性罚款 log₂ C<sub>n</sub> 已知）；长流式数据才轮到 LZ 上场。选工具要看 n 的量级，不看算法名气。</p>
+    </div>
+
+    <!-- 回忆卡片 13.3 -->
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 13.3-1</div>
+              <div class="q-text">LZ78 的切分规则和输出格式是什么？字典如何生长？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              每次切出"字典中已有短语 + 一个新字符"构成的新短语，入字典；输出（旧短语编号，新字符）。字典从空开始每步加一条，解码端同步重建。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 13.3-2</div>
+              <div class="q-text">为什么 LZ78 短串膨胀、长串却能压到熵率？一句话说清摊薄机制。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              c 个互异短语总长 ≳ c²/2，故短语数 c 只以 √n 增长而短语越来越长；每个输出的指针开销 log₂c 被长短语摊薄，重复模式被字典捕获，每符号码长渐近趋于熵率。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 13.4 ============ -->
+    <h2><span class="sec-no">13.4</span>算术编码与"小数码长"：通往柯氏复杂度的桥</h2>
+
+    <p>前三节给了三种通用码的设计思想，但都还欠一个工程零件：码长 log₂(1/q(xⁿ)) 几乎从不是整数，逐符号取整会丢掉宝贵的分数比特。补上这个零件的是<span class="term">算术编码</span>（Arithmetic Coding）：把整条序列 xⁿ 映射到单位区间内一个长度为 q(xⁿ) 的子区间，再输出区间内某个短二进制小数。区间长度就是概率，<strong>码长天然是 log₂(1/q(xⁿ)) 这个"小数"</strong>，整条序列只付一次取整费（≤2 bit），摊到每符号约等于 0。</p>
+
+    <p>它对本章的意义是机制性的：13.2 的 NML 码、贝叶斯混合码，码长函数都是 log₂(1/q(xⁿ)) 形状的理论对象，算术编码是让这些理论码长<strong>可执行</strong>的标准引擎——只要你能逐符号递推算出条件概率 q(x<sub>i</sub>|x<sup>i−1</sup>)（NML 与混合分布都可以链式分解递推），算术编码就把它们落成真实的比特流。</p>
+
+    <p>更重要的是承上启下的一步。回看本章三种码，它们对具体序列 xⁿ 给出的码长都只依赖于序列自身（及其在族中的典型性），而不需要任何人报告 p：<strong>每条序列自带一个"可压缩度"</strong>。把这件事推到极致——不问分布、不问参数族，只问"这条序列本身最短能被描述成什么样"——就得到了一个只依赖序列本身的复杂度量。第 14 章给它正式的名字：<span class="term">柯氏复杂度</span>（Kolmogorov Complexity），K(x) = 能输出 x 的最短程序长度。通用编码是它的"概率版本"，柯氏复杂度是它的"终极个体版本"。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>算术编码是"分数比特"的搬运工，而本章真正的思想出口是：<strong>压缩的下限不在分布里，在序列本身里</strong>。分布只是描述序列规律性的一件外衣——第 14 章把外衣脱掉。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>"算术编码是一种新的信源模型"——错。算术编码不产生任何概率估计，它只负责把<strong>已有的</strong>概率 q 精确兑换成比特。模型好坏（q 离真分布多远）决定码长好坏；算术编码只保证你付出的码长不多不少就是 log₂(1/q)。模型与引擎，别混为一谈。</p>
+    </div>
+
+    <!-- 回忆卡片 13.4 -->
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 13.4-1</div>
+              <div class="q-text">算术编码如何解决"码长必须是整数"的问题？整条序列付几次取整费？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              把整条序列映射成长度为 q(xⁿ) 的区间，输出区间内一个短二进制小数；码长 = log₂(1/q(xⁿ)) 的分数值，整条序列只付一次取整费（≤2 bit），每符号开销→0。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 13.4-2</div>
+              <div class="q-text">本章如何通往第 14 章的柯氏复杂度？"通用"二字在两个层面的含义分别是什么？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              本章通用码的码长只依赖序列本身而无需先知分布，即每条序列自带可压缩度；Ch14 把它推到极致：K(x)=输出 x 的最短程序长。通用 = 对分布通用（本章）→ 对一切可计算描述通用（下一章）。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===== 概念卡 ===== -->
+    <h2><span class="sec-no">🃏</span>概念卡：本章概念的一分钟画像</h2>
+    <p>翻面前先自问：这个概念我能用一句话讲清楚吗？</p>
+    <div class="flip-grid">
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 1</div>
+            <div class="q-text">冗余与相对熵代价（Redundancy as Divergence）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">用 q 的最优码压 p 的数据，期望码长 = H(p) + D(p‖q)，冗余即 D(p‖q)。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">给"分布猜错"标价，把模糊风险变成每符号的比特罚款。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">相对熵是罚款单：猜偏多少，每符号多付多少。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为冗余 ≈ 分布差的绝对值；其实 q 尾部给 0 时罚款爆炸。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">13.2 minimax/贝叶斯定价的基础；一切"近似分布编码"的误差分析。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 2</div>
+            <div class="q-text">minimax 遗憾与 NML（Minimax Regret / Shtarkov）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">R* = min_q max_θ D(p_θ‖q) = log₂ C_n，C_n = ∑ sup_θ p_θ(xⁿ)；最优码为归一化最大似然。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">在"自然选最坏 θ"的对局里，给出谁都不能更差的最稳码。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">给每条序列请一个"事后偏袒它的代言人"，再统一收归一化税。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为遗憾随 n 线性涨；其实 ≈ (k/2)log₂n，每符号 →0。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">短/中序列、无先验时的编码与模型选择（MDL 的源头之一）。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 3</div>
+            <div class="q-text">贝叶斯混合码（Bayesian Mixture Code）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">m(xⁿ) = ∫ w(θ)p_θ(xⁿ)dθ，码长 log₂(1/m(xⁿ))；平均冗余 = I(θ;Xⁿ)。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">有先验时把"学参数值多少信息"精确兑换成平均多付的比特。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">先验是保险单：互信息 I(θ;Xⁿ) 就是无知的平均保费。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为混合码要对 θ 做硬估计；它从不估计，只按后验自动加权。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">有合理先验时的在线编码；与 minimax 互为最坏/平均两面。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 4</div>
+            <div class="q-text">竞争最优性（Competitive Optimality）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">Shannon 码 l 对任意唯一可译码 l′：P(l(X) ≥ l′(X)+c) ≤ 2^(−(c−1))。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">回答"别的码能不能在个别符号上把我打爆"——能，但概率指数衰减。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">对手每想多赢 1 bit，能赢的机会就腰斩一半。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为它说"Shannon 码处处最优"；它只说被大幅击败的概率很小。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">比较编码方案的逐符号稳健性，而非只比平均码长时。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 5</div>
+            <div class="q-text">LZ78（Lempel-Ziv 1978）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">切出互异短语（旧短语+新字符），输出（字典编号，新字符）；字典边读边长。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">完全不知统计（连参数族都不给）时的压缩，渐近码率收敛到熵率。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">字典是隐式概率模型：我见过你，就不用再教你一遍。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">拿短串膨胀否证 LZ；渐近定理从不承诺短数据赚钱。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">长流式数据（文本/日志/基因）；zip/gzip 的内核（LZ77+Huffman）。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 6</div>
+            <div class="q-text">算术编码（Arithmetic Coding）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">把序列映到长度 = q(xⁿ) 的区间，输出区间内短二进制小数，码长 = log₂(1/q)。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">让分数比特码长可执行：整条序列只付一次取整费。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">概率兑换机：区间多长，码就多短，分毫不差。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为它是信源模型；它只是引擎，模型好坏全在 q。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">NML/混合码/自适应编码的落地实现；通往 Ch14 柯氏复杂度的桥。</span></div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- ===== 分层习题 ===== -->
+    <h2><span class="sec-no">📝</span>分层习题</h2>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>判断正误并说明理由：① "只要 q 与 p 很接近（比如每个符号概率误差都不超过 0.01），冗余 D(p‖q) 就一定可以忽略。"② "LZ78 需要扫描两遍数据：第一遍统计，第二遍编码。"</div>
+      <details>
+        <summary>提示</summary>
+        <p>① 想 D(p‖q) 里 log₂(p/q) 对 q 的小概率有多敏感，而不仅是概率差的大小。② 回忆 LZ78 字典是什么时候建的。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p>① <strong>错</strong>。冗余是 p·log₂(p/q) 的和，敏感的是<strong>比值</strong> p/q 而非差值 |p−q|：若某符号 p=0.01 而 q=0.0001（绝对误差仅 0.0099），该符号贡献 0.01·log₂100 ≈ 0.066 bit；若 q 把某真实正概率符号压到 0，罚款直接无界。"逐点接近"不等于"编码上接近"。</p>
+          <p>② <strong>错</strong>。LZ78 是<strong>单遍在线</strong>算法：字典在读数据的同一遍里边切分边生长，输出即时产生，解码端用同一规则同步重建字典。需要两遍的是"先估分布再 Huffman"的两阶段方案——这正是 LZ 相对它的核心优势之一。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>选择：贝叶斯混合码 m(xⁿ) 的先验 w(θ) 选得"不准"（真实 θ 在 w 的低概率区），下列哪种说法最准确？A. 码长无界爆炸；B. 平均冗余仍等于 I(θ;Xⁿ)，与真实 θ 无关；C. 对该真实 θ 的冗余 = D(p_θ‖m)，可能比 I(θ;Xⁿ) 大；D. 混合码失效不再可译。</div>
+      <details>
+        <summary>提示</summary>
+        <p>区分"对先验平均"和"对某个具体 θ"两个口径；I(θ;Xⁿ) 是哪个口径的量？</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p><strong>C 正确</strong>。对具体真实 θ，冗余是 D(p_θ‖m)——θ 落在先验低概率区时 m 会低估它，罚款变大。<strong>A 错</strong>：只要 m(xⁿ)&gt;0（先验不全为零），码长有界，只是变长。<strong>B 错</strong>：I(θ;Xⁿ) 是<strong>按先验 w 求平均</strong>的冗余，"真实 θ 固定"时它不是这个数字——口径混淆是本题要抓的错。<strong>D 错</strong>：混合分布仍归一，码照常可译，只是不优。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>对伯努利族 Bern(θ)、序列长 n=3，计算 NML 的 minimax 遗憾 R* = log₂ C₃，所有步骤写全。</div>
+      <details>
+        <summary>提示</summary>
+        <p>8 条序列按 1 的个数分四组；每组的最大似然估计 θ̂ = k/3；k 个 1 的序列 sup 值 = (k/3)^k·((3−k)/3)^(3−k)。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p><strong>第一步：分组并求各组 sup 值。</strong></p>
+          <p>· 000（k=0）：θ̂=0，sup = 1³ = <strong>1</strong>；</p>
+          <p>· 001、010、100（k=1，共 3 条）：θ̂=1/3，每条 sup = (1/3)¹·(2/3)² = (1/3)·(4/9) = <strong>4/27</strong>；</p>
+          <p>· 011、101、110（k=2，共 3 条）：θ̂=2/3，每条 sup = (2/3)²·(1/3)¹ = (4/9)·(1/3) = <strong>4/27</strong>；</p>
+          <p>· 111（k=3）：θ̂=1，sup = 1³ = <strong>1</strong>。</p>
+          <p><strong>第二步：求和。</strong></p>
+          <div class="formula">C₃ = 1 + 3×<span class="frac"><span class="num-part">4</span><span class="den-part">27</span></span> + 3×<span class="frac"><span class="num-part">4</span><span class="den-part">27</span></span> + 1 = 2 + <span class="frac"><span class="num-part">24</span><span class="den-part">27</span></span> = 2 + <span class="frac"><span class="num-part">8</span><span class="den-part">9</span></span> = <span class="frac"><span class="num-part">26</span><span class="den-part">9</span></span> ≈ 2.8889</div>
+          <p><strong>第三步：取对数。</strong></p>
+          <div class="formula">R* = log₂<span class="frac"><span class="num-part">26</span><span class="den-part">9</span></span> = log₂ 2.8889 ≈ <strong>1.5315 bit</strong></div>
+          <p>对照例 2 的 n=2（1.3219 bit）：n 从 2 到 3，遗憾只增了 0.21 bit——印证 log₂ C<sub>n</sub> 亚线性（约 (1/2)log₂ n）增长，每符号遗憾随之下降。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>对串 01011001011（11 bit）执行完整 LZ78 编码：切分短语、建字典、写出全部输出对，并数出总码长与输入码长比较。</div>
+      <details>
+        <summary>提示</summary>
+        <p>每步找"字典里有的最长前缀"，再多吃一个字符；第 k 个输出的指针占 ⌈log₂ k⌉ bit。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p><strong>逐步步进：</strong></p>
+          <div class="tbl-wrap">
+            <table>
+              <tr><th>步</th><th>短语</th><th>依据</th><th>入字典</th><th>输出</th></tr>
+              <tr><td>1</td><td>0</td><td>字典空</td><td>#1 = 0</td><td>(0,0)</td></tr>
+              <tr><td>2</td><td>1</td><td>1 不在字典</td><td>#2 = 1</td><td>(0,1)</td></tr>
+              <tr><td>3</td><td>01</td><td>0=#1 在，01 不在</td><td>#3 = 01</td><td>(1,1)</td></tr>
+              <tr><td>4</td><td>10</td><td>1=#2 在，10 不在</td><td>#4 = 10</td><td>(2,0)</td></tr>
+              <tr><td>5</td><td>010</td><td>01=#3 在，010 不在</td><td>#5 = 010</td><td>(3,0)</td></tr>
+              <tr><td>6</td><td>11</td><td>1=#2 在，11 不在，串读完</td><td>#6 = 11</td><td>(2,1)</td></tr>
+            </table>
+          </div>
+          <p>切分：<strong>0 | 1 | 01 | 10 | 010 | 11</strong>；输出：<strong>(0,0) (0,1) (1,1) (2,0) (3,0) (2,1)</strong>。</p>
+          <p><strong>码长：</strong>指针位数 = 0+1+2+2+3+3 = 11 bit，新字符 6 bit，合计 <strong>17 bit &gt; 输入 11 bit</strong>。与例 4 同病：短串膨胀，字典尚未盈利。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l3">L3 建模应用</span>场景：你负责两种数据通道——（甲）一种濒危语言的田野录音转写文本，无人能给出可靠字母/词分布；（乙）一条工业传感器数据流，连续运行一年。候选方案：A. 拍脑袋先验 + Huffman；B. 两阶段"先估分布再 Huffman"；C. LZ。请为两个通道各选一个方案，并用本章的量（D(p‖q)、log₂ C<sub>n</sub>、LZ 渐近性）论证，同时比较 B 与 C 的代价。</div>
+      <details>
+        <summary>提示</summary>
+        <p>问自己三件事：估分布的样本从哪来？数据是短有限批还是长流？方案 A 的罚款用什么量定价、会不会无界？</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p><strong>通道甲（濒危语言文本）：选 B 或 C，坚决不选 A。</strong>A 的罚款是 D(p<sub>真</sub>‖q<sub>拍脑袋</sub>)，q 一旦给真实常见字符过低概率，罚款可无界（13.1 的教训）。B 的代价：先用样本估 p̂ 再 Huffman，冗余 ≈ D(p‖p̂)，样本量有限时这个量不可控且需两遍扫描、需把码表随文件传输。C 的代价：LZ 单遍在线、无需任何先验，短文本上有启动膨胀（例 4 的 62%），但对成书规模的文本，每符号码长已明显压向熵率。若文本量小，可用 13.2 的 NML/贝叶斯混合码，罚款 log₂ C<sub>n</sub> 已知可控。<strong>结论：甲选 C（量大）或混合码（量小）。</strong></p>
+          <p><strong>通道乙（一年传感流）：选 C。</strong>这是 LZ 的主场：n 极大，启动成本被无限摊薄，每符号码长渐近收敛到熵率，且单遍在线天然适配流式；B 需要预设分布且工况漂移时 p̂ 过期，D(p<sub>新</sub>‖p̂<sub>旧</sub>) 持续出血。</p>
+          <p><strong>B vs C 的代价总结：</strong>B 付的是"估计误差罚款 D(p‖p̂) + 码表开销 + 两遍扫描"，且分布漂移时持续付费；C 付的是"启动膨胀 + 每符号约 c log₂c/n 的收敛项"，随 n 单调消失。n 小且需精确可控 → 选统计路线（含 NML）；n 大或为流 → 选 LZ。</p>
+        </div>
+      </details>
+    </div>
+
+    <!-- ===== 本章自测 ===== -->
+    <h2><span class="sec-no">✍️</span>本章自测</h2>
+    <p class="quiz-hint">点击选项判分，答错会给出原因。</p>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 1</div>
+      <div class="q-stem">用 q 的最优码压缩真实分布 p 的数据，期望码长为：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. H(p)</li>
+        <li data-opt="b">B. H(p) + D(p‖q)</li>
+        <li data-opt="c">C. H(q) + D(p‖q)</li>
+        <li data-opt="d">D. H(p) + D(q‖p)</li>
+      </ul>
+      <div class="quiz-explain">解析：B 对——E_p[log₂(1/q)] = H(p) + D(p‖q)，恒等式两边只差把 log(1/q) 拆成 log(p/q) + log(1/p)。A 错：忽略了猜错分布的罚款；C 错：H(q) 是 q 自己的熵，与在 p 下求期望无关；D 错：相对熵方向反了，罚款是 D(p‖q)（真在前，猜在后），方向颠倒数值一般不同。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="c">
+      <div class="q-no">自测 2</div>
+      <div class="q-stem">n=2 伯努利族的 NML 归一化常数 C₂ 与 minimax 遗憾 R* 分别为：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. C₂ = 2，R* = 1 bit</li>
+        <li data-opt="b">B. C₂ = 9/4，R* = log₂(9/4)</li>
+        <li data-opt="c">C. C₂ = 5/2，R* = log₂ 2.5 ≈ 1.3219 bit</li>
+        <li data-opt="d">D. C₂ = 3，R* = log₂ 3</li>
+      </ul>
+      <div class="quiz-explain">解析：C 对——四条序列的 sup 值分别为 1、1/4、1/4、1（θ̂ 取序列中 1 的比例），和为 5/2，R* = log₂ C₂ ≈ 1.3219。A 错：漏算了中间两条序列的贡献 1/4+1/4；B 错：9/4 是漏加一条 1/4 的结果；D 错：3 是把四条 sup 值全按 1 算的粗估，只有 00 和 11 的 sup 是 1。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="a">
+      <div class="q-no">自测 3</div>
+      <div class="q-stem">贝叶斯混合码 m(xⁿ) = ∫w(θ)p_θ(xⁿ)dθ 的平均（对先验 w）冗余等于：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 参数与数据的互信息 I(θ;Xⁿ)</li>
+        <li data-opt="b">B. 最大似然估计的方差</li>
+        <li data-opt="c">C. 混合分布的熵 H(m)</li>
+        <li data-opt="d">D. minimax 遗憾 log₂ C<sub>n</sub></li>
+      </ul>
+      <div class="quiz-explain">解析：A 对——∫w(θ)D(p_θ‖m)dθ = I(θ;Xⁿ)，无知的平均价格就是参数携带的信息量。B 错：方差是估计论概念，与期望码长无此恒等关系；C 错：H(m) 是编码后的平均码长量级，不是冗余；D 错：log₂ C<sub>n</sub> 是 minimax（最坏情况）路线的答案，与贝叶斯平均口径不同——两路线渐近接近但不恒等，例 3 的数值一致是两点先验+均匀混合的特例。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="d">
+      <div class="q-no">自测 4</div>
+      <div class="q-stem">竞争最优性 P(l(X) ≥ l′(X)+c) ≤ 2^(−(c−1)) 中，c=3 的含义是：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 任何码都有至少 1/4 的符号比 Shannon 码省 3 bit</li>
+        <li data-opt="b">B. Shannon 码比任何码都长至少 3 bit 的概率为 1/4</li>
+        <li data-opt="c">C. Shannon 码在 3/4 的符号上严格最优</li>
+        <li data-opt="d">D. 任意唯一可译码想在某些符号上比 Shannon 码省 ≥3 bit，此事概率至多为 1/4</li>
+      </ul>
+      <div class="quiz-explain">解析：D 对——不等式界的是"对手大幅获胜事件"的概率上限 2^(−2)=1/4，且对任意唯一可译码 l′ 成立。A 错：方向说反且"至少 1/4"应为"至多 1/4"；B 错：l ≥ l′+3 是"Shannon 码明显更长"，这正是被击败事件，概率至多为 1/4 而不是恰为 1/4，且措辞"任何码都"漏掉了唯一可译前提；C 错：不等式没有给出逐符号严格最优的比例，它只限制被大幅击败的概率。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 5</div>
+      <div class="q-stem">关于 LZ78，下列说法正确的是：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 需要先知道信源的熵率才能设置字典大小</li>
+        <li data-opt="b">B. 短串上可能膨胀，但对平稳遍历信源每符号码长渐近收敛到熵率</li>
+        <li data-opt="c">C. 例 4 中 13 bit 输入压到了 14 bit，小幅盈利</li>
+        <li data-opt="d">D. zip 压缩 = LZ78 + 算术编码</li>
+      </ul>
+      <div class="quiz-explain">解析：B 对——膨胀是启动成本，渐近定理保证收敛到熵率。A 错：LZ 的全部卖点就是不需要任何先验统计，字典边读边长；C 错：例 4 输出是 21 bit（指针 14 + 新字符 7），相对 13 bit 输入是膨胀不是盈利；D 错：zip/gzip 用的是 LZ77 变体（DEFLATE）+ Huffman，不是 LZ78 + 算术编码。</div>
+    </div>
+
+    <!-- ===== 三句话复述 ===== -->
+    <div class="retell">
+      <h3>🗣️ 用自己的话，三句话讲完本章</h3>
+      <p>对着空气（或室友）说出这三句。说卡壳的那句，回去重读对应小节。</p>
+      <details>
+        <summary>句1：这章解决什么问题？——</summary>
+        <div class="retell-answer">参考答案：第 5 章的最优码要求已知分布 p，但现实数据（文本、DNA、传感流）分布未知。本章回答：不知道分布还能不能压到极限、代价是多少。错用 q 的罚款恰为 D(p‖q)，通用编码就是把这个罚款压到最小的编码。</div>
+      </details>
+      <details>
+        <summary>句2：核心机制是什么？——</summary>
+        <div class="retell-answer">参考答案：三条路线给"无知"定价并付款——minimax 路线用 NML 码付 log₂ C_n（最坏情况最优）；贝叶斯路线用混合码付 I(θ;Xⁿ)（先验平均最优）；LZ78 干脆不要模型，边读边建字典，用"旧短语+新字符"的输出格式渐近收敛到熵率；算术编码把分数码长落成可执行的比特流。</div>
+      </details>
+      <details>
+        <summary>句3：它和前后章怎么分工？——</summary>
+        <div class="retell-answer">参考答案：Ch5 给已知分布的最优码，Ch12 用最大熵处理部分先验，本章处理"分布完全未知"的压缩；本章发现每条序列自带可压缩度，Ch14 把它抽象成不依赖任何概率的柯氏复杂度 K(x)；Ch15–17 则把单信源思想推广到多用户网络场景。</div>
+      </details>
+    </div>
+
+    <!-- ===== 间隔复习计划 ===== -->
+    <div class="review-plan">
+      <h3>🔁 间隔复习计划</h3>
+      <p>回忆本身比重读有效 10 倍。到点只做一件事：翻卡 + 重做标记题。</p>
+      <table>
+        <tr><th>时间点</th><th>复习内容</th><th>预计用时</th></tr>
+        <tr><td>第 1 天</td><td>概念卡 1–6 全翻一遍 + 回忆 13.1-1 / 13.3-1；重算例 1 的 D(p‖q)</td><td>12 分钟</td></tr>
+        <tr><td>第 3 天</td><td>概念卡 2、5（NML 与 LZ78）+ 回忆 13.2-1 / 13.3-2；重做 L2 第一题（n=3 遗憾）</td><td>10 分钟</td></tr>
+        <tr><td>第 7 天</td><td>概念卡 3、4、6 + 回忆 13.4-1/13.4-2；重做 L2 第二题（LZ78 编码 01011001011）；自测错题回炉</td><td>12 分钟</td></tr>
+        <tr><td>第 15 天</td><td>三句话复述 + 合上书挑战全做；能对 LZ78 短串膨胀讲清 √n 机制即毕业</td><td>15 分钟</td></tr>
+      </table>
+    </div>
+
+    <!-- 合上书挑战 -->
+    <div class="final-challenge">
+      <h3>📕 合上书挑战</h3>
+      <p class="fc-sub">现在关掉这个页面，拿一张纸，凭记忆完成以下任务。全部做完再回来核对——这是本章真正的毕业考试。</p>
+      <ol id="ch13-challenge-list">
+        <li><span class="fc-check"></span>写出错分布编码恒等式 E_p[l] = H(p) + D(p‖q)，并用 Bern(1/4) vs 均匀 q 验证出 0.1887 bit</li>
+        <li><span class="fc-check"></span>写出 minimax 遗憾定义与 Shtarkov 解，并对 n=2 伯努利族算出 C₂=5/2、R*=1.3219 bit（全步骤）</li>
+        <li><span class="fc-check"></span>写出贝叶斯混合码与 I(θ;Xⁿ) 恒等式，并解释例 3 为何与例 1 同为 0.189 bit</li>
+        <li><span class="fc-check"></span>陈述竞争最优性不等式并解释 c=3 → 1/4 的含义</li>
+        <li><span class="fc-check"></span>对串 1011010100010 默写 LZ78 七步切分、字典与输出对，并数出 21 bit 的账</li>
+        <li><span class="fc-check"></span>用 c ≲ √(2n) 与指针 log₂c 摊薄，口头讲清 LZ78 为何渐近收敛到熵率</li>
+        <li><span class="fc-check"></span>一句话回答本章主线问题：不知道信源分布，还能压到极限吗？</li>
+      </ol>
+    </div>
+
+    <div class="complete-zone">
+      <button class="btn-complete" id="ch13-btn-complete" onclick="markDone()">✓ 我已完成本章（含合上书挑战）</button>
+    </div>
+
+    <div class="chapter-nav">
+      <a href="chapter-12.html"><span class="nav-dir">← 上一章</span>第12章 最大熵</a>
+      <a href="chapter-14.html" class="next"><span class="nav-dir">下一章 →</span>第14章 柯氏复杂度</a>
+    </div>
+
+  </div>
+</div>
+
+<footer class="footer">
+  <div class="wrap">第13章 通用信源编码 · 信息论互动讲义 · 基于 Cover &amp; Thomas《Elements of Information Theory》第2版</div>
+</footer>
+
+<script src="assets/mermaid.min.js"></script>
+<script>
+mermaid.initialize({
+  startOnLoad: true,
+  theme: "base",
+  themeVariables: {
+    primaryColor: "#e3edf7",
+    primaryBorderColor: "#1d5f9e",
+    primaryTextColor: "#1d5f9e",
+    lineColor: "#5c554b",
+    secondaryColor: "#fbeedd",
+    tertiaryColor: "#f5f1e8",
+    fontFamily: "-apple-system, PingFang SC, sans-serif",
+    fontSize: "14px"
+  },
+  flowchart: { curve: "linear", htmlLabels: false }
+});
+</script>
+<script>
+// 自测题逻辑
+document.querySelectorAll(".quiz-block").forEach(block => {
+  const answer = block.dataset.answer;
+  const explain = block.querySelector(".quiz-explain");
+  block.querySelectorAll(".quiz-opts li").forEach(li => {
+    li.addEventListener("click", () => {
+      const opts = block.querySelectorAll(".quiz-opts li");
+      opts.forEach(o => o.classList.add("disabled"));
+      if (li.dataset.opt === answer) {
+        li.classList.add("correct");
+      } else {
+        li.classList.add("wrong");
+        block.querySelector(`[data-opt="${answer}"]`).classList.add("correct");
+      }
+      explain.classList.add("show");
+    });
+  });
+});
+
+// 合上书清单打勾
+document.querySelectorAll("#ch13-challenge-list li").forEach(li => {
+  li.addEventListener("click", () => li.classList.toggle("checked"));
+});
+
+// 完成标记 → localStorage（第13章）
+const KEY = "it_progress_v1";
+function loadProgress() {
+  try { return JSON.parse(localStorage.getItem(KEY)) || {}; } catch (e) { return {}; }
+}
+const progress = loadProgress();
+const btn = document.getElementById("ch13-btn-complete");
+if (progress["13"] && progress["13"].done) {
+  btn.textContent = "✓ 已完成 · 再次点击重置";
+  btn.classList.add("done");
+}
+function markDone() {
+  const p = loadProgress();
+  if (p["13"] && p["13"].done) {
+    delete p["13"];
+    btn.textContent = "✓ 我已完成本章（含合上书挑战）";
+    btn.classList.remove("done");
+  } else {
+    p["13"] = { done: true, completedAt: Date.now(), reviewsDone: 0 };
+    btn.textContent = "✓ 已完成 · 复习提醒已开启";
+    btn.classList.add("done");
+  }
+  localStorage.setItem(KEY, JSON.stringify(p));
+}
+</script>
+
+</body>
+</html>

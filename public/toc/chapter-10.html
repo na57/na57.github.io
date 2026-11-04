@@ -1,0 +1,866 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第10章 复杂性进阶 · 计算理论互动讲义</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+<nav class="topbar">
+  <div class="topbar-inner">
+    <span class="brand"><a href="index.html" style="color:inherit">← 学习地图</a></span>
+    <span class="crumb">段四 · 难解性与前沿 / 第10章</span>
+  </div>
+</nav>
+
+<div class="wrap">
+
+  <div class="lecture-head">
+    <span class="ch-label">CHAPTER 10 · 难解性与前沿</span>
+    <h1>复杂性进阶</h1>
+    <p class="lead">第 9 章证明了"有些问题就是算不动"，本章给出三条退路：放宽精确性、放宽确定性、放宽单边证明——最后合拢全书，回答"什么是计算"这个开头的问题。</p>
+  </div>
+
+  <!-- ===== 章首四件套之 1：全书定位 ===== -->
+  <div class="position-bar">
+    <strong>本章在主线上的位置：</strong>第 7–8 章用时间与空间给"算得出"的问题分级，第 9 章证明"有些问题算不动"（层级定理、相对化、电路下界） → <u>本章给出算不动时的三条出路：近似（牺牲精确）、随机（牺牲确定）、交互（牺牲单边证明），并用 IP = PSPACE 收束全书</u>。<br>
+    第10章回答主线上的第十个问题：<strong>面对算不动的问题，我们还能怎样「退而求其次」地赢？</strong>
+    <div class="map-inline">
+      <span class="node">Ch1–3 语言与自动机（什么是计算）</span><span class="arrow">→</span>
+      <span class="node">Ch4–6 可计算性（什么算得出）</span><span class="arrow">→</span>
+      <span class="node">Ch7–8 复杂性（算多快、算多省）</span><span class="arrow">→</span>
+      <span class="node here">Ch9–10 难解性与前沿（本章 Ch10：算不动怎么办 · 全书完）</span>
+    </div>
+  </div>
+
+  <!-- ===== 章首四件套之 2：学习目标 ===== -->
+  <div class="objectives">
+    <h4>🎯 学完本章，合上书你应该能：</h4>
+    <ol>
+      <li>写出一个近似算法的完整证明：给图、给步骤、给因子论证（以 VERTEX-COVER 的 2-近似为模板）</li>
+      <li>说出 BPP、RP、coRP、ZPP 四个随机类的定义差别，并证明 ZPP = RP ∩ coRP</li>
+      <li>用 Chernoff 思想解释放大引理：为什么错误率 1/3 与 0.499 等价，以及如何把误差压到 2<sup>−O(k)</sup></li>
+      <li>完整描述 GNI 的交互证明协议：验证者怎么发、证明者怎么答、可靠性怎么算</li>
+      <li>陈述 IP = PSPACE 定理，并用算术化与 sumcheck 协议解释"为什么对话比独白强"</li>
+      <li>画出全书四段因果链，并对每一段说出一句话的核心结论</li>
+    </ol>
+  </div>
+
+  <div class="lecture">
+
+    <!-- ===== 章首四件套之 3：推导主线图 ===== -->
+    <div class="figure">
+      <div class="mermaid">
+flowchart LR
+  A["第9章：有些问题<br>精确多项式无解"] --> B["出路1：近似<br>牺牲精确换多项式"]
+  A --> C["出路2：随机<br>牺牲确定换多项式"]
+  A --> D["出路3：交互<br>牺牲单边证明换多项式"]
+  B --> E["2-近似 VERTEX-COVER<br>7/8-近似 MAX-3SAT"]
+  C --> F["BPP RP ZPP<br>放大引理压误差"]
+  D --> G["IP = PSPACE<br>算术化 sumcheck"]
+  E --> H["代价：近似比有上限<br>Håstad 7/8 不可改进"]
+  F --> I["遗留：BPP = P?<br>去随机化未竟"]
+  G --> J["哲学：证明从静态字符串<br>变为动态对话"]
+  classDef hot fill:#fbeedd,stroke:#c4651f,stroke-width:2.5px,color:#c4651f;
+  classDef danger fill:#fae9e7,stroke:#b03a2e,stroke-width:2.5px,color:#b03a2e;
+  class E,F,G hot;
+  class H,I,J danger;
+      </div>
+      <div class="caption">本章推导主线：从第 9 章的"算不动"出发，三条退路各换一项——精确、确定、单边证明——分别得到近似、随机、交互三类算法。每条路都通到一个具体的代价或哲学结论，最终汇成对"什么是计算"的重新理解。</div>
+    </div>
+
+    <!-- ============ 10.1 ============ -->
+    <h2><span class="sec-no">10.1</span>近似算法：赢不了全部，就赢个倍数</h2>
+
+    <p>第 9 章证明了：除非 P = NP，否则 NP 完全问题没有多项式时间精确算法。但工程上往往不需要"最优"，只需要"足够好"。<span class="term">近似算法</span>（approximation algorithm）把"最优"放宽为"离最优不远"——对最小化问题，要求输出值 ≤ α·OPT；对最大化问题，要求输出值 ≥ OPT/α。α 称为<span class="term">近似比</span>（approximation ratio），越小越好（最小化）或越大越好（最大化）。</p>
+
+    <h3>例 1（完整手算）：VERTEX-COVER 的 2-近似</h3>
+    <p>VERTEX-COVER = {⟨G, k⟩ | 图 G 存在大小 ≤ k 的顶点覆盖——每条边至少有一个端点在集合中}。它是 NP 完全的（7.5 节归约链可证）。但下面的贪心算法给出 2-近似：</p>
+
+    <div class="box insight">
+      <span class="box-tag">✅ 近似算法（匹配贪心）</span>
+      <p>① 初始化 C = ∅；② 任取一条未被覆盖的边 (u, v)，把 u 和 v 都放进 C；③ 删去所有与 u 或 v 关联的边；④ 重复 ②③ 直到无边。输出 C。</p>
+    </div>
+
+    <p>关键观察：算法每一步选的边 (u, v) 彼此不共享端点——因为一旦选了 (u, v)，u、v 的所有关联边都被删掉。所以这些被选边构成一个<strong>匹配</strong>（matching）。设匹配大小为 m，算法输出 |C| = 2m。</p>
+
+    <p><strong>下界论证：</strong>任何顶点覆盖（包括最优的 OPT）必须覆盖这 m 条匹配边。但匹配边两两不共享端点，覆盖 m 条边至少需要 m 个顶点（每条边至少需要一个不同的顶点）。所以 OPT ≥ m。</p>
+
+    <p><strong>结论：</strong>|C| = 2m ≤ 2·OPT。因子 2 证毕。∎</p>
+
+    <div class="figure">
+      <div class="mermaid">
+flowchart TB
+  subgraph G["5顶点5边图"]
+    v1(("1")) --- v2(("2"))
+    v2 --- v3(("3"))
+    v3 --- v4(("4"))
+    v4 --- v5(("5"))
+    v5 --- v1
+  end
+  classDef hot fill:#fbeedd,stroke:#c4651f,stroke-width:2.5px,color:#c4651f;
+  class v1,v2 hot;
+      </div>
+      <div class="caption">图 10.1 手算实例。第 1 步选边 (1,2)，C = {1,2}，删去 (1,2)、(2,3)、(5,1)；第 2 步选边 (3,4)，C = {1,2,3,4}，删去 (3,4)、(4,5)；无边剩余，输出 |C| = 4。匹配 m = 2，OPT ≥ 2，实际 OPT = 3（{2,4,5} 可覆盖）。4 ≤ 2×3 ✓</div>
+    </div>
+
+    <h3>例 2：MAX-3SAT 的随机 7/8-近似</h3>
+    <p>MAX-3SAT：给 3CNF 公式 φ，找使满足子句数最多的赋值。随机策略：每个变量独立以 1/2 概率取真。</p>
+
+    <p><strong>期望论证：</strong>对任意子句 C = (ℓ₁ ∨ ℓ₂ ∨ ℓ₃)，它被满足当且仅当至少一个字面量为真。每个字面量为假的概率是 1/2，三个全假的概率是 (1/2)³ = 1/8。所以 C 被满足的概率 = 7/8。设子句数为 m，期望满足数 = 7m/8。而 OPT ≤ m，所以期望满足数 ≥ (7/8)·OPT。∎</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 随机算法也能"去随机化"</span>
+      <p>上面的期望论证可以改成确定性的：用条件期望法逐个固定变量，总能选出一个分支使期望不下降，最终得到满足 ≥ 7m/8 个句子的确定赋值。随机是直觉的向导，不是必须的。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 近似比有理论上限</span>
+      <p>Håstad 证明：MAX-3SAT 的 7/8 已是<strong>最优近似比</strong>——若存在多项式算法保证满足超过 (7/8 + ε)·OPT 个子句（对任意 ε &gt; 0），则 P = NP。VERTEX-COVER 也有类似结果：近似比 2 − ε 需要 P = NP。近似不是无限可压的，每个问题有自己的"硬度地板"。</p>
+    </div>
+
+    <!-- 回忆卡片 10.1 -->
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 10.1-1</div>
+              <div class="q-text">VERTEX-COVER 的 2-近似证明中，"匹配"起什么作用？为什么 OPT ≥ 匹配大小？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              算法选的边两两不共享端点，构成匹配。匹配中每条边至少需要一个不同的顶点来覆盖，所以任何顶点覆盖 ≥ 匹配大小 m。算法输出 2m，故 ≤ 2·OPT。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 10.1-2</div>
+              <div class="q-text">MAX-3SAT 随机赋值的期望满足数怎么算？为什么 7/8 是理论上限？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              每个子句 3 个字面量全假概率 1/8，故满足概率 7/8，期望满足数 = 7m/8 ≥ (7/8)·OPT。Håstad 证明：近似比超过 7/8 + ε 将推出 P = NP。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 10.2 ============ -->
+    <h2><span class="sec-no">10.2</span>概率算法：允许小概率犯错</h2>
+
+    <p>近似算法牺牲了"精确"，这一节牺牲"确定"。<span class="term">概率图灵机</span>（probabilistic Turing machine）在每一步可以掷一枚公平硬币，根据结果走两条转移之一。输出不再是一个固定答案，而是一个随机变量。</p>
+
+    <h3>四个随机复杂性类</h3>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>类</th><th>全名</th><th>接受条件</th><th>错误类型</th></tr>
+        <tr><td><strong>BPP</strong></td><td>bounded-error probabilistic poly time</td><td>w∈L 时接受概率 ≥ 2/3；w∉L 时接受概率 ≤ 1/3</td><td>双边错，各 ≤ 1/3</td></tr>
+        <tr><td><strong>RP</strong></td><td>randomized poly time</td><td>w∈L 时接受概率 ≥ 1/2；w∉L 时必拒绝</td><td>单边错：只在"在语言中"时可能错</td></tr>
+        <tr><td><strong>coRP</strong></td><td>complement of RP</td><td>w∉L 时接受概率 ≥ 1/2；w∈L 时必接受</td><td>单边错：只在"不在语言中"时可能错</td></tr>
+        <tr><td><strong>ZPP</strong></td><td>zero-error probabilistic poly time</td><td>输出永远正确；期望运行时间多项式</td><td>零错，时间随机</td></tr>
+      </table>
+    </div>
+
+    <p><strong>定理：ZPP = RP ∩ coRP。</strong></p>
+
+    <p><strong>证明：</strong>⇒ 若 L ∈ ZPP，则有一台零错期望多项式机 M。把 M 的期望时间 T 截断到 2T：由马尔可夫不等式，M 在 2T 内不停机的概率 ≤ 1/2。若停机则输出（必对），若超时则拒绝。这给出 RP 机：w∈L 时，M 在 2T 内停机且接受的概率 ≥ 1/2；w∉L 时，M 若停机必拒绝，若超时也拒绝，故必拒绝。所以 L ∈ RP。对称地，超时改为接受，得 coRP 机。故 ZPP ⊆ RP ∩ coRP。</p>
+
+    <p>⇐ 若 L ∈ RP ∩ coRP，则有 RP 机 M₁（w∈L 时以 ≥1/2 接受，w∉L 时必拒绝）和 coRP 机 M₂（w∉L 时以 ≥1/2 拒绝，w∈L 时必接受）。交替运行 M₁、M₂：若 M₁ 接受，则 w 必∈L（M₁ 只在 w∈L 时才可能接受）；若 M₂ 拒绝，则 w 必∉L。每台期望 2 次内给出确定答案，总期望时间多项式。故 L ∈ ZPP。∎</p>
+
+    <h3>放大引理（amplification）：常数阈值是任意的</h3>
+    <p>BPP 定义中的 1/3 看起来随意——换成 0.499 行不行？答案是：<strong>任何小于 1/2 的常数都等价</strong>，而且可以把误差压到指数级。</p>
+
+    <div class="box insight">
+      <span class="box-tag">✅ 放大引理（Amplification Lemma）</span>
+      <p>设 BPP 机 M 的错误率 ≤ 1/3。独立运行 M 共 k 次，取多数答案。由 Chernoff 界，多数答案错误的概率 ≤ 2<sup>−O(k)</sup>。所以 k = O(log(1/ε)) 次重复就能把误差从 1/3 降到 ε。1/3 换成 0.499、换成 1/2 − 1/poly(n)，结论不变。</p>
+    </div>
+
+    <p><strong>直觉：</strong>每次运行像一次独立试验，正确概率 ≥ 2/3。k 次中错误的期望次数 ≤ k/3，而多数错要求 ≥ k/2 次错误——偏离期望至少 k/6。Chernoff 界说这种偏离的概率随 k 指数衰减。所以"常数阈值"不是本质，"多项式可放大"才是本质。</p>
+
+    <p><strong>BPP ⊆ P/poly：</strong>对固定输入长度 n，由放大引理取 k = O(n)，存在一串随机选择使 M 在所有 2ⁿ 个输入上都正确。把这串随机选择"固化"成建议字符串，就得到多项式规模的电路。但<strong>BPP = P?</strong> 仍是公开问题——去随机化（derandomization）是当代复杂性理论最活跃的方向之一。</p>
+
+    <p><strong>经典案例：素数判定。</strong>Miller–Rabin 算法是 coRP：合数必被识别（拒绝），素数可能误判为合数（概率 ≤ 1/4）。重复 k 次误差 ≤ 4<sup>−k</sup>。2002 年 AKS 算法把素数判定去随机化进 P，但 Miller–Rabin 至今仍是工程首选——因为更快，且误差可以做得比硬件故障率还低。</p>
+
+    <!-- 回忆卡片 10.2 -->
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 10.2-1</div>
+              <div class="q-text">BPP、RP、coRP、ZPP 四个类的接受条件各是什么？用一句话区分它们的错误类型。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              BPP：双边错各 ≤1/3；RP：在语言中以 ≥1/2 接受、不在则必拒绝；coRP：不在语言中以 ≥1/2 拒绝、在则必接受；ZPP：输出永远正确，时间随机期望多项式。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 10.2-2</div>
+              <div class="q-text">证明 ZPP = RP ∩ coRP 的两个方向分别怎么构造？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              ⇒：ZPP 机截断到 2 倍期望时间，超时拒绝得 RP，超时接受得 coRP。⇐：RP 机与 coRP 机交替运行，RP 接受则必真，coRP 拒绝则必假，期望 2 轮出结果。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 10.3 ============ -->
+    <h2><span class="sec-no">10.3</span>交互证明：问答之间迸发的力量</h2>
+
+    <p>近似放宽了"精确"，随机放宽了"确定"，这一节放宽"证明"本身。传统数学证明是一串静态字符串（NP 证书）；<span class="term">交互证明系统</span>（interactive proof system）把它变成一场多轮对话：</p>
+
+    <ul>
+      <li><strong>证明者 P</strong>：全能（无限计算力），但不可信；</li>
+      <li><strong>验证者 V</strong>：多项式时间 + 随机性，可信但能力有限；</li>
+      <li>多轮交替提问与回答，最后 V 决定接受或拒绝。</li>
+    </ul>
+
+    <p>两个条件：<strong>完全性</strong>（completeness）：若 w∈L，则存在诚实的 P 使 V 以 ≥ 2/3 接受；<strong>可靠性</strong>（soundness）：若 w∉L，则任何 P（包括作弊的）都只能以 ≤ 1/3 骗过 V。类 IP 是所有具有交互证明系统的语言组成的类。</p>
+
+    <h3>例 3（完整协议）：GNI ∈ IP</h3>
+    <p>GNI = {⟨G₁, G₂⟩ | 图 G₁ 与 G₂ 不同构}。这是 coNP 中的问题，不知道有没有短证书。但它有简单的交互证明：</p>
+
+    <div class="box insight">
+      <span class="box-tag">✅ GNI 交互协议</span>
+      <p>① V 随机选 i ∈ {1, 2} 和随机置换 π，把 H = π(Gᵢ) 发给 P；② P 回答 j ∈ {1, 2}；③ 若 j = i，V 接受，否则拒绝。重复两轮，两轮都答对才接受。</p>
+    </div>
+
+    <p><strong>完全性：</strong>若 G₁ ≇ G₂，则 π(G₁) 与 π(G₂) 也不同构（同构是等价关系，置换不改变同构类）。P 有无限计算力，可以算出 H 与 G₁、G₂ 中哪一个同构，从而始终答对 j = i。两轮都对，V 接受概率 = 1 ≥ 2/3。✓</p>
+
+    <p><strong>可靠性：</strong>若 G₁ ≅ G₂，则 π(G₁) 与 π(G₂) 是同构的随机图，分布完全相同。任何 P（哪怕全能）也无法区分，猜对 j = i 的概率恰好 1/2。两轮都猜对的概率 = 1/4 ≤ 1/3。✓（重复 k 轮可压到 2<sup>−k</sup>。）</p>
+
+    <p>注意：GNI 的证书是什么？没有人知道。但交互证明不需要证书——它用随机挑战逼作弊者露馅。</p>
+
+    <h3>IP = PSPACE：对话的极限</h3>
+    <p><span class="term">IP = PSPACE</span>（Shamir，1990）：交互证明的力量恰好等于多项式空间。这意味着：任何多项式空间可判定的问题（包括 TQBF、所有 NP、所有 coNP、所有多项式层级），都有一个多项式轮的交互证明。</p>
+
+    <p><strong>算术化（arithmetization）思想骨架：</strong>以 TQBF 为例。把布尔公式 φ 改写成有限域上的低次多项式：</p>
+
+    <ul>
+      <li>x ∧ y → x·y（乘积）；</li>
+      <li>¬x → 1 − x；</li>
+      <li>x ∨ y → 1 − (1−x)(1−y) = x + y − xy。</li>
+    </ul>
+
+    <p>递归展开后，φ 变成一个关于变量 x₁,…,xₙ 的多项式 P，次数 d 与公式深度同阶（多项式）。验证"∀x₁∃x₂…φ"转化为验证 P 在 {0,1}ⁿ 上的某种和式等于非零值。</p>
+
+    <p><strong>和检验（sumcheck）协议：</strong>V 不必逐点检查 2ⁿ 个赋值。协议逐变量剥离：第 1 轮 P 声称关于 x₁ 的和式是某个单变量多项式 g₁(x₁)，V 随机选 r₁ ∈ 域，要求后续证明 g₁(r₁) 等于关于 x₂,…,xₙ 的和式；第 2 轮 P 给出 g₂(x₂)，V 选 r₂，……最后一轮 V 自己计算 P(r₁,…,rₙ) 与 gₙ(rₙ) 比对。</p>
+
+    <p><strong>为什么作弊者会露馅？</strong>若 P 某轮撒谎，gᵢ 与真实多项式不同。两个次数 ≤ d 的不同多项式，在随机点上取值相等的概率 ≤ d/q（q 是域大小，取 q ≫ d）。n 轮下来，作弊成功的总概率 ≤ nd/q，取 q 足够大可压到任意小。错误被指数稀释。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 哲学冲击：证明从静态到动态</span>
+      <p>NP 证书像一篇论文：写出来，读者自己验证。IP 像一场答辩：证明者现场应对验证者的随机提问，答辩委员会不需要读懂全部论文，只需要在关键处抽查。随机性 + 交互性，把可验证的范围从 NP 暴涨到 PSPACE——这是 1990 年理论计算机科学最惊人的结果之一。</p>
+    </div>
+
+    <!-- 回忆卡片 10.3 -->
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 10.3-1</div>
+              <div class="q-text">GNI 协议中，为什么 G₁ ≅ G₂ 时任何证明者都只有 1/2 概率猜对？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              同构的随机置换产生同分布的图，P 收到的 H 与 i 的选择完全独立，没有任何信息泄露，只能瞎猜。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 10.3-2</div>
+              <div class="q-text">算术化把布尔公式变成什么？sumcheck 协议为什么能逼作弊者露馅？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              变成有限域上的低次多项式（∧→乘、¬→1−x、∨→x+y−xy）。sumcheck 逐变量剥离，作弊者必须在某轮给出假多项式，而两个低次多项式在随机点上一致的概率 ≤ d/q，随轮数指数稀释。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 10.4 ============ -->
+    <h2><span class="sec-no">10.4</span>错误直觉清算：两个最流行的误解</h2>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 误区一："近似算法一定能任意逼近最优解"</span>
+      <p>错。近似比有理论上限：MAX-3SAT 的 7/8 不可改进（Håstad），VERTEX-COVER 的 2 也是已知最好（近似比 2 − ε 需要 P = NP）。有些问题甚至<strong>不可近似到任何常数因子</strong>——除非 P = NP，否则不存在多项式算法保证输出 ≤ α·OPT（对任意常数 α）。近似不是无限可压的，每个问题有自己的"硬度地板"。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 误区二："随机算法不算真算法，答案不可靠"</span>
+      <p>错得离谱。放大引理让错误率低于宇宙射线击穿内存的概率：重复 100 次，误差 ≤ 2<sup>−100</sup>，比硬件故障率低几个数量级。而且 ZPP 连错都不犯——它永远输出正确答案，只是时间随机。Miller–Rabin 跑了 40 年，从未因算法错误而误判素数（只有实现 bug 会）。随机性不是缺陷，是资源。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 误区三："IP = PSPACE 只是理论游戏，说明交互没用"</span>
+      <p>恰恰相反。IP = PSPACE 说明：交互 + 随机，把可验证类从 NP 顶到了 PSPACE——这是一个<strong>质变</strong>。没有交互，coNP 中的问题（如 GNI）连短证书都不知道有没有；有了交互，它们全都有多项式轮证明。对话比独白强，这是数学事实。</p>
+    </div>
+
+    <!-- 回忆卡片 10.4 -->
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 10.4-1</div>
+              <div class="q-text">"近似算法一定能任意逼近"错在哪？举两个有近似阈值的问题。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              错在忽视近似比上限。MAX-3SAT：7/8 不可改进（Håstad）；VERTEX-COVER：2 − ε 需要 P = NP。有些问题甚至不可近似到任何常数因子。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 10.4-2</div>
+              <div class="q-text">"随机算法答案不可靠"为什么错？用放大引理和 ZPP 各反驳一句。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              放大引理：重复 k 次误差 ≤ 2<sup>−O(k)</sup>，可低于硬件故障率。ZPP：零错误，永远输出正确答案，只是时间随机期望多项式。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 10.5 ============ -->
+    <h2><span class="sec-no">10.5</span>全书地图：从"什么是计算"到"算不动怎么办"</h2>
+
+    <p>十章走完，回头看。这不是十个孤立的主题，而是一条因果链——每一段被前一段逼出来，又逼出下一段。</p>
+
+    <div class="figure">
+      <div class="mermaid">
+flowchart TB
+  subgraph S1["段一 Ch1–3 语言与自动机"]
+    A1["丘奇–图灵论题<br>算法 = 图灵机"]
+  end
+  subgraph S2["段二 Ch4–6 可计算性"]
+    B1["对角线 + 停机问题<br>归约与不可判定层级"]
+  end
+  subgraph S3["段三 Ch7–8 复杂性"]
+    C1["P / NP / PSPACE<br>时间空间分级"]
+  end
+  subgraph S4["段四 Ch9–10 难解性与前沿"]
+    D1["层级定理 相对化 电路<br>近似 随机 交互"]
+  end
+  S1 -->|"因为算法被固定为图灵机<br>所以必须追问哪些问题根本算不出"| S2
+  S2 -->|"因为能算不等于算得起<br>所以必须给时间与空间分级"| S3
+  S3 -->|"因为 P vs NP 正面攻不下<br>所以必须换武器：层级 相对化 电路 近似 随机 交互"| S4
+  classDef hot fill:#fbeedd,stroke:#c4651f,stroke-width:2.5px,color:#c4651f;
+  classDef danger fill:#fae9e7,stroke:#b03a2e,stroke-width:2.5px,color:#b03a2e;
+  class A1,B1,C1 hot;
+  class D1 danger;
+      </div>
+      <div class="caption">图 10.2 全书四段因果链。注意三条边上的"因为……所以……"——这不是章节罗列，而是理论生长的内在逻辑。</div>
+    </div>
+
+    <p><strong>段一（Ch1–3）：计算模型的等价性与丘奇–图灵论题。</strong>有穷自动机、下推自动机、图灵机，层层递进。核心是丘奇–图灵论题：直觉上的"算法"被钉死在图灵机上。从此"可计算"有了数学定义，也从此有了边界——图灵机算不出的，任何算法都算不出。</p>
+
+    <p><strong>段二（Ch4–6）：对角线、停机问题与不可判定层级。</strong>图灵机一旦成为对象，就可以被编码、被枚举、被对角线。A<sub>TM</sub>（停机问题）是第一个被证明不可判定的自然问题；归约把不可判定性传染给一大批问题（莱斯定理：所有非平凡性质都不可判定）。结论是：可判定问题只是可枚举语言海洋中的孤岛。</p>
+
+    <p><strong>段三（Ch7–8）：P、NP、PSPACE 与时间空间分级。</strong>可判定的问题里，还要分"快"与"慢"、"省空间"与"费空间"。P 是多项式时间，NP 是可多项式验证，PSPACE 是多项式空间。Cook–Levin 定理把 SAT 钉为 NP 完全，Savitch 定理把 NPSPACE 收进 PSPACE。分级尺子量出了问题的硬度，也量出了人类知识的边界。</p>
+
+    <p><strong>段四（Ch9–10）：算不动时的出路。</strong>层级定理证明"更多时间/空间确实能算更多"（P ⊊ EXPTIME，PSPACE ⊊ EXPSPACE）；相对化证明朴素对角线攻不下 P vs NP；电路复杂性开辟了下界新战场。本章的三条退路——近似、随机、交互——是"退而求其次"的智慧，也是理论向工程的回礼。</p>
+
+    <!-- 回忆卡片 10.5 -->
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 10.5-1</div>
+              <div class="q-text">段一到段二的因果边是什么？为什么"算法被固定为图灵机"必然导致"追问哪些算不出"？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              丘奇–图灵论题把"算法"数学化，使"可计算"有了精确边界。一旦边界存在，就必须问：边界内有什么、边界外有什么。对角线方法正是利用"图灵机可被枚举"这一性质，构造出不在任何图灵机计算范围内的语言。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 10.5-2</div>
+              <div class="q-text">段三到段四的因果边是什么？P vs NP 为什么"正面攻不下"？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              相对化证明：存在神谕 A、B 使 P^A = NP^A 而 P^B ≠ NP^B，所以任何对神谕不变的证明方法（如朴素对角线）都无法解决 P vs NP。必须换武器：层级定理、电路、算术化。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 10.6 ============ -->
+    <h2><span class="sec-no">10.6</span>毕业三问：全书收尾</h2>
+
+    <p>十章结束，回到开头的三个根本问题。每问先给一句话答案，再给一段展开。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 第一问：什么叫可计算？</span>
+      <p><strong>一句话答案：</strong>存在图灵机，对任何输入在有限步内停机并给出正确答案。</p>
+      <p><strong>展开：</strong>这是丘奇–图灵论题的产物。第 1–3 章把"算法"从直觉钉成数学对象；第 4–6 章用对角线证明 A<sub>TM</sub>（停机问题）在界外——不是所有问题都可计算，可计算语言只是可枚举语言中的真子集。边界一旦画出，理论就有了形状。</p>
+    </div>
+
+    <div class="box idea">
+      <span class="box-tag">💡 第二问：什么叫可有效计算？</span>
+      <p><strong>一句话答案：</strong>多项式时间（P）是被广泛接受的操作性答案，即 Cobham–Edmonds 论题。</p>
+      <p><strong>展开：</strong>第 7–8 章把"可计算"细分为 P、NP、PSPACE、L、NL。本章说明这条线可以放宽：近似算法牺牲精确性（VERTEX-COVER 的 2-近似），随机算法牺牲确定性（BPP 的 1/3 误差可压到指数小），交互证明牺牲单边性（IP = PSPACE）。但 NP 完全问题的<strong>精确多项式算法</strong>仍是铜墙铁壁——这是 P vs NP 未解的代价，也是现代密码学的地基。</p>
+    </div>
+
+    <div class="box idea">
+      <span class="box-tag">💡 第三问：为什么有些问题就是算不动？</span>
+      <p><strong>一句话答案：</strong>绝对层——时间/空间量级差异本身制造严格更强的类；相对层——NP 完全把数千个问题的难度锁在一起，而朴素方法攻它不下。</p>
+      <p><strong>展开：</strong>绝对层由层级定理保证：P ⊊ EXPTIME、PSPACE ⊊ EXPSPACE，资源多确实能算更多。相对层由 NP 完全理论保证：SAT、3SAT、CLIQUE、VERTEX-COVER、HAMPATH…… 数千个问题等价地难，一个多项式算法通杀全部。而相对化证明说：任何对神谕不变的证明方法都无法分离 P 与 NP——我们需要新的数学工具。计算的边界，既是工程的边界，也是数学与哲学的边界。</p>
+    </div>
+
+    <!-- 回忆卡片 10.6 -->
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 10.6-1</div>
+              <div class="q-text">三句话分别回答：什么叫可计算？什么叫可有效计算？为什么有些问题算不动？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              ① 存在图灵机对任何输入停机并给出正确答案。② 多项式时间（P），Cobham–Edmonds 论题；可放宽为近似、随机、交互。③ 绝对层：层级定理；相对层：NP 完全锁死 + 相对化屏障。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 10.6-2</div>
+              <div class="q-text">"计算的边界，既是工程的边界，也是数学与哲学的边界"——这句话怎么理解？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              工程上：NP 难问题没有多项式算法，密码学、优化、AI 都受此限制。数学上：P vs NP 是千禧年难题，涉及证明论、组合、代数。哲学上：可计算性划定了机械推理的极限，图灵机与丘奇论题回答了"什么是可知的"。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 概念卡 ============ -->
+    <h2><span class="sec-no">🃏</span>概念卡：本章概念的一分钟画像</h2>
+    <p>翻面前先自问：这个概念我能用一句话讲清楚吗？</p>
+    <div class="flip-grid">
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 1</div>
+            <div class="q-text">近似算法 / 近似比</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">最小化问题输出 ≤ α·OPT，最大化输出 ≥ OPT/α；α 为近似比。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">NP 完全问题无精确多项式算法时的工程退路。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">赢不了全部，就赢个倍数；最优的 2 倍也是胜利。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为可以无限逼近——近似比有理论上限（如 MAX-3SAT 的 7/8）。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">遇到 NP 难优化问题时，先查它的已知近似比与不可近似阈值。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 2</div>
+            <div class="q-text">BPP（双边错误概率多项式时间）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">w∈L 时接受概率 ≥ 2/3，w∉L 时接受概率 ≤ 1/3。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">允许小概率犯错换取多项式效率，如素数判定、多项式恒等检验。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">掷硬币的算法，只要硬币偏得不太离谱，重复就能放大信心。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为 1/3 是魔法常数——任何 &lt; 1/2 的常数都等价（放大引理）。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">BPP ⊆ P/poly；BPP = P? 是公开问题，去随机化是前沿方向。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 3</div>
+            <div class="q-text">RP / coRP / ZPP</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">RP：在语言中 ≥1/2 接受，不在则必拒绝；coRP 反之；ZPP = RP ∩ coRP（零错）。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">单边错误比双边错误更易控制；ZPP 连错都不犯，时间随机。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">RP 像"宁漏勿错"，coRP 像"宁错勿漏"，ZPP 像"要么答对要么说不知道"。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为 ZPP 比 RP 弱——实际上 ZPP = RP ∩ coRP，是交集。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">Miller–Rabin 素数判定是 coRP 经典案例；ZPP 刻画"拉斯维加斯算法"。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 4</div>
+            <div class="q-text">放大引理（Amplification）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">独立重复 k 次取多数，BPP 误差从 1/3 降到 2<sup>−O(k)</sup>。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">证明 BPP 定义中的常数 1/3 是任意的，可换成 1/2 − 1/poly(n)。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">多次独立试验的多数意见，随次数指数级可靠。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为必须重复多项式次——对数级重复就能把误差压到多项式小。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">所有随机算法的标准收尾步骤；证明 BPP ⊆ P/poly 的关键。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 5</div>
+            <div class="q-text">交互证明（IP）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">全能 P 与多项式随机 V 多轮对话；完全性 ≥2/3，可靠性 ≤1/3。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">coNP 中的问题（如 GNI）无短证书，但有交互证明。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">答辩委员会抽查论文关键处，不需要通读全文。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为交互只是锦上添花——IP = PSPACE，比 NP 大得多。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">零知识证明、可验证计算、区块链 SNARK 的理论源头。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 6</div>
+            <div class="q-text">IP = PSPACE 与算术化</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">Shamir 1990：交互证明类 IP 恰好等于多项式空间 PSPACE。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">证明对话 + 随机性能验证所有多项式空间可判定的问题（含 TQBF）。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">把布尔公式变成低次多项式，用随机点抽查代替穷举 2ⁿ 个赋值。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为算术化只是编码技巧——它是把代数结构注入组合问题的桥梁。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">sumcheck 协议、PCP 定理、现代可验证计算的理论基础。</span></div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- ============ 分层习题 ============ -->
+    <h2><span class="sec-no">📝</span>分层习题</h2>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>判断对错：<strong>"BPP 中的 1/3 是本质常数，换成 0.4 就会改变这个类的定义。"</strong>说明理由。</div>
+      <details>
+        <summary>提示</summary>
+        <p>回想放大引理：独立重复 k 次取多数，误差怎么变？</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">错。由放大引理，任何小于 1/2 的常数阈值都等价：独立重复 k 次取多数，Chernoff 界给出误差 ≤ 2<sup>−O(k)</sup>。所以 1/3、0.4、0.499、甚至 1/2 − 1/n 都定义同一个类 BPP。1/3 只是约定俗成，不是本质。</div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>判断对错：<strong>"GNI 协议中，若 G₁ ≅ G₂，则足够聪明的证明者可以始终答对。"</strong></div>
+      <details>
+        <summary>提示</summary>
+        <p>考虑 π(G₁) 与 π(G₂) 的分布关系。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">错。若 G₁ ≅ G₂，则 π(G₁) 与 π(G₂) 是同构的随机置换图，分布完全相同。验证者发送的 H 与 i 的选择统计独立，任何证明者（无论多强）都无法获得关于 i 的任何信息，猜对概率恰好 1/2。两轮都对的概率 1/4 ≤ 1/3，满足可靠性。</div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>对下图执行 VERTEX-COVER 的 2-近似算法：顶点 {1,2,3,4,5,6}，边 {(1,2),(2,3),(3,4),(4,5),(5,6),(6,1)}（6-环）。写出每一步选择的边、覆盖集 C、以及最终的 |C| / OPT 比值。</div>
+      <details>
+        <summary>提示</summary>
+        <p>算法任取未覆盖边，把两端点都放入 C。6-环的最小顶点覆盖是多少？</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p>第 1 步：选边 (1,2)，C = {1,2}，删去 (1,2),(2,3),(6,1)；第 2 步：选边 (3,4)，C = {1,2,3,4}，删去 (3,4),(4,5)；第 3 步：选边 (5,6)，C = {1,2,3,4,5,6}，删去 (5,6)。无边剩余，输出 |C| = 6。</p>
+          <p>匹配 m = 3（三条被选边），算法输出 2m = 6。6-环的最小顶点覆盖 OPT = 3（如 {2,4,6} 或 {1,3,5}）。比值 6/3 = 2，恰好达到近似比上界 2。✓</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>设 BPP 机 M 的错误率为 1/3。用 Chernoff 界估计：重复 k = 11 次取多数，误差概率至少降到多少？（写出计算过程，不需要精确数值）</div>
+      <details>
+        <summary>提示</summary>
+        <p>设 X 为 11 次中错误的次数，E[X] = 11/3。多数错要求 X ≥ 6。用 Chernoff 界估计 P[X ≥ 6]。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p>设 Xᵢ 为第 i 次出错的指示变量，P[Xᵢ = 1] ≤ 1/3，X = ΣXᵢ，E[X] ≤ 11/3 ≈ 3.67。多数错要求 X ≥ 6。</p>
+          <p>用 Chernoff 界（上尾）：P[X ≥ (1+δ)μ] ≤ exp(−δ²μ/3)，其中 μ = 11/3，(1+δ)μ = 6，解得 δ = 6/μ − 1 = 18/11 − 1 = 7/11 ≈ 0.636。</p>
+          <p>误差 ≤ exp(−(7/11)²·(11/3)/3) = exp(−49/121 · 11/9) = exp(−49/99) ≈ exp(−0.495) ≈ 0.61。更紧的 Chernoff 变体（乘性形式）给出 ≤ 2<sup>−O(k)</sup> 的指数衰减；k = 11 时误差已显著低于 1/3，且随 k 指数下降。∎</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l3">L3 建模应用</span>某区块链项目需要验证一个声称"已正确执行"的计算结果，但不想重新执行整个计算（太耗时）。项目方听说"交互证明"可以帮忙。请回答：① 这对应本章哪个概念？② 验证者需要什么能力（计算力、随机性、轮数）？③ 为什么作弊者无法长期骗过验证者？</div>
+      <details>
+        <summary>提示</summary>
+        <p>回想 IP = PSPACE 与 sumcheck 协议的核心思想。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p>① 这对应<strong>交互证明系统</strong>（IP），具体是可验证计算（verifiable computation）场景，理论源头是 IP = PSPACE 与 sumcheck 协议。</p>
+          <p>② 验证者 V 需要：多项式时间计算能力、随机性（掷硬币选随机挑战点）、多项式轮对话（log 轮或常数轮，视协议优化程度）。</p>
+          <p>③ 作弊者必须在某轮给出一个与真实计算不符的多项式 gᵢ。算术化把计算变成低次多项式，而两个不同的低次多项式在随机点上一致的概率 ≤ d/q。验证者随机选点 rᵢ，作弊者恰好撞对的概率指数级小，多轮下来几乎必然露馅。这就是"随机抽查 + 代数刚性"的威力。</p>
+        </div>
+      </details>
+    </div>
+
+    <!-- ============ 本章自测 ============ -->
+    <h2><span class="sec-no">✍️</span>本章自测</h2>
+    <p class="quiz-hint">点击选项判分，答错会给出原因。</p>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 1</div>
+      <div class="q-stem">VERTEX-COVER 的 2-近似算法证明中，关键不等式 OPT ≥ m 成立的原因是：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 算法恰好选了 m 条边</li>
+        <li data-opt="b">B. 算法选的边构成匹配，匹配中每条边至少需要一个不同的顶点来覆盖</li>
+        <li data-opt="c">C. 图的顶点数至少是 m</li>
+        <li data-opt="d">D. 任何顶点覆盖都包含所有匹配边的端点</li>
+      </ul>
+      <div class="quiz-explain">选 B。算法选的边两两不共享端点（选一条就删关联边），构成匹配。匹配中每条边至少需要一个端点，且这些端点互不重复，所以任何顶点覆盖 ≥ m。A 是表面现象不是原因；C 与问题无关；D 错——最优覆盖不必包含所有匹配端点，只需每条匹配边至少一个端点。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="c">
+      <div class="q-no">自测 2</div>
+      <div class="q-stem">关于 BPP、RP、ZPP 的关系，正确的是：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. ZPP = RP ∪ coRP</li>
+        <li data-opt="b">B. RP 允许双边错误，BPP 只允许单边错误</li>
+        <li data-opt="c">C. ZPP = RP ∩ coRP，且 ZPP 是零错误（输出永远正确）</li>
+        <li data-opt="d">D. BPP ⊆ RP，因为 BPP 的错误率更低</li>
+      </ul>
+      <div class="quiz-explain">选 C。ZPP = RP ∩ coRP 已证（两机交替跑到一台给出确定答案）。ZPP 零错误，只是时间随机。A 错：交集不是并集；B 错：RP 是单边错，BPP 是双边错；D 错：RP 与 BPP 的关系未知，但 RP ⊆ BPP 显然（RP 单边错也是双边错 ≤1/3 的特例）。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="a">
+      <div class="q-no">自测 3</div>
+      <div class="q-stem">GNI 交互证明协议中，若 G₁ ≅ G₂，任何证明者猜对 i 的概率恰好是 1/2，根本原因是：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. π(G₁) 与 π(G₂) 是同构的随机置换，分布完全相同，H 不泄露 i 的任何信息</li>
+        <li data-opt="b">B. 证明者计算力不够强</li>
+        <li data-opt="c">C. 验证者可以作弊</li>
+        <li data-opt="d">D. 图同构问题本身很难</li>
+      </ul>
+      <div class="quiz-explain">选 A。这是信息论论证：同构图的随机置换产生同分布，验证者发送的 H 与 i 统计独立。B 错：协议允许证明者全能；C 错：验证者诚实且随机；D 错：即使图同构在 P 中（2022 年已宣布但未被广泛确认），此信息论论证依然成立。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="d">
+      <div class="q-no">自测 4</div>
+      <div class="q-stem">IP = PSPACE 证明中的"算术化"步骤，把布尔公式 x ∧ y 改写成：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. x + y</li>
+        <li data-opt="b">B. 1 − x − y</li>
+        <li data-opt="c">C. x + y − xy</li>
+        <li data-opt="d">D. x · y</li>
+      </ul>
+      <div class="quiz-explain">选 D。x ∧ y 在 {0,1} 上等于 x·y（乘积）。A 是 OR 的弱形式（x+y 可能等于 2）；B 是 NAND 的变形；C 是 OR 的算术化 1−(1−x)(1−y) 展开。算术化的核心是：布尔运算在 {0,1} 上恰好对应特定的低次多项式运算。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 5</div>
+      <div class="q-stem">"有些问题算不动"的两层解释中，"相对层"指的是：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 层级定理证明 P ⊊ EXPTIME</li>
+        <li data-opt="b">B. NP 完全把数千个问题锁在一起，且相对化证明朴素对角线方法攻不下 P vs NP</li>
+        <li data-opt="c">C. 有些问题需要指数空间</li>
+        <li data-opt="d">D. 图灵机模型本身有缺陷</li>
+      </ul>
+      <div class="quiz-explain">选 B。相对层是"问题间的难度关联"：NP 完全理论 + 相对化屏障。A 是绝对层（层级定理，资源量级差异）；C 是空间复杂性的绝对层特例；D 错——图灵机模型是标准，丘奇–图灵论题支持其普适性。</div>
+    </div>
+
+    <!-- ============ 三句话复述 ============ -->
+    <div class="retell">
+      <h3>🗣️ 用自己的话，三句话讲完本章</h3>
+      <p>对着空气（或室友）说出这三句。说卡壳的那句，回去重读对应小节。</p>
+      <details>
+        <summary>句1：这章解决什么问题？——</summary>
+        <div class="retell-answer">参考答案：第 9 章证明"有些问题精确多项式无解"，本章回答"怎么办"。三条退路：近似（牺牲精确，如 VERTEX-COVER 2-近似）、随机（牺牲确定，如 BPP/RP/ZPP）、交互（牺牲单边证明，如 GNI 与 IP = PSPACE）。</div>
+      </details>
+      <details>
+        <summary>句2：核心机制是什么？——</summary>
+        <div class="retell-answer">参考答案：近似用"匹配下界"或"期望论证"保证比例；随机用"放大引理"把常数误差压到指数小；交互用"算术化 + sumcheck"把布尔公式变成低次多项式，用随机点抽查逼作弊者露馅。</div>
+      </details>
+      <details>
+        <summary>句3：它和前后章怎么分工？——</summary>
+        <div class="retell-answer">参考答案：第 1–3 章定义"什么是计算"（图灵机），第 4–6 章回答"什么算得出"（可判定性），第 7–8 章回答"算多快、算多省"（时间空间分级），第 9 章回答"什么算不动"（层级定理、相对化、电路），本章回答"算不动怎么办"（近似、随机、交互）并收束全书。</div>
+      </details>
+    </div>
+
+    <!-- ============ 复习计划 ============ -->
+    <div class="review-plan">
+      <h3>🔁 间隔复习计划</h3>
+      <p>回忆本身比重读有效 10 倍。到点只做一件事：翻卡 + 重做标记题。</p>
+      <table>
+        <tr><th>时间点</th><th>复习内容</th><th>预计用时</th></tr>
+        <tr><td>第 1 天</td><td>概念卡 1–6 全部 + 回忆卡 10.1-1、10.2-2、10.3-2</td><td>12 分钟</td></tr>
+        <tr><td>第 3 天</td><td>概念卡 2、4、6（BPP/放大/IP=PSPACE）+ 重做 L2 两题 + 自测错题</td><td>12 分钟</td></tr>
+        <tr><td>第 7 天</td><td>三句话复述出声说一遍 + 重做 10.1 的 2-近似证明与 10.3 的 GNI 协议 + 回忆卡 10.5-1</td><td>15 分钟</td></tr>
+        <tr><td>第 15 天</td><td>只做合上书挑战；全过则本章毕业，卡在哪条就重读对应小节</td><td>15 分钟</td></tr>
+      </table>
+    </div>
+
+    <!-- 合上书挑战 -->
+    <div class="final-challenge">
+      <h3>📕 合上书挑战</h3>
+      <p class="fc-sub">现在关掉这个页面，拿一张纸，凭记忆完成以下任务。全部做完再回来核对——这是本章真正的毕业考试。</p>
+      <ol id="ch10-challenge-list">
+        <li><span class="fc-check"></span>写出 VERTEX-COVER 2-近似算法的完整证明：算法步骤、匹配性质、OPT ≥ m 的下界论证</li>
+        <li><span class="fc-check"></span>写出 BPP、RP、coRP、ZPP 四个定义，并证明 ZPP = RP ∩ coRP（两个方向各两句话）</li>
+        <li><span class="fc-check"></span>描述 GNI 交互协议：验证者发什么、证明者答什么、完全性与可靠性各怎么算</li>
+        <li><span class="fc-check"></span>陈述 IP = PSPACE，并用算术化（x∧y→xy、¬x→1−x、∨→x+y−xy）与 sumcheck 解释"为什么对话比独白强"</li>
+        <li><span class="fc-check"></span>画出全书四段因果链，对每一段说出一句话核心结论，并写出三条段间因果边</li>
+        <li><span class="fc-check"></span>回答本章主线问题：面对算不动的问题，我们还能怎样「退而求其次」地赢？（一句话）</li>
+      </ol>
+    </div>
+
+    <div class="complete-zone">
+      <button class="btn-complete" id="ch10-btn-complete" onclick="markDone()">✓ 我已完成本章（含合上书挑战）</button>
+    </div>
+
+    <div class="chapter-nav">
+      <a href="chapter-09.html"><span class="nav-dir">← 上一章</span>第9章 难解性</a>
+      <a href="index.html" class="next"><span class="nav-dir">下一章 →</span>回到学习地图（全书完）</a>
+    </div>
+
+  </div>
+</div>
+
+<footer class="footer">
+  <div class="wrap">第10章 复杂性进阶 · 计算理论互动讲义 · 基于 Sipser《Introduction to the Theory of Computation》(3rd ed)</div>
+</footer>
+
+<script src="assets/mermaid.min.js"></script>
+<script>
+mermaid.initialize({
+  startOnLoad: true,
+  theme: "base",
+  themeVariables: {
+    primaryColor: "#e3edf7",
+    primaryBorderColor: "#1d5f9e",
+    primaryTextColor: "#1d5f9e",
+    lineColor: "#5c554b",
+    secondaryColor: "#fbeedd",
+    tertiaryColor: "#f5f1e8",
+    fontFamily: "-apple-system, PingFang SC, sans-serif",
+    fontSize: "14px"
+  },
+  flowchart: { curve: "linear", htmlLabels: false }
+});
+</script>
+<script>
+// 自测题判分
+document.querySelectorAll(".quiz-block").forEach(block => {
+  const answer = block.dataset.answer;
+  const explain = block.querySelector(".quiz-explain");
+  block.querySelectorAll(".quiz-opts li").forEach(li => {
+    li.addEventListener("click", () => {
+      const opts = block.querySelectorAll(".quiz-opts li");
+      opts.forEach(o => o.classList.add("disabled"));
+      if (li.dataset.opt === answer) {
+        li.classList.add("correct");
+      } else {
+        li.classList.add("wrong");
+        block.querySelector(`[data-opt="${answer}"]`).classList.add("correct");
+      }
+      explain.classList.add("show");
+    });
+  });
+});
+
+// 合上书清单打勾
+document.querySelectorAll("#ch10-challenge-list li").forEach(li => {
+  li.addEventListener("click", () => li.classList.toggle("checked"));
+});
+
+// 完成标记 → localStorage（第10章）
+const KEY = "ct_progress_v1";
+function loadProgress() {
+  try { return JSON.parse(localStorage.getItem(KEY)) || {}; } catch (e) { return {}; }
+}
+const progress = loadProgress();
+const btn = document.getElementById("ch10-btn-complete");
+if (progress["10"] && progress["10"].done) {
+  btn.textContent = "✓ 已完成 · 再次点击重置";
+  btn.classList.add("done");
+}
+function markDone() {
+  const p = loadProgress();
+  if (p["10"] && p["10"].done) {
+    delete p["10"];
+    btn.textContent = "✓ 我已完成本章（含合上书挑战）";
+    btn.classList.remove("done");
+  } else {
+    p["10"] = { done: true, completedAt: Date.now(), reviewsDone: 0 };
+    btn.textContent = "✓ 已完成 · 复习提醒已开启";
+    btn.classList.add("done");
+  }
+  localStorage.setItem(KEY, JSON.stringify(p));
+}
+</script>
+
+</body>
+</html>

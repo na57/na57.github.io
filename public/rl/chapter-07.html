@@ -1,0 +1,839 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第7章 n步自举 · 强化学习互动讲义 · 基于 Sutton &amp; Barto《Reinforcement Learning: An Introduction》(2nd ed, 2018)</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+<nav class="topbar">
+  <div class="topbar-inner">
+    <span class="brand"><a href="index.html" style="color:inherit">← 学习地图</a></span>
+    <span class="crumb">第二段 · 表格型无模型方法 / 第7章</span>
+  </div>
+</nav>
+
+<div class="wrap">
+
+  <div class="lecture-head">
+    <span class="ch-label">CHAPTER 07 · 表格型无模型方法</span>
+    <h1>n 步自举</h1>
+    <p class="lead">蒙特卡洛等到回合结束，时序差分只看一步——在这两个极端之间，存在一整条可以连续调节的光谱。</p>
+  </div>
+
+  <!-- 本章定位 -->
+  <div class="position-bar">
+    <strong>本章在主线上的位置：</strong>第5章 MC 等到回合结束（无偏高方差）、第6章 TD 只看一步（低方差有偏）→ <u>本章用 n 步回报在偏差与方差之间连续调节</u> → 第8章把这条光谱系统一并引入规划。<br>
+    第7章回答主线上的一个问题：<strong>一步自举和整回合回报之间，能不能选一个中间步数来平衡偏差与方差？</strong>
+    <div class="map-inline">
+      <span class="node">Ch1–4 表格法基础（老虎机 · MDP · 动态规划）</span><span class="arrow">→</span>
+      <span class="node">Ch5 蒙特卡洛（等回合结束）</span><span class="arrow">→</span>
+      <span class="node">Ch6 时序差分（一步自举）</span><span class="arrow">→</span>
+      <span class="node here">Ch7 n步自举</span><span class="arrow">→</span>
+      <span class="node">Ch8 统一视图与规划</span><span class="arrow">→</span>
+      <span class="node">Ch9–11 函数逼近</span><span class="arrow">→</span>
+      <span class="node">Ch12–13 策略与前沿</span>
+    </div>
+  </div>
+
+  <!-- 学习目标 -->
+  <div class="objectives">
+    <h4>🎯 学完本章，合上书你应该能：</h4>
+    <ol>
+      <li>说出 MC 与 TD(0) 在偏差–方差光谱上的两极位置，写出 n 步回报公式并指出 n=1 与 n≥T−t 时分别退化为什么</li>
+      <li>在 5×5 gridworld 的轨迹上，手算任意 n 的 n 步回报（含完整推导步骤）</li>
+      <li>写出 n 步 TD 与 n 步 Sarsa 的更新式，并手算一次完整更新</li>
+      <li>写出 n 步离策略的截断重要性采样比 ρ<sub>t:t+n−1</sub>，并手算一次带 ρ 的更新</li>
+      <li>写出 λ 回报的定义式，验证一组权重之和为 1，并手算给定 λ 的 λ 回报</li>
+      <li>解释前向视角与后向视角的区别，并给出"先 TD(0) 再试 n"的实用调参流程</li>
+    </ol>
+  </div>
+
+  <div class="lecture">
+
+    <!-- 推导主线图 -->
+    <div class="figure">
+      <div class="mermaid">
+flowchart LR
+  A["MC 等回合结束<br>无偏但方差大"] --> B["TD(0) 一步自举<br>低方差但有偏"]
+  B --> C["n 步回报<br>在两端之间折中"]
+  C --> D["n 步 Sarsa 与<br>离策略截断采样"]
+  D --> E["λ 回报<br>几何加权统一所有 n"]
+  E --> F["代价 前向视角<br>仍需等回合结束"]
+  F --> G["资格迹在线实现<br>留给第12章"]
+  classDef hot fill:#fbeedd,stroke:#c4651f,stroke-width:2.5px,color:#c4651f;
+  classDef danger fill:#fae9e7,stroke:#b03a2e,stroke-width:2.5px,color:#b03a2e;
+  class C hot;
+  class G danger;
+      </div>
+      <div class="caption">图 7.0 本章推导主线：MC 与 TD 各占光谱一端，n 步回报把两端连成线，λ 回报再把整条线收成一个数。末端的红点——前向视角仍要等待——正是资格迹（第12章）的入口。</div>
+    </div>
+
+    <!-- ============ 7.1 ============ -->
+    <h2><span class="sec-no">7.1</span>一步与全程之间：为什么需要 n 步</h2>
+
+    <p>第5、6两章各给了我们一个更新目标，它们恰好站在一条光谱的两端：</p>
+
+    <ul>
+      <li><strong>蒙特卡洛目标</strong>：用整条回合的完整回报 G<sub>t</sub>。它是对真实价值的无偏估计，但方差大——回报里每一步的随机性都累加进来；而且<strong>必须等回合结束</strong>才能更新。</li>
+      <li><strong>TD(0) 目标</strong>：只用一步真实奖励 R<sub>t+1</sub> + γV(S<sub>t+1</sub>)，剩下的靠自举。方差小、立刻可更新，但自举把当前估计的误差直接缝进了目标——<strong>有偏</strong>，对初始估计敏感。</li>
+    </ul>
+
+    <p>这不是"二选一"的选择题，而是一条<span class="term">光谱</span>（spectrum）：TD 用 1 步真实奖励，MC 用全部 T−t 步真实奖励，中间还隔着 2 步、3 步、……、n 步。<span class="term">n 步回报</span>（n-step Return）的定义是把真实奖励用到第 n 步，然后用估计值收尾：</p>
+
+    <div class="formula">G<sub>t:t+n</sub> = R<sub>t+1</sub> + γR<sub>t+2</sub> + … + γ<sup>n−1</sup>R<sub>t+n</sub> + γ<sup>n</sup> V(S<sub>t+n</sub>)</div>
+
+    <p>两个端点立刻可以验证：<strong>n = 1</strong> 时，G<sub>t:t+1</sub> = R<sub>t+1</sub> + γV(S<sub>t+1</sub>)，正是第6章的 TD 目标；<strong>n ≥ T−t</strong> 时，尾部 V(S<sub>T</sub>) = 0（终止态价值为零），公式退化为完整回报 G<sub>t</sub>，即 MC 目标。n 步回报把 MC 和 TD 统一成了同一个家族的两个特例。</p>
+
+    <h3>核心算例：同一条轨迹，五个不同的更新目标</h3>
+
+    <p>沿用 5×5 gridworld（每步 −1、终点 +10、γ = 0.9）。设从 s₀ 出发的一条 5 步轨迹，奖励序列 R₁…R₅ = −1, −1, −1, −1, +10 后终止，当前估计 V(s₁) = 3、V(s₂) = 4、V(s₃) = 5、V(s₄) = 6。对 t = 0 逐个计算：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>n</th><th>目标</th><th>计算过程</th><th>数值</th><th>信息构成</th></tr>
+        <tr><td>1</td><td>G<sub>0:1</sub></td><td>−1 + 0.9 × 3</td><td><strong>1.7</strong></td><td>1 步真实 + 旧估计 V(s₁)</td></tr>
+        <tr><td>2</td><td>G<sub>0:2</sub></td><td>−1 + 0.9×(−1) + 0.81 × 4 = −1.9 + 3.24</td><td><strong>1.34</strong></td><td>2 步真实 + 旧估计 V(s₂)</td></tr>
+        <tr><td>3</td><td>G<sub>0:3</sub></td><td>−1 − 0.9 − 0.81 + 0.729 × 5 = −2.71 + 3.645</td><td><strong>0.935</strong></td><td>3 步真实 + 旧估计 V(s₃)</td></tr>
+        <tr><td>4</td><td>G<sub>0:4</sub></td><td>−1 − 0.9 − 0.81 − 0.729 + 0.6561 × 6 = −3.439 + 3.9366</td><td><strong>0.4976</strong></td><td>4 步真实 + 旧估计 V(s₄)</td></tr>
+        <tr><td>≥5</td><td>G（完整回报）</td><td>−3.439 + 0.6561 × 10</td><td><strong>3.122</strong></td><td>全部真实奖励，零自举</td></tr>
+      </table>
+    </div>
+
+    <p>盯住这张表的变化规律：<strong>n 越小，目标里"旧估计"的占比越大</strong>——G<sub>0:4</sub> 用 γ⁴V(s₄) = 3.9366 收尾，而真实尾巴值 6.561，旧估计 V(s₄) = 6 低估了真实结局，于是目标被拉低到 0.4976。这就是自举偏差的具象化。<strong>n 越大，真实奖励占比越大</strong>，偏差消退，但每一步真实奖励都携带环境的随机性——方差随之上升。n 就是这个旋钮：往小拧，用偏差换方差；往大拧，用方差换偏差。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>把更新目标想成一笔钱：真实奖励是"现金"，自举的 V 是"赊账"。TD(0) 只收一步现金其余全赊，MC 全程现金概不赊账，n 步回报收 n 步现金再赊尾款。现金稳但来得慢、波动大；赊账快但账本的信用取决于你当前的估计准不准。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>"n 步目标要等多走 n 步才更新，所以 n 步比 TD 慢。" 形式上说没错——回合内 t 时刻的经验要到 t+n 时刻才用来更新，确有 n 步延迟。但每次更新<strong>一次消化了 n 步真实奖励的信息</strong>，单条经验的信息量是 TD(0) 的 n 倍。书上的 19 状态随机游走实验表明：中等大小的 n 学习最快，优于 n=1 也优于完整 MC。延迟是真的，"更慢"是假的。</p>
+    </div>
+
+    <!-- 回忆卡片 7.1 -->
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <p class="recall-hint">不要直接点开。先在心里或纸上说出答案，再翻面核对。</p>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 7.1-1</div>
+              <div class="q-text">不看讲义，写出 n 步回报 G<sub>t:t+n</sub> 的公式，并指出 n=1 与 n≥T−t 时分别退化为什么目标。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              G<sub>t:t+n</sub> = R<sub>t+1</sub> + γR<sub>t+2</sub> + … + γ<sup>n−1</sup>R<sub>t+n</sub> + γ<sup>n</sup>V(S<sub>t+n</sub>)。n=1 退化为 TD 目标 R<sub>t+1</sub>+γV(S<sub>t+1</sub>)；n≥T−t 时 V(S<sub>T</sub>)=0，退化为完整回报 G<sub>t</sub>（MC 目标）。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 7.1-2</div>
+              <div class="q-text">7.1 算例中 G<sub>0:4</sub> = 0.4976 远小于完整回报 3.122，差额的来源是什么？这说明了什么？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              尾部用了 γ⁴V(s₄) = 0.6561×6 = 3.9366 收尾，而真实尾巴是 γ⁴×10 = 6.561——旧估计 V(s₄)=6 低估了真实的 +10 终点奖励。这正是自举偏差：n 越小，目标被当前估计的误差拉偏越多。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 7.2 ============ -->
+    <h2><span class="sec-no">7.2</span>n 步 TD 与 n 步 Sarsa：把目标装进更新式</h2>
+
+    <p>上一节造好了目标，这一节把它装进标准的更新骨架"新估计 = 旧估计 + 步长 × (目标 − 旧估计)"。<span class="term">n 步 TD</span>（n-step TD）用于状态价值预测：</p>
+
+    <div class="formula">V(S<sub>t</sub>) ← V(S<sub>t</sub>) + α [ G<sub>t:t+n</sub> − V(S<sub>t</sub>) ]</div>
+
+    <p>注意时间结构：G<sub>t:t+n</sub> 里出现 R<sub>t+n</sub> 与 V(S<sub>t+n</sub>)，所以 t 时刻的这次更新要等到 t+n 时刻才能执行。实现上通常缓存最近 n 步的 (S, A, R)，在 τ = t−n+1 时刻统一结算。</p>
+
+    <p>控制问题沿用第6章 Sarsa 的思路：把状态价值换成动作价值，让采样到的动作序列自己提供目标。<span class="term">n 步 Sarsa</span>（n-step Sarsa）的动作价值版回报为：</p>
+
+    <div class="formula">G<sub>t:t+n</sub><sup>(q)</sup> = R<sub>t+1</sub> + γR<sub>t+2</sub> + … + γ<sup>n−1</sup>R<sub>t+n</sub> + γ<sup>n</sup> Q(S<sub>t+n</sub>, A<sub>t+n</sub>)</div>
+
+    <div class="formula">Q(S<sub>t</sub>, A<sub>t</sub>) ← Q(S<sub>t</sub>, A<sub>t</sub>) + α [ G<sub>t:t+n</sub><sup>(q)</sup> − Q(S<sub>t</sub>, A<sub>t</sub>) ]</div>
+
+    <p>结构与 Sarsa 完全一致：采样五元组链条 (S<sub>t</sub>, A<sub>t</sub>, R<sub>t+1</sub>, …, S<sub>t+n</sub>, A<sub>t+n</sub>)，尾部用下一个实际执行的动作 A<sub>t+n</sub> 的 Q 值自举——仍然是 on-policy。配套的还有 <span class="term">n 步期望 Sarsa</span>（n-step Expected Sarsa）：把尾部 Q(S<sub>t+n</sub>, A<sub>t+n</sub>) 换成对策略 π 的期望 Σ<sub>a</sub> π(a|S<sub>t+n</sub>) Q(S<sub>t+n</sub>, a)，消去尾部的采样随机性，思想与第6章的期望 Sarsa 一脉相承，此处不再展开。</p>
+
+    <h3>算例：一次 5 步 Sarsa 更新</h3>
+
+    <p>沿用 7.1 的轨迹。回合全长 5 步，取 n = 5 时目标就是完整回报 G = 3.122（尾部终止态 Q = 0）。设当前 Q(s₀, a₀) = 2.0，步长 α = 0.1：</p>
+
+    <div class="formula">Q(s₀, a₀) ← 2.0 + 0.1 × ( 3.122 − 2.0 ) = 2.0 + 0.1 × 1.122 = 2.0 + 0.1122 = <strong>2.1122</strong></div>
+
+    <p>对比：若用 1 步 Sarsa，目标是 R₁ + γQ(s₁,a₁)，更新幅度受旧估计 Q(s₁,a₁) 牵制；5 步目标直接由真实奖励构成，这一下就把"终点有 +10"的信息完整灌进了 Q(s₀, a₀)——尽管它为此多等了 4 步。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>n 步 Sarsa 与 Sarsa 的关系，就像 n 步回报与 TD 目标的关系：<strong>算法骨架一行不动，只换目标的"真实含量"</strong>。这也再次印证了第5章的那句话——所有更新都长一个样子，区别只在目标是什么。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>"n 步 Sarsa 的尾部可以随便用 max<sub>a</sub> Q 收尾，那就变成 Q-learning 了。" 不能随意混搭。尾部用 A<sub>t+n</sub>（实际采样动作）保持 on-policy 语义；尾部换成 max 得到的"n 步 Q-learning"是离策略方法，目标和采样分布对不上，必须用 7.3 的重要性采样或树备份等专门机制纠偏，直接替换会引入系统性误差。</p>
+    </div>
+
+    <!-- 回忆卡片 7.2 -->
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 7.2-1</div>
+              <div class="q-text">写出 n 步 TD 与 n 步 Sarsa 的更新式，指出两者目标的唯一差别。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              n 步 TD：V(S<sub>t</sub>) ← V(S<sub>t</sub>) + α[G<sub>t:t+n</sub> − V(S<sub>t</sub>)]；n 步 Sarsa：Q(S<sub>t</sub>,A<sub>t</sub>) ← Q + α[G<sub>t:t+n</sub><sup>(q)</sup> − Q]。差别只在尾部：前者用 V(S<sub>t+n</sub>) 自举，后者用 Q(S<sub>t+n</sub>, A<sub>t+n</sub>) 自举，A<sub>t+n</sub> 来自实际采样（on-policy）。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 7.2-2</div>
+              <div class="q-text">为什么 n 步更新必须等到 t+n 时刻才能结算 t 时刻的经验？实现上要为此准备什么？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              因为目标 G<sub>t:t+n</sub> 含 R<sub>t+n</sub> 与 V(S<sub>t+n</sub>)，这些信息在 t 时刻尚未发生。实现上需缓存最近 n 步的 (S, A, R) 序列，在 τ = t−n+1 时刻统一更新；回合末尾还要把不足 n 步的尾部用完整回报补齐结算。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 7.3 ============ -->
+    <h2><span class="sec-no">7.3</span>n 步离策略：逐段重要性采样比</h2>
+
+    <p>上一节是 on-policy：行为策略就是目标策略。若要像第5章 5.5 节那样让行为策略 b 跑数据、目标策略 π 学价值，就必须纠偏。好消息是：n 步目标里"来自采样的部分"只有前 n 步，所以第5章那个要连乘到回合结束的重要性采样比，<strong>只需截断到 n 步</strong>：</p>
+
+    <div class="formula">ρ<sub>t:t+n−1</sub> = ∏<sub>k=t</sub><sup>min(t+n−1, T−1)</sup> <span class="frac"><span class="num-part">π(A<sub>k</sub> | S<sub>k</sub>)</span><span class="den-part">b(A<sub>k</sub> | S<sub>k</sub>)</span></span></div>
+
+    <p>更新式只是把 ρ 乘进步长里：</p>
+
+    <div class="formula">V(S<sub>t</sub>) ← V(S<sub>t</sub>) + α · ρ<sub>t:t+n−1</sub> · [ G<sub>t:t+n</sub> − V(S<sub>t</sub>) ]</div>
+
+    <p>直觉和第5章完全相同：ρ 是整个步长的缩放因子——ρ = 0 意味着这段轨迹在 π 下不可能发生，样本作废（增量为零）；ρ 大意味着这段轨迹在 π 下比 b 下更典型，一条要顶几条用，步长被放大。</p>
+
+    <h3>算例：一次 3 步离策略更新</h3>
+
+    <p>设某 3 步片段中，三步的动作概率比如下：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>步 k</th><th>π(A<sub>k</sub>|S<sub>k</sub>)</th><th>b(A<sub>k</sub>|S<sub>k</sub>)</th><th>比率</th></tr>
+        <tr><td>第1步</td><td>0.9</td><td>0.5</td><td>1.8</td></tr>
+        <tr><td>第2步</td><td>0.2</td><td>0.5</td><td>0.4</td></tr>
+        <tr><td>第3步</td><td>0.9</td><td>0.5</td><td>1.8</td></tr>
+      </table>
+    </div>
+
+    <div class="formula">ρ = 1.8 × 0.4 × 1.8 = <strong>1.296</strong></div>
+
+    <p>设 α = 0.1，该样本的误差项 (G<sub>t:t+3</sub> − V) = 2，则实际更新增量：</p>
+
+    <div class="formula">ΔV = α · ρ · (G − V) = 0.1 × 1.296 × 2 = <strong>0.2592</strong></div>
+
+    <p>对比 on-policy（ρ ≡ 1）的增量 0.2：这条样本在 π 眼中"更典型"，权重被放大到 1.296 倍。若第2步换成 π 概率为 0 的动作，ρ 立刻归零，整条 3 步样本直接作废。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>截断到 n 步是离策略方法的"减压阀"：第5章里 ρ 要连乘整回合（可能上百步），方差随长度指数膨胀；截到 n 步后，连乘项数被锁死在 n，方差被控制在 n 的尺度上——n 越小越稳。这就是为什么"n"在离策略里同样是偏差–方差旋钮：截得越短，越依赖自举（偏差），但 ρ 越温驯（方差）。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>"截断到 n 步就解决了重要性采样的方差问题，是免费的午餐。" 不是。截断只截到 n 步，意味着目标尾部仍然是自举的估计值——你压住了 ρ 的方差，付出的代价是目标重新引入偏差。这是偏差–方差的又一次取舍，和第5章"普通 IS 无偏但暴躁"的教训是同一枚硬币的两面。</p>
+    </div>
+
+    <!-- 回忆卡片 7.3 -->
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 7.3-1</div>
+              <div class="q-text">写出 n 步离策略的截断重要性采样比 ρ<sub>t:t+n−1</sub>，并解释为什么只需乘到 n 步为止。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              ρ<sub>t:t+n−1</sub> = ∏<sub>k=t</sub><sup>min(t+n−1, T−1)</sup> π(A<sub>k</sub>|S<sub>k</sub>)/b(A<sub>k</sub>|S<sub>k</sub>)。因为 n 步目标中只有前 n 步奖励来自行为策略采样的真实轨迹，需要纠偏；尾部 V(S<sub>t+n</sub>) 是估计值，不含采样随机性，无需加权。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 7.3-2</div>
+              <div class="q-text">在更新 V ← V + αρ(G − V) 中，ρ = 0 与 ρ 很大时各发生什么？为什么 ρ 的方差随 n 增大？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              ρ = 0：增量为零，该样本作废；ρ 大：步长被放大，单条样本主导更新。ρ 是 n 个比率的连乘，每多乘一项就多一层随机性，连乘积的方差随项数急剧（近似指数）增长，故 n 越大 ρ 越不稳定。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 7.4 ============ -->
+    <h2><span class="sec-no">7.4</span>λ 回报：给所有 n 步一个几何权重</h2>
+
+    <p>7.1 留下了一个悬而未决的问题：n 到底选几？2 步有 2 步的道理，4 步有 4 步的道理。与其纠结选哪一个，不如<strong>把所有 n 步目标加权平均全用上</strong>——谁的意见都听，但按几何衰减的权重听。这就是 <span class="term">λ 回报</span>（λ-return）：</p>
+
+    <div class="formula">G<sub>t</sub><sup>λ</sup> = (1−λ) ∑<sub>n=1</sub><sup>T−t−1</sup> λ<sup>n−1</sup> G<sub>t:t+n</sub> + λ<sup>T−t−1</sup> G<sub>t</sub></div>
+
+    <p>结构解读：每一项 n 步回报分到权重 (1−λ)λ<sup>n−1</sup>，随 n 按几何速度衰减；回合末尾剩余的全部质量 λ<sup>T−t−1</sup> 一次性落在完整回报 G<sub>t</sub> 上，保证所有权重之和恰好为 1。</p>
+
+    <h3>权重算例：λ = 0.8，距终止 T−t = 5</h3>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>项</th><th>权重公式</th><th>权重值</th><th>作用对象</th></tr>
+        <tr><td>n=1</td><td>(1−λ)λ⁰</td><td>0.2</td><td>G<sub>t:t+1</sub>（一步 TD 目标）</td></tr>
+        <tr><td>n=2</td><td>(1−λ)λ¹</td><td>0.2 × 0.8 = 0.16</td><td>G<sub>t:t+2</sub></td></tr>
+        <tr><td>n=3</td><td>(1−λ)λ²</td><td>0.2 × 0.64 = 0.128</td><td>G<sub>t:t+3</sub></td></tr>
+        <tr><td>n=4</td><td>(1−λ)λ³</td><td>0.2 × 0.512 = 0.1024</td><td>G<sub>t:t+4</sub></td></tr>
+        <tr><td>末项</td><td>λ⁴</td><td>0.4096</td><td>完整回报 G<sub>t</sub></td></tr>
+      </table>
+    </div>
+
+    <p>验证权重归一：0.2 + 0.16 + 0.128 + 0.1024 + 0.4096 = <strong>1.0</strong> ✓。注意 λ 的几何意义：λ 越大，权重衰减越慢，长尾越厚，越多质量压在长 n 步（乃至完整回报）上。</p>
+
+    <h3>数值算例：把 7.1 的五个目标加权成一个</h3>
+
+    <p>直接代入 7.1 算出的 G<sub>0:1</sub> = 1.7、G<sub>0:2</sub> = 1.34、G<sub>0:3</sub> = 0.935、G<sub>0:4</sub> = 0.4976、G = 3.122：</p>
+
+    <div class="formula">G<sub>0</sub><sup>λ</sup> = 0.2×1.7 + 0.16×1.34 + 0.128×0.935 + 0.1024×0.4976 + 0.4096×3.122</div>
+    <div class="formula">= 0.34 + 0.2144 + 0.11968 + 0.05095424 + 1.2787712 ≈ <strong>2.004</strong></div>
+
+    <p>λ 回报 2.004 落在最小目标 0.4976 与最大目标 3.122 之间——这正是加权平均的折中本性：偏差比方差小的短 n 目标拉它向下，完整的真实回报拉它向上。</p>
+
+    <p>最后要坦白一个代价：以上计算需要<strong>先拿到全部 n 步回报</strong>，也就是要等回合结束才能动手——这叫<span class="term">前向视角</span>（forward view）：站在 t 时刻向前眺望整条未来轨迹。它理论上一清二楚，却不能在线运行。真正可用的实现是等价的<span class="term">后向视角</span>（backward view）：边往前走边用"资格迹"（eligibility traces）把刚获得的 TD 误差分摊给刚路过的状态，数学上与前向视角严格等价、计算上却完全在线。这套机制属于第12章的内容，本章只需记住：<strong>λ 回报是目标，资格迹是实现它的引擎</strong>。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>λ 回报回答的不是"选哪个 n"，而是"不选"——它承认光谱上每个位置都有信息，用几何权重把它们编成一支合唱团：短 n 目标人多声大（权重高），长 n 目标人少但嗓门远（看得远）。λ 调节的就是合唱团的"声部平衡"。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>"λ = 0.8 表示'相信 80% 的一步回报'。" 错。λ 控制的是权重沿 n 衰减的速度（权重按 λ 几何衰减），不是对某个单一 n 的信任度。λ = 0.8 时一步目标只分到 0.2 的权重，完整回报反而分到 0.4096——最大的单一份额在末端。想看"纯一步"，要用 λ = 0（见习题与自测）。</p>
+    </div>
+
+    <!-- 回忆卡片 7.4 -->
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 7.4-1</div>
+              <div class="q-text">写出 λ 回报的定义式，并以 λ=0.8、T−t=5 为例验证权重之和为 1。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              G<sub>t</sub><sup>λ</sup> = (1−λ) Σ<sub>n=1</sub><sup>T−t−1</sup> λ<sup>n−1</sup> G<sub>t:t+n</sub> + λ<sup>T−t−1</sup> G<sub>t</sub>。权重：0.2、0.16、0.128、0.1024，末项 λ⁴ = 0.4096，合计 0.2+0.16+0.128+0.1024+0.4096 = 1.0。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 7.4-2</div>
+              <div class="q-text">前向视角为什么只能"理论上漂亮"？后向视角靠什么机制把它变成在线算法？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              前向视角需要 t 时刻之后的全部 n 步回报（直到回合结束）才能算出 G<sub>t</sub><sup>λ</sup>，无法在线更新。后向视角用资格迹：每步产生 TD 误差后，按迹的衰减即时分摊给刚访问过的状态，与 λ 回报严格等价且完全在线——第12章展开。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 7.5 ============ -->
+    <h2><span class="sec-no">7.5</span>错误直觉清算："n 步只是实现细节"</h2>
+
+    <p>学完前三节，容易滑向一个轻描淡写的结论："n 步方法不就是 TD 的工程量变体吗，选个顺手的 n 就行了。" 这条直觉必须清算。拆开看三处错误：</p>
+
+    <ul>
+      <li><strong>错因一：n 不是细节，是偏差–方差的工作点。</strong>n 直接决定更新目标里"真实奖励"与"旧估计"的配比，同一任务里 1 步和 5 步的收敛速度可差出数倍。书上的 19 状态随机游走实验结论是：中等 n 最优——这和你选学习率 α 一样，是头等重要的超参数，不是实现细节。</li>
+      <li><strong>错因二：n 不是越大越接近 MC 越好。</strong>MC 端"无偏"的光环只在估计成熟后兑现。训练早期价值函数还在剧烈变化，大 n 目标把大量真实奖励砸向一个还在漂移的估计，更新方向反复被旧值污染过的小目标反而更稳——Cliff Walking 这类对初期估计敏感的任务里，大步长光谱端会明显吃亏。就像 7.1 算例展示的：旧估计偏低时，小 n 的目标也被拉低，但拉得少、回头快。</li>
+      <li><strong>错因三："λ 回报和 n 步是两派方法。"</strong>不是。λ 回报就是全部 n 步回报的几何加权平均，是把整条光谱收成一个数的统一视角。n 步家族是"选一个点"，λ 回报是"全都要，但按几何权重分账"——同一个世界，两种表述。</li>
+    </ul>
+
+    <h3>实用建议：怎么选 n</h3>
+
+    <ol>
+      <li><strong>先让 TD(0) 跑通</strong>（n=1）：实现最简单，延迟最小，先确认环境接口、更新代码、α 量级都对。</li>
+      <li><strong>再试 n ∈ {2, 4, 8}</strong>：固定其他超参数，画每个 n 的回报–回合数学习曲线。</li>
+      <li><strong>比较的是"学习速度"而不是渐近性能</strong>：哪个 n 的曲线上升最快、最早稳定，就用哪个；不要盲目追大 n。</li>
+      <li>若任务回合长且随机性强（ρ 或回报方差大），偏好小 n；若环境近乎确定、回合短，可以放大 n 甚至接近 MC 端。</li>
+    </ol>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>第5章到第7章讲的其实是同一件事的三次表述：MC 说"全真"，TD 说"全赊"，n 步说"真 n 赊尾"，λ 回报说"按比例都真一点"。记住这条链，你就握住了表格型无模型方法的主轴。</p>
+    </div>
+
+    <!-- 回忆卡片 7.5 -->
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 7.5-1</div>
+              <div class="q-text">"n 只是实现细节"这条直觉错在哪？给出至少两条反驳。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              ① n 决定偏差–方差工作点，不同 n 的收敛速度可差数倍（随机游走实验：中等 n 最优）；② n 大≠好：估计未稳定时，大 n 目标被旧值污染，Cliff Walking 类任务中大 n 反而吃亏；③ n 与 α 同为头等超参数，需按学习曲线调。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 7.5-2</div>
+              <div class="q-text">说出选择 n 的实用流程，并说明比较的指标是什么。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              先用 TD(0) 跑通管线，再固定其他参数试 n ∈ {2, 4, 8}，画回报–回合数曲线；比较指标是学习速度（曲线上升快慢与稳定早晚），而非渐近性能；回合长/随机性强偏小型 n，近确定/短回合可偏大 n。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 概念卡 ============ -->
+    <h2><span class="sec-no">🃏</span>概念卡：本章概念的一分钟画像</h2>
+    <p>翻面前先自问：这个概念我能用一句话讲清楚吗？</p>
+    <div class="flip-grid">
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 1</div>
+            <div class="q-text">n 步回报（n-step Return, G<sub>t:t+n</sub>）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">用 n 步真实奖励加尾部估计收尾的更新目标：R<sub>t+1</sub>+…+γ<sup>n−1</sup>R<sub>t+n</sub>+γ<sup>n</sup>V(S<sub>t+n</sub>)。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">MC（全真实、高方差、须等待）与 TD(0)（全自举、有偏、敏感初值）之间没有折中方案。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">收 n 步现金、尾款赊账：现金占比由 n 调节。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为 n 越大越接近 MC 就越好——估计未稳定时大 n 被旧值污染，中等 n 常常最快。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">一切需要在偏差与方差间调工作点的表格型任务；第8章统一视图的基本构件。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 2</div>
+            <div class="q-text">n 步 Sarsa（n-step Sarsa）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">on-policy 控制：Q(S<sub>t</sub>,A<sub>t</sub>) ← Q + α[G<sub>t:t+n</sub><sup>(q)</sup> − Q]，尾部用实际采样的 Q(S<sub>t+n</sub>,A<sub>t+n</sub>)。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">一步 Sarsa 单步信息量太少，奖励传播慢；n 步让一次更新消化 n 步真实经验。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">Sarsa 的五元组从"一截短链"换成"n 节链条"。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">尾部随意换 max Q 就当 Q-learning——那样变成离策略，必须另行纠偏。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">回合中等长度、奖励稀疏的 on-policy 控制；期望 Sarsa 变体可去尾部采样噪声。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 3</div>
+            <div class="q-text">n 步离策略与截断重要性采样（Off-policy n-step / Truncated IS）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">V ← V + α·ρ<sub>t:t+n−1</sub>·(G<sub>t:t+n</sub> − V)，ρ 只连乘 n 步策略概率比。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">第5章整回合 ρ 连乘方差爆炸；截断到 n 步把方差锁在 n 的尺度上。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">减压阀：连乘链条越短，权重越温驯。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为截断是免费的——压住 ρ 方差的代价是自举尾部重新引入偏差。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">用日志数据/探索策略评估贪心目标的场景；第12章离策略策略学习的 precursor。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 4</div>
+            <div class="q-text">λ 回报（λ-return, G<sub>t</sub><sup>λ</sup>）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">全部 n 步回报的几何加权平均：(1−λ)Σλ<sup>n−1</sup>G<sub>t:t+n</sub> + λ<sup>T−t−1</sup>G<sub>t</sub>，权重和为 1。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">"n 选几"的难题：不选，全部用上、按 λ 分账。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">合唱团：短 n 人多声大，长 n 人少但看得远，λ 调声部平衡。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">λ=0.8 不是"信 80% 的一步回报"——λ 是衰减速度；最大单一权重 λ<sup>T−t−1</sup> 常在完整回报上。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">TD(λ) 一族方法的目标定义；第12章资格迹的理论标尺。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 5</div>
+            <div class="q-text">前向视角与后向视角（Forward / Backward View）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">前向：站在 t 向未来看，用全部 n 步回报合成 G<sub>t</sub><sup>λ</sup>；后向：边走边用资格迹把 TD 误差分摊给刚路过的状态。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">λ 回报前向计算要等回合结束，无法在线；后向视角给出严格等价的在线实现。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">前向是"先记账后结算"，后向是"随手把功劳分给刚走过的地方"。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为两者是近似关系——它们数学上严格等价，只是计算顺序不同。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">第12章资格迹（TD(λ)、Sarsa(λ)）的核心机制；本章只需记住方向。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 6</div>
+            <div class="q-text">n 的选择（偏差–方差旋钮）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">n 控制更新目标中真实奖励与自举估计的配比：小 n 低方差有偏，大 n 无偏高方差。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">没有普适最优的更新目标，必须按任务特性选工作点。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">收音机调台旋钮：往左噪声小但信号闷，往右信号全但杂音大，中间有最佳点。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">当成实现细节随手定——它与 α 同为头等超参数，收敛速度可差数倍。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">任何 n 步/TD(λ) 实践：先 TD(0) 跑通，再试 {2,4,8} 比学习曲线。</span></div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- ============ 分层习题 ============ -->
+    <h2><span class="sec-no">📝</span>分层习题</h2>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>判断并说明理由：「n 步回报中 n 越大偏差越小、方差越大，所以应该尽量取大的 n。」</div>
+      <details>
+        <summary>提示</summary>
+        <p>"偏差小"是相对真值而言的渐近性质。训练早期，目标里的真实奖励要和什么样的估计配合？回想 7.1 算例中 G<sub>0:4</sub> 为什么只有 0.4976。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p><strong>说法错误。</strong>前半句"n 越大偏差越小、方差越大"在统计意义上成立，但结论"应该尽量大"漏掉了三个关键事实：</p>
+          <p>① <strong>偏差小的前提是估计已经收敛</strong>。训练早期 V 还在剧烈变化，大 n 目标虽含大量真实奖励，但更新对象是尚在漂移的旧估计——7.1 算例中完整回报 3.122 与 G<sub>0:4</sub> = 0.4976 的巨大差异正来自旧估计 V(s₄)=6 的失真。大 n 把这些失真"固化"进更多状态的更新里。</p>
+          <p>② <strong>方差不是免费的</strong>。大 n 目标方差大，需要更多样本或更小 α 来压制，样本效率反而下降。</p>
+          <p>③ <strong>实验证据相反</strong>：书上 19 状态随机游走实验显示中等 n 学习最快，优于 n=1 与大 n 两端。正确结论是：n 是需要按任务调节的超参数，不是越大越好。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>「λ = 1 的 λ 回报等价于什么目标？λ = 0 呢？」请从 λ 回报定义式出发回答。</div>
+      <details>
+        <summary>提示</summary>
+        <p>把 λ = 1 和 λ = 0 分别代入 G<sub>t</sub><sup>λ</sup> = (1−λ)Σλ<sup>n−1</sup>G<sub>t:t+n</sub> + λ<sup>T−t−1</sup>G<sub>t</sub>，看哪些项存活。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p><strong>λ = 1：</strong>(1−λ) = 0，求和项全部消失；末项 λ<sup>T−t−1</sup> = 1，故 G<sub>t</sub><sup>λ</sup> = G<sub>t</sub>，<strong>退化为完整回报（MC 目标）</strong>。</p>
+          <p><strong>λ = 0：</strong>求和项中 λ<sup>n−1</sup> 在 n ≥ 2 时为 0，只有 n=1 项存活且权重 (1−0)×0⁰ = 1；末项 0<sup>T−t−1</sup> = 0。故 G<sub>t</sub><sup>λ</sup> = G<sub>t:t+1</sub> = R<sub>t+1</sub> + γV(S<sub>t+1</sub>)，<strong>退化为一步 TD 目标</strong>。</p>
+          <p>这印证了"λ 是光谱参数"：λ 从 0 拧到 1，方法从 TD(0) 连续滑向 MC，与 n 从 1 拧到 T−t 是同一个光谱的两种参数化。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>一条 3 步终止的轨迹：奖励 R₁ = −1, R₂ = −1, R₃ = +5（T = 3），γ = 0.9，当前估计 V(s₁) = 2、V(s₂) = 3（终止态价值为 0）。计算 G<sub>0:1</sub>、G<sub>0:2</sub> 与完整回报 G，写出全部步骤，并指出三者偏差–方差排序。</div>
+      <details>
+        <summary>提示</summary>
+        <p>G<sub>0:1</sub> 用 V(s₁) 收尾，G<sub>0:2</sub> 用 V(s₂) 收尾，完整回报在 R₃ 后终止、无需自举。先列公式再代数字。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p><strong>G<sub>0:1</sub></strong>（1 步真实 + V(s₁)）：</p>
+          <p>G<sub>0:1</sub> = R₁ + γV(s₁) = −1 + 0.9 × 2 = −1 + 1.8 = <strong>0.8</strong></p>
+          <p><strong>G<sub>0:2</sub></strong>（2 步真实 + V(s₂)）：</p>
+          <p>G<sub>0:2</sub> = R₁ + γR₂ + γ²V(s₂) = −1 + 0.9×(−1) + 0.81×3 = −1 − 0.9 + 2.43 = −1.9 + 2.43 = <strong>0.53</strong></p>
+          <p><strong>完整回报 G</strong>（3 步后终止，无自举）：</p>
+          <p>G = R₁ + γR₂ + γ²R₃ = −1 + 0.9×(−1) + 0.81×5 = −1.9 + 4.05 = <strong>2.15</strong></p>
+          <p><strong>偏差–方差排序：</strong>真实结局 2.15，而 V(s₂)=3、V(s₁)=2 的旧估计都把目标往下拉：G<sub>0:1</sub> = 0.8 与 G<sub>0:2</sub> = 0.53 的偏差（|0.8−2.15|、|0.53−2.15|）远大于 G 的零偏差；方差排序相反：G<sub>0:1</sub> 只含 1 个随机奖励最稳，G 含 3 个最晃。即 偏差：G &lt; G<sub>0:2</sub> &lt; G<sub>0:1</sub>；方差：G<sub>0:1</sub> &lt; G<sub>0:2</sub> &lt; G。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>一次 2 步离策略更新：两步的策略概率分别为 π 侧 1 与 0.25、b 侧各 0.5；α = 0.2，误差项 (G<sub>t:t+2</sub> − V) = 1.5。求 ρ 与本次更新增量。若第二步 π 的概率改为 0，结果如何？说明原因。</div>
+      <details>
+        <summary>提示</summary>
+        <p>ρ 是两步比率连乘；增量 = α·ρ·(G−V)。第二步 π = 0 时连乘中有一因子为 0。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p><strong>第一步比率：</strong>1 / 0.5 = 2；<strong>第二步比率：</strong>0.25 / 0.5 = 0.5。</p>
+          <p><strong>截断采样比：</strong>ρ = 2 × 0.5 = <strong>1.0</strong>。</p>
+          <p><strong>更新增量：</strong>ΔV = α·ρ·(G−V) = 0.2 × 1.0 × 1.5 = <strong>0.3</strong>。注意 ρ = 1.0 纯属巧合：单步比率 2（π 下更典型）与 0.5（π 下较少见）恰好抵消。</p>
+          <p><strong>若第二步 π = 0：</strong>ρ = 2 × 0 = <strong>0</strong>，增量 = 0.2 × 0 × 1.5 = <strong>0</strong>，该样本作废。原因：这条轨迹包含一个目标策略 π 绝不可能执行的动作，它对"π 下的价值"不携带任何信息——重要性采样的覆盖假设（π 支持的动作 b 必须可能采样）在此被违反方向恰好相反：是 π 不支持 b 采到的动作，该轨迹只能丢弃。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l3">L3 建模应用</span>一台机械臂做连续装配作业，任务无自然回合终止（持续数月不间断运行），价值函数从零初始化。有人提议用纯 MC 评估当前控制策略，有人提议全程 TD(0)。指出两条路线各自的致命问题，给出"先 TD(0) 预训练、再切换 n=4"的分阶段方案，并用 mermaid 画出方案流程。</div>
+      <details>
+        <summary>提示</summary>
+        <p>持续任务里"完整回报"意味着什么？TD(0) 的偏差来自哪里，什么时候它会自动减轻？</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p><strong>纯 MC 的致命问题：</strong>任务永不终止，完整回报是无穷项折扣和，任何有限时刻都拿不到一个"完整样本"，更新一次也无法执行——MC 在本任务中根本不适用。</p>
+          <p><strong>全程 TD(0) 的致命问题：</strong>TD(0) 可以在线更新，但其目标 R + γV′ 的偏差完全由当前估计 V′ 承载。从零初始化意味着早期目标几乎全是噪声自举——机械臂早期价值严重失真，更新方向可能被错误的初始估计带偏，恢复缓慢。</p>
+          <p><strong>分阶段方案：</strong></p>
+          <p>① <strong>阶段一 TD(0) 预训练</strong>：利用其低方差、即时更新的特性，让 V 快速脱离糟糕的初始值、进入合理量级；</p>
+          <p>② <strong>阶段二切换 n = 4</strong>：估计已稳定后，自举尾部的失真大幅减轻，此时用 4 步真实奖励精修价值，降低残余偏差；</p>
+          <p>③ 持续监控回报曲线，若性能停滞再在 {2, 8} 中微调 n。</p>
+          <p>逻辑：偏差来自"旧估计不准"，而"不准"随学习自动减轻——所以先用低方差方法把估计养准，再放大 n 收割低偏差。</p>
+          <div class="figure">
+            <div class="mermaid">
+flowchart LR
+  A["阶段一<br>TD(0) 预训练"] --> B["价值快速脱离<br>糟糕初始值"]
+  B --> C["阶段二<br>切换 n=4"]
+  C --> D["用 4 步真实奖励<br>精修价值"]
+  D --> E["监控回报曲线<br>在 2 与 8 间微调"]
+            </div>
+            <div class="caption">参考答案附图：持续任务的分阶段 n 步方案。</div>
+          </div>
+        </div>
+      </details>
+    </div>
+
+    <!-- ============ 自测 ============ -->
+    <h2><span class="sec-no">✍️</span>本章自测</h2>
+    <p class="quiz-hint">点击选项判分，答错会给出原因。</p>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 1</div>
+      <div class="q-stem">下列哪个是 n 步回报 G<sub>t:t+n</sub> 的正确展开式？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. R<sub>t+1</sub> + γR<sub>t+2</sub> + … + γ<sup>n</sup>R<sub>t+n+1</sub> + γ<sup>n+1</sup>V(S<sub>t+n+1</sub>)</li>
+        <li data-opt="b">B. R<sub>t+1</sub> + γR<sub>t+2</sub> + … + γ<sup>n−1</sup>R<sub>t+n</sub> + γ<sup>n</sup>V(S<sub>t+n</sub>)</li>
+        <li data-opt="c">C. R<sub>t</sub> + γR<sub>t+1</sub> + … + γ<sup>n</sup>R<sub>t+n</sub> + γ<sup>n</sup>V(S<sub>t+n</sub>)</li>
+        <li data-opt="d">D. (1−λ) Σ<sub>n</sub> λ<sup>n−1</sup> G<sub>t:t+n</sub></li>
+      </ul>
+      <div class="quiz-explain">解析：B 正确——n 步真实奖励（R<sub>t+1</sub> 到 R<sub>t+n</sub>，最高折扣 γ<sup>n−1</sup>）加 γ<sup>n</sup> 折扣的尾部估计。A 错：多走了一步，用了 n+1 个真实奖励。C 错：R<sub>t</sub> 是进入 S<sub>t</sub> 之前获得的奖励，不属于从 t 出发的目标。D 是 λ 回报的定义，不是单个 n 步回报。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="c">
+      <div class="q-no">自测 2</div>
+      <div class="q-stem">7.1 算例（奖励 −1,−1,−1,−1,+10，γ=0.9，V(s₃)=5）中，G<sub>0:3</sub> = ？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 1.34</li>
+        <li data-opt="b">B. 0.4976</li>
+        <li data-opt="c">C. 0.935</li>
+        <li data-opt="d">D. 3.122</li>
+      </ul>
+      <div class="quiz-explain">解析：C 正确。G<sub>0:3</sub> = −1 + 0.9×(−1) + 0.81×(−1) + 0.729×5 = −2.71 + 3.645 = 0.935。A 是 G<sub>0:2</sub>（尾部 0.81×4）；B 是 G<sub>0:4</sub>（尾部 0.6561×6）；D 是完整回报（尾部 0.6561×10）。四个选项正是光谱上的四个点，算错一个说明 γ 的幂次或尾部取值没对齐。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="a">
+      <div class="q-no">自测 3</div>
+      <div class="q-stem">n 步 Sarsa 更新：Q(s₀,a₀) = 2.0，α = 0.1，5 步目标 G = 3.122。更新后的 Q = ？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 2.1122</li>
+        <li data-opt="b">B. 3.122</li>
+        <li data-opt="c">C. 0.1122</li>
+        <li data-opt="d">D. 2.561</li>
+      </ul>
+      <div class="quiz-explain">解析：A 正确。Q ← 2.0 + 0.1×(3.122 − 2.0) = 2.0 + 0.1122 = 2.1122。B 错：那是把 Q 直接替换为目标（α=1 的结果），忽略了步长。C 错：0.1122 只是增量，忘了加回旧估计 2.0。D 错：(2.0+3.122)/2 = 2.561 是 α=0.5 的平均，不是本题的步长。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="d">
+      <div class="q-no">自测 4</div>
+      <div class="q-stem">λ = 0.8 且 T−t = 5 时，λ 回报中 n = 3 那一项（G<sub>t:t+3</sub>）分到的权重是：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 0.16</li>
+        <li data-opt="b">B. 0.1024</li>
+        <li data-opt="c">C. 0.4096</li>
+        <li data-opt="d">D. 0.128</li>
+      </ul>
+      <div class="quiz-explain">解析：D 正确。n=3 的权重 = (1−λ)λ<sup>n−1</sup> = 0.2 × 0.8² = 0.2 × 0.64 = 0.128。A 是 n=2 的权重（0.2×0.8）；B 是 n=4 的权重（0.2×0.512）；C 是末项完整回报的权重 λ⁴ = 0.4096——注意最大单一权重在末端，这正是"λ≠对一步回报的信任度"的证据。全部权重 0.2+0.16+0.128+0.1024+0.4096 = 1。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 5</div>
+      <div class="q-stem">关于 λ 回报的退化，下列说法正确的是：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. λ = 0 退化为完整 MC 回报，λ = 1 退化为一步 TD 目标</li>
+        <li data-opt="b">B. λ = 0 退化为一步 TD 目标，λ = 1 退化为完整 MC 回报</li>
+        <li data-opt="c">C. λ = 0.5 退化为 2 步回报</li>
+        <li data-opt="d">D. λ 只影响收敛速度，不改变更新目标的构成</li>
+      </ul>
+      <div class="quiz-explain">解析：B 正确。λ=0 时求和项仅剩 n=1（权重 (1−0)·0⁰=1），G<sup>λ</sup> = G<sub>t:t+1</sub>；λ=1 时 (1−λ)=0 求和项全灭，末项 1<sup>T−t−1</sup>=1，G<sup>λ</sup> = G<sub>t</sub>。A 把两端说反了。C 错：λ=0.5 仍是所有 n 的几何加权（只是衰减更快），不等于任何单一 n。D 错：λ 直接改变目标的构成（各 n 步回报的配比），不只是"速度"问题。</div>
+    </div>
+
+    <!-- ============ 复述 ============ -->
+    <div class="retell">
+      <h3>🗣️ 用自己的话，三句话讲完本章</h3>
+      <p>对着空气（或室友）说出这三句。说卡壳的那句，回去重读对应小节。</p>
+      <details>
+        <summary>句1：这章解决什么问题？——</summary>
+        <div class="retell-answer">参考答案：第5章 MC 等到回合结束才更新（无偏但方差大），第6章 TD 只看一步（低方差但有偏、敏感初值）。本章解决"能否在一步自举与整回合回报之间选一个中间步数，连续平衡偏差与方差"。</div>
+      </details>
+      <details>
+        <summary>句2：核心机制是什么？——</summary>
+        <div class="retell-answer">参考答案：n 步回报 G<sub>t:t+n</sub> 用 n 步真实奖励加 γ<sup>n</sup> 折扣的尾部估计收尾，套进"旧估计 + α(目标−旧估计)"骨架即得 n 步 TD 与 n 步 Sarsa；离策略时把重要性采样比截断到 n 步；λ 回报用几何权重 (1−λ)λ<sup>n−1</sup> 把所有 n 步目标加权平均，权重和为 1。</div>
+      </details>
+      <details>
+        <summary>句3：它和前后章怎么分工？——</summary>
+        <div class="retell-answer">参考答案：第5、6章各占据光谱一端，本章把两端连成连续光谱并用 λ 回报统一；第8章把这条光谱纳入统一视图并引入规划；λ 回报的在线实现（资格迹、后向视角）则留给第12章。</div>
+      </details>
+    </div>
+
+    <!-- ============ 复习计划 ============ -->
+    <div class="review-plan">
+      <h3>🔁 间隔复习计划</h3>
+      <p>回忆本身比重读有效 10 倍。到点只做一件事：翻卡 + 重做标记题。</p>
+      <table>
+        <tr><th>时间点</th><th>复习内容</th><th>预计用时</th></tr>
+        <tr><td>第 1 天</td><td>全部 6 张概念卡 + 10 张回忆卡；重算 7.1 的五个目标与 L2 两道手算题</td><td>15 分钟</td></tr>
+        <tr><td>第 3 天</td><td>概念卡 1、4、6（n 步回报/λ 回报/n 的选择）+ 自测错题 + 重算 λ=0.8 的权重表与 G<sup>λ</sup> ≈ 2.004</td><td>10 分钟</td></tr>
+        <tr><td>第 7 天</td><td>三句话复述 + 默写 n 步回报与截断 ρ 公式 + 合上书挑战</td><td>15 分钟</td></tr>
+        <tr><td>第 15 天</td><td>只重做合上书挑战；能全过就毕业，卡哪条回去重读对应小节</td><td>15 分钟</td></tr>
+      </table>
+    </div>
+
+    <!-- 合上书挑战 -->
+    <div class="final-challenge">
+      <h3>📕 合上书挑战</h3>
+      <p class="fc-sub">现在关掉这个页面，拿一张纸，凭记忆完成以下任务。全部做完再回来核对——这是本章真正的毕业考试。</p>
+      <ol id="ch07-challenge-list">
+        <li><span class="fc-check"></span>写出 n 步回报 G<sub>t:t+n</sub> 的公式，并指出 n=1 与 n≥T−t 时的退化结果</li>
+        <li><span class="fc-check"></span>在 7.1 算例（奖励 −1,−1,−1,−1,+10，γ=0.9，V=3,4,5,6）上重算全部五个目标：1.7 / 1.34 / 0.935 / 0.4976 / 3.122</li>
+        <li><span class="fc-check"></span>写出 n 步 Sarsa 更新式，并用 α=0.1、旧 Q=2.0、目标 3.122 算出 2.1122</li>
+        <li><span class="fc-check"></span>写出截断重要性采样比 ρ<sub>t:t+n−1</sub>，用比率 1.8/0.4/1.8 算出 ρ=1.296 与增量 0.2592，并说明 ρ=0 的含义</li>
+        <li><span class="fc-check"></span>写出 λ 回报定义，用 λ=0.8、T−t=5 列出全部权重（0.2/0.16/0.128/0.1024/0.4096）并验证和为 1，算出 G<sup>λ</sup> ≈ 2.004</li>
+        <li><span class="fc-check"></span>一句话回答本章主线问题：一步自举和整回合回报之间，能不能选一个中间步数来平衡偏差与方差？</li>
+      </ol>
+    </div>
+
+    <div class="complete-zone">
+      <button class="btn-complete" id="ch07-btn-complete" onclick="markDone()">✓ 我已完成本章（含合上书挑战）</button>
+    </div>
+
+    <div class="chapter-nav">
+      <a href="chapter-06.html"><span class="nav-dir">← 上一章</span>第6章 时序差分学习</a>
+      <a href="chapter-08.html" class="next"><span class="nav-dir">下一章 →</span>第8章 表格型方法的统一与规划</a>
+    </div>
+
+  </div>
+</div>
+
+<footer class="footer">
+  <div class="wrap">第7章 n步自举 · 强化学习互动讲义 · 基于 Sutton &amp; Barto《Reinforcement Learning: An Introduction》(2nd ed, 2018)</div>
+</footer>
+
+<script src="assets/mermaid.min.js"></script>
+<script>
+mermaid.initialize({
+  startOnLoad: true,
+  theme: "base",
+  themeVariables: {
+    primaryColor: "#e3edf7",
+    primaryBorderColor: "#1d5f9e",
+    primaryTextColor: "#1d5f9e",
+    lineColor: "#5c554b",
+    secondaryColor: "#fbeedd",
+    tertiaryColor: "#f5f1e8",
+    fontFamily: "-apple-system, PingFang SC, sans-serif",
+    fontSize: "14px"
+  },
+  flowchart: { curve: "linear", htmlLabels: false }
+});
+</script>
+<script>
+// 自测题判分
+document.querySelectorAll(".quiz-block").forEach(block => {
+  const answer = block.dataset.answer;
+  const explain = block.querySelector(".quiz-explain");
+  block.querySelectorAll(".quiz-opts li").forEach(li => {
+    li.addEventListener("click", () => {
+      const opts = block.querySelectorAll(".quiz-opts li");
+      opts.forEach(o => o.classList.add("disabled"));
+      if (li.dataset.opt === answer) {
+        li.classList.add("correct");
+      } else {
+        li.classList.add("wrong");
+        block.querySelector(`[data-opt="${answer}"]`).classList.add("correct");
+      }
+      explain.classList.add("show");
+    });
+  });
+});
+
+// 合上书清单打勾
+document.querySelectorAll("#ch07-challenge-list li").forEach(li => {
+  li.addEventListener("click", () => li.classList.toggle("checked"));
+});
+
+// 完成标记 → localStorage（键 rl_progress_v1，章号字符串 "7"）
+const CH07_KEY = "rl_progress_v1";
+function loadProgress() {
+  try { return JSON.parse(localStorage.getItem(CH07_KEY)) || {}; } catch (e) { return {}; }
+}
+const progress = loadProgress();
+const btn = document.getElementById("ch07-btn-complete");
+if (progress["7"] && progress["7"].done) {
+  btn.textContent = "✓ 已完成 · 再次点击重置";
+  btn.classList.add("done");
+}
+function markDone() {
+  const p = loadProgress();
+  if (p["7"] && p["7"].done) {
+    delete p["7"];
+    btn.textContent = "✓ 我已完成本章（含合上书挑战）";
+    btn.classList.remove("done");
+  } else {
+    p["7"] = { done: true, completedAt: Date.now(), reviewsDone: 0 };
+    btn.textContent = "✓ 已完成 · 复习提醒已开启";
+    btn.classList.add("done");
+  }
+  localStorage.setItem(CH07_KEY, JSON.stringify(p));
+}
+</script>
+
+</body>
+</html>

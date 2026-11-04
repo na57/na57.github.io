@@ -1,0 +1,838 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第4章 哈希表 · 算法导论互动讲义</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+<nav class="topbar">
+  <div class="topbar-inner">
+    <span class="brand"><a href="index.html" style="color:inherit">← 学习地图</a></span>
+    <span class="crumb">阶段② · 排序与检索 / 第4章</span>
+  </div>
+</nav>
+
+<div class="wrap">
+
+  <div class="lecture-head">
+    <span class="ch-label">CHAPTER 04 · 排序与检索</span>
+    <h1>哈希表</h1>
+    <p class="lead">一句话副标题：排序能做到 O(n lg n) 整理数据，但单次查找还要 O(lg n)——能不能用一张表把查找直接压到期望 O(1)？</p>
+  </div>
+
+  <!-- ===== 章首四件套之 1：全书定位 ===== -->
+  <div class="position-bar">
+    <strong>本章在主线上的位置：</strong>第3章的排序解决了"批量整理"，本章解决"单次存取"——<u>用期望常数时间完成插入、删除、查找</u>；它付出的代价（不支持有序操作）正是第5章红黑树要补上的。<br>
+    第4章回答主线上的第4个问题：<strong>字典的插入、删除、查找，能不能做到比 O(lg n) 更快？</strong>
+    <div class="map-inline">
+      <span class="node">① 分析基础<br>Ch1 增长率 · Ch2 分治递归</span><span class="arrow">→</span>
+      <span class="node here">② 排序与检索<br>Ch3 排序 · <strong>Ch4 哈希表</strong> · Ch5 红黑树</span><span class="arrow">→</span>
+      <span class="node">③ 图算法<br>Ch6 图基本算法 · Ch7 最短路</span><span class="arrow">→</span>
+      <span class="node">④ 设计范式<br>Ch8 动规 · Ch9 贪心 · Ch10 NP完全</span>
+    </div>
+  </div>
+
+  <!-- ===== 章首四件套之 2：学习目标 ===== -->
+  <div class="objectives">
+    <h4>🎯 学完本章，合上书你应该能：</h4>
+    <ol>
+      <li>说出直接寻址表的时间代价与空间代价各是什么，并举出一个"全域太大导致不可行"的具体数字例子</li>
+      <li>画出 m = 9、h(k) = k mod 9 下插入 9 个键后的链接法散列表，算出 α 与成功查找的期望探查数</li>
+      <li>默写线性探测、二次探测、双重散列三个探查公式，并手算 m = 13 双重散列下任意键的完整探查序列</li>
+      <li>用 1/(1−α) 估计开放寻址不成功查找的探查上界（α = 0.5、0.9、0.99 各算一次）并解释聚集现象</li>
+      <li>陈述全域散列的定义（任意两键冲突概率不超过 1/m），说清它如何把"最坏输入"变成"期望保证"</li>
+      <li>用一句话说明哈希表与红黑树在字典操作上的分工，并指出哈希表不支持哪三类有序操作</li>
+    </ol>
+  </div>
+
+  <div class="lecture">
+
+    <!-- ===== 章首四件套之 3：推导主线图 ===== -->
+    <div class="figure">
+      <div class="mermaid">
+flowchart TB
+  A["字典问题：要支持插入 删除 查找"] --> B["直接寻址表：键就是下标"]
+  B -->|"因为全域太大 空间爆炸"| C["散列函数：把大全域压进小表"]
+  C -->|"因为全域大于表 冲突必然发生"| D["冲突解决：链接法 或 开放寻址"]
+  D -->|"因为探查次数由装满程度决定"| E["控制装载因子 α 等于 n 比 m"]
+  E -->|"因为恶意键能让固定函数退化"| F["全域散列：随机选函数"]
+  F --> G["期望 O1 的字典"]
+  G --> H["代价：放弃顺序 最小值 前驱 后继都不支持"]
+  H -.->|"指向第5章"| I["红黑树：有序字典"]
+  classDef hot fill:#fbeedd,stroke:#c4651f,stroke-width:2.5px,color:#c4651f;
+  classDef danger fill:#fae9e7,stroke:#b03a2e,stroke-width:2.5px,color:#b03a2e;
+  class G hot;
+  class H danger;
+      </div>
+      <div class="caption">本章推导主线：每一步都回答"为什么需要下一步"。注意末端红框：哈希表不是免费的，它用顺序换来了速度。</div>
+    </div>
+
+    <!-- ================= 4.1 ================= -->
+    <h2><span class="sec-no">4.1</span>为什么需要哈希：直接寻址表的空间困境</h2>
+
+    <p>第3章给了我们 O(n lg n) 的排序和 O(lg n) 的二分查找。但很多应用——编译器的符号表、数据库的索引、路由器的转发表——要的不是"排好序"，而是频繁的三种操作：插入一条记录、删除一条记录、按关键字查一条记录。支持这三种操作的数据结构叫<span class="term">字典</span>（Dictionary）。问题是：单次查找能不能比 O(lg n) 更快？</p>
+
+    <p>最快的查找是"根本不查"：直接按关键字当下标。假设关键字的全域 U = {0, 1, …, 999}，就开一个 1000 格的数组 T，键为 k 的记录直接放 T[k]。这就是<span class="term">直接寻址表</span>（Direct-Address Table）：查找、插入、删除都是一次数组访问，严格 O(1)，连"期望"都不需要。</p>
+
+    <p>代价立刻显现。假设我们只在表里存 5 个键 {10, 230, 451, 672, 999}：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>指标</th><th>数值</th><th>说明</th></tr>
+        <tr><td>全域大小 |U|</td><td>1000</td><td>数组必须开 1000 格</td></tr>
+        <tr><td>实际存储的键数 n</td><td>5</td><td>只有 5 格真的有用</td></tr>
+        <tr><td>空间利用率</td><td>5 / 1000 = 0.5%</td><td>995 格（99.5%）被浪费</td></tr>
+        <tr><td>查找时间</td><td>Θ(1)</td><td>一次数组下标访问</td></tr>
+        <tr><td>空间复杂度</td><td>Θ(|U|)</td><td>与全域成正比，与 n 无关</td></tr>
+      </table>
+    </div>
+
+    <p>1000 格浪费 995 格还只是难看。换成真实的键就灾难了：如果键是 64 位整数，|U| = 2⁶⁴ ≈ 1.8 × 10¹⁹，哪怕只存 5 条记录，直接寻址表也要 1.8 × 10¹⁹ 格——按每格 1 字节算是 180 亿 GB，地球上没有任何机器装得下。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>直接寻址的浪费来自"表的大小跟着全域走，而不是跟着实际数据走"。出路只有一条：<strong>造一个函数 h，把大全域 U 压缩到一张只与 n 相称的小表 {0, …, m−1}</strong>。这个 h 就是<span class="term">散列函数</span>（Hash Function），小表就是<span class="term">散列表</span>（Hash Table），查找变成查 T[h(k)]。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>以为散列函数能"设计得足够巧"从而避免冲突。错。鸽巢原理堵死了这条路：|U| &gt; m 时，至少有两个键被压进同一格。本例 |U| = 1000、m 若取 10，则至少有一格要承接 ⌈1000/10⌉ = 100 个键。冲突不是设计失误，是压缩的必然代价——所以本章的重心不是"避免冲突"，而是"冲突来了怎么办"。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 4.1-1</div>
+              <div class="q-text">直接寻址表的时间与空间代价分别是什么？为什么键是 64 位整数时它完全不可行？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              时间 Θ(1)，空间 Θ(|U|)。64 位键意味着 |U| = 2⁶⁴ ≈ 1.8×10¹⁹ 格，与实存键数无关，物理上放不下。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 4.1-2</div>
+              <div class="q-text">为什么任何散列函数都不可能完全避免冲突？用哪条原理一句话说清？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              鸽巢原理：全域 |U| 大于表长 m，|U| 个键压进 m 个槽，至少两个键落同一槽——这就是冲突（Collision）。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ================= 4.2 ================= -->
+    <h2><span class="sec-no">4.2</span>链接法：冲突了，就在槽上挂一条链</h2>
+
+    <p>上一节说冲突必然发生。第一个应对方案最直白：既然多个键会落到同一格，就让每格不是一个记录，而是一条链表的头指针。所有散列到槽 j 的键都串在 T[j] 的链表上。这就是<span class="term">链接法</span>（Chaining）：插入先算 h(k) 再插到链头（O(1)）；查找先算 h(k) 再顺链逐个比较；删除同理。</p>
+
+    <p>查找快不快，取决于平均每条链有多长。设表有 m 个槽、存了 n 个键，定义<span class="term">装载因子</span>（Load Factor）：</p>
+
+    <div class="formula">α = <span class="frac"><span class="num-part"><span class="var">n</span></span><span class="den-part"><span class="var">m</span></span></span> = 平均每槽链长</div>
+
+    <p>在<span class="term">简单均匀散列假设</span>（Simple Uniform Hashing，每个键等可能落到任一槽）下，不成功查找要扫完整条链，期望探查约 1 + α；成功查找平均只扫半条链，期望探查约：</p>
+
+    <div class="formula">1 + <span class="frac"><span class="num-part">α</span><span class="den-part">2</span></span></div>
+
+    <p><strong>完整例子（手算全程）。</strong>取 m = 9，h(k) = k mod 9，依次插入 5, 28, 19, 15, 20, 33, 12, 17, 10，新键插到链头。逐个算散列值：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>键 k</th><th>h(k) = k mod 9 的计算</th><th>落入槽</th></tr>
+        <tr><td>5</td><td>5 = 0×9 + 5</td><td>5</td></tr>
+        <tr><td>28</td><td>28 = 3×9 + 1</td><td>1</td></tr>
+        <tr><td>19</td><td>19 = 2×9 + 1</td><td>1</td></tr>
+        <tr><td>15</td><td>15 = 1×9 + 6</td><td>6</td></tr>
+        <tr><td>20</td><td>20 = 2×9 + 2</td><td>2</td></tr>
+        <tr><td>33</td><td>33 = 3×9 + 6</td><td>6</td></tr>
+        <tr><td>12</td><td>12 = 1×9 + 3</td><td>3</td></tr>
+        <tr><td>17</td><td>17 = 1×9 + 8</td><td>8</td></tr>
+        <tr><td>10</td><td>10 = 1×9 + 1</td><td>1</td></tr>
+      </table>
+    </div>
+
+    <p>插入完成后（链头在左），9 个槽的内容如下：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>槽 j</th><th>0</th><th>1</th><th>2</th><th>3</th><th>4</th><th>5</th><th>6</th><th>7</th><th>8</th></tr>
+        <tr><td>链内容</td><td>—</td><td>10 → 19 → 28</td><td>20</td><td>12</td><td>—</td><td>5</td><td>33 → 15</td><td>—</td><td>17</td></tr>
+        <tr><td>链长</td><td>0</td><td>3</td><td>1</td><td>1</td><td>0</td><td>1</td><td>2</td><td>0</td><td>1</td></tr>
+      </table>
+    </div>
+
+    <div class="figure">
+      <div class="mermaid">
+flowchart LR
+  S1["槽1"] --> A["10"] --> B["19"] --> C["28"]
+  S2["槽2"] --> D["20"]
+  S3["槽3"] --> E["12"]
+  S5["槽5"] --> F["5"]
+  S6["槽6"] --> G["33"] --> H["15"]
+  S8["槽8"] --> I["17"]
+  classDef hot fill:#fbeedd,stroke:#c4651f,stroke-width:2.5px,color:#c4651f;
+  class S1 hot;
+      </div>
+      <div class="caption">图 4.2 链接法实例：m = 9、h(k) = k mod 9。槽 1 冲突最厉害（3 个键），槽 0、4、7 空着——链长不均正是 α 只描述"平均"的原因。</div>
+    </div>
+
+    <p>现在核算代价。链长之和 = 0+3+1+1+0+1+2+0+1 = 9 = n，所以 α = n/m = 9/9 = 1。公式预言成功查找期望探查 1 + α/2 = 1.5 次。实际验证：查 10、20、12、5、33、17 各需 1 次比较，查 19 需 2 次，查 28 需 3 次（它在槽 1 链尾），共 6×1 + 2 + 3 = 11 次；等等——重新清点：槽1 三个键分别花 1、2、3 次，槽6 两个键花 1、2 次，其余四个单键各 1 次，合计 (1+2+3) + (1+2) + 4 = 13 次，平均 13/9 ≈ 1.44，与公式值 1.5 吻合（公式是期望，实例在其附近波动）。</p>
+
+    <div class="box insight">
+      <span class="box-tag">✅ 判定规则</span>
+      <p>链接法下：不成功查找期望探查 ≈ 1 + α；成功查找期望探查 ≈ 1 + α/2。只要 α 保持常数（常用约定 α ≤ 1，即 n ≤ m），两者都是 O(1)。所以工程对策是：n 快超过 m 就换更大的表重新散列（rehash）。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>把"期望 O(1)"记成"最坏 O(1)"。错。若所有 n 个键碰巧散列到同一槽，链长为 n，一次查找就是 Θ(n)——这是最坏情况。期望 O(1) 说的是"对平均的键、在均匀散列假设下"。4.4 节的全域散列正是为了堵这个最坏情况的口子。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 4.2-1</div>
+              <div class="q-text">装载因子 α 怎么定义？α = 1 时成功查找的期望探查数是多少？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              α = n/m（键数比槽数）。成功查找期望探查 = 1 + α/2，α = 1 时约为 1.5 次。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 4.2-2</div>
+              <div class="q-text">链接法里查找一个键分哪两步？最坏情况是什么、代价多少？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              先算 h(k) 定位槽（O(1)），再顺链逐个比较。最坏：n 个键全落一槽，查找 Θ(n)。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ================= 4.3 ================= -->
+    <h2><span class="sec-no">4.3</span>开放寻址：不挂链，就在表里继续探</h2>
+
+    <p>链接法用指针和堆内存，缓存不友好。<span class="term">开放寻址</span>（Open Addressing）走另一条路：所有元素都存在表本身里，不放链表；h(k) 的槽被占了，就按一个确定规则去找下一个槽，直到撞见空槽。查找时沿同一条"探查序列"走，遇空槽即判定不存在。因为元素不超出表，必有 n ≤ m，即 α ≤ 1。</p>
+
+    <p>探查序列由散列函数扩展而来：h(k, i) 表示键 k 的第 i 次探查（i = 0, 1, …, m−1）。三种经典规则：</p>
+
+    <div class="formula"><span class="term">线性探测</span>（Linear Probing）：h(k, i) = ( h′(k) + i ) mod m</div>
+    <div class="formula"><span class="term">二次探测</span>（Quadratic Probing）：h(k, i) = ( h′(k) + c₁i + c₂i² ) mod m</div>
+    <div class="formula"><span class="term">双重散列</span>（Double Hashing）：h(k, i) = ( h₁(k) + i · h₂(k) ) mod m</div>
+
+    <p>线性探测每次往后挪 1 格；二次探测按平方步长跳；双重散列用第二个函数 h₂ 决定步长——不同键的步长不同，探查序列也最"散"。注意双重散列必须保证 h₂(k) 与 m 互质且永不为 0，否则探查序列会卡死或漏槽；常用技巧就是 m 取 2 的幂、或像下面这样让 h₂ 输出落在 {1, …, m−2}。</p>
+
+    <p><strong>完整例子（手算全程）。</strong>m = 13，h₁(k) = k mod 13，h₂(k) = 1 + (k mod 11)，空表插入 14 和 79。</p>
+
+    <p><strong>插入 14：</strong>i = 0，h(14, 0) = h₁(14) = 14 mod 13 = 1（14 = 1×13 + 1）。槽 1 为空，直接放入。<strong>共探查 1 次。</strong></p>
+
+    <p><strong>插入 79：</strong></p>
+    <ul>
+      <li>i = 0：h(79, 0) = h₁(79) = 79 mod 13。79 = 6×13 + 1，所以 h₁(79) = 1——槽 1 已被 14 占了，冲突。</li>
+      <li>算步长：h₂(79) = 1 + (79 mod 11)。79 = 7×11 + 2，所以 h₂(79) = 1 + 2 = 3。</li>
+      <li>i = 1：h(79, 1) = (1 + 1×3) mod 13 = 4。槽 4 为空，放入。<strong>共探查 2 次，序列是 1 → 4。</strong></li>
+    </ul>
+
+    <p>此后查找 79 必须重走同一条序列：先看槽 1（是 14，不是），再跳 3 格看槽 4（命中）。若走到某个空槽还没命中，就断定 79 不在表里。</p>
+
+    <p><strong>探查次数到底多少？</strong>这是开放寻址的核心账目。在均匀散列假设（每个键的探查序列等可能是 m! 种排列之一）下：</p>
+
+    <div class="formula">不成功查找期望探查 ≤ <span class="frac"><span class="num-part">1</span><span class="den-part">1 − α</span></span></div>
+
+    <p>代入实数感受它有多敏感：α = 0.5 时 1/(1−0.5) = 2 次；α = 0.9 时 1/(1−0.9) = 10 次；α = 0.99 时 1/0.01 = 100 次。<strong>表装到九成满，代价翻五倍；装到九成九，直接退化到没法用。</strong>所以开放寻址的工程铁律是 α 控制在 0.5～0.7 以下。</p>
+
+    <p>线性探测不用均匀假设也能算，常用近似公式：成功查找约 ½(1 + 1/(1−α))，不成功约 ½(1 + 1/(1−α)²)。代入 α = 0.5：成功 ≈ ½(1+2) = 1.5 次，不成功 ≈ ½(1+4) = 2.5 次；代入 α = 0.9：成功 ≈ ½(1+10) = 5.5 次，不成功 ≈ ½(1+100) = 50.5 次——比双重散列的 10 次差得多。</p>
+
+    <p>线性探测为什么更吃亏？因为<span class="term">聚集</span>（Clustering）：已占用的槽会连成越来越长的"堵塞段"，新键落进堵塞段的任何位置都要一路走到段尾，而走完之后又让段更长——堵的越堵。准确说这是<span class="term">一次聚集</span>（Primary Clustering）：线性探测中，长为 L 的占用段以 (L+2)/(2m) 左右的概率被下一个键加长，雪球越滚越大。二次探测缓解了它，但若两个键起点相同，整条序列仍相同（二次聚集）；双重散列让步长随键变化，把聚集压到最轻，因此最接近均匀假设。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>开放寻址的全部学问就浓缩在 1/(1−α) 这一条曲线上：代价不取决于 n 或 m 的绝对值，只取决于"表有多满"。看住 α，就看住了性能。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>在开放寻址表里"直接删掉"一个键。错。把槽清空会斩断别人的探查序列——上例中若把槽 1 的 14 直接抹掉，查找 79 时会在槽 1 遇空而误判"不存在"。正确做法是放一个特殊标记 DELETED：查找时跳过它继续探，插入时可复用它。但 DELETED 多了同样拖慢查找，所以开放寻址不适合频繁删除的场景。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 4.3-1</div>
+              <div class="q-text">默写三种开放寻址的探查公式，并说出双重散列对 h₂ 的两条硬性要求。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              线性 (h′(k)+i) mod m；二次 (h′(k)+c₁i+c₂i²) mod m；双重 (h₁(k)+i·h₂(k)) mod m。h₂(k) 必须 ≠ 0，且与 m 互质（否则探查序列卡死或无法遍历全表）。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 4.3-2</div>
+              <div class="q-text">均匀散列假设下不成功查找的期望探查上界是什么？α = 0.9 时是多少？聚集为什么让线性探测更糟？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              上界 1/(1−α)；α = 0.9 时为 10 次。线性探测中已占槽连成堵塞段，段越长越容易被新键加长（一次聚集），所以实际代价高于均匀假设的预言。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ================= 4.4 ================= -->
+    <h2><span class="sec-no">4.4</span>全域散列：把"运气"从输入手里夺回来</h2>
+
+    <p>到目前为止，所有"期望 O(1)"都建立在均匀散列假设上。但假设可能靠不住：散列函数是固定的，而现实输入往往有规律，甚至更糟——如果对手知道你的 h，他可以故意挑选全部散列到同一槽的 n 个键，把你的链接法打成 Θ(n) 链表（这正是 2011 年针对多种语言哈希表的 HashDoS 攻击的原理）。固定函数 + 最坏输入 = 必输。出路是：<strong>函数不固定，运行时随机选</strong>。</p>
+
+    <p><span class="term">全域散列</span>（Universal Hashing）的做法：备一个散列函数的集合 H，每次建表时从 H 里随机抽一个 h 来用。H 满足全域性质——</p>
+
+    <div class="box insight">
+      <span class="box-tag">✅ 定义</span>
+      <p>若对任意两个不同的键 k ≠ l，从 H 中随机选 h 时二者冲突的概率满足 Pr[ h(k) = h(l) ] ≤ 1/m，则称 H 是全域的（universal）。注意 1/m 正是"随机瞎撞"的冲突率——全域族把任何一对键的冲突率压到了理论下限。</p>
+    </div>
+
+    <p>一个经典的可构造全域族：取素数 p ≥ |U| 能覆盖所有键，对 a ∈ {1, …, p−1}、b ∈ {0, …, p−1} 定义</p>
+
+    <div class="formula">h<sub>ab</sub>(k) = ( ( <span class="var">a</span>k + <span class="var">b</span> ) mod <span class="var">p</span> ) mod <span class="var">m</span></div>
+
+    <p>所有这样的 h<sub>ab</sub> 构成全域族。<strong>小例子（手算全程）：</strong>p = 17，m = 6，取 a = 3、b = 5，即 h(k) = ((3k + 5) mod 17) mod 6。</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>键 k</th><th>3k + 5</th><th>mod 17</th><th>mod 6</th><th>h(k)</th></tr>
+        <tr><td>10</td><td>35</td><td>35 − 34 = 1</td><td>1</td><td>1</td></tr>
+        <tr><td>2</td><td>11</td><td>11</td><td>11 − 6 = 5</td><td>5</td></tr>
+        <tr><td>27</td><td>86</td><td>86 − 85 = 1</td><td>1</td><td>1</td></tr>
+      </table>
+    </div>
+
+    <p>看结果：h(10) = 1、h(2) = 5 不冲突；h(27) = 1 与 h(10) 冲突。这正说明全域散列不承诺"哪个函数永远不冲突"——对<em>这一个</em> (a, b) = (3, 5)，键对 {10, 27} 就是撞了。全域性质承诺的是另一件事：让 (a, b) 在 a ∈ {1,…,16}、b ∈ {0,…,16} 共 16×17 = 272 个函数里均匀随机抽，<em>任何</em>固定键对（包括 {10, 27}）撞上它的概率 ≤ 1/6。对手不知道你抽中哪个函数，就无法准备必撞的输入——最坏输入被随机化消解成了期望保证。</p>
+
+    <div class="box insight">
+      <span class="box-tag">✅ 判定规则</span>
+      <p>链接法 + 全域散列 ⇒ 每个键所在链的期望长度 ≤ 1 + α，从而查找、插入、删除的期望时间都是 O(1)（α = O(1) 时）。这个期望是对"随机选函数"取的，对任何输入序列都成立——不再需要对输入做任何假设。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>以为全域散列是"找一个更好的固定函数"。恰恰相反：它承认没有固定函数能对所有输入都好，于是把随机性从"输入分布"转移到"函数选择"上。期望是抛自己的硬币，不是赌对手的善意。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 4.4-1</div>
+              <div class="q-text">全域散列族的定义是什么？"随机"到底随机在什么上？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              对任意 k ≠ l，随机选 h ∈ H 时 Pr[h(k)=h(l)] ≤ 1/m。随机性在函数的选择上（建表时抽 h），不在输入上——因此对任意输入都只有期望代价，没有可被针对的最坏输入。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 4.4-2</div>
+              <div class="q-text">写出 h_ab(k) 的公式（含 p、m 的角色），并给出"链接法 + 全域散列"的结论。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              h_ab(k) = ((ak + b) mod p) mod m，p 是 ≥ 全域大小的素数，a ∈ {1..p−1}，b ∈ {0..p−1}。结论：期望链长 ≤ 1 + α，查找/插入/删除期望 O(1)。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ================= 4.5 ================= -->
+    <h2><span class="sec-no">4.5</span>哈希在字典问题上的地位：用顺序换速度</h2>
+
+    <p>至此本章拿到了期望 O(1) 的字典。把它放回阶段②的版图里，和第3章的排序、第5章的红黑树对比，分工就清楚了：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>操作</th><th>已排序数组（第3章）</th><th>哈希表（本章）</th><th>红黑树（第5章）</th></tr>
+        <tr><td>查找 SEARCH</td><td>O(lg n) 最坏</td><td>O(1) 期望</td><td>O(lg n) 最坏</td></tr>
+        <tr><td>插入 INSERT</td><td>O(n)（要挪位置）</td><td>O(1) 期望</td><td>O(lg n) 最坏</td></tr>
+        <tr><td>删除 DELETE</td><td>O(n)</td><td>O(1) 期望</td><td>O(lg n) 最坏</td></tr>
+        <tr><td>最小值 MINIMUM</td><td>O(1)</td><td>不支持（只能全表扫 Θ(n)）</td><td>O(lg n) 最坏</td></tr>
+        <tr><td>前驱/后继 SUCCESSOR</td><td>O(1)（按下标）</td><td>不支持</td><td>O(lg n) 最坏</td></tr>
+        <tr><td>按序遍历</td><td>O(n) 且天然有序</td><td>输出顺序无意义</td><td>O(n) 中序遍历即有序</td></tr>
+      </table>
+    </div>
+
+    <p>看表就明白：哈希表赢得 SEARCH/INSERT/DELETE 的期望常数，付出的代价是整张表"忘记了键之间的顺序"——散列函数把相近的键打散到远处，是有意为之（打得越散越均匀）。所以问"比 1000 小的最大键是谁"，哈希表只能一格一格翻。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>一句话记住本章：<strong>哈希表用"放弃顺序"换来"期望常数"</strong>。不需要顺序的操作（纯成员查询、去重、计数）全用哈希；需要 MINIMUM、SUCCESSOR、范围查询、按序输出时，请等第5章的红黑树——它用 O(lg n) 的存取代价保住全序。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 4.5-1</div>
+              <div class="q-text">哈希表在字典操作上的"三赢三输"分别是什么？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              赢：查找/插入/删除期望 O(1)。输：MINIMUM、SUCCESSOR（前驱/后继）、按序遍历都不支持，只能退化到全表扫描。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 4.5-2</div>
+              <div class="q-text">什么场景选哈希表、什么场景必须等红黑树？各举一例。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              纯按key存取（缓存、符号表、判重）选哈希；需要"最小值/前驱/区间/按序输出"（排行榜、区间调度）必须红黑树这类有序结构。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===== 章末五件套之 1：概念卡 ===== -->
+    <h2><span class="sec-no">🃏</span>概念卡：本章概念的一分钟画像</h2>
+    <p>翻面前先自问：这个概念我能用一句话讲清楚吗？</p>
+    <div class="flip-grid">
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 1</div>
+            <div class="q-text">直接寻址表（Direct-Address Table）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">键 k 直接存数组 T[k]，键就是下标。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">全域小时提供最纯粹的 O(1) 字典，连冲突概念都没有。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">酒店按房号入住：报 305 直接上 3 楼，不用找。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为它"最快所以最好"——空间 Θ(|U|)，全域一大就报废。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">键域极小且稠密时（如 ASCII 字符计数，|U| = 128）。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 2</div>
+            <div class="q-text">散列函数（Hash Function）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">把全域 U 映射到 {0,…,m−1} 的函数 h，查找改为查 T[h(k)]。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">让表的大小跟 n 走而不是跟 |U| 走，治直接寻址的空间爆炸。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">把全国 14 亿人按生日分到 366 个柜子，柜小但必撞人。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为能设计出无冲突的 h——鸽巢原理：|U| &gt; m 时冲突必然。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">一切哈希表的心脏；4.4 还要给它再加一层"随机选函数"。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 3</div>
+            <div class="q-text">链接法（Chaining）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">每个槽挂一条链表，同槽键串在链上；查找 = 定位槽 + 顺链扫。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">最直接的冲突解决方案，删除干净，α 可以大于 1。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">同一信箱格塞多封信，翻一摞总能找到。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">把期望 1+α/2 当最坏——全撞一槽时查找退化为 Θ(n)。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">删除频繁、或不想操心 α 上界的场景（Java HashMap 即此法）。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 4</div>
+            <div class="q-text">装载因子（Load Factor）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">α = n/m，键数比槽数，衡量表"有多满"。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">把所有哈希表的性能公式统一成一个变量：代价都是 α 的函数。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">停车场上座率：九成满时找车位要绕十圈（1/(1−0.9) = 10）。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为 n 大就慢——n = 10⁶ 但 α = 0.5，照样期望 2 次探查。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">决定何时 rehash 扩容的唯一指标（链接法 ≤1，开放寻址 ≤0.7）。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 5</div>
+            <div class="q-text">开放寻址（Open Addressing）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">元素全存表内，冲突时按探查序列 h(k,0), h(k,1), … 找下一空槽。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">不开堆内存、不用指针，缓存友好，适合超大规模紧凑存储。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">电影院对号入座，座位被占就按约定往后找空位。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">直接删键清空槽——会斩断他人探查序列，必须置 DELETED 标记。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">插入多删除少、内存敏感（Python dict、Redis 的哈希）。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 6</div>
+            <div class="q-text">全域散列（Universal Hashing）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">函数族 H 满足：任意 k ≠ l，随机取 h 时冲突概率 ≤ 1/m；建表时随机抽一个用。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">固定 h 会被恶意输入打成最坏 Θ(n)；随机选 h 让最坏输入无处下手。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">抽签决定分柜规则：对手不知道规则，就没法故意挤同一个柜子。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为它保证每次运行都快——它保证的是对函数选择的期望，不消最坏槽。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">任何输入不可信的公开服务（防 HashDoS）；理论证明期望 O(1) 的基石。</span></div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- ===== 章末五件套之 2：分层习题 ===== -->
+    <h2><span class="sec-no">📝</span>分层习题</h2>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>
+        <p>判断对错并说明理由：(1) "只要散列函数设计得足够均匀，链接法的最坏查找时间也可以是 O(1)。" (2) "装载因子 α = 2 对链接法来说一定意味着性能崩溃，必须立刻扩容。"</p>
+      </div>
+      <details>
+        <summary>提示</summary>
+        <p>(1) 区分"期望"与"最坏"：最坏情况由什么决定？(2) 把 α = 2 代进 1 + α/2，看看到底是多少次。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p>(1) <strong>错。</strong>最坏情况指"所有 n 个键落进同一槽"，此时链长 n，查找 Θ(n)。散列函数再均匀也改变不了一个固定函数存在最坏输入这一事实（鸽巢原理）；均匀性只能让期望探查 = 1 + α/2，期望不是最坏。要把最坏也消掉，只能靠 4.4 的随机化（全域散列），且那也只是期望意义。</p>
+          <p>(2) <strong>说法过头，错在"崩溃"。</strong>α = 2 时成功查找期望探查 = 1 + 2/2 = 2 次，不成功 ≈ 1 + 2 = 3 次——仍是常数，只是比 α = 1 的 1.5 次差了约三分之一。链接法允许 α &gt; 1，是否扩容是时间/空间的权衡，不是硬性崩溃点。（若是开放寻址则不同：α 必须 &lt; 1，α → 1 时 1/(1−α) 才会真的"崩溃"。）</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>
+        <p>下列场景中，哪些适合用哈希表、哪些应当等第5章的红黑树？说明一句话理由：(a) 编译器查变量名是否已声明；(b) 每分钟输出当前在线人数最少的服务器；(c) 判重：10 亿条日志里去掉重复 IP；(d) 按分数段查询"排名在 [100, 200] 的考生"。</p>
+      </div>
+      <details>
+        <summary>提示</summary>
+        <p>对每个场景问一句：它需要"顺序"吗（最小值/区间/排名），还是只需要"按 key 存取"？</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p>(a) 哈希表：纯成员查询，不需要顺序。(b) 红黑树：反复要 MINIMUM，哈希表取最小值要全表扫。(c) 哈希表：判重只需"在不在"，期望 O(1) 最优；10 亿条若用排序是 O(n lg n) 还多花内存。(d) 红黑树：排名/区间是典型有序操作，哈希表完全无法支持。一句话：要顺序选树，不要顺序选哈希。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>
+        <p>m = 11，h(k) = k mod 11，链接法（新键插链头），依次插入 10, 22, 31, 4, 15, 28, 17。(1) 画出最终 11 个槽的链内容；(2) 求 α；(3) 求成功查找与不成功查找的期望探查数；(4) 实测：计算查找每个已存键所需的比较次数，求平均，与公式对比。</p>
+      </div>
+      <details>
+        <summary>提示</summary>
+        <p>先逐个算 k mod 11 落槽（注意 22 = 2×11 + 0，槽 0 也是合法槽）；再数每条链上各键离链头的距离。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p>(1) 逐键计算：10 mod 11 = 10；22 mod 11 = 0（22 = 2×11 + 0）；31 mod 11 = 9（31 = 2×11 + 9）；4 mod 11 = 4；15 mod 11 = 4（15 = 1×11 + 4）；28 mod 11 = 6（28 = 2×11 + 6）；17 mod 11 = 6（17 = 1×11 + 6）。</p>
+          <p>最终表（链头在左）：槽 0 → [22]；槽 4 → [15, 4]；槽 6 → [17, 28]；槽 9 → [31]；槽 10 → [10]；槽 1、2、3、5、7、8 为空。</p>
+          <p>(2) n = 7，m = 11，α = 7/11 ≈ 0.636。</p>
+          <p>(3) 成功查找期望探查 = 1 + α/2 = 1 + 7/22 ≈ 1.32 次；不成功查找期望探查 ≈ 1 + α = 1 + 7/11 ≈ 1.64 次。</p>
+          <p>(4) 实测各键比较次数：22→1，31→1，10→1，15→1（链头），4→2，17→1（链头），28→2。合计 1+1+1+1+2+1+2 = 9 次，平均 9/7 ≈ 1.29。与公式值 1.32 接近——公式是期望，单个实例允许在其上下波动。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>
+        <p>开放寻址，m = 13，双重散列 h₁(k) = k mod 13，h₂(k) = 1 + (k mod 11)。表中已有：槽 1 存 14，槽 4 存 79（即正文例子）。(1) 插入 40，写出完整探查序列（每步给出算式）；(2) 此时 n = 3，求 α，并给出均匀散列假设下"下一次不成功查找"的期望探查上界；(3) 若继续装到 α = 0.75，上界变为多少？说明趋势。</p>
+      </details>
+      <details>
+        <summary>提示</summary>
+        <p>40 mod 13 的余数；h₂ 的步长；逐 i = 0, 1, 2 … 算 (h₁ + i·h₂) mod 13 直到撞空槽。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p>(1) h₁(40) = 40 mod 13：40 = 3×13 + 1，故 h₁(40) = 1。i = 0：槽 1 被 14 占用，冲突。算步长：40 = 3×11 + 7，h₂(40) = 1 + 7 = 8。i = 1：(1 + 1×8) mod 13 = 9，槽 9 为空，插入。<strong>探查序列：1 → 9，共 2 次探查。</strong></p>
+          <p>(2) n = 3，m = 13，α = 3/13 ≈ 0.231。不成功查找期望探查上界 = 1/(1−α) = 1/(1 − 3/13) = 13/10 = 1.3 次。</p>
+          <p>(3) α = 0.75 时，1/(1−0.75) = 1/0.25 = 4 次。从 1.3 → 4：α 不到三倍地增长，上界却超过三倍——1/(1−α) 是双曲线，越接近 1 越陡，这就是开放寻址必须把 α 压在 0.7 左右的原因。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l3">L3 建模应用</span>
+        <p>你在为校园一卡通系统设计"刷卡判重"模块：全校约 30,000 张有效卡，卡号是 9 位十进制数（000000001–999999999）。高峰期每秒要处理 5,000 次"此卡号是否有效"的查询，要求单次查询平均不超过约 2 次探查，且卡号段分布有明显规律（连号发放）。请给出方案：选直接寻址、链接法还是开放寻址？表长 m 取多少？如何抵御"卡号连号导致分布不均"？估算你的方案是否达标。</p>
+      </div>
+      <details>
+        <summary>提示</summary>
+        <p>先算直接寻址要多少空间；再由目标"约 2 次探查"反推 α 的上限；最后想：输入有规律时，靠什么把"期望"保住？</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p><strong>排除直接寻址：</strong>卡号全域 |U| = 10⁹，直接寻址要 10⁹ 格（按每格 4 字节约 4 GB），却只存 3×10⁴ 张卡，利用率 0.003%——空间爆炸，否决。</p>
+          <p><strong>选型与定 m：</strong>查询极高频、无删除外的复杂操作，选开放寻址（缓存友好）或链接法均可；这里取开放寻址双重散列。目标：不成功查找（多数刷卡其实对应有效卡，但按上界设计更稳）期望探查 ≤ 2，即 1/(1−α) ≤ 2 ⟹ α ≤ 0.5。于是 m ≥ n/0.5 = 30,000/0.5 = 60,000，取 2 的幂或素数，如 m = 65,521（素数，α = 30,000/65,521 ≈ 0.458）。代入上界：1/(1−0.458) ≈ 1.84 次 ≤ 2，达标。每秒 5,000 次 × 1.84 ≈ 9,200 次探查，常数级开销，轻松满足。</p>
+          <p><strong>对抗连号规律：</strong>输入有规律意味着"简单均匀散列假设"不可靠——若用固定 h 且 h 与连号模式共振，某段槽会被打爆。对策是全域散列：h_ab(k) = ((ak+b) mod p) mod m（p 取大于 10⁹ 的素数），每次服务启动随机抽 (a, b)，使任何固定卡号集合的期望链长/探查数都 ≤ 设计值，连号也奈何不了随机函数。再配一条运维规则：监控实际 α，超过 0.5 即扩容 rehash 到下一个素数表长。</p>
+        </div>
+      </details>
+    </div>
+
+    <!-- ===== 章末五件套之 3：自测 ===== -->
+    <h2><span class="sec-no">✍️</span>本章自测</h2>
+    <p class="quiz-hint">点击选项判分，答错会给出原因。</p>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 1</div>
+      <div class="q-stem">全域 U = {0,…,9999}、实际只存 50 个键时，直接寻址表的根本问题是什么？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 查找时间退化为 O(n)，因为有 50 个键要逐个比较</li>
+        <li data-opt="b">B. 空间 Θ(|U|) = 10,000 格，利用率 0.5%，空间随全域而非随数据增长</li>
+        <li data-opt="c">C. 键值冲突太严重，50 个键必然有大量同槽</li>
+        <li data-opt="d">D. 插入需要移动元素，代价 O(n)</li>
+      </ul>
+      <div class="quiz-explain">解析：B 对——直接寻址的空间由全域决定，与实际键数无关，这正是散列函数要解决的痛点。A 错：直接寻址按下标访问，严格 O(1)，根本不比较。C 错：直接寻址没有冲突概念，一键一格。D 错：插入就是写 T[k]，O(1)。它唯一的问题就是空间。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="c">
+      <div class="q-no">自测 2</div>
+      <div class="q-stem">链接法散列表，n = 900、m = 900。简单均匀散列假设下，成功查找的期望探查数最接近：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 1 次——散列函数直接定位，所以只要一次</li>
+        <li data-opt="b">B. 900 次——n = 900 就得扫 900 个</li>
+        <li data-opt="c">C. 1.5 次——α = 1，代入 1 + α/2 = 1.5</li>
+        <li data-opt="d">D. lg 900 ≈ 10 次——和二分查找一样</li>
+      </ul>
+      <div class="quiz-explain">解析：C 对——α = n/m = 1，成功查找期望探查 = 1 + α/2 = 1.5。A 错：h(k) 只定位到槽，槽内平均还有半条链要扫，那"1"只是定位代价。B 错：那是"全部键落同一槽"的最坏情况，不是期望。D 错：哈希表不分治、不比较大小，与 lg n 无关；混用两套体系的公式是本章典型错误。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="d">
+      <div class="q-no">自测 3</div>
+      <div class="q-stem">开放寻址，均匀散列假设。表装到 α = 0.9 时，一次不成功查找的期望探查数上界约为：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 约 0.9 次——装载因子本身就是探查数</li>
+        <li data-opt="b">B. 约 1.9 次——1 + α</li>
+        <li data-opt="c">C. 约 2 次——常数，与 α 关系不大</li>
+        <li data-opt="d">D. 约 10 次——1/(1−α) = 1/0.1</li>
+      </ul>
+      <div class="quiz-explain">解析：D 对——上界 1/(1−α)，α = 0.9 时 = 10 次；α = 0.99 时更达 100 次，这就是开放寻址要控制装填的原因。A 错：α 是比例不是次数。B 错：1 + α 是链接法不成功查找的公式，张冠李戴。C 错：恰好说反——1/(1−α) 对 α 极端敏感，α 从 0.5 到 0.9 探查数从 2 跳到 10。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="a">
+      <div class="q-no">自测 4</div>
+      <div class="q-stem">双重散列 h(k,i) = (h₁(k) + i·h₂(k)) mod m 中，为什么必须保证 h₂(k) ≠ 0（且与 m 互质）？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 否则步长为 0，探查序列永远停在 h₁(k) 同一槽；不与 m 互质则序列只能覆盖部分槽，空槽存在也可能报"表满"</li>
+        <li data-opt="b">B. 否则两个键会算出相同的 h₁ 值，冲突变多</li>
+        <li data-opt="c">C. 否则散列值会超出表的范围，数组越界</li>
+        <li data-opt="d">D. 否则装载因子 α 会算错</li>
+      </ul>
+      <div class="quiz-explain">解析：A 对——h₂ 是步长：步长 0 ⟹ h(k,i) ≡ h₁(k)，卡死在首槽；步长与 m 有公因子 d ⟹ 序列只在同一剩余类里转，最多覆盖 m/d 个槽，表没满也插不进。B 错：h₂ 与 h₁ 的取值无关，h₂ 不影响别的键的 h₁。C 错：mod m 保证任何值都落在表内。D 错：α = n/m 只数元素个数，与探查公式无关。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 5</div>
+      <div class="q-stem">关于全域散列，下列说法正确的是：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 它找到一族"对任何输入都不冲突"的完美散列函数</li>
+        <li data-opt="b">B. 它让建表时随机选函数，使任意两键的冲突概率 ≤ 1/m，从而对任何输入都只有期望代价</li>
+        <li data-opt="c">C. 它要求输入本身随机分布，否则期望分析失效</li>
+        <li data-opt="d">D. 它把最坏情况查找时间从 Θ(n) 降到了 Θ(1)</li>
+      </ul>
+      <div class="quiz-explain">解析：B 对——随机性在"选函数"上，不在输入上，所以对手无法针对；链接法下由此得期望链长 O(1+α)。A 错：完美无冲突的函数不存在（鸽巢原理），全域族是"每对键在随机函数下冲突率 ≤ 1/m"。C 错：说反了，全域散列的价值正是对输入不做任何假设。D 错：最坏情况（抽中的函数恰好让这批键全撞）依然存在，只是期望意义下被摊平；最坏 Θ(1) 需要更强的完美散列（本章未讲）。</div>
+    </div>
+
+    <!-- ===== 章末五件套之 4：三句话复述 ===== -->
+    <div class="retell">
+      <h3>🗣️ 用自己的话，三句话讲完本章</h3>
+      <p>对着空气（或室友）说出这三句。说卡壳的那句，回去重读对应小节。</p>
+      <details>
+        <summary>句1：这章解决什么问题？——</summary>
+        <div class="retell-answer">参考答案：字典问题——动态集合的插入、删除、按 key 查找。排序加二分只能做到 O(lg n)，本章问能否更快：答案是期望 O(1)，代价是放弃键之间的顺序。</div>
+      </details>
+      <details>
+        <summary>句2：核心机制是什么？——</summary>
+        <div class="retell-answer">参考答案：散列函数把大全域压进 m 槽小表（空间从 Θ(|U|) 降到 Θ(n)）；冲突必然发生，用链接法（槽上挂链，期望探查 1+α/2）或开放寻址（表内探查，上界 1/(1−α)）解决；装载因子 α 是唯一要盯住的变量；全域散列通过随机选函数，把期望保证从"靠输入善良"变成"靠自己抛硬币"。</div>
+      </details>
+      <details>
+        <summary>句3：它和前后章怎么分工？——</summary>
+        <div class="retell-answer">参考答案：第3章排序管"批量整理"、给 O(lg n) 查找；本章哈希管"高频按 key 存取"，期望 O(1) 但不支持 MINIMUM、前驱后继、按序遍历；需要有序操作的字典交给第5章红黑树，它用 O(lg n) 最坏代价保住全序。</div>
+      </details>
+    </div>
+
+    <!-- ===== 章末五件套之 5：间隔复习计划 ===== -->
+    <div class="review-plan">
+      <h3>🔁 间隔复习计划</h3>
+      <p>回忆本身比重读有效 10 倍。到点只做一件事：翻卡 + 重做标记题。</p>
+      <table>
+        <tr><th>时间点</th><th>复习内容</th><th>预计用时</th></tr>
+        <tr><td>第 1 天</td><td>概念卡 1–6 + 全部回忆卡（4.1 至 4.5 共 10 张）；重做 L2 第一题（m = 11 链接法）</td><td>12 分钟</td></tr>
+        <tr><td>第 3 天</td><td>概念卡 3、4、5（链接法/装载因子/开放寻址）+ 自测错题；重算 α = 0.5、0.9、0.99 的 1/(1−α)</td><td>8 分钟</td></tr>
+        <tr><td>第 7 天</td><td>三句话复述 + 重做 L2 第二题（双重散列插入 40）；默写三个探查公式</td><td>10 分钟</td></tr>
+        <tr><td>第 15 天</td><td>只做合上书挑战；能全过（尤其手算题）本章即毕业，进入第5章红黑树</td><td>15 分钟</td></tr>
+      </table>
+    </div>
+
+    <!-- 合上书挑战 -->
+    <div class="final-challenge">
+      <h3>📕 合上书挑战</h3>
+      <p class="fc-sub">现在关掉这个页面，拿一张纸，凭记忆完成以下任务。全部做完再回来核对——这是本章真正的毕业考试。</p>
+      <ol id="challenge-list">
+        <li><span class="fc-check"></span>写出装载因子 α 的定义，并默写链接法成功/不成功查找、开放寻址不成功查找的三个期望探查公式</li>
+        <li><span class="fc-check"></span>画出 m = 9、h(k) = k mod 9 插入 5, 28, 19, 15, 20, 33, 12, 17, 10 后的链接法散列表（9 个槽全标出）</li>
+        <li><span class="fc-check"></span>手算 m = 13、h₁(k) = k mod 13、h₂(k) = 1 + (k mod 11) 下插入 14 与 79 的完整探查序列，每步写算式</li>
+        <li><span class="fc-check"></span>不算任何资料，说出 α = 0.5 与 α = 0.9 时开放寻址不成功查找的期望探查上界，并用聚集解释线性探测为何更差</li>
+        <li><span class="fc-check"></span>写出全域散列族的定义（含那个 ≤ 1/m 的概率），并说明它防的是什么攻击、期望是"对什么"取的</li>
+        <li><span class="fc-check"></span>列表对比哈希表与红黑树在查找/插入/删除/最小值/前驱五个操作上的代价</li>
+        <li><span class="fc-check"></span>回答本章的主线问题：单次查找如何做到比 O(lg n) 更快、代价是什么？（一句话）</li>
+      </ol>
+    </div>
+
+    <div class="complete-zone">
+      <button class="btn-complete" id="btn-complete" onclick="markDone()">✓ 我已完成本章（含合上书挑战）</button>
+    </div>
+
+    <div class="chapter-nav">
+      <a href="chapter-03.html"><span class="nav-dir">← 上一章</span>第3章 排序算法</a>
+      <a href="chapter-05.html" class="next"><span class="nav-dir">下一章 →</span>第5章 二叉搜索树与红黑树</a>
+    </div>
+
+  </div>
+</div>
+
+<footer class="footer">
+  <div class="wrap">第4章 哈希表 · 算法导论互动讲义 · 基于 CLRS《算法导论》</div>
+</footer>
+
+<script src="assets/mermaid.min.js"></script>
+<script>
+mermaid.initialize({
+  startOnLoad: true,
+  theme: "base",
+  themeVariables: {
+    primaryColor: "#e3edf7",
+    primaryBorderColor: "#1d5f9e",
+    primaryTextColor: "#1d5f9e",
+    lineColor: "#5c554b",
+    secondaryColor: "#fbeedd",
+    tertiaryColor: "#f5f1e8",
+    fontFamily: "-apple-system, PingFang SC, sans-serif",
+    fontSize: "14px"
+  },
+  flowchart: { curve: "linear", htmlLabels: false }
+});
+</script>
+<script>
+// 自测题判分
+document.querySelectorAll(".quiz-block").forEach(block => {
+  const answer = block.dataset.answer;
+  const explain = block.querySelector(".quiz-explain");
+  block.querySelectorAll(".quiz-opts li").forEach(li => {
+    li.addEventListener("click", () => {
+      const opts = block.querySelectorAll(".quiz-opts li");
+      opts.forEach(o => o.classList.add("disabled"));
+      if (li.dataset.opt === answer) {
+        li.classList.add("correct");
+      } else {
+        li.classList.add("wrong");
+        block.querySelector(`[data-opt="${answer}"]`).classList.add("correct");
+      }
+      explain.classList.add("show");
+    });
+  });
+});
+
+// 合上书清单打勾
+document.querySelectorAll("#challenge-list li").forEach(li => {
+  li.addEventListener("click", () => li.classList.toggle("checked"));
+});
+
+// 完成标记 → localStorage（本系列键 algo_progress_v1，章号为字符串 "4"）
+const KEY = "algo_progress_v1";
+function loadProgress() {
+  try { return JSON.parse(localStorage.getItem(KEY)) || {}; } catch (e) { return {}; }
+}
+const progress = loadProgress();
+const btn = document.getElementById("btn-complete");
+if (progress["4"] && progress["4"].done) {
+  btn.textContent = "✓ 已完成 · 再次点击重置";
+  btn.classList.add("done");
+}
+function markDone() {
+  const p = loadProgress();
+  if (p["4"] && p["4"].done) {
+    delete p["4"];
+    btn.textContent = "✓ 我已完成本章（含合上书挑战）";
+    btn.classList.remove("done");
+  } else {
+    p["4"] = { done: true, completedAt: Date.now(), reviewsDone: 0 };
+    btn.textContent = "✓ 已完成 · 复习提醒已开启";
+    btn.classList.add("done");
+  }
+  localStorage.setItem(KEY, JSON.stringify(p));
+}
+</script>
+
+</body>
+</html>

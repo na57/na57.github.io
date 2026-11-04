@@ -1,0 +1,967 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第13章 策略梯度方法 · 强化学习互动讲义</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+<nav class="topbar">
+  <div class="topbar-inner">
+    <span class="brand"><a href="index.html" style="color:inherit">← 学习地图</a></span>
+    <span class="crumb">阶段四 · 策略与前沿 / 第13章（全书终章）</span>
+  </div>
+</nav>
+
+<div class="wrap">
+
+  <div class="lecture-head">
+    <span class="ch-label">CHAPTER 13 · 策略与前沿</span>
+    <h1>策略梯度方法</h1>
+    <p class="lead">不再"先估值、再取 max"，而是把策略本身参数化，沿着回报的梯度直接向上爬——全书在此收口。</p>
+  </div>
+
+  <div class="position-bar">
+    <strong>本章在主线上的位置：</strong>第 1–11 章的所有方法都共用一个套路——学一个值函数，再用 argmax / ε-贪心把值翻译成策略 → <u>本章发现这条翻译链在连续动作、随机最优、逼近突变三处断裂，于是直接参数化策略 π(a|s,θ)，用策略梯度定理在参数空间做梯度上升</u> → 全书"预测 → 控制 → 逼近 → 策略"的主线在此闭环。<br>
+    第13章回答主线上的最后一个问题：<strong>能不能不经过值函数的 argmax，直接优化"策略"这个对象本身？</strong>
+    <div class="map-inline">
+      <span class="node">Ch1–4 表格法基础（MDP·DP 的理想解）</span><span class="arrow">→</span>
+      <span class="node">Ch5–8 表格型无模型（采样代替模型）</span><span class="arrow">→</span>
+      <span class="node">Ch9–11 函数逼近（参数代替查表）</span><span class="arrow">→</span>
+      <span class="node">Ch12 资格迹（时间维的信用缝合）</span><span class="arrow">→</span>
+      <span class="node here">Ch13 策略梯度（策略本身是参数）</span>
+    </div>
+  </div>
+
+  <div class="objectives">
+    <h4>🎯 学完本章，合上书你应该能：</h4>
+    <ol>
+      <li>说出值方法导出策略的三处断裂点（连续动作 / 随机最优 / 逼近突变）</li>
+      <li>写出策略梯度定理 ∇J ∝ E[∇lnπ · q<sub>π</sub>]，并解释为什么不需要对环境动态求导</li>
+      <li>对 softmax 二动作为例，手算一步 REINFORCE 的参数更新与新概率</li>
+      <li>写出基线不改变梯度期望的那一行推导，并用玩具数字对比方差</li>
+      <li>写出一步 actor-critic 的 δ 与两套参数的更新式，各手算一步</li>
+      <li>写出高斯策略的 ∇<sub>θ</sub>lnπ，并说明连续动作为何不能 argmax</li>
+    </ol>
+  </div>
+
+  <div class="lecture">
+
+    <div class="figure">
+      <div class="mermaid">
+flowchart LR
+  A["值方法：策略藏在 argmax 里<br>连续动作取不了 max<br>ε 贪心永远抖动"] --> B["直接参数化 π(a|s,θ)<br>目标 J(θ) 对 θ 可微"]
+  B --> C["策略梯度定理<br>∇J 正比于 E[∇lnπ · q]<br>μ(s) 的梯度被定理吸收"]
+  C --> D["REINFORCE：采样回报 G 顶替 q<br>无偏 但方差大"]
+  D --> E["基线 b(s)：期望不变<br>方差显著下降"]
+  E --> F["Actor-Critic：学 V 当基线<br>δ = R + γV′ − V 一步自举"]
+  F --> G["代价：非凸局部最优 步长敏感<br>前沿：自然梯度 信赖域 PPO"]
+  classDef hot fill:#fbeedd,stroke:#c4651f,stroke-width:2.5px,color:#c4651f;
+  classDef danger fill:#fae9e7,stroke:#b03a2e,stroke-width:2.5px,color:#b03a2e;
+  class C hot;
+  class G danger;
+      </div>
+      <div class="caption">本章推导主线：值方法的三处断裂逼出"直接参数化策略"；策略梯度定理把"往哪调"变成无模型可估的期望；REINFORCE → 基线 → actor-critic 是一条纯粹的降方差之路。终点是代价：非凸与步长敏感，通向自然梯度、信赖域、PPO 等前沿。</div>
+    </div>
+
+    <!-- ================= 13.1 ================= -->
+    <h2><span class="sec-no">13.1</span>为什么绕过值函数：策略的三处断裂</h2>
+
+    <p>前 11 章共享一个固定套路：先学 Q 或 V，再用 argmax（或 ε-贪心）把值"翻译"成动作。这个翻译器在三种场景下会断：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>断裂点</th><th>场景</th><th>为什么 argmax 救不了</th></tr>
+        <tr><td><strong>连续动作</strong></td><td>机械臂力矩、方向盘转角 ∈ ℝ</td><td>无穷多个动作，max<sub>a</sub> Q(s,a) 是一个非凸优化问题，每步都要现场求解</td></tr>
+        <tr><td><strong>随机最优</strong></td><td>石头剪刀布、部分可观测的牌局</td><td>最优策略本身必须是随机的；argmax 只能给出确定性策略</td></tr>
+        <tr><td><strong>逼近突变</strong></td><td>函数逼近下的 Q</td><td>Q 的微小变化可能让 argmax 结果跳变，策略不随参数光滑变化，无法保证改进方向</td></tr>
+      </table>
+    </div>
+
+    <p>对策是<span class="term">策略近似</span>（Policy Approximation）：直接写 π(a|s,θ)，让 θ 成为优化对象。离散动作用<span class="term">软最大</span>（Softmax）参数化，给每个动作一个偏好值 h(s,a,θ)：</p>
+
+    <div class="formula">π(a|s,θ) = <span class="frac"><span class="num-part">e<sup>h(s,a,θ)</sup></span><span class="den-part">∑<sub>b</sub> e<sup>h(s,b,θ)</sup></span></div>
+
+    <p>优化目标定义成起始状态的价值：<span class="var">J</span>(θ) = v<sub>π<sub>θ</sub></sub>(s₀)。问题随之变成：<strong>J 对 θ 的梯度怎么算？</strong>梯度里有两层依赖——动作概率依赖 θ，而状态分布也依赖 θ（策略改变你会走到哪里）。后者需要对环境转移求导，而我们没有模型。13.2 的定理正是解决这个死结。</p>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>以为"直接学策略"就是丢掉值函数。本章后半会看到：值函数没有消失，它从"策略的来源"降级为"梯度的降噪器"（基线 / critic）。策略梯度方法与值方法不是替代关系，而是分工关系。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 13.1-1</div>
+              <div class="q-text">值函数 + argmax 的翻译链在哪三种场景下断裂？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              连续动作（无穷多动作无法取 max）；随机最优（最优策略本身须随机）；逼近突变（Q 的微小变化使 argmax 跳变，策略不光滑）。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 13.1-2</div>
+              <div class="q-text">softmax 策略的公式？J(θ) 的梯度难在哪两层依赖？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              π(a|s,θ) = e<sup>h(s,a,θ)</sup> / ∑<sub>b</sub>e<sup>h(s,b,θ)</sup>。梯度难处：动作概率依赖 θ 容易处理，但状态分布 μ(s) 也依赖 θ，对 μ 求导需要环境模型——这正是策略梯度定理要消去的项。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ================= 13.2 ================= -->
+    <h2><span class="sec-no">13.2</span>策略梯度定理：把"往哪调"变成一个期望</h2>
+
+    <p>上一节的死结：∇J 里藏着 ∇μ(s)（状态分布的梯度），需要模型。<span class="term">策略梯度定理</span>（Policy Gradient Theorem）证明：这个项会在推导中自行消失。分四步走，不跳步：</p>
+
+    <p><strong>第 1 步：展开定义。</strong>J(θ) = v<sub>π</sub>(s₀)，先对任意状态展开：</p>
+    <div class="formula">∇v<sub>π</sub>(s) = ∇ ∑<sub>a</sub> π(a|s) q<sub>π</sub>(s,a)</div>
+
+    <p><strong>第 2 步：乘积法则。</strong></p>
+    <div class="formula">= ∑<sub>a</sub> [ ∇π(a|s) q<sub>π</sub>(s,a) + π(a|s) ∇q<sub>π</sub>(s,a) ]</div>
+
+    <p><strong>第 3 步：把 ∇q 再展开。</strong>q<sub>π</sub>(s,a) = ∑<sub>r,s′</sub> p(r,s′|s,a)[ r + γv<sub>π</sub>(s′) ]，其中 ∇r = 0、∇p = 0（环境参数与 θ 无关），所以：</p>
+    <div class="formula">∇q<sub>π</sub>(s,a) = γ ∑<sub>s′</sub> p(s′|s,a) ∇v<sub>π</sub>(s′)</div>
+
+    <p>代回去，∇v<sub>π</sub>(s) 里又出现 ∇v<sub>π</sub>(s′)——这是一个递归。把它沿时间不断展开，每项都是一个"以某概率到达某状态 s′"的贡献。</p>
+
+    <p><strong>第 4 步：收成期望。</strong>展开的所有"到达概率"加总，正是策略 π 下的折扣状态分布 μ(s)。所有含 ∇μ 的项都被吸收进"在 μ 下取期望"：</p>
+
+    <div class="formula">∇J(θ) ∝ ∑<sub>s</sub> μ(s) ∑<sub>a</sub> ∇π(a|s,θ) q<sub>π</sub>(s,a) = E<sub>π</sub>[ ∇lnπ(A|S,θ) · q<sub>π</sub>(S,A) ]</div>
+
+    <p>最后一步用了对数导数技巧：∇π = π · ∇lnπ，把 ∇π(a|s) 换成 π(a|s)∇lnπ(a|s) 后，对 a 的求和变成对采样动作的期望。</p>
+
+    <div class="box insight">
+      <span class="box-tag">✅ 定理的礼物</span>
+      <p>∇lnπ 只涉及策略自身（我们有解析式），q<sub>π</sub> 可以从采样估计，μ 根本不需要出现——<strong>整个梯度可以在不知道环境模型的前提下用样本估计</strong>。这就是策略梯度"无模型"的来源：不是假设了模型，而是模型项被定理消掉了。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>把 ∝（正比于）当成等号。∇J = 常数 × E[∇lnπ · q]，这个常数与 θ 无关（它来自折扣状态分布的归一），所以梯度<strong>方向</strong>无偏、可用于上升；但写理论推导时不能随手把 ∝ 写成 =。 episodic 与 continuing 任务的常数含义也略有差别。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 13.2-1</div>
+              <div class="q-text">策略梯度定理的最终形式是什么？μ(s) 的梯度去哪了？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              ∇J ∝ E<sub>π</sub>[∇lnπ(A|S,θ)·q<sub>π</sub>(S,A)]。∇v 递归展开时，到达各状态的概率收敛为折扣状态分布 μ，∇μ 被吸收进"在 μ 下取期望"，无需显式求导。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 13.2-2</div>
+              <div class="q-text">对数导数技巧 ∇π = π∇lnπ 在推导里起了什么作用？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              它把 ∑<sub>a</sub> ∇π(a|s)·q(s,a) 改写成 ∑<sub>a</sub> π(a|s)∇lnπ(a|s)·q(s,a)，即对采样动作的期望 E<sub>a~π</sub>[∇lnπ · q]，使梯度可用单条轨迹上的样本无偏估计。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ================= 13.3 ================= -->
+    <h2><span class="sec-no">13.3</span>REINFORCE：用采样回报顶替 q</h2>
+
+    <p>定理里还有 q<sub>π</sub>(S,A) 未知。最简单的估计：在当前轨迹上，用 t 时刻之后的实际回报 G<sub>t</sub> 顶替它。G<sub>t</sub> 是 q<sub>π</sub>(S<sub>t</sub>,A<sub>t</sub>) 的无偏采样，所以</p>
+
+    <div class="formula">θ ← θ + α · G<sub>t</sub> · ∇lnπ(A<sub>t</sub>|S<sub>t</sub>, θ)</div>
+
+    <p>仍是梯度方向的无偏估计。这就是 <span class="term">REINFORCE</span>（蒙特卡洛策略梯度）。每步的更新直觉：回报高 → 沿"提高这个动作对数概率"的方向走；回报低 → 反向。</p>
+
+    <h3>手算：一步更新，全数字</h3>
+    <p>单状态、两动作 L / R，softmax 偏好即参数本身：h = θ<sub>L</sub>, θ<sub>R</sub>。初始 θ<sub>L</sub> = θ<sub>R</sub> = 0，α = 0.1。第一步采样：</p>
+
+    <ul>
+      <li>π(R|θ) = e⁰/(e⁰+e⁰) = <strong>0.5</strong>；同理 π(L) = 0.5</li>
+      <li>采样到 R，轨迹回报 G = 1</li>
+      <li>∇<sub>θR</sub> lnπ(R) = 1 − π(R) = 0.5；∇<sub>θL</sub> lnπ(R) = 0 − π(L) = −0.5</li>
+      <li>Δθ<sub>R</sub> = 0.1 × 1 × 0.5 = <strong>+0.05</strong>；Δθ<sub>L</sub> = 0.1 × 1 × (−0.5) = <strong>−0.05</strong></li>
+    </ul>
+
+    <p>更新后 θ<sub>R</sub> = 0.05, θ<sub>L</sub> = −0.05，新概率：</p>
+    <div class="formula">π(R) = <span class="frac"><span class="num-part">e<sup>0.05</sup></span><span class="den-part">e<sup>0.05</sup> + e<sup>−0.05</sup></span></span> = <span class="frac"><span class="num-part">1.0513</span><span class="den-part">1.0513 + 0.9512</span></span> ≈ <strong>0.525</strong></div>
+
+    <p>一次正回报把 R 的概率从 0.500 推到 0.525。注意 ∇lnπ 自带"1 − π"因子：<strong>已经高概率的动作，同样的回报推得更少</strong>——概率天然饱和。</p>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>"无偏 = 好用"。G<sub>t</sub> 是 MC 回报，方差大：同一个状态两条轨迹的 G 可能差好几倍，参数被噪声来回拉扯。更隐蔽的问题：若所有回报都为正，所有被采到的动作概率都被推高（只是幅度不同），学习效率低。下一节的基线正是为此而来。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 13.3-1</div>
+              <div class="q-text">REINFORCE 的更新式？为什么用 G<sub>t</sub> 顶 q 仍然无偏？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              θ ← θ + αG<sub>t</sub>∇lnπ(A<sub>t</sub>|S<sub>t</sub>,θ)。G<sub>t</sub> 是 q<sub>π</sub>(S<sub>t</sub>,A<sub>t</sub>) 的无偏采样（E[G<sub>t</sub>|S,A] = q<sub>π</sub>），代入期望形式不改变梯度期望。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 13.3-2</div>
+              <div class="q-text">手算例中 Δθ<sub>R</sub>、Δθ<sub>L</sub> 各是多少？新 π(R) 是多少？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              Δθ<sub>R</sub> = +0.05，Δθ<sub>L</sub> = −0.05；π(R) = 1.0513/(1.0513+0.9512) ≈ 0.525。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ================= 13.4 ================= -->
+    <h2><span class="sec-no">13.4</span>带基线的 REINFORCE：不花代价的方差削减</h2>
+
+    <p>上一节的症结：梯度估计的方差大，且"全正回报推高一切"。办法是减掉一个只依赖状态的<span class="term">基线</span>（Baseline）b(s)：</p>
+
+    <div class="formula">θ ← θ + α · ( G<sub>t</sub> − b(S<sub>t</sub>) ) · ∇lnπ(A<sub>t</sub>|S<sub>t</sub>, θ)</div>
+
+    <p>为什么这不会改变梯度的期望？一行推导（对每个 s 的动作求和）：</p>
+
+    <div class="formula">∑<sub>a</sub> b(s) ∇π(a|s,θ) = b(s) ∇ ∑<sub>a</sub> π(a|s,θ) = b(s) ∇1 = <strong>0</strong></div>
+
+    <p>概率和恒为 1，梯度为零——基线项在期望中自动消失。它只能改方差，不能改方向。</p>
+
+    <h3>方差到底降多少：一个可以验证的玩具</h3>
+    <p>单状态、π(L) = π(R) = 0.5，参数 θ<sub>R</sub>。梯度系数：采到 L 时 g = ∇lnπ(L) = −0.5，采到 R 时 g = +0.5。设回报只依赖动作：G<sub>L</sub> = 6，G<sub>R</sub> = 4。取基线 b = 5（平均回报）。</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th></th><th>采到 L（p=0.5）</th><th>采到 R（p=0.5）</th><th>E</th><th>E[·²]</th><th>Var</th></tr>
+        <tr><td>无基线 G·g</td><td>6×(−0.5) = −3</td><td>4×0.5 = +2</td><td>−0.5</td><td>0.5×9+0.5×4 = 6.5</td><td>6.5−0.25 = <strong>6.25</strong></td></tr>
+        <tr><td>有基线 (G−5)·g</td><td>1×(−0.5) = −0.5</td><td>(−1)×0.5 = −0.5</td><td>−0.5</td><td>0.25</td><td>0.25−0.25 = <strong>0</strong></td></tr>
+      </table>
+    </div>
+
+    <p>期望同为 −0.5（方向不变，回报更差的 R 被相对压下去），方差从 6.25 降到 0。归零是这个玩具的特例（回报恰好只依赖动作、基线恰好等于均值），真实任务不会归零；但机制是普遍的：<strong>基线越接近"该状态下的期望回报"，剩余波动越小</strong>。而"状态的期望回报"正是 V(s)——这就是下一节 critic 登场的理由。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 直觉</span>
+      <p>基线回答的不是"这个动作好不好"，而是"这个结果比预期好多少"。G − b &gt; 0 才推概率，&lt; 0 就压概率。没有基线时，"好"的绝对标准不存在，只有相对标准才产生干净的信号。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 13.4-1</div>
+              <div class="q-text">用一行推导说明基线不改变梯度期望。它为什么能降方差？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              ∑<sub>a</sub> b(s)∇π(a|s) = b(s)∇∑π = b(s)∇1 = 0。降方差：减掉状态级期望回报后，残差 G−b 只反映动作间的相对优劣，幅度更小。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 13.4-2</div>
+              <div class="q-text">玩具例中无基线 / 有基线（b=5）的梯度期望与方差各是多少？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              期望同为 −0.5；方差 6.25 → 0（玩具特例）。期望不变验证基线无偏，方差骤降展示机制。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ================= 13.5 ================= -->
+    <h2><span class="sec-no">13.5</span>Actor-Critic：让学出来的 V 当基线</h2>
+
+    <p>基线最好是 V(s)，但 V 也不知道——那就学一个。<span class="term">行动者—评论家</span>（Actor-Critic）同时维护两套参数：</p>
+
+    <ul>
+      <li><strong>Actor</strong>（策略）：θ，按 ∇lnπ 方向更新；</li>
+      <li><strong>Critic</strong>（价值）：w，学 V(s;w)，产出基线与 δ。</li>
+    </ul>
+
+    <p>用一步 TD 误差代替 G − b（δ 本身就约等于 G − V，因为 E[R + γV(S′)] − V(S) ≈ q − V）：</p>
+
+    <div class="formula">δ<sub>t</sub> = R<sub>t+1</sub> + γV(S<sub>t+1</sub>;w) − V(S<sub>t</sub>;w)<br>θ ← θ + α<sup>θ</sup> δ<sub>t</sub> ∇lnπ(A<sub>t</sub>|S<sub>t</sub>,θ)，&nbsp; w ← w + α<sup>w</sup> δ<sub>t</sub> ∇<sub>w</sub>V(S<sub>t</sub>;w)</div>
+
+    <h3>手算：一步 actor-critic</h3>
+    <p>承接 13.3 的状态与策略（π(R) = 0.5），设 critic 已学到 V(s) = 0.5，本步 R = 1、S′ 终止（V = 0），γ = 1，α<sup>θ</sup> = α<sup>w</sup> = 0.1：</p>
+
+    <ul>
+      <li>δ = 1 + 1×0 − 0.5 = <strong>0.5</strong></li>
+      <li>Actor：Δθ<sub>R</sub> = 0.1 × 0.5 × (1−0.5) = <strong>+0.025</strong>（对照 13.3 纯 REINFORCE 的 +0.05：critic 已预见了半数回报，"惊喜"只剩一半）</li>
+      <li>Critic：V(s) ← 0.5 + 0.1×0.5 = <strong>0.55</strong></li>
+      <li>若下一步同样转移再来一次：δ = 1 − 0.55 = <strong>0.45</strong>，更新量进一步缩小——回报被逐步"消化"进 V，actor 的驱动信号自动衰减</li>
+    </ul>
+
+    <div class="box insight">
+      <span class="box-tag">✅ 偏差换方差</span>
+      <p>一步 δ 有偏（V 还没学准），但方差远低于 MC 的 G；而且不需要等回合结束，每个样本在线就能更新。这是把第 6 章 TD 的哲学搬到了策略空间：自举不是妥协，是在线性的来源。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>以为 actor 和 critic 可以用同一个步长、同一份数据随便混。实践中 critic 要学得快（它 supplying 基线，错一点 actor 就偏），通常 α<sup>w</sup> &gt; α<sup>θ</sup>（两个时间尺度）；且两者看到的数据来自同一行为策略，critic 的偏差会直接变成 actor 的系统性错推。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 13.5-1</div>
+              <div class="q-text">写出一步 actor-critic 的 δ 与两套更新式。δ 为什么约等于 G − V？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              δ = R + γV(S′;w) − V(S;w)；θ += αθ·δ·∇lnπ；w += αw·δ·∇V。E[R+γV(S′)|S,A] = q(S,A)，所以 δ 是 q − V 的单样本版，即"比预期好多少"。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 13.5-2</div>
+              <div class="q-text">手算例中 δ、Δθ<sub>R</sub>、新 V(s) 各是多少？为什么第二次同样转移的 δ 变小？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              δ = 0.5，Δθ<sub>R</sub> = +0.025，V(s) → 0.55。第二次 δ = 0.45：回报已部分被 critic 预见，"惊喜"减少，驱动 actor 的信号自动衰减。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ================= 13.6 ================= -->
+    <h2><span class="sec-no">13.6</span>连续动作：高斯策略</h2>
+
+    <p>连续动作空间不能枚举、不能 argmax——但策略梯度根本不需要枚举动作，它只需要 π(a|s,θ) 能采样、能算 ∇lnπ。标准选择是<span class="term">高斯策略</span>（Gaussian Policy）：均值由参数决定，方差固定或也可学：</p>
+
+    <div class="formula">a ~ N( μ(s;θ), σ² )，&nbsp; ∇<sub>θ</sub> lnπ(a|s,θ) = <span class="frac"><span class="num-part">a − μ(s;θ)</span><span class="den-part">σ²</span></span> · ∇<sub>θ</sub>μ(s;θ)</div>
+
+    <h3>手算：一维线性均值</h3>
+    <p>设 μ = θ（x(s) = 1 的线性情形），σ = 1，当前 θ = 1.0。采到 a = 1.6，δ = 0.5，α = 0.1：</p>
+
+    <ul>
+      <li>∇<sub>θ</sub>lnπ = (1.6 − 1.0)/1 × 1 = <strong>0.6</strong>（动作比均值大 → 梯度指向"把均值调大"）</li>
+      <li>Δθ = 0.1 × 0.5 × 0.6 = <strong>+0.03</strong> → 新 μ = 1.03</li>
+    </ul>
+
+    <p>若采到 a = 0.7（比均值小）且 δ 仍为正，∇lnπ = −0.3，均值会被往回拉——高斯策略的梯度方向永远指向"让采样分布向高 δ 的动作集中"。σ 控制探索强度：σ 大 → 采样分散、梯度噪声大；σ 也可参数化让算法自己学。</p>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>以为连续动作可以先离散化再用 DQN。离散化把维度灾难搬进动作维：7 个关节各 20 档就是 20⁷ ≈ 12.8 亿个动作。高斯策略用两个参数（μ、σ）覆盖整个实数轴，这是策略参数化相对值方法的结构性胜利。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 13.6-1</div>
+              <div class="q-text">写出高斯策略的 ∇<sub>θ</sub>lnπ，并解释各项含义。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              ∇<sub>θ</sub>lnπ = (a−μ)/σ² · ∇<sub>θ</sub>μ。(a−μ) 是采样偏离均值的方向，σ² 缩放（方差大则梯度小），∇μ 是均值对参数的敏感度。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 13.6-2</div>
+              <div class="q-text">手算例：μ=1.0、σ=1、a=1.6、δ=0.5、α=0.1，Δθ 与新 μ 是多少？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              ∇lnπ = 0.6；Δθ = 0.1×0.5×0.6 = +0.03；新 μ = 1.03。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ================= 13.7 ================= -->
+    <h2><span class="sec-no">13.7</span>错误直觉专场："策略梯度不需要值函数"</h2>
+
+    <p>本章最容易被带走的一句话："策略梯度方法摆脱了值函数。"逐条拆：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>说法</th><th>判定</th><th>准确的说法</th></tr>
+        <tr><td>"策略梯度不需要值函数"</td><td><strong>错</strong></td><td>定理里的 q<sub>π</sub>(S,A) 就是值函数；REINFORCE 用采样 G 估计它，actor-critic 直接学它。摆脱的是"用值函数 argmax 导出策略"，不是值函数本身。</td></tr>
+        <tr><td>"策略梯度收敛到全局最优"</td><td><strong>错</strong></td><td>J(θ) 对 θ 一般非凸，梯度上升只保证到局部最优（表格 softmax 表示下有凸性结果，但函数逼近下不成立）。</td></tr>
+        <tr><td>"基线引入偏差，不如纯 REINFORCE 干净"</td><td><strong>错</strong></td><td>基线项期望恒为 0（∑b∇π = b∇1 = 0），只改方差。一步 actor-critic 的 δ 才有偏，那是拿偏差换方差与在线性的主动选择。</td></tr>
+        <tr><td>"策略梯度天然比值方法样本效率高"</td><td><strong>错</strong></td><td>恰好相反：MC 版 REINFORCE 方差大、样本效率低；actor-critic 用自举追回部分效率，但值方法的离策略 + 回放组合在样本效率上常常更强。</td></tr>
+      </table>
+    </div>
+
+    <div class="box idea">
+      <span class="box-tag">💡 一句话校正</span>
+      <p>策略梯度与值方法的关系不是"取代"，而是<strong>重新分工</strong>：策略负责"怎么动"（参数化、可随机、可连续），值函数负责"动得比预期好多少"（基线、critic、δ）。两者在 actor-critic 里会师，谁也不可缺席。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 13.7-1</div>
+              <div class="q-text">"策略梯度不需要值函数"错在哪？策略梯度真正摆脱的是什么？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              定理中 q<sub>π</sub> 就是值函数，REINFORCE 采样估计它、AC 学它。摆脱的只是"argmax 翻译层"：策略不再从值函数导出，而是独立参数化。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 13.7-2</div>
+              <div class="q-text">基线为什么不会引入偏差？一步 actor-critic 的偏差从哪来？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              ∑<sub>a</sub>b(s)∇π(a|s) = b∇1 = 0，期望不变。AC 的偏差来自用未收敛的 V 自举（δ 里的 V(S′) 是估计值），是拿偏差换方差与在线性。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ================= 13.8 ================= -->
+    <h2><span class="sec-no">13.8</span>全书地图与毕业三问</h2>
+
+    <p>十三章走完，回头看：整本书其实只回答了一条链上的问题——<strong>一个 agent 如何从"与环境交互的原始经验"出发，一步步逼近"会做事的策略"。</strong>四段不是四本书，是一条因果链：</p>
+
+    <div class="figure">
+      <div class="mermaid">
+flowchart TB
+  S1["第一段 Ch1-4 表格法基础<br>MDP 定义 贝尔曼方程 动态规划<br>预测与控制有了精确目标"] -->|"因为真实任务拿不到环境模型，<br>所以必须学会直接从采样经验中估计价值"| S2["第二段 Ch5-8 表格型无模型<br>MC TD Sarsa Q-learning n 步"]
+  S2 -->|"因为状态空间指数爆炸表格存不下学不完，<br>所以必须用函数逼近做泛化"| S3["第三段 Ch9-11 函数逼近<br>特征构造 线性方法 半梯度<br>离策略与逼近的稳定性"]
+  S3 -->|"因为逼近下长程信用断裂且 argmax 策略走不进连续动作，<br>所以必须缝合时间信用并直接优化策略"| S4["第四段 Ch12-13 策略与前沿<br>资格迹 策略梯度 Actor-Critic"]
+  classDef hot fill:#fbeedd,stroke:#c4651f,stroke-width:2.5px,color:#c4651f;
+  class S4 hot;
+      </div>
+      <div class="caption">图 13.1 全书地图。每条边是一个"因为……所以必须……"：模型缺失逼出采样（Ch5–8），维度爆炸逼出逼近（Ch9–11），逼近下的信用与动作瓶颈逼出资格迹与策略梯度（Ch12–13）。每段都在为下一段制造必须回答的问题。</div>
+    </div>
+
+    <h3>毕业三问</h3>
+    <p>读完全书，用自己的话回答下面三问。先默答，再展开对照。</p>
+
+    <details>
+      <summary>第一问：预测与控制如何统一？</summary>
+      <div class="retell-answer">参考答案：统一在<span class="term">广义策略迭代</span>（Generalized Policy Iteration, GPI）——评估（预测：这个策略值多少）与改善（控制：据此换个更好的）两个过程交替或同时进行，互为对方的目标。值方法里改善靠 argmax，策略梯度里改善靠沿 ∇J 上升；MC、TD、actor-critic 只是 GPI 在"评估的颗粒度与时机"上的不同实例。预测给控制提供方向，控制给预测提供新的评估对象，循环收敛到最优。</div>
+    </details>
+    <details>
+      <summary>第二问：为什么表格法会"崩"？</summary>
+      <div class="retell-answer">参考答案：要分清两层。第一层是<strong>规模崩</strong>：状态数指数增长，表格存储与每个状态的访问次数都撑不住，且表格把每个状态当孤岛、无泛化——这是第 9 章函数逼近登场的理由。第二层才是<strong>收敛崩</strong>：函数逼近 + 自举 + 离策略构成致命三合，目标随参数漂移，半梯度方法可能发散（第 10–11 章）。表格法本身在自己的世界里收敛得很好；"崩"是把它推出自己世界的代价。</div>
+    </details>
+    <details>
+      <summary>第三问：值方法与策略方法怎么取舍？</summary>
+      <div class="retell-answer">参考答案：值方法样本效率高、离策略与回放成熟、理论收敛性强，但策略被 argmax 绑架：进不了连续动作、给不了随机最优、逼近下会跳变。策略方法直接优化目标、可随机可连续、策略随参数光滑变化，但梯度方差大、易局部最优、步长敏感。实践的答案是<strong>不取舍</strong>：actor-critic 让值函数当 critic 降噪、让参数化策略当 actor 行动——第 13 章的终点恰是第 5–11 章与第 13 章的合流。</div>
+    </details>
+
+    <div class="box idea">
+      <span class="box-tag">💡 毕业赠言</span>
+      <p>这本书教你的不是某几个算法，而是一套拆解问题的语法：目标（回报）→ 结构（贝尔曼方程）→ 估计（采样与自举）→ 泛化（函数逼近）→ 行动（策略）。遇到任何 sequential decision 问题，先用这套语法把它切开，再决定每一段用哪一章的工具。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 13.8-1</div>
+              <div class="q-text">全书四段各自回答什么？相邻段之间的"因为……所以必须……"各是什么？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              Ch1–4 定义目标与理想解 →（无模型）→ Ch5–8 采样估计 →（维度爆炸）→ Ch9–11 函数逼近泛化 →（信用断裂+argmax 瓶颈）→ Ch12–13 资格迹与策略梯度。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 13.8-2</div>
+              <div class="q-text">用自己的话说出毕业三问的第二问（为什么表格法会崩）的两层答案。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              规模层：状态数指数爆炸、无泛化、样本与存储撑不住；收敛层：函数逼近+自举+离策略的致命三合导致半梯度可能发散。表格法在自己的世界里是收敛的。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ================= 概念卡 ================= -->
+    <h2><span class="sec-no">🃏</span>概念卡：本章概念的一分钟画像</h2>
+    <p>翻面前先自问：这个概念我能用一句话讲清楚吗？</p>
+    <div class="flip-grid">
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 1</div>
+            <div class="q-text">策略近似（Policy Approximation）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">直接写 π(a|s,θ)（如 softmax、高斯），让策略成为可微参数化对象。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">值函数 + argmax 在连续动作、随机最优、逼近突变三处断裂。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">不再"先估价再翻译"，直接雕刻"怎么动"这件事本身。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为它抛弃了值函数——值函数降级为降噪器，并未消失。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">连续控制、需要随机策略、策略需光滑变化的场合。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 2</div>
+            <div class="q-text">策略梯度定理（Policy Gradient Theorem）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">∇J(θ) ∝ E<sub>π</sub>[∇lnπ(A|S,θ)·q<sub>π</sub>(S,A)]，μ(s) 的梯度被定理吸收。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">让梯度可在无环境模型时用采样估计。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">"往哪调参数"= 对数概率的变化方向 × 这个动作值多少。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">把 ∝ 当 =；忘了 q 仍是未知量需要估计。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">一切策略梯度方法的理论地基（REINFORCE、AC、PPO 皆是其实例）。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 3</div>
+            <div class="q-text">REINFORCE（蒙特卡洛策略梯度）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">θ ← θ + αG<sub>t</sub>∇lnπ(A<sub>t</sub>|S<sub>t</sub>,θ)：用实际回报 G 顶替定理中的 q。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">给出第一个可运行的无模型策略梯度算法。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">回报高就推高这个动作的对数概率，低就压。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为无偏就够好——MC 回报的方差让训练极慢。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">概念验证、基线/AC 的前身；episodic 任务。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 4</div>
+            <div class="q-text">基线（Baseline）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">从 G 中减去只依赖状态的 b(s)：更新用 (G−b)∇lnπ；期望不变（∑b∇π=b∇1=0）。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">不改变梯度方向的前提下压缩方差。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">只奖励"超出预期的部分"，预期之内的涨跌不算功过。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为基线引入偏差——它只改方差；有偏的是自举的 δ。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">一切 REINFORCE 实践；最优基线 ≈ V(s)，通向 actor-critic。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 5</div>
+            <div class="q-text">Actor-Critic（行动者—评论家）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">双参数结构：actor 按 αθ·δ·∇lnπ 更新策略，critic 按 αw·δ·∇V 学价值，δ = R+γV′−V。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">基线 V 未知 → 学一个；同时用自举换取在线性与低方差。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">演员演戏，评论家打分；惊喜（δ）是唯一的沟通语言。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为两者可用同一步长同一目标——通常 αw &gt; αθ，critic 偏差会传染 actor。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">现代深度 RL 的主力框架（A2C、PPO、DDPG 的骨架）。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 6</div>
+            <div class="q-text">高斯策略（Gaussian Policy）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">a ~ N(μ(s;θ), σ²)；∇<sub>θ</sub>lnπ = (a−μ)/σ² · ∇<sub>θ</sub>μ。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">连续动作空间的策略参数化：两个参数覆盖整条实数轴。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">均值是"当前想做的动作"，σ 是"敢试探多远"。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为连续动作可离散化后用 DQN——动作维指数爆炸。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">机器人控制、任何连续控制任务；σ 也可参数化学习。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 7</div>
+            <div class="q-text">广义策略迭代（GPI）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">评估与改善两个过程交替/并行推进，互为对方目标，驱动策略向最优收敛的总框架。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">统一预测与控制：MC/TD/DP/actor-critic 全是它的实例。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">一个量体温、一个开药方，反复迭代直到康复。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为评估必须做完才能改善——第 5 章起就在用"边评估边改善"。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">理解全书所有收敛性论证的共同骨架；毕业三问第一问的答案。</span></div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- ================= 分层习题 ================= -->
+    <h2><span class="sec-no">📝</span>分层习题</h2>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>判断：<strong>"REINFORCE 的梯度估计是无偏的，因此它的方差也小，不需要基线。"</strong></div>
+      <details>
+        <summary>提示</summary>
+        <p>无偏与方差是估计量的哪两个不同性质？MC 回报的方差来自哪里？</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">错。无偏只保证估计量的期望等于真梯度，不约束单次实现的波动。G<sub>t</sub> 是整段轨迹回报的采样，随机性沿每一步累积，方差很大——这正是需要基线的原因。基线减掉状态级期望回报（期望不变：∑b∇π=0），只压缩方差。"无偏"与"低方差"是估计量的两个独立维度。</div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>判断：<strong>"加入基线 b(s) 后，策略梯度的期望会改变，只是实践中影响不大。"</strong></div>
+      <details>
+        <summary>提示</summary>
+        <p>对固定 s，计算 ∑<sub>a</sub> b(s)∇π(a|s,θ)。概率对 a 求和是多少？</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">错。期望<strong>严格不变</strong>，不是"影响不大"：∑<sub>a</sub> b(s)∇π(a|s,θ) = b(s)∇∑<sub>a</sub>π(a|s,θ) = b(s)∇1 = 0，对每个状态 s 都成立，取期望后基线项恒为 0。前提是 b 不依赖动作 a（若 b 依赖 a，此推导失效——所以基线只能是状态函数）。</div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>承接 13.3 的设置（两动作 L/R，softmax 偏好即参数，α = 0.1），新一局开始：θ<sub>L</sub> = 0.2, θ<sub>R</sub> = 0。本步采到动作 L，回报 G = 2。计算 π(R)、两个参数的更新量、更新后的 π(R)。</div>
+      <details>
+        <summary>提示</summary>
+        <p>先算 π(R) = e⁰/(e<sup>0.2</sup>+e⁰)；∇<sub>θR</sub>lnπ(L) = 0−π(R)，∇<sub>θL</sub>lnπ(L) = 1−π(L) = π(R)。e<sup>0.2</sup> ≈ 1.2214。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p>π(R) = 1/(1.2214+1) = 1/2.2214 ≈ <strong>0.4502</strong>；π(L) ≈ 0.5498。</p>
+          <p>Δθ<sub>R</sub> = 0.1×2×(−0.4502) = <strong>−0.090</strong>；Δθ<sub>L</sub> = 0.1×2×0.4502 = <strong>+0.090</strong>。</p>
+          <p>新参数：θ<sub>L</sub> = 0.29，θ<sub>R</sub> = −0.09。新 π(R) = e<sup>−0.09</sup>/(e<sup>0.29</sup>+e<sup>−0.09</sup>) = 0.9139/(1.3364+0.9139) = 0.9139/2.2503 ≈ <strong>0.406</strong>。</p>
+          <p>解读：回报 +2 给了被采到的 L，L 的偏好上升、R 下降，π(R) 从 0.450 降到 0.406——奖励什么就放大什么。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>13.4 的玩具例（π(L)=π(R)=0.5，g<sub>L</sub>=−0.5，g<sub>R</sub>=+0.5，G<sub>L</sub>=6，G<sub>R</sub>=4），把基线从 5 改为 4。重算梯度期望与方差，与无基线（Var=6.25）、b=5（Var=0）对比，说明基线选取的影响。</div>
+      <details>
+        <summary>提示</summary>
+        <p>逐项算 (G−b)·g 的两个取值，再算 E、E[·²]、Var = E[·²] − E²。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p>b=4：L 分支 (6−4)×(−0.5) = −1；R 分支 (4−4)×0.5 = 0。</p>
+          <p>E = 0.5×(−1) + 0.5×0 = <strong>−0.5</strong>（与无基线、b=5 完全相同，再次验证基线无偏）。</p>
+          <p>E[·²] = 0.5×1 + 0.5×0 = 0.5；Var = 0.5 − 0.25 = <strong>0.25</strong>。</p>
+          <p>对比：无基线 6.25 → b=4 时 0.25 → b=5 时 0。基线越接近状态期望回报（本例 5），方差越小；即使取偏差的 4，方差也已缩到原来的 4%。方向永远不变，变的只是噪声。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l3">L3 建模应用</span>六轴机械臂做"拧紧螺丝"：动作是 6 维连续力矩（各 ∈ [−2, 2] N·m），状态是关节角与角速度，奖励 = −(角度误差)² − 0.01×(力矩平方和)，回合结束于拧紧或超时。①为什么不用 DQN 类方法？②给出策略的形式与 ∇lnπ；③基线/critic 选什么、δ 怎么写；④指出一个会导致训练不稳的设计错误。</div>
+      <details>
+        <summary>提示</summary>
+        <p>先数动作空间的"大小"；再想高斯策略需要哪两个参数化头；最后想 δ 里谁依赖逼近器。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p>① DQN 需要 max<sub>a</sub> Q(s,a)：动作是 6 维连续向量，每步都要解一个 6 维非凸优化，不可行；离散化若每轴 20 档则是 20⁶ = 6400 万动作，指数爆炸。</p>
+          <p>② 高斯策略：μ(s;θ) 为 6 维（网络输出 6 个均值），σ 可固定（如 0.3）或让网络再输出 log σ。∇<sub>θ</sub>lnπ(a|s,θ) = ∑<sub>i=1..6</sub> (a<sub>i</sub>−μ<sub>i</sub>)/σ<sub>i</sub>² · ∇<sub>θ</sub>μ<sub>i</sub>。采样即得动作，天然带探索。</p>
+          <p>③ critic 学 V(s;w)（同结构网络、输出标量）；δ = R + γV(s′;w) − V(s;w)，actor 用 δ·∇lnπ 上升，critic 最小化 δ²。奖励 shaping 已含力矩惩罚，critic 会把"省力"的偏好通过 δ 传给 actor。</p>
+          <p>④ 典型错误：σ 固定过小（如 0.01）——探索消失、梯度方差反而爆炸（(a−μ)/σ² 被放大 10⁴ 倍），且易困在初始策略；或 actor 与 critic 共用大步长，critic 未收敛时 δ 噪声直接带偏策略。正确做法：σ 可学习、α<sup>w</sup> &gt; α<sup>θ</sup>（两个时间尺度）。</p>
+        </div>
+      </details>
+    </div>
+
+    <!-- ================= 自测 ================= -->
+    <h2><span class="sec-no">✍️</span>本章自测</h2>
+    <p class="quiz-hint">点击选项判分，答错会给出原因。</p>
+
+    <div class="quiz-block" data-answer="c">
+      <div class="q-no">自测 1</div>
+      <div class="q-stem">策略梯度定理中，状态分布 μ(s) 对 θ 的梯度：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 必须用环境模型显式计算</li>
+        <li data-opt="b">B. 可以用有限差分近似</li>
+        <li data-opt="c">C. 在 ∇v 的递归展开中被吸收进"在 μ 下取期望"，无需显式求导</li>
+        <li data-opt="d">D. 被假设为零</li>
+      </ul>
+      <div class="quiz-explain">选 C。这是定理的核心礼物：∇v<sub>π</sub>(s) 展开后递归含 ∇v<sub>π</sub>(s′)，全部"到达概率"收敛为折扣状态分布，∇μ 项消失于期望记号中。A 正是被定理消除的需求；B 无此必要；D 是错误假设，μ 确实依赖 θ，只是其梯度不必出现。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 2</div>
+      <div class="q-stem">REINFORCE 中，某步采到动作 a、回报 G &gt; 0，参数更新会：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 降低 a 的概率</li>
+        <li data-opt="b">B. 沿提高 lnπ(a|s,θ) 的方向更新，且 a 当前概率越低、推动越明显（因子 1−π）</li>
+        <li data-opt="c">C. 等比例提高所有动作的概率</li>
+        <li data-opt="d">D. 只更新值函数参数</li>
+      </ul>
+      <div class="quiz-explain">选 B。Δθ ∝ G·∇lnπ，softmax 下 ∇lnπ 含 (1−π(a)) 因子，低概率动作的梯度更大。A 方向反了；C 错，∇lnπ 对被采动作与其他动作符号相反；D 错，REINFORCE 没有值函数参数。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="a">
+      <div class="q-no">自测 3</div>
+      <div class="q-stem">基线不改变梯度期望，关键推导是：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. ∑<sub>a</sub> b(s)∇π(a|s) = b(s)∇∑<sub>a</sub>π(a|s) = b(s)∇1 = 0</li>
+        <li data-opt="b">B. b(s) 与 G 统计独立</li>
+        <li data-opt="c">C. b(s) 是常数，常数的梯度为零</li>
+        <li data-opt="d">D. 基线让正负梯度互相抵消</li>
+      </ul>
+      <div class="quiz-explain">选 A。概率和恒为 1，其梯度为 0，且关键是 b 不依赖 a 才能提出求和号。B 错，b 与 G 可相关（b=V 时高度相关），独立性根本不需要；C 错，b 可随 s 变化，且"常数梯度为零"用错了变量；D 是模糊直觉，不是推导。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="d">
+      <div class="q-no">自测 4</div>
+      <div class="q-stem">V(s)=0.5，本步 R=1，S′ 终止（V=0），γ=1。一步 actor-critic 的 δ 与（αθ=0.1、π(a)=0.5 时的）actor 更新量是：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. δ=1，更新 0.05</li>
+        <li data-opt="b">B. δ=1.5，更新 0.075</li>
+        <li data-opt="c">C. δ=−0.5，更新 −0.025</li>
+        <li data-opt="d">D. δ=0.5，更新 0.025</li>
+      </ul>
+      <div class="quiz-explain">选 D。δ = R + γV(S′) − V(S) = 1 + 0 − 0.5 = 0.5；Δθ = 0.1×0.5×(1−0.5) = 0.025。A 忘了减 V(s)（那是无基线 REINFORCE）；B 符号用加；C 把 δ 写反。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 5</div>
+      <div class="q-stem">高斯策略中采到 a &gt; μ 且 δ &gt; 0，更新会：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 调小 μ</li>
+        <li data-opt="b">B. 调大 μ（∇lnπ = (a−μ)/σ²·∇μ，方向与偏离同号）</li>
+        <li data-opt="c">C. 调大 σ</li>
+        <li data-opt="d">D. 不变，因为 a 只是采样噪声</li>
+      </ul>
+      <div class="quiz-explain">选 B。(a−μ) &gt; 0、δ &gt; 0 → 梯度为正，μ 上移，分布向高 δ 动作集中。A 方向反；C 错，σ 的更新需单独对 σ 参数求梯度，与本项无关；D 否定了整个策略梯度的学习信号。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="c">
+      <div class="q-no">自测 6</div>
+      <div class="q-stem">关于"策略梯度与值函数的关系"，正确的是：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 策略梯度彻底摆脱了值函数</li>
+        <li data-opt="b">B. 值函数只在一开始有用，训练后就可丢弃</li>
+        <li data-opt="c">C. 定理中的 q<sub>π</sub> 就是值函数；摆脱的只是"用 argmax 从值函数导出策略"这一层</li>
+        <li data-opt="d">D. 值函数与策略梯度在任何情形下都不能共存</li>
+      </ul>
+      <div class="quiz-explain">选 C。REINFORCE 用 G 采样估计 q<sub>π</sub>，actor-critic 直接学 V 当 critic。A/B 都被定理本身否定；D 与 actor-critic 的存在矛盾——两者在 AC 框架里分工明确、缺一不可。</div>
+    </div>
+
+    <!-- ================= 复述 ================= -->
+    <div class="retell">
+      <h3>🗣️ 用自己的话，三句话讲完本章</h3>
+      <p class="retell-sub">对着空气（或室友）说出这三句。说卡壳的那句，回去重读对应小节。</p>
+      <details>
+        <summary>句1：这章解决什么问题？——</summary>
+        <div class="retell-answer">参考答案：前 11 章的策略都是从值函数经 argmax 翻译出来的，这条翻译链在连续动作、随机最优、逼近突变三处断裂；本章把策略本身参数化，直接对 J(θ) = v<sub>π</sub>(s₀) 做梯度上升。</div>
+      </details>
+      <details>
+        <summary>句2：核心机制是什么？——</summary>
+        <div class="retell-answer">参考答案：策略梯度定理把 ∇J 写成 E[∇lnπ · q<sub>π</sub>]（μ 的梯度被定理吸收，无模型可估）；REINFORCE 用采样 G 顶 q（无偏高方差），基线 b(s) 零代价降方差（∑b∇π=0），actor-critic 学 V 当基线并用 δ 自举换在线性；连续动作用高斯策略，∇lnπ = (a−μ)/σ²·∇μ。</div>
+      </details>
+      <details>
+        <summary>句3：它和前后章怎么分工？——</summary>
+        <div class="retell-answer">参考答案：本章是全书终点。Ch1–4 定义目标（贝尔曼方程），Ch5–8 用采样替代模型，Ch9–11 用逼近替代查表，Ch12 缝合时间信用；本章把"行动"本身也变成参数——值函数没有退场，而是与参数化策略在 actor-critic 里会师，GPI 的骨架贯穿始终。</div>
+      </details>
+    </div>
+
+    <div class="review-plan">
+      <h3>🔁 间隔复习计划</h3>
+      <p>回忆本身比重读有效 10 倍。到点只做一件事：翻卡 + 重做标记题。</p>
+      <table>
+        <tr><th>时间点</th><th>复习内容</th><th>预计用时</th></tr>
+        <tr><td>第 1 天</td><td>概念卡 1–7 全部 + 回忆 13.2-1、13.4-1</td><td>12 分钟</td></tr>
+        <tr><td>第 3 天</td><td>概念卡 2、4、5 + 重做 L2 两题 + 自测错题</td><td>12 分钟</td></tr>
+        <tr><td>第 7 天</td><td>三句话复述 + 重推 13.2 四步推导 + 手算 13.3/13.5 两个例子</td><td>15 分钟</td></tr>
+        <tr><td>第 15 天</td><td>默画全书地图 + 毕业三问；能全过则本章毕业、全书毕业</td><td>20 分钟</td></tr>
+      </table>
+    </div>
+
+    <div class="final-challenge">
+      <h3>📕 合上书挑战</h3>
+      <p class="fc-sub">现在关掉这个页面，拿一张纸，凭记忆完成以下任务。全部做完再回来核对——这是本章、也是全书的毕业考试。</p>
+      <ol id="ch13-challenge-list">
+        <li><span class="fc-check"></span>写出值函数 + argmax 翻译链的三处断裂（连续动作 / 随机最优 / 逼近突变）及各一句原因</li>
+        <li><span class="fc-check"></span>写出策略梯度定理的四步推导骨架（展开 → 乘积法则 → ∇q 递归 → 收成期望），并指出 μ 梯度消失的位置</li>
+        <li><span class="fc-check"></span>手算一步 REINFORCE：θ<sub>L</sub>=θ<sub>R</sub>=0，采到 R，G=1，α=0.1 → Δθ<sub>R</sub>=+0.05，Δθ<sub>L</sub>=−0.05，新 π(R)≈0.525</li>
+        <li><span class="fc-check"></span>写出基线无偏的一行推导，并复述玩具例：期望同为 −0.5，方差 6.25 → 0.25（b=4）→ 0（b=5）</li>
+        <li><span class="fc-check"></span>写出一步 actor-critic 的 δ 与双更新式，手算 δ=0.5、Δθ<sub>R</sub>=0.025、V→0.55</li>
+        <li><span class="fc-check"></span>写出高斯策略 ∇<sub>θ</sub>lnπ = (a−μ)/σ²·∇μ，并解释为什么 7 关节机械臂不能离散化后用 DQN</li>
+        <li><span class="fc-check"></span>默画全书地图：四段 + 三条"因为……所以必须……"的边</li>
+        <li><span class="fc-check"></span>回答全书主线问题：一个 agent 如何从原始交互经验逼近"会做事的策略"？（一句话）</li>
+      </ol>
+    </div>
+
+    <div class="complete-zone">
+      <button class="btn-complete" id="ch13-btn-complete" onclick="markDone()">✓ 我已完成本章（含合上书挑战）</button>
+    </div>
+
+    <div class="chapter-nav">
+      <a href="chapter-12.html"><span class="nav-dir">← 上一章</span>第12章 资格迹</a>
+      <a href="index.html" class="next"><span class="nav-dir">下一章 →</span>回到学习地图（全书完）</a>
+    </div>
+
+  </div>
+</div>
+
+<footer class="footer">
+  <div class="wrap">第13章 策略梯度方法 · 强化学习互动讲义 · 基于 Sutton &amp; Barto (2018, 2nd ed)</div>
+</footer>
+
+<script src="assets/mermaid.min.js"></script>
+<script>
+mermaid.initialize({
+  startOnLoad: true,
+  theme: "base",
+  themeVariables: {
+    primaryColor: "#e3edf7",
+    primaryBorderColor: "#1d5f9e",
+    primaryTextColor: "#1d5f9e",
+    lineColor: "#5c554b",
+    secondaryColor: "#fbeedd",
+    tertiaryColor: "#f5f1e8",
+    fontFamily: "-apple-system, PingFang SC, sans-serif",
+    fontSize: "14px"
+  },
+  flowchart: { curve: "linear", htmlLabels: false }
+});
+</script>
+<script>
+// 自测题判分
+document.querySelectorAll(".quiz-block").forEach(block => {
+  const answer = block.dataset.answer;
+  const explain = block.querySelector(".quiz-explain");
+  block.querySelectorAll(".quiz-opts li").forEach(li => {
+    li.addEventListener("click", () => {
+      const opts = block.querySelectorAll(".quiz-opts li");
+      opts.forEach(o => o.classList.add("disabled"));
+      if (li.dataset.opt === answer) {
+        li.classList.add("correct");
+      } else {
+        li.classList.add("wrong");
+        block.querySelector(`[data-opt="${answer}"]`).classList.add("correct");
+      }
+      explain.classList.add("show");
+    });
+  });
+});
+
+// 合上书清单打勾
+document.querySelectorAll("#ch13-challenge-list li").forEach(li => {
+  li.addEventListener("click", () => li.classList.toggle("checked"));
+});
+
+// 完成标记 → localStorage（第13章）
+const KEY = "rl_progress_v1";
+function loadProgress() {
+  try { return JSON.parse(localStorage.getItem(KEY)) || {}; } catch (e) { return {}; }
+}
+const progress = loadProgress();
+const btn = document.getElementById("ch13-btn-complete");
+if (progress["13"] && progress["13"].done) {
+  btn.textContent = "✓ 已完成 · 再次点击重置";
+  btn.classList.add("done");
+}
+function markDone() {
+  const p = loadProgress();
+  if (p["13"] && p["13"].done) {
+    delete p["13"];
+    btn.textContent = "✓ 我已完成本章（含合上书挑战）";
+    btn.classList.remove("done");
+  } else {
+    p["13"] = { done: true, completedAt: Date.now(), reviewsDone: 0 };
+    btn.textContent = "✓ 已完成 · 复习提醒已开启";
+    btn.classList.add("done");
+  }
+  localStorage.setItem(KEY, JSON.stringify(p));
+}
+</script>
+
+</body>
+</html>

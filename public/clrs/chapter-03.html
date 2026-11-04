@@ -1,0 +1,979 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第3章 排序算法 · CLRS 算法导论互动讲义</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+<nav class="topbar">
+  <div class="topbar-inner">
+    <span class="brand"><a href="index.html" style="color:inherit">← 学习地图</a></span>
+    <span class="crumb">阶段② · 排序与检索 / 第3章</span>
+  </div>
+</nav>
+
+<div class="wrap">
+
+  <div class="lecture-head">
+    <span class="ch-label">CHAPTER 03 · 排序与检索</span>
+    <h1>排序算法</h1>
+    <p class="lead">比较排序的下界是 Ω(nlgn)，那为什么计数排序能是 O(n)？</p>
+  </div>
+
+  <div class="position-bar">
+    <strong>本章在主线上的位置：</strong>第2章的分治与递归式给了我们分析工具 → <u>本章用排序问题把这些工具全部实战一遍</u> → 第4章哈希表换一条"按键直接定位"的路，不再依赖比较。<br>
+    第3章回答主线上的第2个问题：<strong>比较排序的下界是 Ω(nlgn)，那为什么计数排序能是 O(n)？</strong>
+    <div class="map-inline">
+      <span class="node"><strong>① 分析基础</strong></span>
+      <span class="node">Ch1 算法分析与增长率</span><span class="arrow">→</span>
+      <span class="node">Ch2 分治与递归式</span><span class="arrow">→</span>
+      <span class="node"><strong>② 排序与检索</strong></span>
+      <span class="node here">Ch3 排序算法</span><span class="arrow">→</span>
+      <span class="node">Ch4 哈希表</span><span class="arrow">→</span>
+      <span class="node">Ch5 二叉搜索树与红黑树</span><span class="arrow">→</span>
+      <span class="node"><strong>③ 图算法</strong></span>
+      <span class="node">Ch6 图的基本算法</span><span class="arrow">→</span>
+      <span class="node">Ch7 最小生成树与单源最短路</span><span class="arrow">→</span>
+      <span class="node"><strong>④ 设计范式与难解性</strong></span>
+      <span class="node">Ch8 动态规划</span><span class="arrow">→</span>
+      <span class="node">Ch9 贪心与摊还分析</span><span class="arrow">→</span>
+      <span class="node">Ch10 NP完全与近似算法</span>
+    </div>
+  </div>
+
+  <div class="objectives">
+    <h4>🎯 学完本章，合上书你应该能：</h4>
+    <ol>
+      <li>说出最大堆性质与数组表示中 PARENT/LEFT/RIGHT 的下标公式</li>
+      <li>写出建堆 O(n) 的求和式，并对 n=15 的堆逐项算出总交换次数上界</li>
+      <li>对给定数组手算 BUILD-MAX-HEAP 与 PARTITION 的每一步</li>
+      <li>用指示器随机变量推出随机化快排的期望比较次数 E[X] ≤ 2n·ln n</li>
+      <li>用决策树与 lg(n!) 的放缩解释比较排序下界 Ω(nlgn)</li>
+      <li>解释计数/基数/桶排序各自依赖什么前提才能跑出线性时间</li>
+    </ol>
+  </div>
+
+  <div class="lecture">
+
+    <div class="figure">
+      <div class="mermaid">
+flowchart TB
+  A["排序是算法最基本的练兵场"] --> B["频繁找最大：堆结构让每次只要 O(lgn)"]
+  B --> C["堆排序：原地 O(nlgn)"]
+  C --> D["快排：分区换更小常数"]
+  D --> E["最坏 Θ(n²)，必须随机化"]
+  E --> F["比较排序下界 Ω(nlgn)"]
+  F --> G["打破下界：利用键的结构"]
+  G --> H1["计数排序"]
+  G --> H2["基数排序"]
+  G --> H3["桶排序"]
+  H1 --> I["代价：线性排序有前提，不是免费午餐"]
+  H2 --> I
+  H3 --> I
+  classDef danger fill:#fae9e7,stroke:#b03a2e,stroke-width:2.5px,color:#b03a2e;
+  class I danger;
+      </div>
+      <div class="caption">本章推导主线：每一步都回答"为什么需要下一步"——因为要找最大所以发明堆，因为要更快所以分区，因为比较排序撞到下界所以改用键的结构。</div>
+    </div>
+    <h2><span class="sec-no">3.1</span>为什么需要堆：每次都要"找最大"，但不想每次重排整个数组</h2>
+
+    <p>第2章的分治给了我们归并排序：O(nlgn)，但要付出 Θ(n) 的辅助空间。先别急着想"更快的排序"，先看一个更朴素的需求：很多场景不是一次性排好序，而是<strong>反复地"取当前最大，再补进新的"</strong>——操作系统的进程调度、医院急诊的分诊台，都是这样。用无序数组，取最大要扫一遍 O(n)；用全排序数组，插入一个新元素要挪动 O(n)。能不能让"取最大"和"插入"都只要 O(lgn)？这就是<span class="term">堆</span>（Heap）存在的理由。</p>
+
+    <h3>最大堆：一个"近似有序"的二叉树</h3>
+
+    <p><span class="term">最大堆</span>（Max-Heap）是一棵近似完全的二叉树，满足<span class="term">最大堆性质</span>（Max-Heap Property）：除根以外，每个节点的值都不大于它父亲的值。也就是对一切 i ≠ 1：</p>
+
+    <div class="formula">A[PARENT(<span class="var">i</span>)] ≥ A[<span class="var">i</span>]</div>
+
+    <p>堆直接用数组存放，不做任何指针。下标从 1 开始，三个导航公式背下来：</p>
+
+    <div class="formula">PARENT(<span class="var">i</span>) = ⌊<span class="var">i</span>/2⌋&emsp;LEFT(<span class="var">i</span>) = 2<span class="var">i</span>&emsp;RIGHT(<span class="var">i</span>) = 2<span class="var">i</span>+1</div>
+
+    <p>例如下标 4 的父亲是 ⌊4/2⌋=2，孩子是 8 和 9。树的高度是 ⌊lgn⌋：n=10 时高度 3，n=15 时高度 3。</p>
+
+    <h3>MAX-HEAPIFY：让一个"只有根不对"的子树归位，代价 O(lgn)</h3>
+
+    <p>核心操作 <span class="term">MAX-HEAPIFY</span>：假设 LEFT(i) 和 RIGHT(i) 为根的两棵子树都已经是最大堆，只有 A[i] 可能"太小"。做法：比较 A[i] 与两个孩子，若最大的不是 A[i]，就把 A[i] 与最大的孩子交换，然后对那个孩子位置递归调用 MAX-HEAPIFY。每下沉一层做一次比较交换，最多沉到叶子，路径长度不超过树高，所以代价 <strong>O(lgn)</strong>。</p>
+
+    <h3>建堆的账：为什么是 O(n) 而不是 O(nlgn)</h3>
+
+    <p>BUILD-MAX-HEAP 从最后一个内部节点 i=⌊n/2⌋ 到根 i=1，依次做 MAX-HEAPIFY。粗看：n 次调用 × 每次 O(lgn) = O(nlgn)。这个上界<strong>对但不紧</strong>，因为大多数节点离叶子很近，根本沉不了几层。</p>
+
+    <p><strong>拿 n=15 真算一遍账</strong>（满二叉树，高度 3）。按节点的高度分类——高度 0 是叶子，高度 3 是根：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>高度 h</th><th>该层节点数</th><th>每个节点至多下沉次数</th><th>小计</th></tr>
+        <tr><td>0（叶子）</td><td>8</td><td>0</td><td>0×8 = 0</td></tr>
+        <tr><td>1</td><td>4</td><td>1</td><td>1×4 = 4</td></tr>
+        <tr><td>2</td><td>2</td><td>2</td><td>2×2 = 4</td></tr>
+        <tr><td>3（根）</td><td>1</td><td>3</td><td>3×1 = 3</td></tr>
+        <tr><td><strong>合计</strong></td><td>15</td><td>—</td><td><strong>11 ≤ 2n = 30</strong></td></tr>
+      </table>
+    </div>
+
+    <p>一般情形：高度为 h 的节点至多 ⌈n/2<sup>h+1</sup>⌉ 个，每个代价 O(h)，所以总代价</p>
+
+    <div class="formula">T(n) = ∑<sub>h</sub> ⌈n/2<sup>h+1</sup>⌉·O(h) = O(n·∑<sub>h</sub> h/2<sup>h</sup>) = O(2n) = O(n)</div>
+
+    <p>这里用到一个求和事实：∑<sub>h≥0</sub> h/2<sup>h</sup> = 2。验证一下为什么：记 S = 1/2 + 2/4 + 3/8 + 4/16 + …；则 2S = 1 + 2/2 + 3/4 + 4/8 + …；两式相减，2S − S = 1 + (2/2−1/2) + (3/4−2/4) + (4/8−3/8) + … = 1 + 1/2 + 1/4 + 1/8 + … = 2，所以 S = 2。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>建堆里"贵的节点少、便宜的节点多"：一半的节点是叶子（0 次交换），只有 1 个根最贵。n 个操作的总代价由<strong>分布</strong>决定，不由最坏那次决定——这正是第2章递归树之外另一种常见的紧界分析手法：按深度/高度分档求和。</p>
+    </div>
+
+    <h3>完整手算：BUILD-MAX-HEAP 的逐步 trace</h3>
+
+    <p>对 CLRS 经典例子 A = [4, 1, 3, 2, 16, 9, 10, 14, 8, 7]，n=10，从 i=⌊10/2⌋=5 开始逐次 MAX-HEAPIFY。每行是处理完下标 i 之后的数组（下标从 1 起）：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>步骤</th><th>处理下标</th><th>操作</th><th>数组 A[1..10]</th></tr>
+        <tr><td>初始</td><td>—</td><td>—</td><td>[4, 1, 3, 2, 16, 9, 10, 14, 8, 7]</td></tr>
+        <tr><td>1</td><td>i=5（值16）</td><td>16 ≥ 孩子 8、7，不动</td><td>[4, 1, 3, 2, 16, 9, 10, 14, 8, 7]</td></tr>
+        <tr><td>2</td><td>i=4（值2）</td><td>2 与孩子 14、8 中最大者 14 交换</td><td>[4, 1, 3, 14, 16, 9, 10, 2, 8, 7]</td></tr>
+        <tr><td>3</td><td>i=3（值3）</td><td>3 与孩子 10、7 中最大者 10 交换</td><td>[4, 1, 10, 14, 16, 9, 3, 2, 8, 7]</td></tr>
+        <tr><td>4</td><td>i=2（值1）</td><td>1 与 16 交换，再与孩子 8、7 中最大者 8 交换</td><td>[4, 16, 10, 14, 8, 9, 3, 2, 1, 7]</td></tr>
+        <tr><td>5</td><td>i=1（值4）</td><td>4 与 16 交换，再与 14 交换，再与 8 交换</td><td>[16, 14, 10, 8, 7, 9, 3, 2, 4, 1]</td></tr>
+      </table>
+    </div>
+
+    <p>最终堆 [16, 14, 10, 8, 7, 9, 3, 2, 4, 1]：抽查堆性质，下标 2 的值 14 ≥ 孩子下标 4、5 的值 8、7 ✓；下标 3 的值 10 ≥ 孩子 9、3 ✓。注意堆<strong>不是排序结果</strong>——比如下标 5 的 7 大于下标 4 的 8，这在排好序的数组里不可能，但在堆里完全合法。</p>
+
+    <h3>优先队列：堆的直接产品</h3>
+
+    <p>基于最大堆，<span class="term">优先队列</span>（Priority Queue）的三个操作都是 O(lgn)：HEAP-MAXIMUM 直接读 A[1]（O(1)）；HEAP-EXTRACT-MAX 把末尾元素提到根再 MAX-HEAPIFY；MAX-HEAP-INSERT 把新元素放末尾、键设为 −∞，再 INCREASE-KEY 到目标值，沿父亲链上浮。堆排序、第7章的 Prim 与 Dijkstra 算法都建立在这三个操作上。</p>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>"堆是一棵排序好的树"——错。堆只保证父亲 ≥ 孩子，兄弟之间、不同子树之间没有任何顺序保证。想拿"全局第 k 大"，堆不能一次给你答案，只能一次次 EXTRACT-MAX。把"局部偏序"误当"全局全序"，是堆题最常见的丢分点。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 3.1-1</div>
+              <div class="q-text">建堆 n 个节点，每个 MAX-HEAPIFY 最坏 O(lgn)，为什么总代价是 O(n) 而不是 O(nlgn)？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              因为代价按高度分档：高度 h 的节点至多 ⌈n/2<sup>h+1</sup>⌉ 个，每个至多下沉 h 层，总和 n·∑h/2<sup>h</sup> = 2n。多数节点是叶子或近叶子，根本沉不了几层，"n 次 × 最坏 lgn"把大多数节点高估了。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 3.1-2</div>
+              <div class="q-text">堆的数组表示里，下标 i 的父亲和两个孩子分别怎么算（下标从 1 起）？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              PARENT(i) = ⌊i/2⌋，LEFT(i) = 2i，RIGHT(i) = 2i+1。例：i=5 的父亲是 2，孩子是 10 和 11。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <h2><span class="sec-no">3.2</span>堆排序：把"取最大"重复 n−1 次，原地 O(nlgn)</h2>
+
+    <p>上一节给了 O(lgn) 的"取最大"。排序的整个思路因此变得直白：把数组建成最大堆，然后反复把堆顶（当前最大）换到数组末尾、堆规模减一、对新堆顶做 MAX-HEAPIFY。这就是<span class="term">堆排序</span>（Heapsort）。</p>
+
+    <p>代价账：建堆 O(n)，之后 n−1 次 EXTRACT-MAX，每次 MAX-HEAPIFY 至多 O(lgn)，合计</p>
+
+    <div class="formula">T(n) = O(n) + (n−1)·O(lgn) = O(nlgn)</div>
+
+    <p>排序全程在<strong>原数组</strong>内进行，只用 O(1) 辅助空间——这是它比归并排序（Θ(n) 辅助空间）多出来的一张王牌。</p>
+
+    <h3>完整手算：对 3.1 建好的堆做前 4 步 extract</h3>
+
+    <p>初始堆（n=10）：[16, 14, 10, 8, 7, 9, 3, 2, 4, 1]。每步：A[1] 与当前堆末元素交换 → 堆规模减一 → 对新堆顶 MAX-HEAPIFY。"|"右边是已就位（不再属于堆）的尾部。</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>步</th><th>交换堆顶与堆末</th><th>MAX-HEAPIFY 修复</th><th>数组（|右=已排好）</th></tr>
+        <tr><td>1</td><td>16 ↔ A[10]=1</td><td>1 下沉：1↔14，1↔8</td><td>[14, 8, 10, 4, 7, 9, 3, 2, 1 | 16]</td></tr>
+        <tr><td>2</td><td>14 ↔ A[9]=1</td><td>1 下沉：1↔10，1↔4</td><td>[10, 8, 9, 4, 7, 1, 3, 2 | 14, 16]</td></tr>
+        <tr><td>3</td><td>10 ↔ A[8]=2</td><td>2 下沉：2↔8，2↔4</td><td>[9, 8, 3, 4, 7, 1, 2 | 10, 14, 16]</td></tr>
+        <tr><td>4</td><td>9 ↔ A[7]=2</td><td>2 下沉：2↔8，2↔4</td><td>[8, 7, 3, 4, 2, 1 | 9, 10, 14, 16]</td></tr>
+      </table>
+    </div>
+
+    <p>验证第 1 步：1 换到堆顶后，孩子是 14 和 8，与最大的 14 交换；新位置的孩子是 8 和 7，与 8 交换；再往下到叶子，停。每步把当前最大钉到尾部，重复 9 次后数组升序：[1, 2, 4, 7, 8, 9, 10, 14, 16, …]（尾部先大后小已就位）。</p>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>"堆排序是稳定排序"——错。交换堆顶与堆末会把元素<strong>长距离甩到前面</strong>，相等元素的原始相对顺序无法保证。比如两个等值元素分别在堆顶附近和堆底，一次 extract 就可能让后者越过前者。需要稳定性时别选堆排序。</p>
+    </div>
+
+    <div class="box insight">
+      <span class="box-tag">✅ 判定规则</span>
+      <p>三种 O(nlgn) 排序怎么选：要<strong>原地 + 最坏情况保证</strong>选堆排序；要<strong>稳定</strong>选归并排序；要<strong>平均常数最小</strong>选快速排序（3.3、3.4 节）。堆排序最坏 O(nlgn) 是硬保证，快排最坏会掉到 Θ(n²)。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 3.2-1</div>
+              <div class="q-text">堆排序的每一步做什么？总代价怎么算？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              每步：堆顶与堆末交换，堆规模减一，对新堆顶 MAX-HEAPIFY。代价 = 建堆 O(n) + (n−1) 次 extract × O(lgn) = O(nlgn)，辅助空间 O(1)。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 3.2-2</div>
+              <div class="q-text">堆排序相比归并排序的优势与劣势各是什么？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              优势：原地（O(1) 辅助空间），归并要 Θ(n)。劣势：不稳定，且实际常数因子与缓存局部性不如快排，工程上纯排序场景往往输给随机化快排。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <h2><span class="sec-no">3.3</span>快速排序的分区：用一次扫描把数组切成"小 | 主元 | 大"</h2>
+
+    <p>堆排序保证了最坏 O(nlgn)，但工程师更爱另一个平均更快的家伙：<span class="term">快速排序</span>（Quicksort）。它是第2章分治思想最直接的传人——分（PARTITION）：把 A[p..r] 重排成"≤主元的 | 主元 | ≥主元的"三段；治：递归排左右两段；合：什么都不用做（这是它比归并省的地方）。</p>
+
+    <p>PARTITION(A, p, r) 取主元 x = A[r]，维护指针 i = "≤x 区域的右边界"（初始 p−1）。j 从 p 扫到 r−1：若 A[j] ≤ x，则 i 加一、交换 A[i] 与 A[j]。扫完交换 A[i+1] 与 A[r]，返回 q = i+1。</p>
+
+    <h3>完整手算：PARTITION 的逐步 trace（CLRS 图 7.1）</h3>
+
+    <p>A = [2, 8, 7, 1, 3, 5, 6, 4]，p=1，r=8，主元 x = A[8] = 4。初始 i = 0。</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>j</th><th>A[j]</th><th>A[j] ≤ 4?</th><th>i</th><th>交换</th><th>数组状态</th></tr>
+        <tr><td>1</td><td>2</td><td>是</td><td>1</td><td>A[1]↔A[1]（自身）</td><td>[2, 8, 7, 1, 3, 5, 6 | 4]</td></tr>
+        <tr><td>2</td><td>8</td><td>否</td><td>1</td><td>—</td><td>[2, 8, 7, 1, 3, 5, 6 | 4]</td></tr>
+        <tr><td>3</td><td>7</td><td>否</td><td>1</td><td>—</td><td>[2, 8, 7, 1, 3, 5, 6 | 4]</td></tr>
+        <tr><td>4</td><td>1</td><td>是</td><td>2</td><td>A[2]↔A[4]</td><td>[2, 1, 7, 8, 3, 5, 6 | 4]</td></tr>
+        <tr><td>5</td><td>3</td><td>是</td><td>3</td><td>A[3]↔A[5]</td><td>[2, 1, 3, 8, 7, 5, 6 | 4]</td></tr>
+        <tr><td>6</td><td>5</td><td>否</td><td>3</td><td>—</td><td>[2, 1, 3, 8, 7, 5, 6 | 4]</td></tr>
+        <tr><td>7</td><td>6</td><td>否</td><td>3</td><td>—</td><td>[2, 1, 3, 8, 7, 5, 6 | 4]</td></tr>
+        <tr><td>收尾</td><td>—</td><td>—</td><td>3</td><td>A[4]↔A[8]</td><td>[2, 1, 3 | 4 | 7, 5, 6, 8]</td></tr>
+      </table>
+    </div>
+
+    <p>返回 q = i+1 = 4。验证分区不变式：A[1..3] = [2,1,3] 全部 ≤ 4 ✓；A[4] = 4 是主元 ✓；A[5..8] = [7,5,6,8] 全部 ≥ 4 ✓。主元一次到位，之后再递归 A[1..3] 与 A[5..8]。</p>
+
+    <h3>最坏情形：分区每次切出 0 对 n−1</h3>
+
+    <p>如果每次分区都极度不平衡——一边 0 个元素、一边 n−1 个（例如数组<strong>已经有序</strong>且总取末位当主元），递归式变成：</p>
+
+    <div class="formula">T(n) = T(n−1) + Θ(n) ⟹ T(n) = Θ(n²)</div>
+
+    <p>拿 n=5 真算：每层分区代价就是当前子问题规模，5 + 4 + 3 + 2 + 1 = 15 = n(n+1)/2 = 5·6/2 ✓。这是一条每层层代价减 1 的"斜树"，深度 n，总代价 Θ(n²)。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>快排的命运完全由"主元切得均不均"决定。切得均（比如每次 1:9）依然是 Θ(nlgn)——用递归树验证：每层代价 n，深度 log<sub>10/9</sub>n = Θ(lgn)。真正致命的是<strong>每次都 0:(n−1)</strong>，而固定取末位主元碰上已排序输入就必然如此。下一节的任务：让这种坏运气变成小概率事件。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 3.3-1</div>
+              <div class="q-text">PARTITION 结束时数组满足哪三段不变式？指针 i 的语义是什么？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              i 是"≤主元区域的右边界"。结束时 A[p..i] ≤ x，A[i+1] = x（主元就位，返回 q=i+1），A[i+2..r] ≥ x。扫描中 i 只进不退，j 扫过即判定归属。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 3.3-2</div>
+              <div class="q-text">快排最坏 Θ(n²) 在什么输入下触发？写出此时的递归式。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              每次分区都 0 对 n−1 时触发——典型就是已排序（或逆序）数组配固定主元。递归式 T(n) = T(n−1) + Θ(n)，展开是 n + (n−1) + … + 1 = Θ(n²)。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <h2><span class="sec-no">3.4</span>随机化快排：把"坏输入"变成"坏运气"，期望 O(nlgn)</h2>
+
+    <p>上一节的坏消息是：固定主元让某些输入必然 Θ(n²)。修复方案简单到不像正经算法——<span class="term">RANDOMIZED-PARTITION</span>：先在 A[p..r] 里均匀随机抽一个下标，与 A[r] 交换，再走普通 PARTITION。从此没有任何特定输入能稳定触发最坏情形；最坏情形仍然存在，但发生的<strong>概率</strong>小到可以忽略。算法分析的口径也从"最坏输入"换成"期望运行时间"。</p>
+
+    <h3>期望比较次数：指示器随机变量的经典一课</h3>
+
+    <p>快排的运行时间由比较次数主导。设输入元素按值从小到大记为 z₁ &lt; z₂ &lt; … &lt; zₙ。定义<span class="term">指示器随机变量</span>（Indicator Random Variable）：X<sub>ij</sub> = 1 当且仅当 z<sub>i</sub> 与 z<sub>j</sub> 在整次快排中被比较过（每对元素至多比较一次——因为比较只发生在主元与另一元素之间，比完主元就退场了）。总比较次数 X = ∑<sub>i&lt;j</sub> X<sub>ij</sub>，于是</p>
+
+    <div class="formula">E[X] = ∑<sub>i&lt;j</sub> E[X<sub>ij</sub>] = ∑<sub>i&lt;j</sub> Pr{ z<sub>i</sub> 与 z<sub>j</sub> 被比较 } = ∑<sub>i&lt;j</sub> <span class="frac"><span class="num-part">2</span><span class="den-part">j−i+1</span></span></div>
+
+    <p>为什么概率是 2/(j−i+1)：z<sub>i</sub> 与 z<sub>j</sub> 被比较，当且仅当在集合 {z<sub>i</sub>, z<sub>i+1</sub>, …, z<sub>j</sub>} 这 j−i+1 个元素中，<strong>第一个被选为主元的恰好是 z<sub>i</sub> 或 z<sub>j</sub></strong>（若先选中中间的 z<sub>k</sub>，i&lt;k&lt;j，则 z<sub>i</sub> 与 z<sub>j</sub> 被分进两个子问题，永远不再见面）。随机选主元下，每个元素等概率 1/(j−i+1) 成为该集合里的首个主元，两个端点合计 2/(j−i+1)。</p>
+
+    <h3>拿 n=4 真算：6 对元素逐对求概率</h3>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>元素对 (zᵢ, zⱼ)</th><th>区间大小 j−i+1</th><th>比较概率 2/(j−i+1)</th></tr>
+        <tr><td>(1,2)</td><td>2</td><td>1</td></tr>
+        <tr><td>(1,3)</td><td>3</td><td>2/3</td></tr>
+        <tr><td>(1,4)</td><td>4</td><td>1/2</td></tr>
+        <tr><td>(2,3)</td><td>2</td><td>1</td></tr>
+        <tr><td>(2,4)</td><td>3</td><td>2/3</td></tr>
+        <tr><td>(3,4)</td><td>2</td><td>1</td></tr>
+        <tr><td><strong>合计 E[X]</strong></td><td>—</td><td><strong>3×1 + 2×(2/3) + 1/2 = 4.83</strong></td></tr>
+      </table>
+    </div>
+
+    <p>对比：n=4 的最坏情形比较次数是 3+2+1 = 6 次（每次切出 0 对 n−1）。期望 4.83 次比最坏 6 次省了近 20%，n 越大差距越是量级级的。</p>
+
+    <p>一般放缩：把求和按 k = j−i 重新分组，每个 k 恰有 n−k 对，每对概率 2/(k+1)，所以</p>
+
+    <div class="formula">E[X] = ∑<sub>k=1</sub><sup>n−1</sup> (n−k)·<span class="frac"><span class="num-part">2</span><span class="den-part">k+1</span></span> &lt; 2n·∑<sub>k=1</sub><sup>n−1</sup> <span class="frac"><span class="num-part">1</span><span class="den-part">k</span></span> ≈ 2n·ln n = Θ(nlgn)</div>
+
+    <p>（调和级数 H<sub>n</sub> ≈ ln n + 0.577，放缩时把 n−k 放松成 n、把 2/(k+1) 放松成 2/k。）</p>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>"随机化快排把最坏情形消灭了"——错。Θ(n²) 仍在，只是从"某些输入必触发"变成"任何输入都以极小概率触发"。期望 O(nlgn) 是对<strong>算法的随机选择</strong>取平均，不是对输入分布取平均——这叫随机化算法，不是平均情形分析。对敌手（知道代码不知道随机数）依然安全。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 3.4-1</div>
+              <div class="q-text">随机化快排中，zᵢ 与 zⱼ（i&lt;j）被比较的概率是多少？为什么？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              2/(j−i+1)。因为在 {zᵢ,…,zⱼ} 这 j−i+1 个元素中，谁先当主元由随机数决定；只有 zᵢ 或 zⱼ 先当主元（概率各 1/(j−i+1)）两者才会见面比较，中间元素先当主元则两者永被隔开。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 3.4-2</div>
+              <div class="q-text">"期望运行时间 O(nlgn)"里的期望是对什么取的？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              对算法内部的随机选择（随机主元）取期望，输入是任意固定的。这意味着不存在"专克快排的坏输入"——同样的最坏输入，换次随机数就跑得飞快。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <h2><span class="sec-no">3.5</span>比较排序下界：决策树告诉你 Ω(nlgn) 是天花板</h2>
+
+    <p>堆排序 O(nlgn)，随机化快排期望 Θ(nlgn)——还能更快吗？这一节给出一个普适的否定答案：任何只靠"两两比较"获取信息的排序算法，最坏情形都要 Ω(nlgn) 次比较。工具是<span class="term">决策树</span>（Decision Tree）模型。</p>
+
+    <h3>决策树：把任何比较排序画成一棵二叉树</h3>
+
+    <p>一个基于比较的排序算法，在固定输入规模 n 下的全部行为，可以画成一棵二叉树：每个内部节点是一次比较 "a<sub>i</sub> : a<sub>j</sub>"，左分支走 ≤、右分支走 &gt;，每片叶子是一个确定的输出排列。n 个元素有 n! 种可能排列，算法要区分它们，所以树<strong>至少有 n! 片叶子</strong>。一次运行就是从根到某片叶子的一条路径，路径长度 = 这次运行的比较次数；树高 h = 最坏情形比较次数。</p>
+
+    <p><strong>n=3 真算</strong>：3! = 6 种排列，树必须 ≥ 6 片叶子。高度 h 的二叉树至多 2<sup>h</sup> 片叶子，所以 2<sup>h</sup> ≥ 6，h ≥ ⌈lg 6⌉ = ⌈2.58⌉ = 3。即排 3 个元素最坏至少要 3 次比较——画出这棵树：根比较 a₁:a₂；若 a₁≤a₂，比较 a₂:a₃；若 a₂≤a₃ 得叶 [a₁a₂a₃]，否则再比 a₁:a₃ 区分 [a₁a₃a₂] 与 [a₃a₁a₂]；对称地处理 a₁&gt;a₂ 分支。深度确实 3，与下界吻合。</p>
+
+    <h3>从 2ʰ ≥ n! 到 Ω(nlgn)</h3>
+
+    <div class="formula">2<sup>h</sup> ≥ n! ⟹ h ≥ lg(n!) = ∑<sub>k=1</sub><sup>n</sup> lg k</div>
+
+    <p>逐项放缩（不用 Stirling 也能证）：把求和砍掉前一半，剩下的每一项都 ≥ lg(n/2)：</p>
+
+    <div class="formula">lg(n!) = ∑<sub>k=1</sub><sup>n</sup> lg k ≥ ∑<sub>k=⌈n/2⌉</sub><sup>n</sup> lg k ≥ <span class="frac"><span class="num-part">n</span><span class="den-part">2</span></span>·lg<span class="frac"><span class="num-part">n</span><span class="den-part">2</span></span> = <span class="frac"><span class="num-part">n</span><span class="den-part">2</span></span>(lg n − 1) = Ω(nlgn)</div>
+
+    <p>（若用 Stirling 公式 n! ≈ (n/e)<sup>n</sup>·√(2πn)，则 lg(n!) ≈ n lg n − n lg e + O(lg n)，结论相同且更精确。）</p>
+
+    <div class="box insight">
+      <span class="box-tag">✅ 判定规则</span>
+      <p>比较排序下界 Ω(nlgn) 是<strong>对信息获取方式的限制</strong>：每次比较最多带回 1 比特，而确定 n! 个排列中的哪一个需要 lg(n!) ≈ n lg n 比特。它不禁止任何具体算法，只禁止"纯比较 + 更快"的组合。想更快，必须绕过"比较"这个信息瓶颈——这正是 3.6 节的事。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>"下界说排序至少要 Ω(nlgn)，所以计数排序 O(n) 是矛盾/作弊"——错。下界的前提是"算法只通过比较获取顺序信息"。计数排序一次比较都不做，它用"值即下标"直接定位，根本不在决策树模型的管辖范围内。下界没有错，线性排序也没有作弊，是模型边界划得好。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 3.5-1</div>
+              <div class="q-text">决策树论证的两步核心推导是什么（从 n! 到 Ω(nlgn)）？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              ① 树须区分 n! 种排列，故 2<sup>h</sup> ≥ n!，h ≥ lg(n!)；② lg(n!) = ∑lg k ≥ (n/2)·lg(n/2) = Ω(nlgn)（或用 Stirling：lg(n!) ≈ n lg n − n lg e）。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 3.5-2</div>
+              <div class="q-text">n=3 时比较排序的最坏情形下界是几次比较？怎么算的？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              3 次。3! = 6 片叶子，2<sup>h</sup> ≥ 6 要求 h ≥ ⌈lg 6⌉ = 3。任何算法排 3 个元素，总存在某个输入要 3 次比较——2 次比较至多区分 4 种情形，不够分 6 种。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <h2><span class="sec-no">3.6</span>线性时间排序：不比较，改用"键的结构"直接定位</h2>
+
+    <p>3.5 节说了：比较的路线最多走到 Ω(nlgn)。但下界只封住了"比较"这一条路。如果键本身带有可利用的结构——范围小、位数有限、分布均匀——就能绕过比较，直接算出每个元素该去的位置，跑到 O(n)。这一节看三位选手：计数排序、基数排序、桶排序。</p>
+
+    <h3>计数排序（Counting Sort）：键值是 0..k 的小整数，"数人数 + 算站位"</h3>
+
+    <p>前提：n 个元素的键都是 0 到 k 之间的整数，且 k = O(n)。两趟扫描：第一趟数出每个值出现几次（计数数组 C）；把 C 改成前缀和——C[j] = "≤j 的元素个数"，也就是值 j 的元素在输出中的最后站位；第二趟<strong>从右往左</strong>扫输入，把 A[j] 放到 B[C[A[j]]]，然后 C[A[j]] 减一。从右往左扫是<span class="term">稳定性</span>（Stability，相等元素保持原始相对顺序）的关键。</p>
+
+    <p><strong>完整 trace</strong>（CLRS 图 8.2）：A = [2, 5, 3, 0, 2, 3, 0, 3]，k=5。</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>阶段</th><th>C[0]</th><th>C[1]</th><th>C[2]</th><th>C[3]</th><th>C[4]</th><th>C[5]</th></tr>
+        <tr><td>计数后（每个值出现次数）</td><td>2</td><td>0</td><td>2</td><td>3</td><td>0</td><td>1</td></tr>
+        <tr><td>前缀和后（≤j 的个数 = 值 j 的最后站位）</td><td>2</td><td>2</td><td>4</td><td>7</td><td>7</td><td>8</td></tr>
+      </table>
+    </div>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>回填步骤</th><th>取元素</th><th>放 B[C[x]]</th><th>C[x] 减一后</th><th>输出 B[1..8]</th></tr>
+        <tr><td>1</td><td>A[8]=3</td><td>B[7]=3</td><td>C[3]: 7→6</td><td>[_, _, _, _, _, _, 3, _]</td></tr>
+        <tr><td>2</td><td>A[7]=0</td><td>B[2]=0</td><td>C[0]: 2→1</td><td>[_, 0, _, _, _, _, 3, _]</td></tr>
+        <tr><td>3</td><td>A[6]=3</td><td>B[6]=3</td><td>C[3]: 6→5</td><td>[_, 0, _, _, _, 3, 3, _]</td></tr>
+        <tr><td>4</td><td>A[5]=2</td><td>B[4]=2</td><td>C[2]: 4→3</td><td>[_, 0, _, 2, _, 3, 3, _]</td></tr>
+        <tr><td>5</td><td>A[4]=0</td><td>B[1]=0</td><td>C[0]: 1→0</td><td>[0, 0, _, 2, _, 3, 3, _]</td></tr>
+        <tr><td>6</td><td>A[3]=3</td><td>B[5]=3</td><td>C[3]: 5→4</td><td>[0, 0, _, 2, 3, 3, 3, _]</td></tr>
+        <tr><td>7</td><td>A[2]=5</td><td>B[8]=5</td><td>C[5]: 8→7</td><td>[0, 0, _, 2, 3, 3, 3, 5]</td></tr>
+        <tr><td>8</td><td>A[1]=2</td><td>B[3]=2</td><td>C[2]: 3→2</td><td>[0, 0, 2, 2, 3, 3, 3, 5]</td></tr>
+      </table>
+    </div>
+
+    <p>输出 [0, 0, 2, 2, 3, 3, 3, 5] ✓。稳定性验证：原数组里三个 3 在下标 3、6、8，输出里占 B[5]、B[6]、B[7]——先来的 3（下标3）落在最左的 B[5]，相对顺序保持 ✓。代价 Θ(n + k)，k = O(n) 时即 Θ(n)。</p>
+
+    <h3>基数排序（Radix Sort）：键是 d 位整数，逐位用稳定子排序</h3>
+
+    <p>前提：每个键是 d 位数字，每位取自 k 种符号。做法：从<strong>最低位</strong>到最高位，逐位用一个稳定排序（通常计数排序）排一遍。每轮 Θ(n+k)，共 d 轮，总代价 Θ(d(n+k))；d 为常数、k = O(n) 时即 Θ(n)。</p>
+
+    <p><strong>完整 trace</strong>：A = [329, 457, 657, 839, 436, 720, 355]，d=3，k=10。</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>轮次</th><th>按哪位排</th><th>排序后数组</th></tr>
+        <tr><td>初始</td><td>—</td><td>[329, 457, 657, 839, 436, 720, 355]</td></tr>
+        <tr><td>第 1 轮</td><td>个位</td><td>[720, 355, 436, 457, 657, 329, 839]</td></tr>
+        <tr><td>第 2 轮</td><td>十位</td><td>[720, 329, 436, 839, 355, 457, 657]</td></tr>
+        <tr><td>第 3 轮</td><td>百位</td><td>[329, 355, 436, 457, 657, 720, 839]</td></tr>
+      </table>
+    </div>
+
+    <p>验证第 1 轮：个位数字依次是 9,7,7,9,6,0,5，按个位稳定分组：0→[720]，5→[355]，6→[436]，7→[457,657]（保持原相对顺序），9→[329,839]，拼起来即表中结果。为什么子排序必须稳定？第 2 轮按十位排时，十位相同的元素（如 457 与 355 的十位都是 5——本例中不冲突，但一般地）必须保住第 1 轮按个位排好的次序，否则低位的工作就白做了。稳定性是"逐位累加排序成果"的粘合剂。</p>
+
+    <h3>桶排序（Bucket Sort）：键均匀分布在 [0,1)，"分桶 + 桶内快排"</h3>
+
+    <p>前提：键独立均匀地分布在 [0,1) 区间。做法：开 n 个等宽桶，A[i] 进第 ⌊n·A[i]⌋ 号桶；每个桶内用插入排序；按桶序拼接。</p>
+
+    <p><strong>完整 trace</strong>：A = [0.78, 0.17, 0.39, 0.26, 0.72, 0.94, 0.21, 0.12, 0.23, 0.68]，n=10。</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>桶号</th><th>区间</th><th>装入（保持原顺序）</th><th>桶内排序后</th></tr>
+        <tr><td>0</td><td>[0.0,0.1)</td><td>（空）</td><td>—</td></tr>
+        <tr><td>1</td><td>[0.1,0.2)</td><td>[0.17, 0.12]</td><td>[0.12, 0.17]</td></tr>
+        <tr><td>2</td><td>[0.2,0.3)</td><td>[0.26, 0.21, 0.23]</td><td>[0.21, 0.23, 0.26]</td></tr>
+        <tr><td>3</td><td>[0.3,0.4)</td><td>[0.39]</td><td>[0.39]</td></tr>
+        <tr><td>4–5</td><td>[0.4,0.6)</td><td>（空）</td><td>—</td></tr>
+        <tr><td>6</td><td>[0.6,0.7)</td><td>[0.68]</td><td>[0.68]</td></tr>
+        <tr><td>7</td><td>[0.7,0.8)</td><td>[0.78, 0.72]</td><td>[0.72, 0.78]</td></tr>
+        <tr><td>8</td><td>[0.8,0.9)</td><td>（空）</td><td>—</td></tr>
+        <tr><td>9</td><td>[0.9,1.0)</td><td>[0.94]</td><td>[0.94]</td></tr>
+      </table>
+    </div>
+
+    <p>拼接：0.12, 0.17, 0.21, 0.23, 0.26, 0.39, 0.68, 0.72, 0.78, 0.94 ✓。为什么期望线性？均匀分布下每桶期望装 1 个元素，桶内插入排序的期望代价是常数，n 个桶合计 Θ(n)。若分布严重倾斜（全挤进一个桶），就退化成桶内排序的 O(n²)——线性的承诺建立在"均匀"这个前提上。</p>
+
+    <h3>三种线性排序前提条件对比</h3>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>算法</th><th>键的前提</th><th>时间</th><th>稳定</th><th>致命软肋</th></tr>
+        <tr><td>计数排序</td><td>整数，范围 0..k 且 k=O(n)</td><td>Θ(n+k)</td><td>是</td><td>k 大则数组 C 爆炸（如手机号范围 10¹¹）</td></tr>
+        <tr><td>基数排序</td><td>d 位整数，每位 k 种符号</td><td>Θ(d(n+k))</td><td>子排序必须稳定</td><td>位数 d 大（如任意精度大数）则退化</td></tr>
+        <tr><td>桶排序</td><td>实数，[0,1) 上均匀分布</td><td>期望 Θ(n)</td><td>取决于桶内排序</td><td>分布不均则退化为 O(n²)</td></tr>
+      </table>
+    </div>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>三种算法共享同一个哲学：<strong>用"键是什么"代替"键比谁大"</strong>。计数用值当下标，基数用各位数字分桶，桶排序用数值大小映射区间。它们不违反 Ω(nlgn) 下界，因为它们根本不在"比较模型"里玩。线性时间不是免费的——是用键的结构信息换来的。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 3.6-1</div>
+              <div class="q-text">计数排序中 C 数组经历了哪两种形态？为什么回填要从右往左扫？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              先存"每个值出现次数"，再变前缀和"≤j 的个数 = 值 j 的最后站位"。从右往左扫保证相同值的元素中，原数组靠后的先放、占据站位区间靠右的格子，从而保持相对顺序——即稳定性。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 3.6-2</div>
+              <div class="q-text">基数排序为什么要从最低位开始排？桶排序的线性时间依赖什么假设？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              从低位起排，配合稳定子排序，高位排序时自动保住低位已排好的次序；从高位起排则每轮要分裂出子问题单独处理，麻烦得多。桶排序期望 Θ(n) 依赖键在 [0,1) 均匀分布——每桶期望 1 个元素。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <h2><span class="sec-no">🃏</span>概念卡：本章概念的一分钟画像</h2>
+    <p>翻面前先自问：这个概念我能用一句话讲清楚吗？</p>
+    <div class="flip-grid">
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 1</div>
+            <div class="q-text">堆（Heap）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">存于数组的近似完全二叉树，满足最大堆性质 A[PARENT(i)] ≥ A[i]。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">让"取最大/插入"都只要 O(lgn)，不必为一次取最大重排全部。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">淘汰赛对阵表：冠军在塔尖，但亚军不一定在亚军席上。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为堆内元素整体有序——它只保证父亲 ≥ 孩子。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">堆排序、优先队列、第7章 Prim/Dijkstra 的取最小边操作。</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 2</div>
+            <div class="q-text">优先队列（Priority Queue）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">支持 INSERT / EXTRACT-MAX / INCREASE-KEY 的抽象数据类型，堆是其经典实现。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">动态数据流中反复"处理当前最重要者"：调度、分诊、事件驱动模拟。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">急诊分诊台：不看先来后到，永远先叫病情最重的。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为只有堆能实现——有序数组、无序数组都行，只是操作代价此消彼长。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">第7章最小生成树与最短路算法的核心部件。</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 3</div>
+            <div class="q-text">堆排序（Heapsort）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">建最大堆后反复把堆顶换到数组末尾并修复，n−1 轮后全序。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">原地 O(nlgn) 排序：不用归并的 Θ(n) 辅助空间，也没有快排的 Θ(n²) 最坏。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">每轮把"当前冠军"请到领奖台末尾，剩下的人重赛一轮。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为它稳定——堆顶与堆末的长途交换必然打乱等值元素顺序。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">内存紧张且要求最坏情形硬保证的排序场景。</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 4</div>
+            <div class="q-text">分区（Partition）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">以主元 x 为界，一趟扫描把数组重排成 ≤x | x | ≥x 三段，返回主元终位 q。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">快排的"分"步：主元一次到位，左右子问题独立递归，合并步为零。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">按身高分队：叫一个人站到中间，比他矮的往左、高的往右。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为分区结果两段各自有序——只有主元一个元素就位。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">快排、快速选择（找第 k 小），以及"荷兰国旗"类重排问题。</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 5</div>
+            <div class="q-text">随机化快排（Randomized Quicksort）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">分区前随机抽主元与末位交换的快排，期望比较次数 Θ(nlgn)。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">消除"特定输入必触发最坏"的软肋，最坏 Θ(n²) 只剩小概率坏运气。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">抽签分组：对手再了解规则，也无法预知签位。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为期望是对输入分布取的——其实对任意固定输入、对随机选择取。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">通用排序的工程默认选择（各语言标准库的排序内核多为变体）。</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 6</div>
+            <div class="q-text">比较排序下界（Comparison Sort Lower Bound）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">任何比较排序最坏需 Ω(nlgn) 次比较：决策树须区分 n! 片叶子，2ʰ ≥ n!。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">回答"比较排序还能不能更快"，终结一切 nlgn 以内的纯比较幻想。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">每次比较只得 1 比特，而 n! 种排列要 lg(n!) ≈ n lg n 比特才能区分。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为它禁止一切更快排序——它只管"靠比较获取信息"的算法。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">判断一个排序方案的理论上限；下界类论证（第10章归约思想的前身）。</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 7</div>
+            <div class="q-text">线性时间排序（Linear-Time Sorting）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">计数/基数/桶排序：利用键的结构直接定位，绕过比较，Θ(n) 或期望 Θ(n)。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">键满足前提（小范围整数/固定位数/均匀分布）时突破 Ω(nlgn) 下界。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">不对答案，直接查户口：看身份证号就知道该坐哪排。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为线性排序"免费"——前提不满足时代价比比较排序更糟。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">大规模整数/定长键排序；桶思想直通第4章哈希表。</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <h2><span class="sec-no">📝</span>分层习题</h2>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>堆排序是不稳定排序。判断这个说法对不对，并说明机制层面的原因。</div>
+      <details>
+        <summary>提示</summary>
+        <p>想想 EXTRACT-MAX 那一步发生了什么距离的移动；再想想"稳定"要求相等元素保持什么。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p>对，堆排序不稳定。机制：每轮把堆顶 A[1] 与堆末 A[heap-size] 交换——这是一次跨越几乎整个数组的长途搬运。若两个等值元素 x、y 原本 x 在前 y 在后，y 可能因位于堆末被一次交换甩到堆顶附近，最终排在 x 前面，原始相对顺序被破坏。对比：归并排序的合并是顺序比较、等值时先取左半，天然稳定；插入排序只与相邻元素交换，也稳定。堆排序的不稳定不是实现缺陷，是"原地 + O(lgn) 修复"这套机制的固有代价。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>基数排序的第 2 轮（按十位排）为什么必须用稳定排序当子过程？如果换成不稳定的快排按位排，会发生什么？</div>
+      <details>
+        <summary>提示</summary>
+        <p>第 2 轮里十位相同的两个数，它们在低位（个位）上的次序是谁保证的？</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p>基数排序的正确性靠归纳：第 i 轮结束后，数组按"低 i 位"整体有序。第 2 轮按十位排时，十位相同的元素（如 457 与 355）的先后，必须沿用第 1 轮按个位排好的次序（355 个位 5 &lt; 457 个位 7，所以 355 应在前——最终 355 &lt; 457 ✓）。这个"沿用"正是稳定性的定义。若子排序不稳定，十位相同的元素次序随机，低位轮次的工作作废，最终结果可能乱序。例如 [29, 21]：第 1 轮按个位排得 [21, 29]；第 2 轮十位都是 2，若子排序不稳定可能把 29 换到 21 前面，输出 [29, 21]——错了。所以 CLRS 规定基数排序的子排序必须稳定。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>对数组 A = [3, 9, 2, 1, 4, 5] 手算 BUILD-MAX-HEAP，给出每一步 MAX-HEAPIFY 之后的数组，并验证最终堆性质。</div>
+      <details>
+        <summary>提示</summary>
+        <p>先定起点：i 从 ⌊n/2⌋ = 3 开始往根走。每次只动"当前下标为根、两棵子树已是堆"的那棵子树。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p>n=6，初始 [3, 9, 2, 1, 4, 5]。</p>
+          <p><strong>i=3</strong>（值 2）：孩子只有 LEFT(3)=6，A[6]=5 &gt; 2，交换 → [3, 9, 5, 1, 4, 2]。</p>
+          <p><strong>i=2</strong>（值 9）：孩子 A[4]=1、A[5]=4，9 最大，不动 → [3, 9, 5, 1, 4, 2]。</p>
+          <p><strong>i=1</strong>（值 3）：孩子 A[2]=9、A[3]=5，与最大的 9 交换 → [9, 3, 5, 1, 4, 2]；继续在下标 2：A[2]=3，孩子 A[4]=1、A[5]=4，与最大的 4 交换 → [9, 4, 5, 1, 3, 2]；到下标 5 是叶子，停止。</p>
+          <p>最终堆 [9, 4, 5, 1, 3, 2]。验证：A[1]=9 ≥ A[2]=4、A[3]=5 ✓；A[2]=4 ≥ A[4]=1、A[5]=3 ✓；A[3]=5 ≥ A[6]=2 ✓。下标 4、5、6 是叶子无需检查。交换总次数 3 次，远小于 2n=12，符合 O(n) 的账。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>对数组 A = [5, 2, 4, 1, 3] 手算 PARTITION（主元取末位 A[5]=3），逐 j 给出 i 与数组状态，并给出返回的 q。</div>
+      <details>
+        <summary>提示</summary>
+        <p>i 从 p−1=0 开始；只有 A[j] ≤ 3 时 i 才加一并交换 A[i]↔A[j]；最后别忘了主元归位那一步。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p>初始 i=0，主元 x=3。</p>
+          <p><strong>j=1</strong>：A[1]=5 &gt; 3，不动。i=0。数组 [5, 2, 4, 1, 3]。</p>
+          <p><strong>j=2</strong>：A[2]=2 ≤ 3，i=1，交换 A[1]↔A[2] → [2, 5, 4, 1, 3]。</p>
+          <p><strong>j=3</strong>：A[3]=4 &gt; 3，不动。i=1。</p>
+          <p><strong>j=4</strong>：A[4]=1 ≤ 3，i=2，交换 A[2]↔A[4] → [2, 1, 5, 4, 3]。</p>
+          <p><strong>收尾</strong>：交换 A[i+1]=A[3] ↔ A[5] → [2, 1, 3, 4, 5]，返回 q=3。</p>
+          <p>验证：A[1..2]=[2,1] ≤ 3 ✓；A[3]=3 主元就位 ✓；A[4..5]=[4,5] ≥ 3 ✓。本例碰巧两段都有序，但分区本身只承诺三段不变式，不承诺两段有序——那只是小数组的巧合。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l3">L3 建模应用</span>某养老系统要给 100 万条老人记录按年龄排序，年龄是 0–120 的整数，记录还携带姓名等数据。选什么排序算法？论证你的选择，并估算它比随机化快排省多少。</div>
+      <details>
+        <summary>提示</summary>
+        <p>把"年龄 0–120 整数"映射到哪种前提？k 与 n 的量级关系是什么？记录携带数据这点对算法有什么额外要求？</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p><strong>选计数排序。</strong>论证三步：</p>
+          <p>① 前提匹配：键是 0..120 的整数，k=121，n=10⁶，k ≪ n 即 k=O(n)，恰好落在计数排序的甜区。计数数组 C 只有 121 个格子，内存可忽略。</p>
+          <p>② 代价对比：计数排序 Θ(n+k) ≈ 2n ≈ 2×10⁶ 次操作；随机化快排期望约 2n·ln n ≈ 2×10⁶×13.8 ≈ 2.8×10⁷ 次比较——计数排序快约一个量级（约 14 倍）。</p>
+          <p>③ 稳定性要求：记录携带姓名等数据，且若记录此前已按其他键（如入住时间）排过序，按年龄再排时通常要保住旧次序——计数排序稳定（从右往左回填），满足要求。若改用基数排序（年龄视作 3 位十进制数，d=3，k=10）也可行：Θ(3(n+10)) ≈ 3n，比计数慢些但仍线性；桶排序不适合（整数非均匀实数）；堆排/快排则白白放弃键结构。</p>
+          <p>结论：计数排序，Θ(n) 且稳定；这正是"用键的结构换时间"的标准应用。</p>
+        </div>
+      </details>
+    </div>
+
+    <h2><span class="sec-no">✍️</span>本章自测</h2>
+    <p class="quiz-hint">点击选项判分，答错会给出原因。</p>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 1</div>
+      <div class="q-stem">BUILD-MAX-HEAP 对 n 个元素的总代价是 O(n)，其紧界分析的关键论据是？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 每次 MAX-HEAPIFY 只需 O(1)，所以 n 次是 O(n)</li>
+        <li data-opt="b">B. 高度为 h 的节点至多 ⌈n/2^(h+1)⌉ 个，代价按高度分档求和 n·∑h/2ʰ = 2n</li>
+        <li data-opt="c">C. 堆是完全二叉树，所以任何操作都是 O(n)</li>
+        <li data-opt="d">D. 主定理 case 2 直接给出 O(n)</li>
+      </ul>
+      <div class="quiz-explain">解析：B 对——代价按高度分档，贵的节点（高 h 大）数量指数级少，求和收敛到 2n。A 错：MAX-HEAPIFY 单次最坏 O(lgn) 不是 O(1)，是"多数节点根本沉不了几层"摊薄了代价。C 错：完全二叉树只决定结构，EXTRACT-MAX 就不是 O(n) 而是 O(lgn)，"完全"推不出 O(n)。D 错：BUILD-MAX-HEAP 不是分治递归式，主定理用不上。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="c">
+      <div class="q-no">自测 2</div>
+      <div class="q-stem">以下哪种输入会让"固定取末位主元"的快排跑出 Θ(n²)？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 元素全随机的数组</li>
+        <li data-opt="b">B. 所有元素相等的数组以外的任何数组都不会</li>
+        <li data-opt="c">C. 已经升序排好的数组</li>
+        <li data-opt="d">D. 先升序后降序的"山峰形"数组</li>
+      </ul>
+      <div class="quiz-explain">解析：C 对——已排序时末位主元恰是当前最大，每次分区切出 0 对 n−1，T(n)=T(n−1)+Θ(n)=Θ(n²)。A 错：随机输入下固定主元近似随机主元，期望 nlgn。B 错：全相等数组按本章 PARTITION 定义（≤x 进左区）会全部进左区再主元归位，实际切得很均匀；且"不会"说得太满——逆序数组同样触发最坏。D 错：山峰形不保证每次 0 对 n−1，一般不至于 Θ(n²)。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="a">
+      <div class="q-no">自测 3</div>
+      <div class="q-stem">随机化快排中，zᵢ 与 zⱼ（i&lt;j）被比较的概率是 2/(j−i+1)，这个结论依赖的关键事件是？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 在 {zᵢ,…,zⱼ} 中第一个被选为主元的恰是 zᵢ 或 zⱼ</li>
+        <li data-opt="b">B. zᵢ 和 zⱼ 在数组中相邻</li>
+        <li data-opt="c">C. zᵢ 和 zⱼ 都被选为主元各一次</li>
+        <li data-opt="d">D. 输入必须是随机打乱的</li>
+      </ul>
+      <div class="quiz-explain">解析：A 对——只有两者之一先当主元才会互相比较；若中间的 zₖ 先当主元，两者被永久分到两个子问题。集合大小 j−i+1，等概率下两个端点合计 2/(j−i+1)。B 错：概率取决于值的距离 j−i，与数组物理位置无关。C 错：一对元素至多比较一次，"各当一次主元"既不可能也没必要。D 错：随机性来自算法自己抽主元，不依赖输入分布——这是随机化算法与平均情形分析的分界线。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="d">
+      <div class="q-no">自测 4</div>
+      <div class="q-stem">"比较排序最坏情形需要 Ω(nlgn) 次比较"这条下界的准确含义是？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 任何排序算法（包括计数排序）最坏都要 Ω(nlgn)</li>
+        <li data-opt="b">B. 堆排序没有达标，因为它偶尔是 O(n²)</li>
+        <li data-opt="c">C. 对某个固定输入，所有比较排序都恰好需要 nlgn 次比较</li>
+        <li data-opt="d">D. 任何只靠比较获取顺序信息的算法，最坏输入下需 Ω(nlgn) 次比较；不计数排序的管辖</li>
+      </ul>
+      <div class="quiz-explain">解析：D 对——决策树论证的前提是"信息只来自两两比较"，结论是最坏情形（存在某个输入）需要 Ω(nlgn)。A 错：计数排序不做比较，不在模型内，O(n) 不与下界矛盾。B 错：堆排序 O(nlgn) 恰好达到下界，是最优的比较排序之一。C 错：下界是"最坏情形"而非"每个输入"；且是 Ω 级别的渐近说法，不是精确 nlgn。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 5</div>
+      <div class="q-stem">下列哪组"数据 → 算法"的配对是错的？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 50 万条 0–999 的整数编号 → 计数排序</li>
+        <li data-opt="b">B. 100 万个 64 位无符号整数，值域跨满整个 2⁶⁴ → 计数排序</li>
+        <li data-opt="c">C. [0,1) 上均匀采样的浮点概率值 → 桶排序</li>
+        <li data-opt="d">D. 定长 8 位手机尾号字符串 → 基数排序（每字符一位）</li>
+      </ul>
+      <div class="quiz-explain">解析：B 错——计数排序要开 k+1 个计数格，k=2⁶⁴ 根本开不下，且 k=O(n) 前提完全不满足；这种场景该用快排（或按字节做 d=8、k=256 的基数排序）。A 对：k=1000 = O(n)，计数排序甜区。C 对：均匀分布正是桶排序期望线性的前提。D 对：定长数字串按位 d=8、k=10，基数排序 Θ(8(n+10)) 线性。</div>
+    </div>
+
+    <div class="retell">
+      <h3>🗣️ 用自己的话，三句话讲完本章</h3>
+      <p>对着空气（或室友）说出这三句。说卡壳的那句，回去重读对应小节。</p>
+      <details>
+        <summary>句1：这章解决什么问题？——</summary>
+        <div class="retell-answer">参考答案：排序这个最基础的算法问题，用比较能做到多快、不用比较又能做到多快——前者有 Ω(nlgn) 的硬下界，后者在键有结构时可达 O(n)。</div>
+      </details>
+      <details>
+        <summary>句2：核心机制是什么？——</summary>
+        <div class="retell-answer">参考答案：堆用"局部偏序"换 O(lgn) 的取最大，堆排序原地 nlgn；快排用分区把主元一次到位，随机化把最坏情形压成小概率；下界用决策树的 2ʰ ≥ n! 封死比较路线；计数/基数/桶改用键的结构直接定位，绕开比较。</div>
+      </details>
+      <details>
+        <summary>句3：它和前后章怎么分工？——</summary>
+        <div class="retell-answer">参考答案：第2章给的分治与递归式在本章全部实战（快排的 T(n) 分析、建堆的分档求和）；本章"键值直接定位"的思想直通第4章哈希表，堆则以优先队列形态在第7章图算法里返场。</div>
+      </details>
+    </div>
+
+    <div class="review-plan">
+      <h3>🔁 间隔复习计划</h3>
+      <p>回忆本身比重读有效 10 倍。到点只做一件事：翻卡 + 重做标记题。</p>
+      <table>
+        <tr><th>时间点</th><th>复习内容</th><th>预计用时</th></tr>
+        <tr><td>第 1 天</td><td>概念卡 1–7 全翻一遍 + 回忆卡 3.1-1、3.5-1（建堆的账与下界两步推导）</td><td>12 分钟</td></tr>
+        <tr><td>第 3 天</td><td>概念卡 3、5、6、7 + 重做 L2 两道手算（BUILD-MAX-HEAP 与 PARTITION）</td><td>15 分钟</td></tr>
+        <tr><td>第 7 天</td><td>三句话复述 + 回忆卡 3.4-1（比较概率 2/(j−i+1)）+ 自测错题重做</td><td>10 分钟</td></tr>
+        <tr><td>第 15 天</td><td>只重做合上书挑战；能在纸上默出建堆求和式与下界推导就毕业</td><td>15 分钟</td></tr>
+      </table>
+    </div>
+
+    <div class="final-challenge">
+      <h3>📕 合上书挑战</h3>
+      <p class="fc-sub">现在关掉这个页面，拿一张纸，凭记忆完成以下任务。全部做完再回来核对——这是本章真正的毕业考试。</p>
+      <ol id="challenge-list">
+        <li><span class="fc-check"></span>写出堆数组表示的三个下标公式，并写出最大堆性质的不等式</li>
+        <li><span class="fc-check"></span>写出建堆 O(n) 的求和式 ∑⌈n/2<sup>h+1</sup>⌉·O(h)，并对 n=15 算出总交换上界 11</li>
+        <li><span class="fc-check"></span>对 [4,1,3,2,16,9,10,14,8,7] 完整手算 BUILD-MAX-HEAP，给出最终堆</li>
+        <li><span class="fc-check"></span>对 [2,8,7,1,3,5,6,4] 完整手算 PARTITION，给出返回值 q=4 与最终数组</li>
+        <li><span class="fc-check"></span>解释 zᵢ 与 zⱼ 的比较概率为何是 2/(j−i+1)，并对 n=4 算出期望比较次数 ≈4.83</li>
+        <li><span class="fc-check"></span>写出决策树下界论证：2ʰ ≥ n! ⟹ h ≥ lg(n!) = Ω(nlgn)，并对 n=3 算出下界 3 次</li>
+        <li><span class="fc-check"></span>一句话回答本章主线问题：比较排序的下界是 Ω(nlgn)，那为什么计数排序能是 O(n)？</li>
+      </ol>
+    </div>
+
+    <div class="complete-zone">
+      <button class="btn-complete" id="btn-complete" onclick="markDone()">✓ 我已完成本章（含合上书挑战）</button>
+    </div>
+
+    <div class="chapter-nav">
+      <a href="chapter-02.html"><span class="nav-dir">← 上一章</span>第2章 分治与递归式</a>
+      <a href="chapter-04.html" class="next"><span class="nav-dir">下一章 →</span>第4章 哈希表</a>
+    </div>
+
+  </div>
+</div>
+
+<footer class="footer">
+  <div class="wrap">第3章 排序算法 · CLRS 算法导论互动讲义 · 基于 Cormen, Leiserson, Rivest &amp; Stein《算法导论》(第3版)</div>
+</footer>
+
+<script src="assets/mermaid.min.js"></script>
+<script>
+mermaid.initialize({
+  startOnLoad: true,
+  theme: "base",
+  themeVariables: {
+    primaryColor: "#e3edf7",
+    primaryBorderColor: "#1d5f9e",
+    primaryTextColor: "#1d5f9e",
+    lineColor: "#5c554b",
+    secondaryColor: "#fbeedd",
+    tertiaryColor: "#f5f1e8",
+    fontFamily: "-apple-system, PingFang SC, sans-serif",
+    fontSize: "14px"
+  },
+  flowchart: { curve: "linear", htmlLabels: false }
+});
+</script>
+<script>
+// 自测题判分（原样复用，勿改）
+document.querySelectorAll(".quiz-block").forEach(block => {
+  const answer = block.dataset.answer;
+  const explain = block.querySelector(".quiz-explain");
+  block.querySelectorAll(".quiz-opts li").forEach(li => {
+    li.addEventListener("click", () => {
+      const opts = block.querySelectorAll(".quiz-opts li");
+      opts.forEach(o => o.classList.add("disabled"));
+      if (li.dataset.opt === answer) {
+        li.classList.add("correct");
+      } else {
+        li.classList.add("wrong");
+        block.querySelector(`[data-opt="${answer}"]`).classList.add("correct");
+      }
+      explain.classList.add("show");
+    });
+  });
+});
+
+// 合上书清单打勾（原样复用，勿改）
+document.querySelectorAll("#challenge-list li").forEach(li => {
+  li.addEventListener("click", () => li.classList.toggle("checked"));
+});
+
+// 完成标记 → localStorage（章号 "3"）
+const KEY = "algo_progress_v1";
+function loadProgress() {
+  try { return JSON.parse(localStorage.getItem(KEY)) || {}; } catch (e) { return {}; }
+}
+const progress = loadProgress();
+const btn = document.getElementById("btn-complete");
+if (progress["3"] && progress["3"].done) {
+  btn.textContent = "✓ 已完成 · 再次点击重置";
+  btn.classList.add("done");
+}
+function markDone() {
+  const p = loadProgress();
+  if (p["3"] && p["3"].done) {
+    delete p["3"];
+    btn.textContent = "✓ 我已完成本章（含合上书挑战）";
+    btn.classList.remove("done");
+  } else {
+    p["3"] = { done: true, completedAt: Date.now(), reviewsDone: 0 };
+    btn.textContent = "✓ 已完成 · 复习提醒已开启";
+    btn.classList.add("done");
+  }
+  localStorage.setItem(KEY, JSON.stringify(p));
+}
+</script>
+
+</body>
+</html>

@@ -1,0 +1,885 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第1章 引言：强化学习问题 · 强化学习互动讲义</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+<nav class="topbar">
+  <div class="topbar-inner">
+    <span class="brand"><a href="index.html" style="color:inherit">← 学习地图</a></span>
+    <span class="crumb">第一段 · 表格法基础 / 第1章</span>
+  </div>
+</nav>
+
+<div class="wrap">
+
+  <div class="lecture-head">
+    <span class="ch-label">CHAPTER 01 · 表格法基础</span>
+    <h1>引言：强化学习问题</h1>
+    <p class="lead">没有老师给标准答案，只有分数——智能体如何从试错中学会行动？</p>
+  </div>
+
+  <!-- ===== 章首四件套之 1：全书定位 ===== -->
+  <div class="position-bar">
+    <strong>本章在主线上的位置：</strong>全书起点，回答"强化学习到底在解决什么问题" → <u>定义交互接口、回报与值函数这三个全书通用词汇</u> → 第 2 章先在无状态的老虎机里练"估计动作价值"，第 3 章再把问题完整建模为 MDP。<br>
+    第1章回答主线上的第一个问题：<strong>什么样的学习问题是"强化学习问题"，它和监督学习的本质区别在哪？</strong>
+    <div class="map-inline">
+      <span class="node here">Ch1 引言：RL 问题</span><span class="arrow">→</span>
+      <span class="node">Ch2 多臂老虎机（无状态，练价值估计）</span><span class="arrow">→</span>
+      <span class="node">Ch3 有限 MDP（建模语言）</span><span class="arrow">→</span>
+      <span class="node">Ch4 动态规划（模型内求解）</span><span class="arrow">‖</span>
+      <span class="node">Ch5-8 无模型表格法（MC/TD/规划）</span><span class="arrow">‖</span>
+      <span class="node">Ch9-11 函数逼近（大规模状态）</span><span class="arrow">‖</span>
+      <span class="node">Ch12-13 策略梯度与前沿</span>
+    </div>
+    <div style="margin-top:8px; font-size:12.5px; color:var(--ink-faint)">
+      全书四段分工：<strong>表格法基础（1–4）</strong>在状态可枚举的小世界里建立全部概念；<strong>表格型无模型（5–8）</strong>扔掉环境模型，用采样学习；<strong>函数逼近（9–11）</strong>把值表换成参数化函数以应对大状态空间；<strong>策略与前沿（12–13）</strong>直接优化策略本身。
+    </div>
+  </div>
+
+  <!-- ===== 章首四件套之 2：学习目标 ===== -->
+  <div class="objectives">
+    <h4>🎯 学完本章，合上书你应该能：</h4>
+    <ol>
+      <li>说出强化学习的三个标志性特征（试错、延迟回报、交互闭环），并举一个监督学习解决不了而 RL 能解决的例子</li>
+      <li>写出回报 G<sub>t</sub> 的折扣定义，并手算给定奖励序列与 γ 的 G<sub>t</sub></li>
+      <li>画出智能体—环境交互闭环图，标出状态、动作、奖励三股信息流</li>
+      <li>解释为什么井字棋程序用"值表 + 贪心"能学会下棋，而纯监督方法拿不到训练标签</li>
+      <li>说出探索—利用两难的含义，并解释为什么它在 RL 中不可避免</li>
+    </ol>
+  </div>
+
+  <div class="lecture">
+
+    <!-- ===== 章首四件套之 3：推导主线 ===== -->
+    <div class="figure">
+      <div class="mermaid">
+flowchart LR
+  A["只有分数<br>没有标准答案"] --> B["必须试错<br>交互闭环"]
+  B --> C["行动后果延迟出现<br>怎么记账？"]
+  C --> D["定义回报 G<br>把未来折成现在"]
+  D --> E["评估局势好坏<br>值函数登场"]
+  E --> F["没试过的动作不知道好坏<br>探索-利用两难"]
+  F --> G["代价：值函数怎么算<br>Ch2-Ch8 的全部内容"]
+  classDef hot fill:#fbeedd,stroke:#c4651f,stroke-width:2.5px,color:#c4651f;
+  classDef danger fill:#fae9e7,stroke:#b03a2e,stroke-width:2.5px,color:#b03a2e;
+  class D hot;
+  class G danger;
+      </div>
+      <div class="caption">本章推导主线：从"没有老师"出发，每一步都逼出下一个概念。终点（红色）是本章买下的账单——值函数到底怎么算，要花掉第 2 到第 8 章来还清。</div>
+    </div>
+
+    <!-- ============ 1.1 ============ -->
+    <h2><span class="sec-no">1.1</span>什么是强化学习：三个缺一不可的特征</h2>
+
+    <p>教一个孩子下棋，有两种方式。监督学习的方式：请来棋谱，告诉ta"这个局面应该走马"。强化学习的方式：什么也不说，让ta自己对弈，赢了给糖，输了没收玩具——<strong>从结果反馈中自己摸索</strong>。第二种方式里没有"标准答案"，只有"事后分数"。</p>
+
+    <p><span class="term">强化学习</span>（Reinforcement Learning, RL）研究的就是第二类问题：<strong>学习者（智能体）通过与环境交互、根据数值奖励信号调整行为，以最大化长期累计奖励</strong>。它有三个标志性特征，缺一不可：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>特征</th><th>含义</th><th>井字棋中的体现</th><th>监督学习里有没有</th></tr>
+        <tr><td><strong>试错</strong>（trial-and-error）</td><td>没有标注数据，动作好坏只能自己试了才知道</td><td>没人告诉你"该走马"，只能落子看输赢</td><td>没有——训练集直接给答案</td></tr>
+        <tr><td><strong>延迟回报</strong>（delayed reward）</td><td>动作的后果可能在很多步之后才显现</td><td>开局那步看似无害的边子，十步后导致输棋</td><td>没有——每个样本的反馈是即时的</td></tr>
+        <tr><td><strong>交互闭环</strong></td><td>智能体的动作会改变它之后看到的数据</td><td>你走一步，棋盘就变了，下一步面对的是新局面</td><td>没有——数据集是固定的</td></tr>
+      </table>
+    </div>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>监督学习学的是"模仿标准答案"，RL 学的是"从分数里反推什么行为导致了分数"。<strong>反馈从"指导"降级为"评估"</strong>——这是两种学习范式的分水岭，也是 RL 一切困难的源头。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>"RL 就是没有标签的监督学习"——错。无监督学习也没有标签，但它从固定数据里找结构；RL 的数据是自己行动产生的，行动改变数据分布。这个"自己做饭自己吃"的闭环，才是 RL 独有的麻烦与魅力。</p>
+    </div>
+
+    <!-- 回忆卡片 1.1 -->
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 1.1-1</div>
+              <div class="q-text">强化学习区别于监督学习的三个标志性特征是什么？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              试错（无标准答案，只有评估性反馈）、延迟回报（后果滞后出现）、交互闭环（动作改变后续数据）。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 1.1-2</div>
+              <div class="q-text">为什么说 RL 的反馈是"评估性"而非"指导性"的？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              奖励只告诉你"做得好不好"，不告诉你"应该做什么"；从分数反推出正确行为是智能体自己的任务。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 1.2 ============ -->
+    <h2><span class="sec-no">1.2</span>智能体—环境接口：全书通用的三股信息流</h2>
+
+    <p>上一节给了 RL 的定性画像，但要"算"就必须形式化。RL 把一切学习问题压缩成一个接口：决策者叫<span class="term">智能体</span>（Agent），它之外的一切叫<span class="term">环境</span>（Environment）。双方按离散时间步 t = 0, 1, 2, … 循环交换三条信息：</p>
+
+    <div class="figure">
+      <div class="mermaid">
+flowchart LR
+  AG["智能体<br>看到 S_t 输出 A_t"] -->|"动作 A_t"| EV["环境<br>按自身规则演化"]
+  EV -->|"新状态 S_{t+1}"| AG
+  EV -->|"奖励 R_{t+1}"| AG
+      </div>
+      <div class="caption">图 1.1 智能体—环境交互闭环。注意奖励与新状态同时产生，且都受智能体上一步动作影响。</div>
+    </div>
+
+    <ul>
+      <li><span class="term">状态</span>（State）S<sub>t</sub>：环境呈现给智能体的"当前局面"摘要；</li>
+      <li><span class="term">动作</span>（Action）A<sub>t</sub>：智能体在可选动作集合中的选择；</li>
+      <li><span class="term">奖励</span>（Reward）R<sub>t+1</sub>：环境发回的一个<strong>标量数值</strong>，正值为赏、负值为罚。</li>
+    </ul>
+
+    <p>一次交互产生一条<span class="term">轨迹</span>（Trajectory）：S₀, A₀, R₁, S₁, A₁, R₂, …。智能体的行为规则叫<span class="term">策略</span>（Policy）π：从状态到动作（或动作概率）的映射。<strong>学习 = 改进策略</strong>。</p>
+
+    <p>光有单步奖励还不够——目标是"长期累计"。定义<span class="term">回报</span>（Return）为从时刻 t 起的折扣累计奖励：</p>
+
+    <div class="formula">G<sub>t</sub> = R<sub>t+1</sub> + γR<sub>t+2</sub> + γ²R<sub>t+3</sub> + ⋯ = ∑<sub>k=0</sub><sup>∞</sup> γ<sup>k</sup> R<sub>t+k+1</sub></div>
+
+    <p>其中 γ ∈ [0,1] 是<span class="term">折扣因子</span>（Discount Factor）：γ 越接近 0 越"近视"（只看眼前），越接近 1 越在乎长远。它还有一个实用功能：让无穷序列的和收敛。</p>
+
+    <h3>手算例：同一个奖励序列，不同 γ 下的回报</h3>
+    <p>设每步奖励恒为 1，永不终止：</p>
+    <ul>
+      <li>γ = 0.5：G<sub>0</sub> = 1 + 0.5 + 0.25 + 0.125 + ⋯ = 1/(1−0.5) = <strong>2</strong></li>
+      <li>γ = 0.9：G<sub>0</sub> = 1/(1−0.9) = <strong>10</strong></li>
+      <li>γ = 0.99：G<sub>0</sub> = 1/(1−0.99) = <strong>100</strong></li>
+    </ul>
+    <p>再算一个有限序列：未来三步奖励为 1, 2, 3，之后为 0，γ = 0.9：</p>
+    <div class="formula">G<sub>0</sub> = 1 + 0.9×2 + 0.9²×3 = 1 + 1.8 + 2.43 = <strong>5.23</strong></div>
+    <p>注意一个极有用的递推：<strong>G<sub>t</sub> = R<sub>t+1</sub> + γG<sub>t+1</sub></strong>。上例中 G<sub>1</sub> = 2 + 0.9×3 = 4.7，验证 G<sub>0</sub> = 1 + 0.9×4.7 = 5.23 ✓。这个递推是第 3、4 章所有 Bellman 方程的雏形。</p>
+
+    <div class="box insight">
+      <span class="box-tag">✅ 判定规则</span>
+      <p>任务分两类：<strong>回合制</strong>（episodic，如一盘棋，有自然终点，γ 可取 1）与<strong>持续制</strong>（continuing，如服务器调度，永不停止，必须 γ &lt; 1 否则回报发散）。第 3 章会证明这两种情况下值函数都定义良好。</p>
+    </div>
+
+    <!-- 回忆卡片 1.2 -->
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 1.2-1</div>
+              <div class="q-text">写出折扣回报 G<sub>t</sub> 的定义式，以及它的递推形式。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              G<sub>t</sub> = ∑ γ<sup>k</sup>R<sub>t+k+1</sub>；递推：G<sub>t</sub> = R<sub>t+1</sub> + γG<sub>t+1</sub>。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 1.2-2</div>
+              <div class="q-text">为什么持续制任务必须取 γ &lt; 1？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              否则无穷正奖励序列的和不收敛，"长期累计奖励"失去意义；γ &lt; 1 时恒奖励序列收敛到 1/(1−γ)。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 1.3 ============ -->
+    <h2><span class="sec-no">1.3</span>两个贯穿全书的小环境：先把"考场"搭好</h2>
+
+    <p>上一节定义了接口。本节把它落到两个具体环境上——它们将贯穿前 8 章，所有算法都在这两个"考场"里接受检验。现在只需记住设定，后面每章都会回来用它。</p>
+
+    <h3>考场一：4×4 网格世界（Gridworld）</h3>
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>要素</th><th>设定</th></tr>
+        <tr><td>状态</td><td>16 个格子 (行,列)，如 (1,1) 到 (4,4)；左上角 (1,1) 与右下角 (4,4) 是终点</td></tr>
+        <tr><td>动作</td><td>上、下、左、右；撞墙则停在原地</td></tr>
+        <tr><td>奖励</td><td>每走一步 −1，直到进入终点（终点不再产生奖励）</td></tr>
+        <tr><td>折扣</td><td>γ = 1（回合制任务）</td></tr>
+        <tr><td>目标</td><td>尽快走到终点（负奖励越少越好）</td></tr>
+      </table>
+    </div>
+    <p>这个环境小到可以在纸上枚举全部状态，又大到能暴露"延迟回报"的全部麻烦：走第一步时你看不到任何正反馈，却要为几十步后的到达负责。<strong>第 3 章在它上面手算 Bellman 方程，第 4 章在它上面跑通动态规划。</strong></p>
+
+    <h3>考场二：10 臂测试台（10-Armed Testbed）</h3>
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>要素</th><th>设定</th></tr>
+        <tr><td>状态</td><td>只有一个（永远面对同一台机器）</td></tr>
+        <tr><td>动作</td><td>10 个拉杆；每个拉杆 a 有固定的真实期望收益 q*(a)，初始时从标准正态 N(0,1) 抽定</td></tr>
+        <tr><td>奖励</td><td>拉动 a 时，从 N(q*(a), 1) 中采样——期望是 q*(a)，但有噪声</td></tr>
+        <tr><td>目标</td><td>在 1000 次拉动中让累计收益尽量大</td></tr>
+      </table>
+    </div>
+    <p>它把 RL 砍到最简：<strong>没有状态转移，没有延迟回报，只剩纯粹的探索—利用两难</strong>。第 2 章整章都在这个测试台上较量各种动作选择策略。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 为什么需要两个考场</span>
+      <p>网格世界有状态、有延迟，考验"价值传播"；测试台无状态、有噪声，考验"价值估计"。一个算法在两个考场上的表现常常此消彼长——把它们记熟，后面每章的算法差异你都能立刻定位到"它解决了哪个考场上的什么麻烦"。</p>
+    </div>
+
+    <!-- 回忆卡片 1.3 -->
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 1.3-1</div>
+              <div class="q-text">4×4 网格世界的奖励结构与目标是什么？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              每步 −1，终点 (1,1) 与 (4,4) 结束回合；目标是最少步数到达终点，γ = 1。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 1.3-2</div>
+              <div class="q-text">10 臂测试台中，真实价值 q*(a) 和实际奖励 R 的关系是什么？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              q*(a) 是动作 a 的期望收益（抽自 N(0,1)）；实际奖励 R ~ N(q*(a), 1)，即围绕期望上下波动、方差为 1。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 1.4 ============ -->
+    <h2><span class="sec-no">1.4</span>延迟回报为什么难：井字棋的完整推演</h2>
+
+    <p>有了考场，回到本章的核心困难。以井字棋为例，把"延迟回报"拆开看它到底难在哪。</p>
+
+    <p>对弈时，奖励只在终局出现：赢 +1、输 −1、和 0。<strong>中盘任何一步都没有即时反馈</strong>。假设你走出一步棋后局面变坏，但十步之后才输——分数只出现在终点，你怎么知道是哪一步惹的祸？这叫<span class="term">信度分配问题</span>（Credit Assignment Problem）：把终局的分数合理地"记功/记过"到中途的每一步上。</p>
+
+    <p>监督学习在这里彻底失灵：你想收集"局面 → 最佳落子"的训练集，但<strong>根本不存在标注者</strong>——连人类大师也常常说不清某步棋为什么好。就算有大师棋谱，模仿大师也只能学到大师的水平，而且对手一换风格就抓瞎。</p>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>"给中间局面设计奖励不就行了？比如吃掉对方一子 +1。"——这叫奖励塑形（reward shaping），用不好会毁掉任务：国际象棋里按吃子给奖励，智能体会学会"疯狂换子"而不是赢棋。<strong>奖励必须忠于最终目标</strong>；中间局面的好坏应该由值函数去"学出来"，而不是由人拍脑袋写进奖励。</p>
+    </div>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>延迟回报的解法不是"把奖励提前发"，而是<strong>造一个能预测未来的中间变量</strong>：给每个局面打一个分，分数的意义是"从这个局面走下去，最终平均能拿多少回报"。这个分数就是下一节的值函数——它把"十步后的输赢"折现成"此刻局面的好坏"。</p>
+    </div>
+
+    <!-- 回忆卡片 1.4 -->
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 1.4-1</div>
+              <div class="q-text">什么是信度分配问题？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              终局奖励只有一个，却要判断中途每步棋对结果的贡献——把延迟的分数合理归因到早期的决策上。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 1.4-2</div>
+              <div class="q-text">为什么不能靠人工设计中间奖励来解决延迟回报？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              人工塑形容易偏离最终目标（如"吃子 +1"导致只换子不求胜）；中间局面的价值应当从终局结果中学出来，而非手工指定。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 1.5 ============ -->
+    <h2><span class="sec-no">1.5</span>值函数登场：井字棋程序怎么"学会"下棋</h2>
+
+    <p>上一节逼出了需求：需要一个"局面打分器"，分数 = 未来回报的预测。这就是<span class="term">值函数</span>（Value Function）——全书最重要的概念，没有之一。</p>
+
+    <p>Sutton &amp; Barto 的井字棋方案极简：</p>
+    <ol>
+      <li><strong>建表</strong>：给每个可能局面存一个数，表示"从此局面出发的估计胜率"。初始全设 0.5（未知），必胜局设 1，必败/和局设 0。</li>
+      <li><strong>对弈选招</strong>：枚举所有合法落子，看落子后的局面（这叫<span class="term">后位状态</span> afterstate），<strong>多数时候选值最高的</strong>（利用），偶尔随机乱走（探索）。</li>
+      <li><strong>赛后更新</strong>：每走一步，把前一步局面的值往"后一步局面的值"方向挪一点：</li>
+    </ol>
+
+    <div class="formula">V(S<sub>t</sub>) ← V(S<sub>t</sub>) + α [ V(S<sub>t+1</sub>) − V(S<sub>t+1</sub>) ]</div>
+
+    <p>其中 α 是步长（学习率）。这条更新规则的逻辑：<strong>用后一个局面的估值修正前一个局面的估值</strong>——胜利终点 V=1 的"好消息"会像水波一样，一局一局往回传，直到开局局面也带上正确的分数。</p>
+
+    <h3>手算例：一次更新</h3>
+    <p>设局面 s 当前估值 V(s) = 0.5，落子后到 s′，查表 V(s′) = 0.7，取 α = 0.1：</p>
+    <div class="formula">V(s) ← 0.5 + 0.1 × (0.7 − 0.5) = 0.5 + 0.02 = <strong>0.52</strong></div>
+    <p>s 的估值向 s′ 靠近了一小步。若这局最终获胜（终点值 1），终点前一手的估值先被拉向 1，下一局更前一手的估值又被它拉高……<strong>多局之后，"通向胜利的路径"上所有局面的分数都被抬高</strong>，贪心选招自然就越来越像高手。</p>
+
+    <h3>值函数方法 vs 进化方法</h3>
+    <p>另一条显而易见的路线：直接演化策略——让一堆策略互相厮杀，赢者复制变异。Sutton &amp; Barto 的对比结论：</p>
+    <div class="tbl-wrap">
+      <table>
+        <tr><th></th><th>值函数方法</th><th>进化方法</th></tr>
+        <tr><td>反馈粒度</td><td>每步都用（局面值逐步更新）</td><td>只用整局输赢</td></tr>
+        <tr><td>对手变化</td><td>持续对弈持续适应</td><td>演化评估被对手分布污染</td></tr>
+        <tr><td>关键优势</td><td>利用了"问题特有的状态结构"</td><td>把问题当黑箱，信息浪费大</td></tr>
+      </table>
+    </div>
+    <p>举个例子：对手某一步走出昏招、局面骤变。值函数方法立刻知道"新局面分数很高"而记下通往它的路径；进化方法却可能因为这一局碰巧输了（后面自己又走出昏招）而惩罚整条策略。<strong>状态结构是 RL 问题的免费午餐，值函数是吃到这顿午餐的餐具。</strong></p>
+
+    <!-- 回忆卡片 1.5 -->
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 1.5-1</div>
+              <div class="q-text">写出井字棋值表的更新公式，并解释每一项。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              V(S<sub>t</sub>) ← V(S<sub>t</sub>) + α[V(S<sub>t+1</sub>) − V(S<sub>t</sub>)]；α 为步长，方括号是"后局估值 − 前局估值"，即更新方向与幅度。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 1.5-2</div>
+              <div class="q-text">值函数方法胜过进化方法的根本原因是什么？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              它利用了问题的状态结构：每个局面都有估值、每步都有反馈；进化方法只把整局输赢当作黑箱信号，浪费了中途全部信息。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 1.6 ============ -->
+    <h2><span class="sec-no">1.6</span>探索—利用：RL 独有的两难</h2>
+
+    <p>井字棋方案里藏了一个看似不起眼的细节："多数时候选值最高的，<strong>偶尔随机乱走</strong>"。没有这半句，整个方法会垮掉。</p>
+
+    <p>设想值表初期全是错的：某个局面被错误地标成 0.9，通往它的昏招被反复选中；它的值被越刷越高，程序永远发现不了真正的好棋。<strong>只利用（exploit）会锁死在错误的信念上；只探索（explore）则永远不用学到的知识。</strong>这个权衡叫<span class="term">探索—利用两难</span>（Exploration–Exploitation Dilemma）。</p>
+
+    <p>一个直观数字：某局面有两个动作，动作 A 试过 10 次赢了 9 次（估计胜率 0.9），动作 B 从没试过。纯利用永远选 A；但万一 B 的真实胜率是 0.95 呢？——只有探索才能发现。<strong>估计越不可靠，探索越有价值</strong>；探索本身消耗本可用于赢棋的机会，这就是代价。第 2 章会把这个两难量化成可计算的策略（ε-贪心、UCB），本章先记住它的存在。</p>
+
+    <div class="box insight">
+      <span class="box-tag">✅ 判定规则</span>
+      <p>探索—利用两难是 RL 与监督学习的又一分水岭：监督学习的数据是给定的，不存在"要不要收集新数据"的问题；RL 的智能体<strong>既是学习者又是数据采集员</strong>，每个动作都同时影响"现在赚多少"和"未来知道多少"。</p>
+    </div>
+
+    <!-- 回忆卡片 1.6 -->
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 1.6-1</div>
+              <div class="q-text">为什么纯利用（永远选当前估值最高的动作）会失败？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              早期估值不可靠；不探索就永远纠正不了错误信念，策略被锁死在次优动作上。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 1.6-2</div>
+              <div class="q-text">探索的代价是什么？为什么它和利用必然冲突？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              探索动作当前收益往往较低，占用本可赢棋的机会；同一个动作不能既赚当前收益又赚信息，故二者必然此消彼长。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 1.7 ============ -->
+    <h2><span class="sec-no">1.7</span>错误直觉大扫除</h2>
+
+    <p>本章概念少但误区密集。集中拆掉三颗雷，后面五章会反复受益。</p>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 误区一：奖励最大 = 价值最大</span>
+      <p>奖励是<strong>即时</strong>信号（这一步拿多少分），价值是<strong>长期</strong>预测（这个局面最终能拿多少回报）。井字棋里中盘每步奖励都是 0，但局面价值天差地别。"奖励最大≠价值最大"——智能体追求的是回报 G（奖励的折扣累计），而值函数是对 G 的预测。把两者混为一谈，是理解 Bellman 方程时最大的障碍。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 误区二："RL 是监督学习的一个变种"</span>
+      <p>监督学习的反馈是指导性的（标准答案），RL 的反馈是评估性的（分数）；监督学习数据独立同分布，RL 数据由自己的动作产生且前后相关。把 RL 硬塞进监督框架（如"把高手棋谱当标签"）丢掉的是试错、闭环与探索——恰恰是 RL 的三个本质特征。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 误区三："需要一本规则手册才能开始学"</span>
+      <p>井字棋程序不需要懂"双三杀"之类的战术知识，值表 + 更新规则 + 大量自我对弈就够了。RL 的起点可以是<strong>完全无知</strong>，知识（值表）是从交互中"长"出来的。当然，第 4 章会看到：如果环境规则完全已知，可以不用试错直接算——那是动态规划，是另一条路线。</p>
+    </div>
+
+    <div class="box idea">
+      <span class="box-tag">💡 本章给下一章留的账</span>
+      <p>值函数这么重要，可井字棋的"赛后挪值"只是土办法：它依赖完整对局、更新粗糙。<strong>能不能把"估计动作价值"这件事本身做扎实？</strong>第 2 章先把问题砍到最简——没有状态的老虎机——在那里把价值估计与探索策略彻底练熟。</p>
+    </div>
+
+    <!-- 回忆卡片 1.7 -->
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 1.7-1</div>
+              <div class="q-text">"奖励最大≠价值最大"这句话怎么理解？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              奖励是单步即时信号，价值是对未来累计回报（G）的预测；中盘每步奖励为 0，但局面价值不同——追求的对象是 G，不是单步 R。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 1.7-2</div>
+              <div class="q-text">RL 智能体的初始知识从哪来？需要人类先教规则吗？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              不需要。可以从零开始：值表/策略在与环境的反复交互中逐步"长"出来；人类规则知识是可选的加速项，不是必需品。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===== 章末五件套之 1：概念卡 ===== -->
+    <h2><span class="sec-no">🃏</span>概念卡：本章概念的一分钟画像</h2>
+    <p>翻面前先自问：这个概念我能用一句话讲清楚吗？</p>
+    <div class="flip-grid">
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 1</div>
+            <div class="q-text">强化学习（Reinforcement Learning）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">智能体通过与环境交互、依据数值奖励信号改进策略，以最大化长期累计回报的学习范式。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">没有标准答案、只有事后评分的序贯决策问题。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">训狗：不给动作示范，只在对的时候给零食。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">当成"没标签的监督学习"——忽略了动作会反过来改变数据。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">全书总纲；第 3 章把它形式化为 MDP。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 2</div>
+            <div class="q-text">回报（Return）G<sub>t</sub></div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">从时刻 t 起奖励的折扣累计：G<sub>t</sub> = ∑ γ<sup>k</sup>R<sub>t+k+1</sub>。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">把"长期表现"压缩成一个可优化的标量目标。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">职业生涯总收入折现到今天的身价。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">与单步奖励混为一谈；回报才是优化目标，奖励只是原材料。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">第 3 章定义值函数、第 5 章蒙特卡洛直接对它取平均。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 3</div>
+            <div class="q-text">折扣因子（Discount Factor）γ</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">γ ∈ [0,1]，未来第 k 步奖励按 γ<sup>k</sup> 折现。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">让无穷长任务的回报收敛；表达"眼前比远方重要"的偏好。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">利率：明天的一块钱不如今天的一块钱值钱。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为 γ 小=算法短视的缺陷——它常常是任务本身的合理设定。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">所有 Bellman 方程（第 3、4 章）都含 γ；γ=1 仅适用于回合制。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 4</div>
+            <div class="q-text">策略（Policy）π</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">从状态到动作（或动作概率分布）的映射，智能体的行为规则。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">把"学习成果"具体化：学到的就是一张更好的策略。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">棋手的"棋风"：给定局面，他习惯怎么下。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为策略必须确定性——随机策略（带概率）同样是策略，且探索必需。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">第 3 章形式化 π(a|s)；第 13 章直接对参数化策略求梯度。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 5</div>
+            <div class="q-text">值函数（Value Function）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">对状态（或状态-动作对）的打分：从此出发按某策略走，期望回报是多少。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">延迟回报下的信度分配：把终局分数折成每个局面的"好坏"。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">棋手扫一眼棋盘就知道"这局我占优"——那个直觉就是值函数。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">当成即时奖励；值函数是关于未来的预测，不是已发生的分数。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">第 2 章（动作价值）、第 3 章（严格定义）、第 4-8 章（怎么算）。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 6</div>
+            <div class="q-text">探索—利用两难（Exploration–Exploitation）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">每个动作只能二选一：赚当前已知的最优收益（利用），或收集信息改善未来决策（探索）。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">估计不可靠时，纯利用会锁死在错误信念上。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">常去的餐馆 vs 没去过的新店：吃老店稳，但可能错过更好的。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为探索是"可选的锦上添花"——它是 RL 结构性必需，不是技巧。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">第 2 章整章量化它；ε-贪心、UCB、梯度老虎机都是答案。</span></div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- ===== 章末五件套之 2：分层习题 ===== -->
+    <h2><span class="sec-no">📝</span>分层习题</h2>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>以下说法哪些正确？① RL 中奖励信号告诉智能体"应该选哪个动作"；② RL 的数据分布会被智能体自身的动作改变；③ 监督学习中也存在探索—利用两难；④ 值函数是对未来回报的预测。</div>
+      <details>
+        <summary>提示</summary>
+        <p>逐条对照本章三个特征与"评估性 vs 指导性反馈"的区分。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          ①错：奖励是评估性的（好不好），不指示正确动作——指导性反馈是监督学习的特征。②对：交互闭环的含义，动作改变后续状态与数据。③错：监督学习数据是给定的，没有"是否收集新数据"的选择，故无此两难。④对：这正是值函数的定义。
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>"γ 越小智能体越近视，所以 γ 应该尽量取接近 1。"这句话对吗？</div>
+      <details>
+        <summary>提示</summary>
+        <p>γ 是"算法的缺陷"还是"任务定义的一部分"？</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          不对。γ 是任务目标的一部分：它规定了我们多在乎远期。γ 小不是缺陷而是合理的偏好设定（如高频交易在乎即时收益）；且在持续制任务中 γ 必须 &lt; 1 才能使回报收敛。γ=1 只适合回合制任务。
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>某持续制任务每步奖励恒为 2。(a) γ = 0.8 时 G<sub>0</sub> 是多少？(b) 若前 3 步奖励为 2, 4, 6，之后恒为 0，γ = 0.5，求 G<sub>0</sub> 与 G<sub>1</sub>，并用递推式互相验证。</div>
+      <details>
+        <summary>提示</summary>
+        <p>(a) 用等比求和 1/(1−γ)；(b) 先正着展开 G₀，再算 G₁ 后用 G₀ = R₁ + γG₁ 验证。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          (a) G<sub>0</sub> = 2 × (1 + 0.8 + 0.64 + ⋯) = 2/(1−0.8) = <strong>10</strong>。<br>
+          (b) G<sub>0</sub> = 2 + 0.5×4 + 0.25×6 = 2 + 2 + 1.5 = <strong>5.5</strong>；G<sub>1</sub> = 4 + 0.5×6 = <strong>7</strong>。<br>
+          验证：G<sub>0</sub> = R<sub>1</sub> + γG<sub>1</sub> = 2 + 0.5×7 = 5.5 ✓。
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>井字棋值表更新：局面 s 的估值 V(s) = 0.4，落子后到达 s′，V(s′) = 0.6，步长 α = 0.5。(a) 求更新后的 V(s)。(b) 若随后终局获胜（终点值 1），且 s′′ 是终点前一手、当前 V(s′′) = 0.6，终点估值视为 1，α = 0.5，求 s′′ 更新后的值，并说明胜利信息如何逐局回传。</div>
+      <details>
+        <summary>提示</summary>
+        <p>直接套 V(s) ← V(s) + α[V(s′) − V(s)]；第二问把终点当作"下一个局面"。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          (a) V(s) ← 0.4 + 0.5×(0.6 − 0.4) = 0.4 + 0.1 = <strong>0.5</strong>。<br>
+          (b) V(s′′) ← 0.6 + 0.5×(1 − 0.6) = 0.6 + 0.2 = <strong>0.8</strong>。<br>
+          回传机制：本局终点值 1 先把终点前一手拉高到 0.8；下一局若再走到 s′′ 的前一手，就会以 0.8 为参照被拉高——胜利的"好消息"以每局一格的速度沿胜利路径向开局传播。
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l3">L3 建模应用</span>某公司要用 RL 训练"仓库拣货机器人"：机器人在货架间移动，接到订单后把商品送到打包台。请定义它的状态、动作、奖励，指出哪里体现延迟回报与探索—利用，并说明这属于回合制还是持续制。</div>
+      <details>
+        <summary>提示</summary>
+        <p>状态要足以支持决策（位置、电量、订单）；奖励忠于最终目标（送对、送快），不要奖励"走近货架"这类中间行为。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <strong>状态</strong>：机器人位置与朝向、当前订单（商品位置）、电量、障碍物分布。<strong>动作</strong>：移动方向、抓取、放下、充电。<strong>奖励</strong>：每步 −0.1（鼓励快）、成功送达 +10、撞架 −5、错误商品 −10。<strong>延迟回报</strong>：绕路避开拥堵的决策，其价值要几十步后送达才显现；电量管理（提前充电）的回报更远。<strong>探索—利用</strong>：已知快路径 vs 尝试新路径可能更短。<strong>类型</strong>：若以"每张订单"为一个回合，是回合制；若 7×24 不间断运行，更适合建模为持续制（γ &lt; 1）。
+        </div>
+      </details>
+    </div>
+
+    <!-- ===== 章末五件套之 3：自测 ===== -->
+    <h2><span class="sec-no">✍️</span>本章自测</h2>
+    <p class="quiz-hint">点击选项判分，答错会给出原因。</p>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 1</div>
+      <div class="q-stem">下列哪一项不是强化学习的标志性特征？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 试错：没有标准答案，只能评估动作好坏</li>
+        <li data-opt="b">B. 每个样本附带人工标注的正确输出</li>
+        <li data-opt="c">C. 延迟回报：动作后果可能很多步后才出现</li>
+        <li data-opt="d">D. 交互闭环：动作改变后续看到的数据</li>
+      </ul>
+      <div class="quiz-explain">解析：B 描述的是监督学习（指导性反馈），不是 RL 特征。A/C/D 正是试错、延迟回报、交互闭环三特征。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="c">
+      <div class="q-no">自测 2</div>
+      <div class="q-stem">每步奖励恒为 1 且永不终止，γ = 0.9，则 G<sub>0</sub> = ？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 发散到无穷大</li>
+        <li data-opt="b">B. 0.9</li>
+        <li data-opt="c">C. 10</li>
+        <li data-opt="d">D. 1</li>
+      </ul>
+      <div class="quiz-explain">解析：G₀ = 1/(1−0.9) = 10。A 错：γ&lt;1 时等比级数收敛；B 错：0.9 只是折扣因子本身；D 错：只算了第一步。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="a">
+      <div class="q-no">自测 3</div>
+      <div class="q-stem">井字棋值表方法中，"胜利 +1"的信息如何传播到开局局面？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 每局结束后，沿当局的落子路径逐格把前值向后值靠近，多局积累后传回开局</li>
+        <li data-opt="b">B. 赢一局就立刻把所有局面值设为 1</li>
+        <li data-opt="c">C. 由人类专家根据棋理手工填写</li>
+        <li data-opt="d">D. 不需要传播，开局局面直接用终局奖励更新</li>
+      </ul>
+      <div class="quiz-explain">解析：A 正确——更新规则每次只让相邻局面的值靠近，传播是渐进的。B 错：无差别赋值抹掉了局面差异；C 错：方法的核心就是不依赖人类知识；D 错：开局与终局之间隔着整条路径，直接更新无法完成信度分配。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="d">
+      <div class="q-no">自测 4</div>
+      <div class="q-stem">为什么纯利用（永远选当前估值最高的动作）的策略在 RL 中注定失败？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 因为估值计算太耗时</li>
+        <li data-opt="b">B. 因为环境总是随机的</li>
+        <li data-opt="c">C. 因为奖励信号有噪声</li>
+        <li data-opt="d">D. 因为早期估值不可靠，不探索就永远无法纠正错误信念</li>
+      </ul>
+      <div class="quiz-explain">解析：D 正确，这是探索—利用两难的核心。A 错：计算量与策略优劣无关；B、C 错：随机性和噪声会加大困难，但即使确定性环境中，错误初始估值同样会锁死纯利用策略。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 5</div>
+      <div class="q-stem">关于值函数与奖励的关系，正确的是：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 值函数就是即时奖励的另一种叫法</li>
+        <li data-opt="b">B. 值函数是对未来折扣累计奖励（回报）的预测</li>
+        <li data-opt="c">C. 奖励是长期信号，值函数是即时信号</li>
+        <li data-opt="d">D. 值函数只在没有奖励的任务里才有用</li>
+      </ul>
+      <div class="quiz-explain">解析：B 正确。A 错：把长期预测与即时信号混淆，是本章最大误区；C 错：恰好说反；D 错：值函数正是为了处理奖励才存在的。</div>
+    </div>
+
+    <!-- ===== 章末五件套之 4：三句话复述 ===== -->
+    <div class="retell">
+      <h3>🗣️ 用自己的话，三句话讲完本章</h3>
+      <p>对着空气（或室友）说出这三句。说卡壳的那句，回去重读对应小节。</p>
+      <details>
+        <summary>句1：这章解决什么问题？——</summary>
+        <div class="retell-answer">参考答案：定义什么是强化学习问题——只有数值评分、没有标准答案的序贯决策，并给出它的形式化接口（智能体—环境—状态/动作/奖励）与优化目标（折扣回报）。</div>
+      </details>
+      <details>
+        <summary>句2：核心机制是什么？——</summary>
+        <div class="retell-answer">参考答案：用值函数把延迟的终局评分折算成每个局面的"好坏分"，配合"多数利用 + 偶尔探索"的动作选择，在试错闭环中逐步改进策略。</div>
+      </details>
+      <details>
+        <summary>句3：它和前后章怎么分工？——</summary>
+        <div class="retell-answer">参考答案：本章只立概念不算账；第 2 章在无状态的老虎机上把"估计动作价值 + 探索策略"做扎实，第 3 章引入 MDP 给值函数一个严格的数学定义，第 4 章起才真正解决"值函数怎么算"。</div>
+      </details>
+    </div>
+
+    <!-- ===== 章末五件套之 5：间隔复习计划 ===== -->
+    <div class="review-plan">
+      <h3>🔁 间隔复习计划</h3>
+      <p>回忆本身比重读有效 10 倍。到点只做一件事：翻卡 + 重做标记题。</p>
+      <table>
+        <tr><th>时间点</th><th>复习内容</th><th>预计用时</th></tr>
+        <tr><td>第 1 天</td><td>概念卡 1–6 全部 + 回忆卡 1.2-1、1.5-1、1.6-1</td><td>10 分钟</td></tr>
+        <tr><td>第 3 天</td><td>概念卡 2、5、6（回报/值函数/探索利用）+ 重做自测错题 + L2 第 1 题</td><td>8 分钟</td></tr>
+        <tr><td>第 7 天</td><td>三句话复述出声说一遍 + 回忆卡 1.4-1、1.7-1</td><td>10 分钟</td></tr>
+        <tr><td>第 15 天</td><td>只做合上书挑战；六条全过则本章毕业，卡在哪条就重读对应小节</td><td>15 分钟</td></tr>
+      </table>
+    </div>
+
+    <!-- 合上书挑战 -->
+    <div class="final-challenge">
+      <h3>📕 合上书挑战</h3>
+      <p class="fc-sub">现在关掉这个页面（或遮住屏幕），拿一张纸，凭记忆完成以下任务。全部做完再回来核对——这是本章真正的毕业考试。</p>
+      <ol id="ch01-challenge-list">
+        <li><span class="fc-check"></span>写出折扣回报 G<sub>t</sub> 的定义式与递推式，并手算 γ=0.9、奖励序列 1,2,3 的 G₀</li>
+        <li><span class="fc-check"></span>画出智能体—环境交互闭环图，标出 S<sub>t</sub>、A<sub>t</sub>、R<sub>t+1</sub> 三股信息流</li>
+        <li><span class="fc-check"></span>说出 RL 的三个标志性特征，并各举一个井字棋中的体现</li>
+        <li><span class="fc-check"></span>写出井字棋值表更新公式，手算 V=0.4、V′=0.6、α=0.5 的一步更新</li>
+        <li><span class="fc-check"></span>解释"奖励最大≠价值最大"和"为什么纯利用必败"</li>
+        <li><span class="fc-check"></span>回答本章的主线问题：什么样的学习问题是强化学习问题，它和监督学习的本质区别在哪？（一句话）</li>
+      </ol>
+    </div>
+
+    <div class="complete-zone">
+      <button class="btn-complete" id="ch01-btn-complete" onclick="markDone()">✓ 我已完成本章（含合上书挑战）</button>
+    </div>
+
+    <div class="chapter-nav">
+      <a href="index.html"><span class="nav-dir">← 上一章</span>返回学习地图</a>
+      <a href="chapter-02.html" class="next"><span class="nav-dir">下一章 →</span>第2章 多臂老虎机</a>
+    </div>
+
+  </div>
+</div>
+
+<footer class="footer">
+  <div class="wrap">第1章 引言：强化学习问题 · 强化学习互动讲义 · 基于 Sutton &amp; Barto (2018, 2nd ed)</div>
+</footer>
+
+<script src="assets/mermaid.min.js"></script>
+<script>
+mermaid.initialize({
+  startOnLoad: true,
+  theme: "base",
+  themeVariables: {
+    primaryColor: "#e3edf7",
+    primaryBorderColor: "#1d5f9e",
+    primaryTextColor: "#1d5f9e",
+    lineColor: "#5c554b",
+    secondaryColor: "#fbeedd",
+    tertiaryColor: "#f5f1e8",
+    fontFamily: "-apple-system, PingFang SC, sans-serif",
+    fontSize: "14px"
+  },
+  flowchart: { curve: "linear", htmlLabels: false }
+});
+</script>
+<script>
+// 自测题逻辑
+document.querySelectorAll(".quiz-block").forEach(block => {
+  const answer = block.dataset.answer;
+  const explain = block.querySelector(".quiz-explain");
+  block.querySelectorAll(".quiz-opts li").forEach(li => {
+    li.addEventListener("click", () => {
+      const opts = block.querySelectorAll(".quiz-opts li");
+      opts.forEach(o => o.classList.add("disabled"));
+      if (li.dataset.opt === answer) {
+        li.classList.add("correct");
+      } else {
+        li.classList.add("wrong");
+        block.querySelector(`[data-opt="${answer}"]`).classList.add("correct");
+      }
+      explain.classList.add("show");
+    });
+  });
+});
+
+// 合上书清单打勾
+document.querySelectorAll("#ch01-challenge-list li").forEach(li => {
+  li.addEventListener("click", () => li.classList.toggle("checked"));
+});
+
+// 完成标记 → localStorage（第1章）
+const KEY = "rl_progress_v1";
+function loadProgress() {
+  try { return JSON.parse(localStorage.getItem(KEY)) || {}; } catch (e) { return {}; }
+}
+const progress = loadProgress();
+const btn = document.getElementById("ch01-btn-complete");
+if (progress[1] && progress[1].done) {
+  btn.textContent = "✓ 已完成 · 再次点击重置";
+  btn.classList.add("done");
+}
+function markDone() {
+  const p = loadProgress();
+  if (p[1] && p[1].done) {
+    delete p[1];
+    btn.textContent = "✓ 我已完成本章（含合上书挑战）";
+    btn.classList.remove("done");
+  } else {
+    p[1] = { done: true, completedAt: Date.now(), reviewsDone: 0 };
+    btn.textContent = "✓ 已完成 · 复习提醒已开启";
+    btn.classList.add("done");
+  }
+  localStorage.setItem(KEY, JSON.stringify(p));
+}
+</script>
+
+</body>
+</html>

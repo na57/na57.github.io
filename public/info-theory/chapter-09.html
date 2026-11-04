@@ -1,0 +1,793 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第9章 高斯信道 · 信息论互动讲义</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+<nav class="topbar">
+  <div class="topbar-inner">
+    <span class="brand"><a href="index.html" style="color:inherit">← 学习地图</a></span>
+    <span class="crumb">阶段二 · 压缩与信道 / 第9章</span>
+  </div>
+</nav>
+
+<div class="wrap">
+
+  <div class="lecture-head">
+    <span class="ch-label">CHAPTER 09 · 压缩与信道</span>
+    <h1>高斯信道</h1>
+    <p class="lead">物理信道的价格标签：给定功率与带宽，每秒最多能可靠传多少比特？答案是 ½log(1+P/N)。</p>
+  </div>
+
+  <!-- 本章定位 -->
+  <div class="position-bar">
+    <strong>本章在主线上的位置：</strong>第7章给出信道容量的定义与编码定理，第8章备好微分熵工具 → <u>本章落到最重要的物理信道：AWGN 容量 C = ½log(1+P/N)、注水分配、带限公式 W·log₂(1+P/(N₀W))</u> → 第10章回过头处理信源那头（连续信源要压到多少比特）。<br>
+    第9章回答主线上的第九个问题：<strong>功率和带宽受限的物理信道，每秒最多能可靠传输多少比特？</strong>
+    <div class="map-inline">
+      <span class="node">Ch1–4 基础（熵 / AEP / 熵率）</span><span class="arrow">→</span>
+      <span class="node">Ch5–8 压缩 · 信道 · 微分熵</span><span class="arrow">→</span>
+      <span class="node here">Ch9 高斯信道</span><span class="arrow">→</span>
+      <span class="node">Ch10–12 率失真与统计</span><span class="arrow">→</span>
+      <span class="node">Ch13–17 通用与网络</span>
+    </div>
+  </div>
+
+  <!-- 学习目标 -->
+  <div class="objectives">
+    <h4>🎯 学完本章，合上书你应该能：</h4>
+    <ol>
+      <li>说出为什么带宽 W 的连续信道每秒等价于 2W 个独立 AWGN 自由度，以及噪声取高斯的两条理由</li>
+      <li>从 I(X;Y) = h(Y) − h(Z) 出发，用"固定方差下高斯微分熵最大"推出 C = ½log(1+P/N)，并手算给定 P/N 的数值</li>
+      <li>画出球体填充示意：噪声球半径 √(nN)、接收球半径 √(n(P+N))，数出可装的码字个数</li>
+      <li>对给定噪声向量与总功率的并行高斯信道，手算注水解 Pᵢ = (ν−Nᵢ)⁺ 与总容量（含"弃用深噪声信道"的判断）</li>
+      <li>写出带限信道容量 C = W·log₂(1+P/(N₀W))，解释带宽—功率折中并推出 Eb/N₀ ≥ −1.59 dB 的香农极限</li>
+    </ol>
+  </div>
+
+  <div class="lecture">
+
+    <!-- 推导主线 -->
+    <div class="figure">
+      <div class="mermaid">
+flowchart LR
+  A["Ch7 给了容量定义<br>Ch8 给了微分熵"] --> B["连续信道怎么算<br>采样定理切出自由度"]
+  B --> C["每个自由度 Y = X + Z<br>噪声为何是高斯"]
+  C --> D["功率约束下<br>高斯输入让 h（Y）最大"]
+  D --> E["C = ½log（1 + P/N）<br>球体填充"]
+  E --> F["多子信道<br>注水分功率"]
+  F --> G["欠账：信源那头<br>连续信源压到多少比特 → Ch10"]
+  classDef hot fill:#fbeedd,stroke:#c4651f,stroke-width:2.5px,color:#c4651f;
+  classDef danger fill:#fae9e7,stroke:#b03a2e,stroke-width:2.5px,color:#b03a2e;
+  class E hot;
+  class G danger;
+      </div>
+      <div class="caption">本章推导主线：工具备齐 → 把连续信道切成可计算的自由度 → 单自由度容量 → 多信道功率分配 → 合成带限公式。终点（红色）是留给第 10 章的账。</div>
+    </div>
+
+    <!-- ============ 9.1 ============ -->
+    <h2><span class="sec-no">9.1</span>为什么需要高斯信道：从带限连续信道到 Y = X + Z</h2>
+
+    <p>第 7 章给出了信道容量 C = max I(X;Y) 的定义和编码定理，第 8 章为连续变量备好了微分熵。但真实的物理信道——电话线里的电压波形、无线电里的电磁场——是<strong>连续时间、连续幅度</strong>的。这带出一个问题：<strong>怎么把一条连续波形信道变成我们能代入容量公式的对象？</strong>本节搭起这座桥。</p>
+
+    <h3>第一步：采样定理把连续信道切成"每秒 2W 个自由度"</h3>
+    <p>设信道带宽为 W Hz（只允许频率不超过 W 的信号通过）。<span class="term">采样定理</span>（Sampling Theorem，Nyquist）说：<strong>带宽 W 的信号由每秒 2W 个等间隔采样完全决定</strong>——采样值给全了，整条波形可以用 sinc 插值无损重建。反过来，信道那头收到的带限波形，也只需每秒看 2W 个采样点就掌握了全部信息。</p>
+    <p>于是一条带宽 W 的连续信道，<strong>每秒相当于 2W 次独立的信道使用</strong>——这就是"自由度"的含义。把连续信道算容量的问题，化成了"每次使用能传多少比特"的离散问题。</p>
+
+    <h3>第二步：每个自由度是一条离散时间 AWGN 信道</h3>
+    <p>每次使用时，发送端发一个实数 X，接收端收到：</p>
+
+    <div class="formula"><span class="var">Y</span><sub>i</sub> = <span class="var">X</span><sub>i</sub> + <span class="var">Z</span><sub>i</sub>，　<span class="var">Z</span><sub>i</sub> ~ N(0, <span class="var">N</span>)</div>
+
+    <p>噪声在各自由度上独立同分布（"白"噪声的含义：频谱平坦 ⟹ 时域采样互不相关，高斯 ⟹ 不相关即独立）。这个模型叫<span class="term">加性高斯白噪声信道</span>（AWGN Channel，Additive White Gaussian Noise Channel）。</p>
+
+    <div class="figure">
+      <div class="mermaid">
+flowchart LR
+  A["连续时间信道<br>带宽 W"] --> B["采样定理<br>每秒 2W 个自由度"]
+  B --> C["每个自由度<br>Y = X + Z"]
+  C --> D["Z 服从 N（0，N）<br>各自由度独立"]
+      </div>
+      <div class="caption">图 9.1 从连续信道到 AWGN：采样定理负责"切"，白高斯噪声负责"每个自由度长什么样"。看懂这张图，9.2 节就只剩一步优化。</div>
+    </div>
+
+    <h3>第三步：噪声凭什么取高斯？两条理由</h3>
+    <ul>
+      <li><strong>中心极限定理</strong>（CLT）：导体热噪声、器件散粒噪声是海量独立微小扰动的叠加，叠加和的分布趋于高斯——这是物理层面的理由。</li>
+      <li><strong>最坏情形理由</strong>：在<strong>固定方差</strong>的所有噪声分布中，高斯分布的微分熵最大（第 8 章的结论）。噪声熵越大，h(Y|X) 越大，容量 I(X;Y) = h(Y) − h(Y|X) 越小——<strong>高斯噪声是同等功率下最坏的噪声</strong>。按高斯设计，等于给容量买了保险。这条理由的严格表述（给定矩约束下最大化熵的分布族）正是第 12 章最大熵原理的内容，这里先记账。</li>
+    </ul>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>一根带宽 W 的电话线，在信息论眼里<strong>不是一条管道，而是每秒 2W 条并行的小信道</strong>，每条独立地做 X → X+Z。后面所有公式里的"每次使用"，指的就是这 1/(2W) 秒里的一个自由度。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>"采样必丢信息，所以连续信道的容量永远算不准"——错。采样定理保证：对严格带限于 W 的信号，每秒 2W 个采样是<strong>无损</strong>表示。真正丢信息的是采样率低于 2W（混叠）。另外，"噪声取高斯只是工程近似"也不全对——第二条理由说明它还是理论上的最坏情形假设。</p>
+    </div>
+
+    <!-- 回忆卡片 9.1 -->
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 9.1-1</div>
+              <div class="q-text">带宽 W 的连续信道每秒等价于多少个独立自由度？依据是什么？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              2W 个。依据采样定理：带宽 W 的信号由每秒 2W 个采样完全决定，因此连续信道每秒相当于 2W 次独立信道使用。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 9.1-2</div>
+              <div class="q-text">把噪声建模为高斯分布的两条理由是什么？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              ①CLT：真实噪声是大量独立小扰动的叠加；②固定方差下高斯熵最大，是同等功率下最坏（最保守）的噪声假设——严格化见第 12 章最大熵。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 9.2 ============ -->
+    <h2><span class="sec-no">9.2</span>容量公式怎么来：功率约束下，高斯输入摘走了最大熵</h2>
+
+    <p>上一节把连续信道切成了 Y = X + Z 的离散自由度，但模型本身不是极限——它带出一个问题：<strong>在这条信道上，每次使用最多能可靠传多少比特？</strong>如果发送功率不受限，答案是无穷（把星座点摆得越来越密即可）。现实中的硬约束是<span class="term">平均功率约束</span>（Average Power Constraint）：</p>
+
+    <div class="formula"><span class="frac"><span class="num-part">1</span><span class="den-part">n</span></span> ∑<sub>i=1</sub><sup>n</sup> <span class="var">x</span><sub>i</sub>² ≤ <span class="var">P</span>　（每个码字）；等价地 E[<span class="var">X</span>²] ≤ <span class="var">P</span></div>
+
+    <h3>推导：三步，每步都有名字</h3>
+    <p><strong>第一步：把互信息拆成"输出熵减噪声熵"。</strong>给定 X 时 Y = X + Z 只是 Z 的平移，所以 h(Y|X) = h(Z)：</p>
+
+    <div class="formula">I(X;Y) = h(Y) − h(Y|X) = h(Y) − h(Z)，　h(Z) = <span class="frac"><span class="num-part">1</span><span class="den-part">2</span></span> log(2πe<span class="var">N</span>)</div>
+
+    <p>h(Z) 与输入分布无关，所以最大化 I(X;Y) 就是<strong>最大化 h(Y)</strong>。</p>
+    <p><strong>第二步：给 h(Y) 盖上天花板。</strong>X 与 Z 独立 ⟹ Var(Y) = Var(X) + N ≤ P + N。第 8 章的定理：固定方差下高斯分布微分熵最大，于是</p>
+
+    <div class="formula">h(Y) ≤ <span class="frac"><span class="num-part">1</span><span class="den-part">2</span></span> log( 2πe·Var(Y) ) ≤ <span class="frac"><span class="num-part">1</span><span class="den-part">2</span></span> log( 2πe(<span class="var">P</span>+<span class="var">N</span>) )</div>
+
+    <p><strong>第三步：检查等号能不能取到。</strong>取 X ~ N(0, P)，则 Var(X) = P（功率预算用满），且 Y = X + Z 是两个独立高斯之和 ⟹ Y ~ N(0, P+N)，两个 ≤ 同时取等。天花板够得着，所以它就是答案：</p>
+
+    <div class="box insight">
+      <span class="box-tag">✅ 高斯信道容量（定理）</span>
+      <p>平均功率约束 P、噪声方差 N 的 AWGN 信道，容量为</p>
+      <div class="formula"><span class="var">C</span> = <span class="frac"><span class="num-part">1</span><span class="den-part">2</span></span> log₂( 1 + <span class="frac"><span class="num-part">P</span><span class="den-part">N</span></span> )　比特/次</div>
+      <p>达到容量的输入分布是 X ~ N(0, P)。反方向（converse）：用 Fano 不等式加联合典型（第 7 章那套工具）可证，任何速率超过 C 的编码，错误概率都压不到零——细节见教材 9.1 节，思想与离散信道完全相同。</p>
+    </div>
+
+    <h3>例 1：两组 P/N 的完整手算</h3>
+    <p><strong>P/N = 15</strong>（约 12 dB 的信噪比）：</p>
+    <ul>
+      <li>第 1 步：1 + P/N = 1 + 15 = 16；</li>
+      <li>第 2 步：log₂(16) = 4；</li>
+      <li>第 3 步：C = ½ × 4 = <strong>2 比特/次</strong>。</li>
+    </ul>
+    <p><strong>P/N = 255</strong>（约 24 dB）：</p>
+    <ul>
+      <li>第 1 步：1 + P/N = 1 + 255 = 256；</li>
+      <li>第 2 步：log₂(256) = 8；</li>
+      <li>第 3 步：C = ½ × 8 = <strong>4 比特/次</strong>。</li>
+    </ul>
+    <p>注意这两组数字并排看的信息量：<strong>信噪比从 15 放大到 255（17 倍），容量只从 2 涨到 4（翻倍）</strong>。容量对功率是对数关系——这个观察后面习题还要考。</p>
+
+    <h3>几何直觉：n 维空间里的球体填充</h3>
+    <p>把 n 次使用看成一个 n 维向量。发送码字功率 ≤ nP，噪声向量的典型长度是 √(nN)（每个坐标方差 N，n 维欧氏长度约 √n·√N）。接收向量 = 码字 + 噪声，落在以原点为中心、半径 √(n(P+N)) 的大球内；译码要的是：以各接收点为中心、半径 √(nN) 的小"噪声球"互不重叠。能装下的码字个数 ≈ 体积比：</p>
+
+    <div class="formula"><span class="var">M</span> ≈ ( <span class="frac"><span class="num-part">√(n(P+N))</span><span class="den-part">√(nN)</span></span> )<sup>n</sup> = ( 1 + <span class="frac"><span class="num-part">P</span><span class="den-part">N</span></span> )<sup>n/2</sup></div>
+
+    <p>每个码字对应一个可靠消息，码率 R = (1/n)·log₂M = ½log₂(1+P/N)——<strong>和优化推导殊途同归</strong>。这幅图叫<span class="term">球体填充</span>（Sphere Packing）：发送就像往大球房间里摆台球，每个台球自带半径 √(nN) 的"私人空间"，摆得下多少个不重叠，就能传多少消息。维度 n 越高，球的体积越集中在表面附近，这个计数越精确。</p>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>"功率翻倍，容量翻倍"——错。C 对 P 是对数关系：功率从 P 翻倍到 2P，容量增量只有 ½log((1+2P/N)/(1+P/N))，且随 P 增大而递减（P≫N 时趋近 0.5 比特）。上面的例 1 就是证据：17 倍功率只买来 1 倍容量。功率换比特的汇率是对数级的，越换越不划算。</p>
+    </div>
+
+    <!-- 回忆卡片 9.2 -->
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 9.2-1</div>
+              <div class="q-text">从 I(X;Y) 推出 C = ½log(1+P/N) 的三步各是什么？等号成立条件？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              ①I = h(Y) − h(Z)，h(Z) 与输入无关；②h(Y) ≤ ½log(2πe·Var(Y)) ≤ ½log(2πe(P+N))（固定方差高斯熵最大）；③X ~ N(0,P) 时功率用满且 Y 为高斯，等号成立。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 9.2-2</div>
+              <div class="q-text">球体填充里两个球的半径各是多少？能装的码字约多少个？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              噪声球半径 √(nN)，接收向量大球半径 √(n(P+N))；体积比给出 M ≈ (1+P/N)^(n/2) 个码字，对应码率 ½log(1+P/N)。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 9.3 ============ -->
+    <h2><span class="sec-no">9.3</span>多信道怎么分功率：并行高斯信道与注水</h2>
+
+    <p>上一节解决了一条信道。但 DSL、OFDM 这类现代系统的做法是把一个物理媒介切成 K 条子信道，各频段噪声不一样——电话线上低频干净、高频被串扰污染。这带出一个问题：<strong>总功率只有一份，往各条子信道各倒多少，总容量最大？</strong></p>
+
+    <p><strong>模型</strong>：K 条独立并行 AWGN 信道，Yᵢ = Xᵢ + Zᵢ，Zᵢ ~ N(0, Nᵢ)，总功率约束 Σᵢ Pᵢ ≤ P。K 条独立信道一起用，容量是各信道容量之和的最大化：</p>
+
+    <div class="formula"><span class="var">C</span> = max<sub>ΣPᵢ≤P</sub> ∑<sub>i=1</sub><sup>K</sup> <span class="frac"><span class="num-part">1</span><span class="den-part">2</span></span> log₂( 1 + <span class="frac"><span class="num-part">Pᵢ</span><span class="den-part">Nᵢ</span></span> )</div>
+
+    <p>目标函数对每个 Pᵢ 是凹的（log），约束是线性的，用拉格朗日乘子法（<span class="term">KKT 条件</span>，Karush–Kuhn–Tucker Conditions）求驻点，解呈闭式：</p>
+
+    <div class="box insight">
+      <span class="box-tag">✅ 注水定理</span>
+      <p>最优功率分配为 <strong>Pᵢ = (ν − Nᵢ)⁺</strong>（x⁺ = max(x, 0)），其中水位 ν 由 Σᵢ (ν − Nᵢ)⁺ = P 唯一确定。代入得容量 C = Σ ½log₂(ν/Nᵢ)（只对 Pᵢ &gt; 0 的信道求和）。</p>
+    </div>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃：为什么叫"注水"</span>
+      <p><span class="term">注水</span>（Water-filling）：把每条子信道看成一个<strong>深度为 Nᵢ 的容器</strong>（噪声越深容器越深），总功率 P 像水一样倒进去。水面永远齐平在高度 ν：容器 i 里的水（功率）深度 = ν − Nᵢ。<strong>噪声比水位还深的容器，一滴水都进不去</strong>——它被完全放弃。好信道多喝，差信道不喝，这就是最优。</p>
+    </div>
+
+    <div class="figure">
+      <div class="mermaid">
+flowchart LR
+  A["总功率 P = 6<br>像水一样倒入"] --> B["水位齐平 ν = 4"]
+  B --> C["信道一 噪声 1<br>分得 4 − 1 = 3"]
+  B --> D["信道二 噪声 2<br>分得 4 − 2 = 2"]
+  B --> E["信道三 噪声 3<br>分得 4 − 3 = 1"]
+  classDef hot fill:#fbeedd,stroke:#c4651f,stroke-width:2.5px,color:#c4651f;
+  class B hot;
+      </div>
+      <div class="caption">图 9.2 注水示意（例 A）：水位 ν 一刀切平，每条信道分到的功率 = 水位 − 噪声深度。看水位与噪声的相对位置，就能目测分配结果。</div>
+    </div>
+
+    <h3>例 A（三条全用）：N = (1, 2, 3)，总功率 P = 6</h3>
+    <ul>
+      <li>第 1 步：<strong>假设三条都分到功率</strong>，则 ν − Nᵢ 全为正，求和得 Σ(ν−Nᵢ) = 3ν − (1+2+3) = 6 ⟹ ν = (6+6)/3 = <strong>4</strong>；</li>
+      <li>第 2 步：<strong>检验假设</strong>：ν = 4 &gt; 3 = max Nᵢ ✓，每条噪声都低于水位，假设成立；</li>
+      <li>第 3 步：P = (4−1, 4−2, 4−3) = <strong>(3, 2, 1)</strong>，合计 3+2+1 = 6 ✓ 功率用尽；</li>
+      <li>第 4 步：容量 C = ½[log₂(1+3/1) + log₂(1+2/2) + log₂(1+1/3)] = ½[log₂4 + log₂2 + log₂(4/3)] = ½[2 + 1 + 0.4150] ≈ <strong>1.71 比特</strong>（log₂(4/3) = 0.4150）。</li>
+    </ul>
+
+    <h3>例 B（有一条被淹）：N = (1, 2, 8)，总功率 P = 5</h3>
+    <ul>
+      <li>第 1 步：先假设三条全用，ν = (P + ΣNᵢ)/3 = (5+11)/3 ≈ <strong>5.33</strong>；</li>
+      <li>第 2 步：检验：5.33 &lt; 8 = N₃ ✗——水位没不过第三条信道的噪声，它会分到负功率，假设不成立，<strong>弃用信道三</strong>；</li>
+      <li>第 3 步：只对前两条重算水位：ν = (5+1+2)/2 = <strong>4</strong>，检验 4 &gt; 2 = 剩余最大噪声 ✓；</li>
+      <li>第 4 步：P = (4−1, 4−2, 0) = <strong>(3, 2, 0)</strong>；</li>
+      <li>第 5 步：C = ½[log₂(1+3/1) + log₂(1+2/2)] = ½[log₂4 + log₂2] = ½(2+1) = <strong>1.5 比特</strong>。</li>
+    </ul>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>"差信道噪声大，应该多分功率补偿它"——与最优解正好相反。log 的边际收益递减：把一单位功率投进浅噪声信道，换得的 ½log(1+Pᵢ/Nᵢ) 增量更大；深噪声信道投入回报太低，KKT 干脆判它零功率。<strong>最优策略是锦上添花，不是雪中送炭</strong>。工程对应：OFDM/DSL 系统会干脆关掉被干扰毁掉的子载波。</p>
+    </div>
+
+    <!-- 回忆卡片 9.3 -->
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 9.3-1</div>
+              <div class="q-text">写出注水公式，并说明水位 ν 怎么确定。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              Pᵢ = (ν − Nᵢ)⁺；ν 由功率约束 Σᵢ(ν − Nᵢ)⁺ = P 解出。噪声 Nᵢ ≥ ν 的信道分到 0。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 9.3-2</div>
+              <div class="q-text">手算注水时，怎么判断某条信道要被弃用？弃用后做什么？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              先假设全用，算出 ν = (P+ΣNᵢ)/K；若 ν ≤ 某 Nᵢ，该信道弃用，从集合中删掉后重算 ν 并重新检验，直到剩余信道噪声都低于水位。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 9.4 ============ -->
+    <h2><span class="sec-no">9.4</span>带宽和功率怎么换算：带限信道与 −1.59 dB 香农极限</h2>
+
+    <p>上一节把多信道的功率分配讲清了，现在回到连续时间把总账算出来：9.1 节说带宽 W 的信道每秒有 2W 个自由度，9.2 节说每个自由度容量 ½log(1+SNR)——两者相乘就是带限信道的容量。剩下唯一的问题：<strong>每个自由度上的信噪比是多少？</strong></p>
+
+    <h3>带限信道容量公式</h3>
+    <p>设白噪声的双边<span class="term">功率谱密度</span>（Power Spectral Density）为 N₀/2。带宽 W 内积出的噪声总功率 N = N₀·W（正负两个半边各贡献 N₀W/2）。信号总功率 P 摊到每秒 2W 个自由度上，等价于每个自由度的信噪比 P/(N₀W)。代入 2W × ½log(1+SNR)：</p>
+
+    <div class="box insight">
+      <span class="box-tag">✅ 带限 AWGN 信道容量（香农公式）</span>
+      <div class="formula"><span class="var">C</span> = <span class="var">W</span> · log₂( 1 + <span class="frac"><span class="num-part">P</span><span class="den-part">N₀W</span></span> )　比特/秒</div>
+    </div>
+
+    <h3>例 2：电话线的理论天花板</h3>
+    <p>老式电话线：带宽 W = 3000 Hz，线路<span class="term">信噪比</span>（Signal-to-Noise Ratio，SNR）30 dB，即 P/(N₀W) = 10³ = 1000。逐步算：</p>
+    <ul>
+      <li>第 1 步：1 + SNR = 1 + 1000 = 1001；</li>
+      <li>第 2 步：log₂(1001) = 9.967；</li>
+      <li>第 3 步：C = 3000 × 9.967 ≈ 29 900 ≈ <strong>29.9 kbps</strong>。</li>
+    </ul>
+    <p>这就是传统电话线信道的理论上限量级——上世纪 56k 调制解调器能逼近这个量级（实际利用了电话网数字段的技巧），靠的正是把 SNR 用到了极限。想再快，只能加带宽或加功率，而这两者怎么换算，就是下一个话题。</p>
+
+    <h3>带宽 ↔ 功率：一场不对等的交换</h3>
+    <p>公式里 W 出现在两个位置：线性地乘在外面（自由度变多），也藏在 SNR 里做分母（噪声功率 N₀W 随带宽线性变大）。所以<strong>加带宽不是免费的</strong>：自由度多了，但每个自由度更差了。固定 P，让 W 增大：log 增长越来越慢，最终饱和。用近似 log₂(1+x) ≈ x/ln2（x 小时）：</p>
+
+    <div class="formula"><span class="var">W</span>·log₂( 1 + <span class="frac"><span class="num-part">P</span><span class="den-part">N₀W</span></span> ) ≈ <span class="var">W</span> · <span class="frac"><span class="num-part">P</span><span class="den-part">N₀W·ln 2</span></span> = <span class="frac"><span class="num-part">P</span><span class="den-part">N₀·ln 2</span></span>　（W → ∞ 的极限）</div>
+
+    <p>无限带宽也买不来无限容量，饱和值是 P/(N₀·ln2)。</p>
+
+    <h3>香农极限：每比特能量的地板</h3>
+    <p>设码率为 R，则每比特消耗的能量 <span class="term">E<sub>b</sub></span>（Energy per Bit）= P/R。可靠传输要求 R ≤ C ≤ P/(N₀·ln2)，于是</p>
+
+    <div class="formula"><span class="frac"><span class="num-part">E<sub>b</sub></span><span class="den-part">N₀</span></span> = <span class="frac"><span class="num-part">P/N₀</span><span class="den-part">R</span></span> ≥ <span class="frac"><span class="num-part">P/N₀</span><span class="den-part">C</span></span> ≥ ln 2 = 0.693</div>
+
+    <p>换算成分贝：10·log₁₀(0.693) = <strong>−1.59 dB</strong>。这就是<span class="term">香农极限</span>（Shannon Limit）：<strong>任何编码方案，想可靠传输，每比特能量与噪声谱密度之比都不能低于 ln2</strong>；注意它是负的——只要带宽足够，在信噪比低于 0 dB 的环境里照样可以可靠通信。深空通信、LDPC、Turbo 码几十年的工程史，就是在逼近这条 −1.59 dB 的地板。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>带宽和功率是两种可以互换的货币，但汇率悬殊：功率换容量是对数汇率（9.2 节），带宽换容量先是接近线性、然后饱和。工程设计的自由度全在这场兑换里——而 −1.59 dB 是无论怎么兑换都跌破不了的底价。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区 + 本章留账</span>
+      <p>"带宽趋于无穷，容量也趋于无穷"——错，饱和到 P/(N₀·ln2)，因为噪声功率随带宽同步增长。<strong>留账</strong>：本章把"信道这头"解决了——给定信道能传多少比特。但信源那头还没解决：一个连续信源（语音、图像）最少要压到多少比特？这是第 10 章率失真理论的问题。</p>
+    </div>
+
+    <!-- 回忆卡片 9.4 -->
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 9.4-1</div>
+              <div class="q-text">写出带限信道容量公式，并说明噪声功率 N₀W 是怎么来的。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              C = W·log₂(1 + P/(N₀W))。噪声双边功率谱密度为 N₀/2，在带宽 W（正负两半）内积分得总噪声功率 N = N₀W。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 9.4-2</div>
+              <div class="q-text">香农极限 −1.59 dB 说的是什么？怎么推出来的？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              可靠传输要求 Eb/N₀ ≥ ln2 ≈ 0.693，即 −1.59 dB（10·log₁₀(0.693)）。推导：W→∞ 时 C → P/(N₀·ln2)，代入 Eb/N₀ = (P/N₀)/R ≥ (P/N₀)/C 即得。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 概念卡 ============ -->
+    <h2><span class="sec-no">🃏</span>概念卡：本章概念的一分钟画像</h2>
+    <p>翻面前先自问：这个概念我能用一句话讲清楚吗？</p>
+    <div class="flip-grid">
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 1</div>
+            <div class="q-text">高斯信道（AWGN Channel）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">Y = X + Z，Z ~ N(0, N) 且各次使用独立的离散时间信道；连续带限信道每个自由度的化身。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">把"连续波形信道能传多少比特"变成可计算的离散优化问题。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">每次发送一个实数，对方收到的是它加上一团高斯形状的"雾"。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为高斯假设只是近似——它还是固定功率下最坏的噪声（最大熵），按它设计最保守。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">本章全部；Ch10 率失真的高斯信源与它互为对偶；一切通信系统设计的起点模型。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 2</div>
+            <div class="q-text">平均功率约束（Power Constraint）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">码字满足 (1/n)Σxᵢ² ≤ P，分布层面即 E[X²] ≤ P。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">没有它容量是无穷大（星座点无限加密）；它是让"容量"成为有限数的物理约束。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">电费预算：每个符号都是一次耗电，总账单有限额。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">与"峰值约束"混淆——本章约束的是均方值，个别符号可以超过 √P。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">9.2 推导的第一步；9.3 注水把它推广成总功率池 ΣPᵢ ≤ P。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 3</div>
+            <div class="q-text">容量公式 C = ½log(1+P/N)（AWGN Capacity）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">功率 P、噪声 N 的 AWGN 信道每次使用最多可靠传输 ½log(1+P/N) 比特，X ~ N(0,P) 时达到。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">给物理信道贴上精确的价格标签：功率和噪声给定，速率上限钉死。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">输出方差(P+N) 与噪声方差 N 之比的"对数一半"——能分辨的电平层数取对数。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为容量对功率线性——它是对数；也别忘了括号里的 +1（高 SNR 才可略）。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">本章全部计算的基石；Ch10 与 R(D) 对接（分离定理）；Ch15 网络信息论的构件。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 4</div>
+            <div class="q-text">球体填充直觉（Sphere Packing）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">n 维空间中：接收向量球半径 √(n(P+N))，噪声球半径 √(nN)，可装码字 ≈ (1+P/N)^(n/2)。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">不用互信息也能"看见"容量公式从哪来——纯粹的几何计数。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">往大房间里摆台球，每个球自带半径 √(nN) 的私人空间，互不重叠才能分清。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为只是比喻——n 维球体积 ∝ rⁿ 的集中度让它成为严格可达性证明的内核。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">理解编码定理的几何；Ch15 多用户信道的容量区域也用同一套几何。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 5</div>
+            <div class="q-text">注水原理（Water-filling）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">并行高斯信道的最优功率分配：Pᵢ = (ν − Nᵢ)⁺，水位 ν 由 Σ(ν−Nᵢ)⁺ = P 确定。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">总功率受限、子信道质量不齐时，功率该怎么分。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">把水倒进高低不平的容器：水面齐平，太深的容器（噪声 ≥ 水位）空着。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为该给差信道多分配来补偿——恰恰相反，好信道多拿，差信道可能一分不得。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">OFDM/DSL 子载波功率加载；Ch10 高斯信源率失真的"反向注水"是同一结构的镜像。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 6</div>
+            <div class="q-text">香农极限 −1.59 dB（Shannon Limit）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">可靠传输要求 Eb/N₀ ≥ ln2 = 0.693，即 −1.59 dB；由 W→∞ 时 C → P/(N₀·ln2) 推出。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">回答"传一比特最少花多少能量"——通信的能量地板。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">无论编码多聪明，每比特都要付至少 ln2 单位的"能量税"。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">惊讶于它是负 dB——带宽足够时，信噪比低于 0 dB 也能可靠通信，这正是深空通信的现实。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">衡量一切编码方案（LDPC、Turbo、Polar）离极限多远的标尺。</span></div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- ============ 分层习题 ============ -->
+    <h2><span class="sec-no">📝</span>分层习题</h2>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>判断对错：<strong>"既然功率受限，输入分布取 [−√P, √P] 上的均匀分布最自然，它就能达到容量。"</strong>说明理由。</div>
+      <details>
+        <summary>提示</summary>
+        <p>达到容量要求 h(Y) 最大——回忆：固定方差下什么分布的微分熵最大？再检查这个均匀分布的方差是不是真的用满了功率预算 P。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">错，且错在两处。①容量在 X ~ N(0, P) 时达到：Var(Y) = Var(X)+N 被功率约束钉住后，固定方差下高斯分布的微分熵最大，任何非高斯输入的 h(Y) 都严格更小，所以均匀输入<strong>严格次优</strong>。②[−√P, √P] 上均匀分布的方差只有 (2√P)²/12 = P/3，连功率预算都没用满。即使改用 [−√(3P), √(3P)] 把方差凑到 P，仍因①而达不到容量。"最自然"不等于"最优"。</div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>判断对错：<strong>"发射功率翻倍，信道容量也翻倍。"</strong>说明理由。</div>
+      <details>
+        <summary>提示</summary>
+        <p>写出 C 作为 P 的函数，看看它的形状；算一算功率从 P 翻倍到 2P 时容量增量是多少，再和原容量比。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">错。C = ½log(1+P/N) 对 P 是<strong>对数</strong>关系，不是线性。功率 P → 2P 的容量增量 Δ = ½log((1+2P/N)/(1+P/N)) &lt; C(P)；P≫N 时 Δ ≈ ½log₂2 = 0.5 比特，而原容量可能远大于它。例：P/N = 15 时 C = 2 比特；功率翻倍到 30，C = ½log₂31 ≈ 2.48 比特，只多了 0.48 比特（24%），远非翻倍。功率换容量是越换越亏的对数汇率。</div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>AWGN 信道，分别计算 P/N = 15 与 P/N = 255 时的容量（比特/次），写全步骤，并评论两个数字的关系。</div>
+      <details>
+        <summary>提示</summary>
+        <p>代公式 C = ½log₂(1+P/N)；这两组数字都被设计过——1+P/N 恰好是 2 的幂。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p><strong>P/N = 15</strong>：1+P/N = 16；log₂(16) = 4；C = ½×4 = <strong>2 比特/次</strong>。</p>
+          <p><strong>P/N = 255</strong>：1+P/N = 256；log₂(256) = 8；C = ½×8 = <strong>4 比特/次</strong>。</p>
+          <p>评论：信噪比从 15 提到 255（放大 17 倍），容量只从 2 涨到 4（翻倍）。再次印证对数关系——想靠堆功率线性提升容量是死路，这正是 9.4 节"带宽↔功率折中"如此重要的原因。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>并行高斯信道，噪声 N = (1, 2, 3)，总功率 P = 6。求最优功率分配与总容量。追问：若总功率改为 P = 2，结果如何？</div>
+      <details>
+        <summary>提示</summary>
+        <p>先假设三条信道全用，解 ν = (P+ΣNᵢ)/3，再检验 ν 是否大过每条噪声；不成立就把最深的信道扔掉重算。追问里注意：<strong>水位可能淹没浅信道</strong>——P 变小时，原来能分到功率的信道也可能被淹。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p><strong>P = 6</strong>：假设全用，ν = (6+1+2+3)/3 = 12/3 = 4；检验 4 &gt; 3 = max Nᵢ ✓。P = (4−1, 4−2, 4−3) = <strong>(3, 2, 1)</strong>，合计 6 ✓。C = ½[log₂4 + log₂2 + log₂(4/3)] = ½[2 + 1 + 0.4150] ≈ <strong>1.71 比特</strong>。</p>
+          <p><strong>追问 P = 2</strong>：试全用，ν = (2+6)/3 = 8/3 ≈ 2.67 &lt; 3 ⟹ 第三信道被淹，弃用。重算：ν = (2+1+2)/2 = 2.5，检验 2.5 &gt; 2 ✓。P = (2.5−1, 2.5−2, 0) = <strong>(1.5, 0.5, 0)</strong>。C = ½[log₂(1+1.5) + log₂(1+0.25)] = ½[log₂2.5 + log₂1.25] = ½[1.3219 + 0.3219] = <strong>0.82 比特</strong>。功率缩到 1/3，容量从 1.71 掉到 0.82——最差的信道最先被牺牲。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l3">L3 建模应用</span>DSL 场景：一对铜线切成 3 个频段，测得各频段噪声功率 N = (1, 2, 8)，调制解调器总功率预算为 5。要求：①把场景映射为并行高斯信道模型；②画出注水示意图；③算出最优功率分配与总容量；④解释为什么最差的信道被完全放弃，以及这在工程上对应什么操作。</div>
+      <details>
+        <summary>提示</summary>
+        <p>每个频段就是一条独立 AWGN 子信道，约束是 ΣPᵢ ≤ 5。注水时先试"三条全用"，检验水位与最大噪声 8 的关系。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p><strong>① 模型</strong>：3 条独立并行 AWGN 信道，Yᵢ = Xᵢ + Zᵢ，Zᵢ ~ N(0, Nᵢ)，N = (1, 2, 8)，总功率约束 P₁+P₂+P₃ ≤ 5。目标：max Σ ½log₂(1+Pᵢ/Nᵢ)。</p>
+          <p><strong>② 注水示意</strong>：</p>
+          <div class="figure">
+            <div class="mermaid">
+flowchart LR
+  A["总功率 P = 5"] --> B["先试全用<br>ν = 5.33 小于噪声 8"]
+  B --> C["弃用信道三<br>重算 ν = 4"]
+  C --> D["信道一 噪声 1<br>分得 3"]
+  C --> E["信道二 噪声 2<br>分得 2"]
+  C --> F["信道三 噪声 8<br>淹没 分得 0"]
+  classDef danger fill:#fae9e7,stroke:#b03a2e,stroke-width:2.5px,color:#b03a2e;
+  class F danger;
+            </div>
+            <div class="caption">注水过程：先试全用 → 发现水位没不过最深的噪声 → 弃用后重算，水位落定在 4。</div>
+          </div>
+          <p><strong>③ 计算</strong>：试全用 ν = (5+11)/3 ≈ 5.33 &lt; 8 ⟹ 弃信道三；重算 ν = (5+1+2)/2 = 4 &gt; 2 ✓。P = (4−1, 4−2, 0) = <strong>(3, 2, 0)</strong>。C = ½[log₂4 + log₂2] = ½(2+1) = <strong>1.5 比特</strong>（每次联合使用）。</p>
+          <p><strong>④ 解释</strong>：信道三噪声 8 超过水位 4——往里面投任何一小份功率，边际容量增量都低于把同一份功率投给信道一（log 边际收益递减 + 分母 N₃ 太大），KKT 条件于是判它零功率。<strong>工程对应</strong>：DSL/OFDM 系统会直接<strong>关掉被串扰或射频干扰（如 AM 电台）毁掉的子载波</strong>，把全部功率集中给干净频段——这正是现代调制解调器"比特加载"算法做的事。</p>
+        </div>
+      </details>
+    </div>
+
+    <!-- ============ 本章自测 ============ -->
+    <h2><span class="sec-no">✍️</span>本章自测</h2>
+    <p class="quiz-hint">点击选项判分，答错会给出原因。</p>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 1</div>
+      <div class="q-stem">AWGN 信道，P/N = 15。每次使用的容量是多少？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. ½log₂(15) ≈ 1.95 比特</li>
+        <li data-opt="b">B. 2 比特</li>
+        <li data-opt="c">C. 8 比特</li>
+        <li data-opt="d">D. 4 比特</li>
+      </ul>
+      <div class="quiz-explain">选 B：C = ½log₂(1+15) = ½log₂16 = ½×4 = 2 比特。A 错在漏掉括号里的 +1——只有高 SNR 时才能略去，本题 1+15=16 是设计好的；C 错在把 log₂16=4 又乘了 2，公式系数是 ½ 不是 2；D 是 P/N=255 的答案，张冠李戴。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="c">
+      <div class="q-no">自测 2</div>
+      <div class="q-stem">平均功率约束 E[X²] ≤ P 下，下列哪种输入分布达到 AWGN 信道容量？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. [−√P, √P] 上的均匀分布</li>
+        <li data-opt="b">B. 二值分布：等概率取 +√P 与 −√P</li>
+        <li data-opt="c">C. 高斯分布 N(0, P)</li>
+        <li data-opt="d">D. 均值为 0、方差为 P 的指数分布</li>
+      </ul>
+      <div class="quiz-explain">选 C。容量推导中等号成立当且仅当 Y 为高斯，这要求 X 为高斯 N(0,P)。A 错：均匀分布方差只有 P/3（功率没用满），且非高斯；B 错：二值输入方差是 P，但 h(Y) 严格小于高斯情形，次优；D 错：指数分布支撑集非负、不可能均值 0，且同样非高斯。固定方差下高斯微分熵最大——这是全题眼。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="c">
+      <div class="q-no">自测 3</div>
+      <div class="q-stem">三条并行高斯信道，噪声 N = (1, 2, 8)，总功率 P = 5。最优功率分配是：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. (5/3, 5/3, 5/3)——平均分配最公平</li>
+        <li data-opt="b">B. 噪声最大的信道三分得最多功率，补偿它的劣势</li>
+        <li data-opt="c">C. (3, 2, 0)——好信道多拿，最差的信道一分不给</li>
+        <li data-opt="d">D. (1, 1, 3)——按噪声正比例分配</li>
+      </ul>
+      <div class="quiz-explain">选 C：注水解 Pᵢ = (ν−Nᵢ)⁺，ν=4，得 (3,2,0)。A 错：平均分配无视噪声差异，不是驻点；B 是最常见的直觉错误——log 收益递减，"补偿"差信道回报最低，最优恰好相反；D 把比例方向搞反了，噪声大的多分只会浪费功率。弃用深噪声信道正是注水的精髓。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 4</div>
+      <div class="q-stem">带限 AWGN 信道 C = W·log₂(1+P/(N₀W))。固定发射功率 P，令带宽 W → ∞，容量趋于：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 无穷大——带宽是免费的，自由度无限增多</li>
+        <li data-opt="b">B. P/(N₀·ln2)——一个有限饱和值</li>
+        <li data-opt="c">C. 0——噪声功率随带宽增长把容量压没</li>
+        <li data-opt="d">D. 保持不变，等于某个 W·log₂(1+SNR)</li>
+      </ul>
+      <div class="quiz-explain">选 B。W 增大时自由度线性增多，但噪声功率 N₀W 也线性增大；用 log₂(1+x)≈x/ln2 得极限 P/(N₀·ln2)。A 错在忘了带宽同时放大噪声——带宽不是免费的；C 错：自由度增长（线性 W）压过了每自由度信噪比的下降，总量收敛到正值而非 0；D 错：C 明明随 W 变化。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="c">
+      <div class="q-no">自测 5</div>
+      <div class="q-stem">可靠传输所需的每比特能量下限（香农极限）是：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. Eb/N₀ ≥ 1，即 0 dB——信噪比不能低于 1</li>
+        <li data-opt="b">B. Eb/N₀ ≥ 1.44，即 +1.59 dB</li>
+        <li data-opt="c">C. Eb/N₀ ≥ ln2 ≈ 0.693，即 −1.59 dB</li>
+        <li data-opt="d">D. Eb/N₀ ≥ 2，即约 3 dB</li>
+      </ul>
+      <div class="quiz-explain">选 C。由 C ≤ P/(N₀·ln2) 与 Eb = P/R 联立：Eb/N₀ = (P/N₀)/R ≥ ln2 = 0.693，10·log₁₀(0.693) = −1.59 dB。A 错：它可以是负 dB——带宽足够时 SNR 低于 0 dB 也能可靠通信（深空通信即如此）；B 数值对、符号错：是 −1.59 不是 +1.59；D 是某些实用编码的近似工作点，不是理论极限。</div>
+    </div>
+
+    <!-- ============ 三句话复述 ============ -->
+    <div class="retell">
+      <h3>🗣️ 用自己的话，三句话讲完本章</h3>
+      <p class="retell-sub">对着空气（或室友）说出这三句。说卡壳的那句，回去重读对应小节。</p>
+      <details>
+        <summary>句1：这章解决什么问题？——</summary>
+        <div class="retell-answer">参考答案：功率与带宽受限的连续物理信道（电缆、无线电），每秒最多能可靠传输多少比特？第 7 章的容量定义落到了最重要的具体信道上。</div>
+      </details>
+      <details>
+        <summary>句2：核心机制是什么？——</summary>
+        <div class="retell-answer">参考答案：采样定理把带宽 W 的信道切成每秒 2W 个 AWGN 自由度 Y = X+Z；单自由度上"高斯输入使 h(Y) 最大"给出 C = ½log(1+P/N)（几何上就是球体填充计数）；多条噪声不齐的子信道用注水 Pᵢ = (ν−Nᵢ)⁺ 分功率；合起来得带限公式 C = W·log₂(1+P/(N₀W))，并压出 Eb/N₀ ≥ −1.59 dB 的能量地板。</div>
+      </details>
+      <details>
+        <summary>句3：它和前后章怎么分工？——</summary>
+        <div class="retell-answer">参考答案：第 7 章给容量定义与编码定理框架，第 8 章给微分熵工具，本章把二者落到 AWGN 与带限信道；欠两笔账——噪声为何最坏是高斯（第 12 章最大熵严格化），以及信源那头连续信源最少要压到多少比特（第 10 章率失真）。</div>
+      </details>
+    </div>
+
+    <!-- ============ 复习计划 ============ -->
+    <div class="review-plan">
+      <h3>🔁 间隔复习计划</h3>
+      <p>回忆本身比重读有效 10 倍。到点只做一件事：翻卡 + 重做标记题。</p>
+      <table>
+        <tr><th>时间点</th><th>复习内容</th><th>预计用时</th></tr>
+        <tr><td>第 1 天</td><td>概念卡 1–6 全部 + 回忆卡 9.2-1、9.3-1、9.4-2</td><td>10 分钟</td></tr>
+        <tr><td>第 3 天</td><td>概念卡 3、5、6（容量公式/注水/香农极限）+ 重做习题 L2-1、L2-2 + 自测错题</td><td>10 分钟</td></tr>
+        <tr><td>第 7 天</td><td>三句话复述出声说一遍 + 回忆卡 9.1-2、9.2-2、9.3-2 + 白纸上重推 C = ½log(1+P/N)</td><td>12 分钟</td></tr>
+        <tr><td>第 15 天</td><td>只做合上书挑战；6 条全过则本章毕业，卡在哪条就重读对应小节</td><td>15 分钟</td></tr>
+      </table>
+    </div>
+
+    <!-- 合上书挑战 -->
+    <div class="final-challenge">
+      <h3>📕 合上书挑战</h3>
+      <p class="fc-sub">现在关掉这个页面（或遮住屏幕），拿一张纸，凭记忆完成以下任务。全部做完再回来核对——这是本章真正的毕业考试。</p>
+      <ol id="ch09-challenge-list">
+        <li><span class="fc-check"></span>写出 AWGN 信道模型 Y = X + Z 与平均功率约束，并说出噪声取高斯的两条理由</li>
+        <li><span class="fc-check"></span>从 I(X;Y) = h(Y) − h(Z) 出发，三步推出 C = ½log(1+P/N)，指明等号成立条件</li>
+        <li><span class="fc-check"></span>手算 P/N = 15 与 P/N = 255 的容量；画出球体填充示意（两个球的半径与体积比）</li>
+        <li><span class="fc-check"></span>对 N = (1, 2, 3)、P = 6 手算注水解 P = (3, 2, 1) 与容量 ≈ 1.71 比特，并说出何时某条信道会被弃用</li>
+        <li><span class="fc-check"></span>写出带限公式 C = W·log₂(1+P/(N₀W))，推出 W→∞ 的饱和值与 −1.59 dB 香农极限</li>
+        <li><span class="fc-check"></span>回答本章的主线问题：功率 P、噪声 N、带宽 W 给定，这条物理信道每秒最多能可靠传多少比特？（一句话）</li>
+      </ol>
+    </div>
+
+    <div class="complete-zone">
+      <button class="btn-complete" id="ch09-btn-complete" onclick="markDone()">✓ 我已完成本章（含合上书挑战）</button>
+    </div>
+
+    <div class="chapter-nav">
+      <a href="chapter-08.html"><span class="nav-dir">← 上一章</span>第8章 微分熵</a>
+      <a href="chapter-10.html" class="next"><span class="nav-dir">下一章 →</span>第10章 率失真理论</a>
+    </div>
+
+  </div>
+</div>
+
+<footer class="footer">
+  <div class="wrap">第9章 高斯信道 · 信息论互动讲义 · 基于 Cover &amp; Thomas《Elements of Information Theory》（第2版）</div>
+</footer>
+
+<script src="assets/mermaid.min.js"></script>
+<script>
+mermaid.initialize({
+  startOnLoad: true,
+  theme: "base",
+  themeVariables: {
+    primaryColor: "#e3edf7",
+    primaryBorderColor: "#1d5f9e",
+    primaryTextColor: "#1d5f9e",
+    lineColor: "#5c554b",
+    secondaryColor: "#fbeedd",
+    tertiaryColor: "#f5f1e8",
+    fontFamily: "-apple-system, PingFang SC, sans-serif",
+    fontSize: "14px"
+  },
+  flowchart: { curve: "linear", htmlLabels: false }
+});
+</script>
+<script>
+// 自测题判分（原样复用，勿改）
+document.querySelectorAll(".quiz-block").forEach(block => {
+  const answer = block.dataset.answer;
+  const explain = block.querySelector(".quiz-explain");
+  block.querySelectorAll(".quiz-opts li").forEach(li => {
+    li.addEventListener("click", () => {
+      const opts = block.querySelectorAll(".quiz-opts li");
+      opts.forEach(o => o.classList.add("disabled"));
+      if (li.dataset.opt === answer) {
+        li.classList.add("correct");
+      } else {
+        li.classList.add("wrong");
+        block.querySelector(`[data-opt="${answer}"]`).classList.add("correct");
+      }
+      explain.classList.add("show");
+    });
+  });
+});
+
+// 合上书清单打勾
+document.querySelectorAll("#ch09-challenge-list li").forEach(li => {
+  li.addEventListener("click", () => li.classList.toggle("checked"));
+});
+
+// 完成标记 → localStorage（键名与章号按本章设置）
+const KEY = "it_progress_v1";
+const CH = "9";
+function loadProgress() {
+  try { return JSON.parse(localStorage.getItem(KEY)) || {}; } catch (e) { return {}; }
+}
+const progress = loadProgress();
+const btn = document.getElementById("ch09-btn-complete");
+if (progress[CH] && progress[CH].done) {
+  btn.textContent = "✓ 已完成 · 再次点击重置";
+  btn.classList.add("done");
+}
+function markDone() {
+  const p = loadProgress();
+  if (p[CH] && p[CH].done) {
+    delete p[CH];
+    btn.textContent = "✓ 我已完成本章（含合上书挑战）";
+    btn.classList.remove("done");
+  } else {
+    p[CH] = { done: true, completedAt: Date.now(), reviewsDone: 0 };
+    btn.textContent = "✓ 已完成 · 复习提醒已开启";
+    btn.classList.add("done");
+  }
+  localStorage.setItem(KEY, JSON.stringify(p));
+}
+</script>
+
+</body>
+</html>

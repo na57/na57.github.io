@@ -1,0 +1,862 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第10章 带近似的在策略控制 · 强化学习互动讲义</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+<nav class="topbar">
+  <div class="topbar-inner">
+    <span class="brand"><a href="index.html" style="color:inherit">← 学习地图</a></span>
+    <span class="crumb">阶段三 · 函数逼近 / 第10章</span>
+  </div>
+</nav>
+
+<div class="wrap">
+
+  <div class="lecture-head">
+    <span class="ch-label">CHAPTER 10 · 函数逼近</span>
+    <h1>带近似的在策略控制</h1>
+    <p class="lead">预测学会了"评估"，控制还要学会"选择"；而当任务没有终点时，连"什么叫好"都要重新定义。</p>
+  </div>
+
+  <!-- 本章定位 -->
+  <div class="position-bar">
+    <strong>本章在主线上的位置：</strong>Ch9 给出逼近下的预测 → <u>本章把预测升级为 ε-贪心控制，并为没有终止态的任务找到干净的目标</u> → Ch11 揭示离策略与函数逼近叠加的致命危险。<br>
+    第10章回答主线上的一个问题：<strong>函数逼近之下怎么做在策略控制？没有终点的持续任务，优化目标该是什么、为什么？</strong>
+    <div class="map-inline">
+      <span class="node">Ch1-4 表格法基础（MDP与动态规划）</span><span class="arrow">→</span>
+      <span class="node">Ch5-8 表格型无模型（MC与TD控制）</span><span class="arrow">→</span>
+      <span class="node here">Ch10 带近似的在策略控制</span><span class="arrow">→</span>
+      <span class="node">Ch12-13 策略与前沿（资格迹与策略梯度）</span>
+    </div>
+  </div>
+
+  <!-- 学习目标 -->
+  <div class="objectives">
+    <h4>🎯 学完本章，合上书你应该能：</h4>
+    <ol>
+      <li>说出控制为什么必须用动作价值 q̂(s,a) 而不能只用状态价值 v̂(s)，并解释特征 x(s,a) 如何把动作编码进同一个线性逼近</li>
+      <li>写出半梯度 Sarsa 的更新公式，并在给定线性特征与权重时手算一步完整的权重更新（含 δ 与梯度方向）</li>
+      <li>写出平均奖励 r(π) 的定义与差分 Bellman 方程，并在 2–3 状态的确定性 MRP 上手算 r(π) 和一组差分值</li>
+      <li>解释"持续任务 + 函数逼近"下折扣目标为什么失效（μ_π 随策略变化），并说出平均奖励目标为什么干净</li>
+      <li>写出差分半梯度 Sarsa 的双时标更新（w 用 α、r̄ 用 β），手算一步更新并解释 β≪α 的理由</li>
+    </ol>
+  </div>
+
+  <div class="lecture">
+
+    <!-- 推导主线图 -->
+    <div class="figure">
+      <div class="mermaid">
+flowchart TB
+  A["Ch9 解决了逼近预测 v̂(s)"] --> B["控制需要 q̂(s, a)<br>在同一状态比较动作"]
+  B --> C["动作进特征 x(s, a)<br>加 ε 贪心"]
+  C --> D["半梯度 Sarsa<br>搞定回合任务"]
+  D --> E["持续任务没有终止态<br>折扣目标随策略漂移"]
+  E --> F["平均奖励 r(π) 与差分回报<br>重新定义好"]
+  F --> G["差分半梯度 Sarsa<br>w 与 r̄ 双时标"]
+  G --> H["代价 理论更弱 离策略更险<br>通向 Ch11"]
+  classDef hot fill:#fbeedd,stroke:#c4651f,stroke-width:2.5px,color:#c4651f;
+  classDef danger fill:#fae9e7,stroke:#b03a2e,stroke-width:2.5px,color:#b03a2e;
+  class G hot;
+  class H danger;
+      </div>
+      <div class="caption">图 10.0 本章推导主线：每一步都在回答"上一步还差什么"。末端红点——理论更弱、离策略更险——正是第11章的致命三角。</div>
+    </div>
+
+    <!-- ============ 10.1 ============ -->
+    <h2><span class="sec-no">10.1</span>从预测到控制：动作价值与半梯度 Sarsa</h2>
+
+    <p>第9章解决了逼近预测：给定策略 π，用 w<sup>ᵀ</sup>x(s) 逼近 v<sub>π</sub>(s)。但预测从来不是终点——回顾 Ch5–8 的表格型控制（MC 控制、Sarsa、Q-learning），它们全都围绕<strong>动作价值</strong> Q(s,a) 展开。为什么？因为<span class="term">控制</span>要在<strong>同一个状态里比较不同动作</strong>，用 ε-贪心选出下一步；只有 v̂(s) 做不到这一点：没有环境模型时，状态值无法告诉你"哪个动作通向高价值的后继"。这就是本章的第一步——把逼近对象从 v 换成 <span class="term">动作价值函数</span>（Action-Value Function）：</p>
+
+    <div class="formula">q̂(<span class="var">s</span>, <span class="var">a</span>, <span class="var">w</span>) = <span class="var">w</span><sup>ᵀ</sup><span class="var">x</span>(<span class="var">s</span>, <span class="var">a</span>)</div>
+
+    <p>关键设计：特征向量 x(s,a) <strong>把动作也编码进去</strong>，一个 w 同时服务所有动作。在状态 s 要决策时，对每个候选动作 a 算一次 q̂(s,·,w)，取最大者（或以 ε 概率随机）——这就是 ε-贪心策略改进。</p>
+
+    <p>更新规则是 Ch6 Sarsa 的直接推广——<span class="term">半梯度 Sarsa</span>（Semi-gradient Sarsa），一种<span class="term">在策略</span>（On-policy）控制：行为策略与目标策略同为对 q̂ 的 ε-贪心。</p>
+
+    <div class="formula"><span class="var">w</span> ← <span class="var">w</span> + α [ R + γ q̂(S′, A′, <span class="var">w</span>) − q̂(S, A, <span class="var">w</span>) ] ∇q̂(S, A, <span class="var">w</span>)</div>
+
+    <p>线性逼近 q̂ = w<sup>ᵀ</sup>x(s,a) 时，∇q̂(S,A,w) = x(S,A)——梯度就是特征本身。若 S′ 是终止态，约定 q̂(终止, ·) = 0。</p>
+
+    <h3>完整算例：两步回合，手算 w 的两次更新</h3>
+    <p>回合片段：(S₀, right) → R=0 → S₁；(S₁, right) → R=1 → 终止。特征 x(S₀,right)=(1,0)、x(S₁,right)=(0,1)，初始 w₀=(0.2, 0.5)，α=0.5，γ=1。</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>步骤</th><th>当前 (S,A)</th><th>q̂(S,A)</th><th>R</th><th>自举项</th><th>δ</th><th>更新后 w</th></tr>
+        <tr><td>1</td><td>(S₀,right)</td><td>0.2</td><td>0</td><td>γ·q̂(S₁,right)=0.5</td><td>0 + 0.5 − 0.2 = <strong>0.3</strong></td><td>(0.35, 0.5)</td></tr>
+        <tr><td>2</td><td>(S₁,right)</td><td>0.5</td><td>1</td><td>终止 = 0</td><td>1 + 0 − 0.5 = <strong>0.5</strong></td><td>(0.35, 0.75)</td></tr>
+      </table>
+    </div>
+
+    <p><strong>逐步验算</strong>：</p>
+    <ul>
+      <li>第1步：q̂(S₀,right) = w·x = 0.2×1 + 0.5×0 = 0.2；δ = 0 + 1×0.5 − 0.2 = 0.3；w ← (0.2,0.5) + 0.5×0.3×(1,0) = (0.2+0.15, 0.5) = <strong>(0.35, 0.5)</strong>。</li>
+      <li>第2步：δ = 1 + 0 − 0.5 = 0.5；w ← (0.35,0.5) + 0.5×0.5×(0,1) = (0.35, 0.5+0.25) = <strong>(0.35, 0.75)</strong>。</li>
+      <li>对照真值：q(S₁,right)=1，q(S₀,right)=0+1×1=1。w 的两个分量都从初始值朝 1 方向移动（0.2→0.35，0.5→0.75）——方向正确。</li>
+    </ul>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>半梯度 Sarsa = Ch6 的表格 Sarsa 把"查表项"换成 w<sup>ᵀ</sup>x(s,a)。表格只是 x 为 one-hot 特征的特例——本章所有公式令 x 取 one-hot 就退化回 Ch6。你早就见过它，只是换了一身衣服。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>"动作多了，那就给每个动作单独训练一个函数吧。" 不必。特征是 (s,a) 的函数，所有动作<strong>共享一个 w</strong>，动作间的泛化（相似动作价值相近）正是白送的收益。把它学成 |𝒜| 个互不相干的模型，等于把泛化能力扔进垃圾桶。（实践中确有"共享主干 + 每动作一个输出头"的网络，但那本质仍是共享表示，不是独立训练。）</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <p class="recall-hint">不要直接点开。先在心里或纸上说出答案，再翻面核对。</p>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 10.1-1</div>
+              <div class="q-text">为什么逼近下的控制必须用 q̂(s,a)，而预测只用 v̂(s) 就够？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              控制要在同一状态比较动作来做 ε-贪心策略改进，动作必须是函数的输入；没有模型时 v̂(s) 只给状态打分，推不出哪个动作更好。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 10.1-2</div>
+              <div class="q-text">写出半梯度 Sarsa 更新公式。线性逼近时梯度 ∇q̂ 等于什么？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              w ← w + α[R + γq̂(S′,A′,w) − q̂(S,A,w)]∇q̂(S,A,w)。线性 q̂ = w<sup>ᵀ</sup>x(s,a) 时 ∇q̂ = x(s,a)，终止态 q̂ = 0。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 10.2 ============ -->
+    <h2><span class="sec-no">10.2</span>n 步半梯度 Sarsa 与 Mountain Car</h2>
+
+    <p>上一节的一步 Sarsa 自举快、方差小，但 Ch7 已经告诉我们：一步 TD 与蒙特卡洛之间有一整个谱系，n 步往往比两个端点都好。逼近之下同样如此——把更新靶子从一步 TD 目标换成 <span class="term">n 步回报</span>（n-step Return）即可：</p>
+
+    <div class="formula">G<sub>t:t+n</sub> = R<sub>t+1</sub> + γR<sub>t+2</sub> + ⋯ + γ<sup>n−1</sup>R<sub>t+n</sub> + γ<sup>n</sup> q̂(S<sub>t+n</sub>, A<sub>t+n</sub>, <span class="var">w</span>)</div>
+    <div class="formula"><span class="var">w</span> ← <span class="var">w</span> + α [ G<sub>t:t+n</sub> − q̂(S<sub>t</sub>, A<sub>t</sub>, <span class="var">w</span>) ] ∇q̂(S<sub>t</sub>, A<sub>t</sub>, <span class="var">w</span>)</div>
+
+    <p>结构与 Ch9 的 n 步预测完全平行：靶子减估计、乘梯度、乘步长。前 n−1 个奖励是实测，第 n 步用当前 q̂ 自举。</p>
+
+    <h3>Mountain Car（例 10.1）：连续状态的第一场实战</h3>
+    <p>一辆动力不足的小车卡在两山之间的谷底，直接踩油门冲不上坡，必须<strong>先反向荡起来积蓄动能</strong>才能翻过山顶。状态是 (位置, 速度) 两个连续量；奖励恒为 −1，直到过顶回合结束。</p>
+
+    <p>连续状态没法列表——这是函数逼近的用武之地。Sutton 用的特征是 <span class="term">瓦片编码</span>（Tile Coding）：</p>
+    <ul>
+      <li>在二维状态空间上铺<strong>多层网格</strong>，层与层之间彼此错开一小段距离；</li>
+      <li>任一状态落在每层的恰好一个格子里，把该格对应的特征置 1，其余置 0；</li>
+      <li>总特征数很大，但每一步只有少数几个非零——<strong>稀疏二值特征</strong>，线性 q̂ = w<sup>ᵀ</sup>x 就够用。</li>
+    </ul>
+    <p>为什么有效：邻近的状态在大多数层里落进相同或相邻的格子，共享大量瓦片——对一个状态的更新<strong>自动泛化到附近状态</strong>；多层的偏移又提供了分辨率。配上 ε-贪心与 n 步（Sutton 用 n=1 与 n=8 对比，中等 n 学习明显更快），线性半梯度 Sarsa 就能轻松学会"荡上去"的策略。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>瓦片编码 = 手工设计的"核"。它把"邻近状态价值应相近"这个先验硬编码进特征表示，用粗粒度的划分换取线性方法的稳定性、速度和可解释性——在深度网络流行之前，这就是连续控制的标准做法。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>"n 越大信息越全，直接取到回合结束最好。" 错。n 大则偏向蒙特卡洛——方差大、要等更久才能更新；n 小则偏向一步 TD——自举偏置大。这个权衡在逼近下原样存在，Mountain Car 上中等 n 通常优于两端。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 10.2-1</div>
+              <div class="q-text">Mountain Car 为什么必须用函数逼近？瓦片编码怎样把连续状态变成特征？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              位置、速度是连续量，状态无穷多无法列表。瓦片编码用多层彼此偏移的网格，每层点亮一格，得到稀疏二值特征；邻近状态共享瓦片，从而泛化。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 10.2-2</div>
+              <div class="q-text">写出 n 步回报 G_{t:t+n}，并说出增大 n 的利弊。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              G<sub>t:t+n</sub> = R<sub>t+1</sub> + γR<sub>t+2</sub> + ⋯ + γ<sup>n−1</sup>R<sub>t+n</sub> + γ<sup>n</sup>q̂(S<sub>t+n</sub>,A<sub>t+n</sub>,w)。n 大偏 MC（方差大），n 小偏一步 TD（偏置大），逼近下权衡依旧。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 10.3 ============ -->
+    <h2><span class="sec-no">10.3</span>平均奖励：没有终点时"好"的定义</h2>
+
+    <p>前两节都默认回合会结束——Mountain Car 总会过顶。但大量真实任务是 <span class="term">持续任务</span>（Continuing Task）：服务器调度、恒温控制、常驻机器人，<strong>没有终止态，交互永不停止</strong>。相对地，有终止态的叫 <span class="term">回合任务</span>（Episodic Task）。没有终点，"总回报"发散，那"好"到底指什么？本节给出答案：<span class="term">平均奖励</span>（Average Reward）——策略 π 下每步奖励的长期平均：</p>
+
+    <div class="formula">r(π) = lim<sub>h→∞</sub> <span class="frac"><span class="num-part">1</span><span class="den-part">h</span></span> ∑<sub>t=1..h</sub> 𝔼[R<sub>t</sub>] = ∑<sub>s</sub> μ<sub>π</sub>(s) ∑<sub>a</sub> π(a|s) ∑<sub>s′,r</sub> p(s′,r|s,a) · r</div>
+
+    <p>其中 μ<sub>π</sub> 是策略 π 诱导的<span class="term">稳态分布</span>（Stationary Distribution）。当马尔可夫链满足<span class="term">遍历性</span>（Ergodicity）——从任何状态出发都能到达任何状态——极限存在且<strong>与起始状态无关</strong>，r(π) 是策略的固有属性。</p>
+
+    <h3>完整算例：两状态 MRP 的 r(π) 与差分值</h3>
+    <p>单个策略（无选择，MRP）：A→B 确定性、R=0；B→A 确定性、R=2。</p>
+
+    <div class="figure">
+      <div class="mermaid">
+flowchart LR
+  A["状态 A"] -->|"R = 0"| B["状态 B"]
+  B -->|"R = 2"| A
+      </div>
+      <div class="caption">图 10.1 两状态确定性 MRP：每两步拿到奖励 2，平均每步 1。</div>
+    </div>
+
+    <p><strong>第一步，求稳态分布</strong>：链是周期 2 的确定性环，长期看一半时间在 A、一半在 B，μ(A) = μ(B) = 1/2。</p>
+    <p><strong>第二步，求 r(π)</strong>：r(π) = μ(A)·0 + μ(B)·2 = 0.5×0 + 0.5×2 = <strong>1</strong>。直觉检验：每两步进账 2，平均每步 1 ✓。</p>
+
+    <p>有了平均奖励，就能定义 <span class="term">差分回报</span>（Differential Return）——每一步先扣掉平均水平再累计：</p>
+
+    <div class="formula">G<sub>t</sub> = R<sub>t+1</sub> − r(π) + R<sub>t+2</sub> − r(π) + R<sub>t+3</sub> − r(π) + ⋯</div>
+
+    <p>各项围绕零波动，遍历性保证这个无穷级数收敛（不像原始回报那样发散）。相应的 <span class="term">差分值函数</span>（Differential Value Function）v<sub>π</sub>(s) = 𝔼<sub>π</sub>[G<sub>t</sub> | S<sub>t</sub>=s] 满足<strong>差分 Bellman 方程</strong>：</p>
+
+    <div class="formula">v(s) = 𝔼[ R − r(π) + v(S′) ]</div>
+
+    <p><strong>第三步，求差分值</strong>：v(A) = 0 − 1 + v(B)；v(B) = 2 − 1 + v(A) = 1 + v(A)。取基准 v(A) = 0，则 v(B) = 1。回代检查：v(A) = −1 + 1 = 0 ✓。注意：把所有 v 同时加一个常数 c，方程两边依然成立——<strong>差分值只确定到加性常数</strong>，有意义的只是状态间的相对差（B 比 A 好 1）。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>平均奖励像一条"基准线"：每步奖励先与基准线比较，高出记正、低于记负。差分值衡量的不是"这个状态值多少"，而是"从这里出发，能比平均水平好多少"。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>"平均奖励嘛，把历史奖励求个平均不就行了。" 不行。历史平均只给你一个孤零零的数；Bellman 结构——用后继的值表示当前的值——必须靠差分回报才成立。没有这个递归结构，就没有 TD 更新可用，第9章的全套武器都作废。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 10.3-1</div>
+              <div class="q-text">写出 r(π) 的定义。遍历性保证了什么？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              r(π) = lim (1/h)Σ𝔼[R<sub>t</sub>] = Σ<sub>s</sub>μ<sub>π</sub>(s)Σ<sub>a</sub>π(a|s)Σp·r。遍历性保证极限存在、与起始状态无关、μ<sub>π</sub> 唯一。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 10.3-2</div>
+              <div class="q-text">差分回报为什么要减 r(π)？差分值为什么只确定到常数？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              减去平均奖励使各项围绕零波动，级数收敛、Bellman 结构成立。Bellman 方程两边对 v 同加常数仍成立，故只有相对差有意义。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 10.4 ============ -->
+    <h2><span class="sec-no">10.4</span>为什么逼近之下折扣设置站不住</h2>
+
+    <p>上一节给持续任务立了新目标，但你应该追问：表格法里 γ&lt;1 的折扣用得好好的，为什么非换不可？答案是：<strong>折扣目标的"干净"依赖表格表示，一旦换逼近就塌了</strong>。</p>
+
+    <p><strong>表格法</strong>：每个状态有独立的表项，v̂ 可以精确等于 v<sub>π</sub>，"所有状态误差同时为零"是可达的、毫不含糊的目标。γ&lt;1 只管保证回报收敛，目标定义毫无歧义。</p>
+
+    <p><strong>函数逼近</strong>：w 的维度远小于状态数，v̂ 不可能处处等于 v<sub>π</sub>，必须回答"在哪个状态上误差更重要"。Ch9 的目标是投影误差 ‖v<sub>π</sub> − v̂‖<sub>μ<sub>π</sub></sub>——按策略的稳态分布 μ<sub>π</sub> 加权。麻烦正在这里：</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>μ<sub>π</sub> 依赖被评估的策略本身。策略一改，状态分布跟着改，误差的权重跟着改——"什么叫好"的尺子随被测量者一起动。于是"最优策略"陷入循环定义：最优 = 按它自己引起的分布加权误差最小的策略？这在概念上是站不住的。而平均奖励目标 r(π) 是一个<strong>单一标量</strong>，不依赖任何 w、不依赖状态加权，定义干干净净。</p>
+    </div>
+
+    <p><strong>结论</strong>：continuing + 函数逼近 → 用平均奖励；episodic 任务（有终止态吸收，分布的麻烦不出现）折扣照用。</p>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>"这是纯哲学洁癖，工程上无所谓。" 恰恰相反：目标里含 μ<sub>π</sub> 时，连"策略改进了没有"都可能无法判定——两个策略的投影误差是在两套不同权重下算出来的，直接比较没有意义。目标不干净，改进无从谈起。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 10.4-1</div>
+              <div class="q-text">表格法里折扣目标为什么干净？逼近下为什么不干净？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              表格可逐状态精确表示 v<sub>π</sub>，零误差目标明确。逼近下只能最小化按 μ<sub>π</sub> 加权的投影误差，而 μ<sub>π</sub> 随策略改变——评价标准随被评价对象变动。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 10.4-2</div>
+              <div class="q-text">continuing + 逼近该用什么目标？episodic 呢？各说一句理由。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              前者用平均奖励 r(π)：单一标量、与 w 和状态加权解耦。后者折扣照用：有终止态，μ<sub>π</sub> 加权的麻烦不出现。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 10.5 ============ -->
+    <h2><span class="sec-no">10.5</span>差分半梯度 Sarsa</h2>
+
+    <p>目标定了，算法就是把 10.1 的半梯度 Sarsa 改成"差分版"：γ 退休，换成在 δ 里减去平均奖励的估计 r̄。核心是 <span class="term">差分 TD 误差</span>（Differential TD Error）：</p>
+
+    <div class="formula">δ<sub>t</sub> = R<sub>t+1</sub> − r̄<sub>t</sub> + q̂(S<sub>t+1</sub>, A<sub>t+1</sub>, <span class="var">w</span>) − q̂(S<sub>t</sub>, A<sub>t</sub>, <span class="var">w</span>)</div>
+
+    <p>以及一组<span class="term">双时标</span>（Two-time-scale）更新——w 和 r̄ 各走各的速度：</p>
+
+    <div class="formula"><span class="var">w</span> ← <span class="var">w</span> + α δ<sub>t</sub> ∇q̂(S<sub>t</sub>, A<sub>t</sub>, <span class="var">w</span>) &nbsp;&nbsp;&nbsp;&nbsp; r̄ ← r̄ + β δ<sub>t</sub></div>
+
+    <p>取 β≪α：r̄ 移动得慢，w 在"近似冻结的 r̄"下快速追踪差分动作值，然后 r̄ 再缓缓挪一步。两个回路时间尺度分离，避免互相追逐振荡。策略照旧是对 q̂ 的 ε-贪心——在策略控制。</p>
+
+    <h3>完整算例：两状态 MRP 上的两步更新</h3>
+    <p>沿用 10.3 的 MRP（A→B 得 0，B→A 得 2，真值 r(π)=1）。特征 x(A)=(1,0)、x(B)=(0,1)，初始 w₀=(0.5,0.5)，r̄₀=0.5，α=0.5，β=0.1。</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>转移</th><th>R</th><th>q̂ 当前</th><th>q̂ 下一</th><th>δ = R − r̄ + 下一 − 当前</th><th>更新后 w</th><th>更新后 r̄</th></tr>
+        <tr><td>A→B</td><td>0</td><td>0.5</td><td>0.5</td><td>0 − 0.5 + 0.5 − 0.5 = <strong>−0.5</strong></td><td>(0.25, 0.5)</td><td>0.45</td></tr>
+        <tr><td>B→A</td><td>2</td><td>0.5</td><td>0.25</td><td>2 − 0.45 + 0.25 − 0.5 = <strong>1.3</strong></td><td>(0.25, 1.15)</td><td>0.58</td></tr>
+      </table>
+    </div>
+
+    <p><strong>逐步验算</strong>：</p>
+    <ul>
+      <li>转移 A→B（R=0）：q̂(A)=0.5，q̂(B)=0.5，δ = 0 − 0.5 + 0.5 − 0.5 = −0.5；w ← (0.5,0.5) + 0.5×(−0.5)×x(A) = (0.5−0.25, 0.5) = (0.25, 0.5)；r̄ ← 0.5 + 0.1×(−0.5) = 0.45。</li>
+      <li>转移 B→A（R=2）：此时 q̂(B)=0.5、q̂(A)=0.25，δ = 2 − 0.45 + 0.25 − 0.5 = 1.3；w ← (0.25,0.5) + 0.5×1.3×x(B) = (0.25, 0.5+0.65) = (0.25, 1.15)；r̄ ← 0.45 + 0.1×1.3 = 0.58。</li>
+      <li>方向检查：真值 r(π)=1，r̄ 从 0.5 → 0.45 → 0.58 震荡上行，朝 1 靠拢；w 的 B 分量涨到 1.15、A 分量降到 0.25——正是 10.3 差分值 v(A)=0、v(B)=1（允许差一个常数）的形状：B 比 A 好约 1。</li>
+    </ul>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>r̄ 是"会学习的基准线"。δ 一肩挑两职：告诉 w 哪个状态-动作比预期好多少，同时告诉 r̄ 平均水平该上调还是下调。一个信号，两处受用。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>"r̄ 直接用历史奖励的滑动平均估计不就行了？" 不行。滑动平均估的是行为分布下的滞后均值，与当前值函数不自洽；用 δ 驱动 r̄ 才与差分 Bellman 方程一致——w 与 r̄ 收敛到同一组方程的解，滑动平均做不到这一点。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 10.5-1</div>
+              <div class="q-text">写出差分 TD 误差与两条更新式。α、β 各管什么，为什么 β≪α？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              δ = R − r̄ + q̂(S′,A′,w) − q̂(S,A,w)；w ← w + αδ∇q̂；r̄ ← r̄ + βδ。α 管动作值、β 管平均奖励；β≪α 让 r̄ 近似静止，w 的追踪稳定不振荡。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 10.5-2</div>
+              <div class="q-text">为什么不能用滑动平均代替 r̄ 的 δ 驱动更新？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              滑动平均是行为分布下的滞后均值，与值函数不自洽；δ 驱动使 r̄ 与 w 收敛到差分 Bellman 方程的同一组解。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 10.6 ============ -->
+    <h2><span class="sec-no">10.6</span>错误直觉："γ 取 0.999 就万事大吉"</h2>
+
+    <p>听完 10.3–10.5，很多人心里还剩最后一个抵抗：何必发明新目标？γ 取得足够接近 1，折扣不就约等于平均了吗？三条反驳：</p>
+
+    <ol>
+      <li><strong>方差爆炸</strong>：γ→1 时折扣回报的有效累计时域约 1/(1−γ) 步——γ=0.999 就是 1000 步的奖励噪声全灌进一个更新信号，学习慢且抖。</li>
+      <li><strong>μ_π 依赖不会消失</strong>：10.4 的循环定义源于"目标里含随策略变动的权重"，γ 取得再大，这个结构性毛病原样保留。</li>
+      <li><strong>最优策略不一致</strong>：γ=0.999 的折扣最优策略 ≠ 平均奖励最优策略——折扣把近期奖励不成比例地加权，会偏爱"先甜后苦"的行为；只有取 γ→1 的病态极限，两者才趋于一致。</li>
+    </ol>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>平均奖励是 continuing 任务的母语，γ&lt;1 是 episodic 任务的母语。用错语言不是完全不能表达，而是词不达意——你以为说的是"长期表现好"，实际说的是"近期表现被放大一千倍的好"。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>"反正工程上大家都用折扣，跑出来的策略也不差。" 工程惯性与理论正确性是两回事。实践里调得动不代表目标在概念上站得住；知道它不干净，至少在结果异常时知道去哪里找 bug。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 10.6-1</div>
+              <div class="q-text">说出反驳"γ 取 0.999 代替平均奖励"的三条理由。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              ①γ→1 折扣回报方差爆炸；②μ<sub>π</sub> 随策略变动的循环定义不因 γ 大而消失；③折扣最优 ≠ 平均奖励最优，近期奖励被不成比例加权。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 10.6-2</div>
+              <div class="q-text">本章两类任务各用什么目标？一句话说分工。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              episodic 任务用折扣回报（γ&lt;1）；continuing 任务配函数逼近用平均奖励 r(π)。两种"母语"各管各的地盘。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 概念卡 ============ -->
+    <h2><span class="sec-no">🃏</span>概念卡：本章概念的一分钟画像</h2>
+    <p>翻面前先自问：这个概念我能用一句话讲清楚吗？</p>
+    <div class="flip-grid">
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 1</div>
+            <div class="q-text">半梯度 Sarsa（Semi-gradient Sarsa）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">w ← w + α[R + γq̂(S′,A′,w) − q̂(S,A,w)]∇q̂ 的在策略 TD 控制。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">把 Ch6 的 Sarsa 推广到函数逼近，状态多到存不下表也能做控制。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">每次拿"下一步的估计"当靶子，把当前估计往靶子挪一小步。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为每个动作要单独训练一个函数——特征是 (s,a) 的函数，共享一个 w。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">episodic 大状态空间的在策略控制；Ch12 资格迹会给它再加速。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 2</div>
+            <div class="q-text">平均奖励 r(π)（Average Reward）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">r(π) = lim (1/h)Σ𝔼[R<sub>t</sub>] = Σ<sub>s</sub>μ<sub>π</sub>(s)Σ<sub>a</sub>π(a|s)Σp·r。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">continuing 任务下"哪个策略好"的标量判据，且与逼近权重解耦。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">长期跑下来，每步平均进账多少。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为是历史奖励的简单平均——它是稳态分布下的期望，遍历性与起点无关。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">无终止态任务 + 函数逼近；10.5 差分算法的目标量。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 3</div>
+            <div class="q-text">差分回报与差分值（Differential Return / Value）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">G<sub>t</sub> = Σ(R<sub>t+k</sub> − r(π))；v<sub>π</sub>(s)=𝔼[G<sub>t</sub>|S<sub>t</sub>=s]，满足 v(s)=𝔼[R − r(π) + v(S′)]。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">让"每步与平均比"的累计量收敛，恢复 Bellman 递归结构。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">先扣掉平均表现，再看你比平均好多少。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为差分值唯一——只确定到加性常数，比较相对差才有意义。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">平均奖励设定下的一切值函数与 TD 更新（10.5、例 10.2）。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 4</div>
+            <div class="q-text">差分半梯度 Sarsa（Differential Semi-gradient Sarsa）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">δ = R − r̄ + q̂′ − q̂；w ← w + αδ∇q̂；r̄ ← r̄ + βδ。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">continuing 任务的在策略控制：无终止态、无折扣，照样 TD 更新。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">Sarsa 的 γ 退休，r̄ 上岗当基准线。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">r̄ 用滑动平均估——与值函数不自洽，必须用 δ 驱动。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">服务器调度、恒温、常驻机器人（Sutton 例 10.2 访问控制排队）。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 5</div>
+            <div class="q-text">瓦片编码（Tile Coding）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">多层彼此偏移的网格，把连续状态映射为每层一格的稀疏二值特征。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">连续状态无法列表；给线性方法提供自带泛化的特征。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">邻近状态共享瓦片，"近者值近"的先验被硬编码。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为网格越细越好——层数与粒度是泛化与分辨率的权衡。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">Mountain Car 等低维连续控制（例 10.1），深度网络前的标准做法。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 6</div>
+            <div class="q-text">双时标 r̄（Two-time-scale）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">w 以步长 α 快更新、r̄ 以 β≪α 慢更新的耦合迭代。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">r̄ 与 w 互为对方的输入，分开时间尺度避免追逐振荡。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">r̄ 像几乎不动的锚，w 围着锚快速收敛，锚再缓缓挪动。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">α=β 也能跑——两回路同速互相追逐，理论和实践都更差。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">一切平均奖励算法（10.5），Ch13 Actor-Critic 也是同款结构。</span></div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- ============ 分层习题 ============ -->
+    <h2><span class="sec-no">📝</span>分层习题</h2>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>控制为什么用 q̂(s,a)，而预测只用 v̂(s) 就够？</div>
+      <details>
+        <summary>提示</summary>
+        <p>想想 ε-贪心在决策的那一刻需要什么信息；没有模型时，v̂(s) 缺了什么。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p>控制的核心动作是<strong>在同一状态比较不同动作</strong>，据此做 ε-贪心策略改进——动作必须能作为函数的输入，这就是 q̂(s,a,w) = w<sup>ᵀ</sup>x(s,a)。预测只需要回答"这个状态值多少"，v̂(s) 即可。</p>
+          <p>没有模型时，v̂(s) 无法推出该选哪个动作：知道状态 s 值 5，却不知道 a₁、a₂ 各自通向哪里、哪个更好。有模型时可以用 v̂ 做一步前瞻（max_a Σ p·v̂(s′)），但无模型设定下此路不通。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>差分回报 G<sub>t</sub> 里为什么要每一项都减去 r(π)？</div>
+      <details>
+        <summary>提示</summary>
+        <p>不减的话，这个无穷级数会怎么样？减了之后各项的符号意味着什么？</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p>不减时，continuing 任务的原始回报 ΣR 随步数线性增长（平均每步进账 r(π)>0 时趋于 +∞），级数发散，无法定义值函数。</p>
+          <p>逐项减去 r(π) 后，各项变成"这一步比平均水平好多少"，围绕零波动；遍历性保证正负大体抵消，级数收敛。收敛了才有 v<sub>π</sub>(s)=𝔼[G<sub>t</sub>|s]，才有差分 Bellman 方程 v(s)=𝔼[R − r(π) + v(S′)]——<strong>减掉 r(π) 是 Bellman 递归结构得以成立的前提</strong>，不是可有可无的装饰。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>手算一步差分半梯度 Sarsa：x(A)=(1,0)、x(B)=(0,1)，w=(0.4,0.4)，r̄=0.8；发生转移 A→B、R=1，B 非终止；α=0.5，β=0.1。求更新后的 w 与 r̄。</div>
+      <details>
+        <summary>提示</summary>
+        <p>先算两个 q̂，再算 δ = R − r̄ + q̂(B) − q̂(A)，最后分别用 α、β 更新 w（沿 x(A) 方向）与 r̄。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p>① q̂(A) = w·x(A) = 0.4×1 + 0.4×0 = 0.4；q̂(B) = 0.4×0 + 0.4×1 = 0.4。</p>
+          <p>② δ = R − r̄ + q̂(B) − q̂(A) = 1 − 0.8 + 0.4 − 0.4 = <strong>0.2</strong>。</p>
+          <p>③ w ← w + αδ∇q̂(A) = (0.4,0.4) + 0.5×0.2×(1,0) = (0.4+0.1, 0.4) = <strong>(0.5, 0.4)</strong>。</p>
+          <p>④ r̄ ← r̄ + βδ = 0.8 + 0.1×0.2 = <strong>0.82</strong>。</p>
+          <p>解读：这一步奖励 1 高于基准 0.8，δ>0，于是 A 的权重上调（A 变得更"值钱"），基准线 r̄ 也随之上调。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>三状态环 MRP：A→B（R=0）、B→C（R=0）、C→A（R=3），全部确定性。求 r(π) 与一组差分值，并回代验证。</div>
+      <details>
+        <summary>提示</summary>
+        <p>确定性环上每个状态的长期占比相同；差分 Bellman 方程逐边列出，取一个状态为基准 0 再解。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p>① 稳态分布：周期 3 的确定性环，μ(A)=μ(B)=μ(C)=1/3。</p>
+          <p>② r(π) = (1/3)×0 + (1/3)×0 + (1/3)×3 = <strong>1</strong>。直觉：每三步进账 3，平均每步 1 ✓。</p>
+          <p>③ 差分 Bellman 方程逐边展开：</p>
+          <p>v(A) = 0 − 1 + v(B)；&nbsp; v(B) = 0 − 1 + v(C)；&nbsp; v(C) = 3 − 1 + v(A) = 2 + v(A)。</p>
+          <p>④ 取基准 v(A) = 0 → v(B) = −1 + v(C)，v(C) = 2 + 0 = 2 → v(B) = −1 + 2 = 1。</p>
+          <p>得 <strong>v(A)=0，v(B)=1，v(C)=2</strong>。</p>
+          <p>⑤ 回代验证：v(A) = −1 + 1 = 0 ✓；v(B) = −1 + 2 = 1 ✓；v(C) = 2 + 0 = 2 ✓。含义：离大奖励越近的状态越值钱（C 下一步就拿 3）。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l3">L3 建模应用</span>服务器访问控制（参照 Sutton 例 10.2 Access-Control Queuing）：10 台服务器各自忙闲不一，客户按 4 种优先级到来；每个到达的客户，你要决定"接受"（分配一台空闲服务器，按优先级获得奖励）还是"拒绝"（奖励 0）。服务器服务完会释放。要求：写出状态/动作/奖励，设计特征，写出差分半梯度 Sarsa 的一步更新，并说明为什么这个任务必须用平均奖励而不是折扣。</div>
+      <details>
+        <summary>提示</summary>
+        <p>状态要同时描述"资源剩多少"和"这单值多少"；动作只有两个；想想任务有没有终点、状态分布跟不跟策略走。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p><strong>MDP 三要素</strong>：</p>
+          <ul>
+            <li>状态 s = (空闲服务器数 n ∈ {0,…,10}, 当前到达客户优先级 h ∈ {1,2,3,4})；</li>
+            <li>动作 a ∈ {接受, 拒绝}（n=0 时只能拒绝）；</li>
+            <li>奖励 R = 2<sup>h−1</sup>（接受优先级 h 的客户，得 1/2/4/8），拒绝得 0。</li>
+          </ul>
+          <p><strong>特征设计</strong>：x(s,a) 用 one-hot 的交叉积——空闲数 one-hot(11 维) × 优先级 one-hot(4 维) × 动作指示(2 维)，共 88 维的稀疏二值向量，q̂(s,a)=w<sup>ᵀ</sup>x(s,a)。</p>
+          <p><strong>一步更新</strong>：δ = R − r̄ + q̂(S′,A′,w) − q̂(S,A,w)；w ← w + αδ·x(S,A)；r̄ ← r̄ + βδ（β≪α）。策略为对 q̂ 的 ε-贪心。</p>
+          <p><strong>为什么必须用平均奖励</strong>：①客流不停，任务天然 continuing，没有终止态；②状态分布随策略变化——拒绝得多、空闲服务器就多，μ<sub>π</sub> 明显依赖 π，正中 10.4 的折扣目标失效情形；③业务关心的本来就是"单位时间收益"，即 r(π) 本身。学出来的策略会呈现合理形状：空闲多时几乎都接，只剩一台空闲时只接高优先级客户。</p>
+        </div>
+      </details>
+    </div>
+
+    <!-- ============ 本章自测 ============ -->
+    <h2><span class="sec-no">✍️</span>本章自测</h2>
+    <p class="quiz-hint">点击选项判分，答错会给出原因。</p>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 1</div>
+      <div class="q-stem">函数逼近下，控制为什么要用 q̂(s,a) 而不能只用 v̂(s)？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 因为 q 比 v 多一个输入，表达能力天生更强</li>
+        <li data-opt="b">B. 因为控制要在同一状态比较动作来做 ε-贪心，动作必须作为函数输入；无模型时 v̂ 推不出该选哪个动作</li>
+        <li data-opt="c">C. 因为 v̂(s) 无法用线性函数逼近</li>
+        <li data-opt="d">D. 因为 q̂ 的收敛速度比 v̂ 快</li>
+      </ul>
+      <div class="quiz-explain">解析：B 对——控制的本质是动作间的比较与选择。A 错：问题不在表达能力，而在"动作是否可比较"。C 错：Ch9 整章都在做 v̂ 的线性逼近。D 错：收敛速度与用 q 还是 v 无关。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="c">
+      <div class="q-no">自测 2</div>
+      <div class="q-stem">n 步半梯度 Sarsa 中，增大 n 的主要效果是？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 减小更新方差</li>
+        <li data-opt="b">B. 消除自举带来的全部偏差，包括逼近偏差</li>
+        <li data-opt="c">C. 偏向蒙特卡洛一端：实测奖励占比高、方差大；n 小则偏向一步 TD：自举偏置大</li>
+        <li data-opt="d">D. 让函数逼近误差消失</li>
+      </ul>
+      <div class="quiz-explain">解析：C 对——n 步是 MC 与一步 TD 之间的谱系，逼近下权衡依旧。A 错：n 大方差反而更大。B 错：n 再大也只减少自举步数带来的偏差，函数类造成的逼近偏差不受影响。D 错：逼近误差由特征与函数类决定，与 n 无关。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="c">
+      <div class="q-no">自测 3</div>
+      <div class="q-stem">关于平均奖励 r(π) 与差分值，下列哪项正确？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. r(π) 的值依赖起始状态</li>
+        <li data-opt="b">B. 差分值函数是唯一确定的</li>
+        <li data-opt="c">C. 遍历性下 r(π) 与起始状态无关；差分值只确定到加性常数</li>
+        <li data-opt="d">D. 差分回报不减 r(π) 也收敛</li>
+      </ul>
+      <div class="quiz-explain">解析：C 对。A 错：遍历性保证极限与起点无关。B 错：Bellman 方程两边对 v 同加常数仍成立，只有相对差有意义。D 错：不减则每步平均净增 r(π)，级数发散，Bellman 结构无从谈起。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 4</div>
+      <div class="q-stem">"continuing + 函数逼近"下折扣目标失效的根本原因是？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. γ&lt;1 时折扣回报一定发散</li>
+        <li data-opt="b">B. 投影误差目标中的加权分布 μ_π 随被评估策略改变，"什么叫好"陷入循环定义</li>
+        <li data-opt="c">C. 折扣回报无法用 TD 方法估计</li>
+        <li data-opt="d">D. 线性函数逼近不支持折扣因子</li>
+      </ul>
+      <div class="quiz-explain">解析：B 对——目标含 μ_π，策略一改评价标准跟着改，连"是否改进"都可能无法判定。A 错：γ&lt;1 的折扣回报收敛。C 错：TD 完全能估计折扣回报，Ch9 就是这么做的。D 错：失效与线性与否无关，深度逼近同样有此问题。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 5</div>
+      <div class="q-stem">差分半梯度 Sarsa 中，r̄ 的正确更新方式是？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 用历史奖励的滑动平均直接估计</li>
+        <li data-opt="b">B. r̄ ← r̄ + βδ，且 β≪α，与 w 构成双时标</li>
+        <li data-opt="c">C. 每个回合结束时用蒙特卡洛回报重估</li>
+        <li data-opt="d">D. 固定为 0，不影响学习</li>
+      </ul>
+      <div class="quiz-explain">解析：B 对——δ 驱动使 r̄ 与 w 收敛到差分 Bellman 方程的同一组解，β≪α 保证追踪稳定。A 错：滑动平均是行为分布下的滞后均值，与值函数不自洽。C 错：continuing 任务没有回合结束可言。D 错：r̄=0 等于不减基准，级数发散、目标错误。</div>
+    </div>
+
+    <!-- ============ 三句话复述 ============ -->
+    <div class="retell">
+      <h3>🗣️ 用自己的话，三句话讲完本章</h3>
+      <p class="retell-sub">对着空气（或室友）说出这三句。说卡壳的那句，回去重读对应小节。</p>
+      <details>
+        <summary>句1：这章解决什么问题？——</summary>
+        <div class="retell-answer">参考答案：函数逼近下怎么做在策略控制；以及没有终止态的 continuing 任务，该用什么标量目标来定义"好"。</div>
+      </details>
+      <details>
+        <summary>句2：核心机制是什么？——</summary>
+        <div class="retell-answer">参考答案：把动作编码进特征 x(s,a)，episodic 任务用半梯度 Sarsa（含 n 步版）做 ε-贪心控制；continuing 任务用平均奖励 r(π) 定义"好"，用差分半梯度 Sarsa（w 与 r̄ 双时标，β≪α）学习差分动作值。</div>
+      </details>
+      <details>
+        <summary>句3：它和前后章怎么分工？——</summary>
+        <div class="retell-answer">参考答案：Ch9 给逼近预测，本章把预测升级为控制、并为持续任务换上平均奖励目标；Ch11 将揭示离策略 + 函数逼近 + 自举三者叠加的致命三角。</div>
+      </details>
+    </div>
+
+    <!-- ============ 间隔复习计划 ============ -->
+    <div class="review-plan">
+      <h3>🔁 间隔复习计划</h3>
+      <p>回忆本身比重读有效 10 倍。到点只做一件事：翻卡 + 重做标记题。</p>
+      <table>
+        <tr><th>时间点</th><th>复习内容</th><th>预计用时</th></tr>
+        <tr><td>第 1 天</td><td>概念卡 1–6 全部 + 回忆 10.1-1/2、10.3-1/2、10.5-1/2</td><td>10 分钟</td></tr>
+        <tr><td>第 3 天</td><td>概念卡 2、3、4（平均奖励一族）+ 重做 L2 两题 + 自测错题</td><td>10 分钟</td></tr>
+        <tr><td>第 7 天</td><td>三句话复述 + 回忆 10.4-1/2、10.6-1/2 + 概念卡 1、5、6</td><td>10 分钟</td></tr>
+        <tr><td>第 15 天</td><td>只做合上书挑战 6 条；能全过就毕业</td><td>15 分钟</td></tr>
+      </table>
+    </div>
+
+    <!-- 合上书挑战 -->
+    <div class="final-challenge">
+      <h3>📕 合上书挑战</h3>
+      <p class="fc-sub">现在关掉这个页面，拿一张纸，凭记忆完成以下任务。全部做完再回来核对——这是本章真正的毕业考试。</p>
+      <ol id="ch10-challenge-list">
+        <li><span class="fc-check"></span>写出 q̂(s,a,w) = w<sup>ᵀ</sup>x(s,a) 与半梯度 Sarsa 更新公式，说出线性时梯度 ∇q̂ 等于什么</li>
+        <li><span class="fc-check"></span>用 10.1 的两步片段（w₀=(0.2,0.5)、α=0.5、γ=1）手算出 w=(0.35, 0.75) 的全过程，含两个 δ</li>
+        <li><span class="fc-check"></span>写出 r(π) 的定义与差分 Bellman 方程，并在两状态 MRP（A→B 得 0、B→A 得 2）上算出 r(π)=1 和一组差分值</li>
+        <li><span class="fc-check"></span>解释 continuing + 逼近下折扣目标失效的 μ_π 原因，并说出平均奖励目标为什么干净</li>
+        <li><span class="fc-check"></span>写出差分 TD 误差与双时标更新式，说出 r̄ 为什么不能用历史奖励滑动平均代替</li>
+        <li><span class="fc-check"></span>一句话回答本章主线问题：逼近下怎么做在策略控制？continuing 任务的目标是什么、为什么？</li>
+      </ol>
+    </div>
+
+    <div class="complete-zone">
+      <button class="btn-complete" id="ch10-btn-complete" onclick="markDone()">✓ 我已完成本章（含合上书挑战）</button>
+    </div>
+
+    <div class="chapter-nav">
+      <a href="chapter-09.html"><span class="nav-dir">← 上一章</span>第9章 带近似的在策略预测</a>
+      <a href="chapter-11.html" class="next"><span class="nav-dir">下一章 →</span>第11章 离策略与函数逼近的致命三角</a>
+    </div>
+
+  </div>
+</div>
+
+<footer class="footer">
+  <div class="wrap">第10章 带近似的在策略控制 · 强化学习互动讲义 · 基于 Sutton &amp; Barto (2018, 2nd ed)</div>
+</footer>
+
+<script src="assets/mermaid.min.js"></script>
+<script>
+mermaid.initialize({
+  startOnLoad: true,
+  theme: "base",
+  themeVariables: {
+    primaryColor: "#e3edf7",
+    primaryBorderColor: "#1d5f9e",
+    primaryTextColor: "#1d5f9e",
+    lineColor: "#5c554b",
+    secondaryColor: "#fbeedd",
+    tertiaryColor: "#f5f1e8",
+    fontFamily: "-apple-system, PingFang SC, sans-serif",
+    fontSize: "14px"
+  },
+  flowchart: { curve: "linear", htmlLabels: false }
+});
+</script>
+<script>
+// 自测题判分
+document.querySelectorAll(".quiz-block").forEach(block => {
+  const answer = block.dataset.answer;
+  const explain = block.querySelector(".quiz-explain");
+  block.querySelectorAll(".quiz-opts li").forEach(li => {
+    li.addEventListener("click", () => {
+      const opts = block.querySelectorAll(".quiz-opts li");
+      opts.forEach(o => o.classList.add("disabled"));
+      if (li.dataset.opt === answer) {
+        li.classList.add("correct");
+      } else {
+        li.classList.add("wrong");
+        block.querySelector(`[data-opt="${answer}"]`).classList.add("correct");
+      }
+      explain.classList.add("show");
+    });
+  });
+});
+
+// 合上书清单打勾
+document.querySelectorAll("#ch10-challenge-list li").forEach(li => {
+  li.addEventListener("click", () => li.classList.toggle("checked"));
+});
+
+// 完成标记 → localStorage（键 rl_progress_v1，章号字符串 "10"）
+const KEY = "rl_progress_v1";
+function loadProgress() {
+  try { return JSON.parse(localStorage.getItem(KEY)) || {}; } catch (e) { return {}; }
+}
+const progress = loadProgress();
+const btn = document.getElementById("ch10-btn-complete");
+if (progress["10"] && progress["10"].done) {
+  btn.textContent = "✓ 已完成 · 再次点击重置";
+  btn.classList.add("done");
+}
+function markDone() {
+  const p = loadProgress();
+  if (p["10"] && p["10"].done) {
+    delete p["10"];
+    btn.textContent = "✓ 我已完成本章（含合上书挑战）";
+    btn.classList.remove("done");
+  } else {
+    p["10"] = { done: true, completedAt: Date.now(), reviewsDone: 0 };
+    btn.textContent = "✓ 已完成 · 复习提醒已开启";
+    btn.classList.add("done");
+  }
+  localStorage.setItem(KEY, JSON.stringify(p));
+}
+</script>
+
+</body>
+</html>

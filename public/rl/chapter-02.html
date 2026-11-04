@@ -1,0 +1,898 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第2章 多臂老虎机 · 强化学习互动讲义</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+<nav class="topbar">
+  <div class="topbar-inner">
+    <span class="brand"><a href="index.html" style="color:inherit">← 学习地图</a></span>
+    <span class="crumb">第一段 · 表格法基础 / 第2章</span>
+  </div>
+</nav>
+
+<div class="wrap">
+
+  <div class="lecture-head">
+    <span class="ch-label">CHAPTER 02 · 表格法基础</span>
+    <h1>多臂老虎机</h1>
+    <p class="lead">把强化学习砍到只剩一个问题：估计不准时，该选哪个动作？</p>
+  </div>
+
+  <!-- ===== 章首四件套之 1：全书定位 ===== -->
+  <div class="position-bar">
+    <strong>本章在主线上的位置：</strong>第 1 章立下"值函数 + 探索—利用"两大概念 → <u>本章在最简单的无状态环境里，把"如何估计动作价值、如何在估计不准时选动作"彻底做扎实</u> → 第 3 章把状态请回来，用 MDP 给值函数一个严格定义，本章的所有估计与选择技巧将在那里被复用。<br>
+    第2章回答主线上的第二个问题：<strong>只有动作、没有状态时，如何从带噪声的奖励中学到哪个动作最好？</strong>
+    <div class="map-inline">
+      <span class="node">Ch1 引言：RL 问题</span><span class="arrow">→</span>
+      <span class="node here">Ch2 多臂老虎机（无状态，练价值估计）</span><span class="arrow">→</span>
+      <span class="node">Ch3 有限 MDP（建模语言）</span><span class="arrow">→</span>
+      <span class="node">Ch4 动态规划（模型内求解）</span><span class="arrow">‖</span>
+      <span class="node">Ch5-8 无模型表格法（MC/TD/规划）</span><span class="arrow">‖</span>
+      <span class="node">Ch9-11 函数逼近（大规模状态）</span><span class="arrow">‖</span>
+      <span class="node">Ch12-13 策略梯度与前沿</span>
+    </div>
+    <div style="margin-top:8px; font-size:12.5px; color:var(--ink-faint)">
+      全书四段分工：<strong>表格法基础（1–4）</strong>在状态可枚举的小世界里建立全部概念；<strong>表格型无模型（5–8）</strong>扔掉环境模型，用采样学习；<strong>函数逼近（9–11）</strong>把值表换成参数化函数以应对大状态空间；<strong>策略与前沿（12–13）</strong>直接优化策略本身。
+    </div>
+  </div>
+
+  <!-- ===== 章首四件套之 2：学习目标 ===== -->
+  <div class="objectives">
+    <h4>🎯 学完本章，合上书你应该能：</h4>
+    <ol>
+      <li>写出动作价值 q*(a) 的定义，以及样本均值估计的增量式更新公式并手算一步</li>
+      <li>说出 ε-贪心策略的完整选择规则，并手算 10 臂、ε=0.1 时各臂被选中的概率</li>
+      <li>解释为什么非平稳问题要用恒定步长 α 而不是 1/n，并写出指数近因加权平均的展开式</li>
+      <li>写出 UCB 的动作选择公式，并手算给定 t 与 N(a) 时各臂的置信项</li>
+      <li>写出梯度老虎机的偏好更新规则，并手算一步 softmax 概率变化</li>
+      <li>说出上下文老虎机与完整 RL 问题之间还差什么</li>
+    </ol>
+  </div>
+
+  <div class="lecture">
+
+    <!-- ===== 章首四件套之 3：推导主线 ===== -->
+    <div class="figure">
+      <div class="mermaid">
+flowchart LR
+  A["没有状态<br>只剩动作怎么选"] --> B["估计动作价值<br>样本均值 Q(a)"]
+  B --> C["估计不可靠<br>贪心会锁死"]
+  C --> D["ε-贪心<br>随机乱试"]
+  C --> E["UCB<br>不确定性加权"]
+  C --> F["梯度老虎机<br>直接学偏好"]
+  D --> G["代价：都没有状态<br>现实决策相互影响 → Ch3 MDP"]
+  E --> G
+  F --> G
+  classDef hot fill:#fbeedd,stroke:#c4651f,stroke-width:2.5px,color:#c4651f;
+  classDef danger fill:#fae9e7,stroke:#b03a2e,stroke-width:2.5px,color:#b03a2e;
+  class B hot;
+  class G danger;
+      </div>
+      <div class="caption">本章推导主线：从"没有状态"出发，价值估计逼出探索策略，探索策略的三种答案最终都撞上同一堵墙——状态。红色节点是本章留给第 3 章的账。</div>
+    </div>
+
+    <!-- ============ 2.1 ============ -->
+    <h2><span class="sec-no">2.1</span>动作价值：先回答"哪个动作值得选"</h2>
+
+    <p>第 1 章的 10 臂测试台就是本章的考场：10 个拉杆，每个拉杆 a 有真实期望收益 q*(a)，但每次拉动拿到的奖励围绕它波动（方差为 1）。你连拉 1000 次，目标是总收益最大。<strong>你唯一要学的就是每个动作的"身价"。</strong></p>
+
+    <p>形式化：动作 a 的<span class="term">真实价值</span>（True Action Value）定义为选它时的期望奖励：</p>
+
+    <div class="formula">q*(a) = 𝔼[ R<sub>t</sub> | A<sub>t</sub> = a ]</div>
+
+    <p>q*(a) 对环境是客观存在的，但你<strong>看不见</strong>——你只能看到一次次带噪声的奖励。能做的是维护一个估计值 Q<sub>t</sub>(a)：到时刻 t 为止对 q*(a) 的猜测。最自然的估计就是<span class="term">样本均值</span>（Sample Average）：把 a 被选过的所有奖励取平均：</p>
+
+    <div class="formula">Q<sub>t</sub>(a) = <span class="frac"><span class="num-part">a 被选过的各次奖励之和</span><span class="den-part">a 被选过的次数 N<sub>t</sub>(a)</span></span></div>
+
+    <p>由大数定律，N<sub>t</sub>(a) → ∞ 时 Q<sub>t</sub>(a) → q*(a)。估计本身无偏，问题是：<strong>前期 N 很小时估计很不可靠</strong>——这正是探索存在的理由。</p>
+
+    <h3>增量式更新：不用存全部历史</h3>
+    <p>样本均值有个实现技巧：不必保存所有历史奖励，只需存 (n, Q<sub>n</sub>)，新奖励 R<sub>n+1</sub> 到来时：</p>
+
+    <div class="formula">Q<sub>n+1</sub> = Q<sub>n</sub> + <span class="frac"><span class="num-part">1</span><span class="den-part">n+1</span></span> [ R<sub>n+1</sub> − Q<sub>n</sub> ]</div>
+
+    <p>这条式子是<strong>全书的元模板</strong>：新估计 = 旧估计 + 步长 ×（新信息 − 旧估计）。方括号里的差是"误差"，步长决定学多快。第 5–7 章的蒙特卡洛、时序差分更新全是这个形状。</p>
+
+    <h3>手算例：序列 1, 2, 3 的增量均值</h3>
+    <p>设某臂连续三次奖励为 1, 2, 3，用增量式逐步算：</p>
+    <ul>
+      <li>Q<sub>1</sub> = 1（第一次，直接取奖励）</li>
+      <li>Q<sub>2</sub> = Q<sub>1</sub> + ½(2 − 1) = 1 + 0.5 = <strong>1.5</strong>（= (1+2)/2 ✓）</li>
+      <li>Q<sub>3</sub> = Q<sub>2</sub> + ⅓(3 − 1.5) = 1.5 + 0.5 = <strong>2</strong>（= (1+2+3)/3 ✓）</li>
+    </ul>
+    <p>再练一个：设某臂已选 3 次、Q<sub>3</sub> = 2.4，第 4 次奖励 R<sub>4</sub> = 3：</p>
+    <div class="formula">Q<sub>4</sub> = 2.4 + <span class="frac"><span class="num-part">1</span><span class="den-part">4</span></span>(3 − 2.4) = 2.4 + 0.15 = <strong>2.55</strong></div>
+    <p>验证：(2.4×3 + 3)/4 = (7.2+3)/4 = 10.2/4 = 2.55 ✓。增量式与直接平均永远一致。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>"新估计 = 旧估计 + 步长 × 误差"这个形式值得背下来。误差是<em>新信息带来的惊讶程度</em>：奖励比预期好就往上调，比预期差就往下调。学习 = 系统性地消除惊讶。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>"Q(a) 是动作的价值"——不准确。Q(a) 只是<strong>对</strong>价值的<em>估计</em>，q*(a) 才是价值本身。混淆两者会以为"选 Q 最大的就是选最好的"，实际上 Q 最大的可能只是运气最好的——这恰是贪心策略翻车的根源（2.2 节）。</p>
+    </div>
+
+    <!-- 回忆卡片 2.1 -->
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 2.1-1</div>
+              <div class="q-text">写出增量式样本均值更新公式，并解释方括号里的量的含义。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              Q<sub>n+1</sub> = Q<sub>n</sub> + (1/(n+1))[R<sub>n+1</sub> − Q<sub>n</sub>]；方括号是"新奖励 − 旧估计"，即预测误差，决定更新方向与幅度。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 2.1-2</div>
+              <div class="q-text">q*(a) 与 Q(a) 的区别是什么？为什么说混淆它们是贪心翻车的根源？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              q*(a) 是动作的真实期望奖励（客观但不可见），Q(a) 是智能体基于有限样本的估计。估计早期不可靠，Q 最大不代表 q* 最大。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 2.2 ============ -->
+    <h2><span class="sec-no">2.2</span>ε-贪心：探索的最简答案，与非平稳性的账单</h2>
+
+    <p>有了估计 Q(a)，怎么选动作？最直接的答案：永远选当前估计最高的——<span class="term">贪心</span>（Greedy）。但 1.6 节已经宣判过它的死刑：早期估计不可靠，贪心会锁死在运气好的次优臂上。</p>
+
+    <p>最简修补：<span class="term">ε-贪心</span>（ε-Greedy）——以 1−ε 的概率选当前估计最高的动作（利用），以 ε 的概率在全部动作中<strong>均匀随机</strong>选一个（探索）。ε 通常取 0.01–0.1。</p>
+
+    <h3>手算例：10 臂、ε = 0.1 时每个臂被选中的概率</h3>
+    <p>设当前估计最高的是 3 号臂。一次选择中：</p>
+    <ul>
+      <li>以 0.9 概率走"利用"分支 → 必中 3 号臂；</li>
+      <li>以 0.1 概率走"探索"分支 → 10 个臂均匀随机，每个 0.1/10 = 0.01，其中也包括 3 号臂。</li>
+    </ul>
+    <div class="formula">P(3号臂) = 0.9 + 0.01 = <strong>0.91</strong>；P(其余每个臂) = <strong>0.01</strong></div>
+    <p>注意：探索分支占总选择的 0.1，即每 1000 步约有 100 步在探索。贪心臂以 91% 的概率被选中——ε-贪心不是"ε 概率探索、其余纯贪心"就结束了，<strong>探索是均匀洒向所有臂的</strong>，包括当前最好的那个。</p>
+
+    <h3>非平稳问题：步长 1/n 的失效</h3>
+    <p>到目前为止的考场里 q*(a) 是固定的（<span class="term">平稳</span> stationary）。但现实中目标常常缓慢变化：用户口味在变、机器在老化——这叫<span class="term">非平稳</span>（Nonstationary）问题。此时步长 1/n 是灾难：n 越大步长越小，学到后面几乎不再更新，完全跟不上变化。</p>
+
+    <p>对策：用<span class="term">恒定步长</span> α ∈ (0,1]：</p>
+
+    <div class="formula">Q<sub>n+1</sub> = Q<sub>n</sub> + α [ R<sub>n+1</sub> − Q<sub>n</sub> ]</div>
+
+    <p>把它递归展开，会发现 Q<sub>n+1</sub> 其实是历史奖励的<span class="term">指数近因加权平均</span>（Exponential Recency-Weighted Average）：</p>
+
+    <div class="formula">Q<sub>n+1</sub> = (1−α)<sup>n</sup> Q<sub>1</sub> + ∑<sub>i=1</sub><sup>n</sup> α(1−α)<sup>n−i</sup> R<sub>i</sub></div>
+
+    <p>越老的奖励权重按 (1−α) 逐次衰减——近期样本主导估计，目标漂移时估计能跟上。代价：权重和不随 n 收敛到"无限多的证据"，估计永远在波动，不会完全收敛。这是非平稳性收的第一个过路费。</p>
+
+    <div class="box insight">
+      <span class="box-tag">✅ 判定规则</span>
+      <p>平稳问题用 1/n（收敛、无偏）；非平稳问题用恒定 α（跟踪、永不完全收敛）。判断依据是环境本身会不会变，不是算法偏好。</p>
+    </div>
+
+    <!-- 回忆卡片 2.2 -->
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 2.2-1</div>
+              <div class="q-text">10 臂 ε-贪心、ε=0.1 时，当前最优臂和其余臂各自被选中的概率是多少？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              最优臂 0.9 + 0.1/10 = 0.91；其余每个臂 0.01。探索分支占总选择的 0.1，且均匀洒在全部 10 个臂上。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 2.2-2</div>
+              <div class="q-text">为什么非平稳问题要用恒定步长 α？代价是什么？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              1/n 步长随时间萎缩，跟不上目标漂移；恒定 α 让近期奖励权重更高，能跟踪变化。代价是估计永不完全收敛，始终波动。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 2.3 ============ -->
+    <h2><span class="sec-no">2.3</span>乐观初始值：把探索"编进"初始信念</h2>
+
+    <p>ε-贪心的探索是"盲目"的：均匀乱试，不区分哪个臂更没底。其实还有一个几乎零成本的探索手段——<strong>动手脚的地方不是选择规则，而是初始估计</strong>。</p>
+
+    <p>10 臂测试台的 q*(a) 来自 N(0,1)，绝大多数在 ±2 以内。把全部 Q<sub>1</sub>(a) 故意初始化为 <strong>+5</strong>（一个过分乐观的值），会发生什么？</p>
+
+    <ol>
+      <li>第一次无论选哪个臂，拿到的真实奖励大约都在 0 附近，远低于 +5；</li>
+      <li>更新后该臂 Q 值被大幅拉低（如 α=0.1：Q ← 5 + 0.1×(0−5) = 4.5，仍然虚高）；</li>
+      <li>贪心规则立刻转向另一个还是 +5 的臂；</li>
+      <li>于是<strong>每个臂都会被"失望"着轮流试一遍</strong>——探索自动发生，不需要任何随机数。</li>
+    </ol>
+
+    <p>这叫<span class="term">乐观初始值</span>（Optimistic Initial Values）：用系统性高估的初始信念诱导贪心策略去"逐一证伪"每个动作。在早期它甚至比 ε-贪心更有效，因为探索由"失望"驱动、天然覆盖所有臂。</p>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>"乐观初始值是万能探索方案"——它有两个硬伤：① <strong>一次性</strong>：所有臂都被证伪之后，乐观耗尽，若此后环境变化它不会再探索（非平稳问题失效）；② 需要知道"多乐观才算乐观"——初值设低了没效果，设高了浪费早期步数。它是技巧，不是原则。</p>
+    </div>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>乐观初始值揭示了一个深刻观点：<strong>初始估计本身也是策略的一部分</strong>。探索不仅可以来自"选择规则里的随机性"，也可以来自"信念里的偏差"。第 13 章之后你会在"乐观面对不确定性"（optimism in the face of uncertainty）这一原则下再次见到它。</p>
+    </div>
+
+    <!-- 回忆卡片 2.3 -->
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 2.3-1</div>
+              <div class="q-text">把 Q 初始化为远高于真实值的 +5，为什么贪心策略会自动探索？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              选任何臂后真实奖励远低于 +5，该臂估值被拉低；贪心随即转向仍虚高的臂——每个臂被"失望"轮流试一遍，探索由证伪驱动。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 2.3-2</div>
+              <div class="q-text">乐观初始值的两个局限是什么？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              ① 探索是一次性的，乐观耗尽后非平稳环境下不再探索；② 初值高低需先验知识，设错则无效或浪费。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 2.4 ============ -->
+    <h2><span class="sec-no">2.4</span>UCB：让"没把握的程度"自己定价</h2>
+
+    <p>ε-贪心探索时在所有非贪心臂中均匀乱选。可一个试了 1 次的臂和一个试了 100 次的臂，"没把握"程度天差地别——<strong>探索应该优先投向没把握的臂</strong>。怎么量化"没把握"？</p>
+
+    <p><span class="term">置信上界</span>（Upper Confidence Bound, UCB）动作选择给出答案：</p>
+
+    <div class="formula">A<sub>t</sub> = argmax<sub>a</sub> [ Q<sub>t</sub>(a) + c <span class="frac"><span class="num-part">√ ln t</span><span class="den-part">√ N<sub>t</sub>(a)</span></span> ]</div>
+
+    <p>结构一目了然：<strong>估值项 + 置信项</strong>。置信项里，N<sub>t</sub>(a) 越小（越没把握）项越大；ln t 随时间缓慢增长，保证任何臂都不会被永远冷落；常数 c 控制探索强度。若某臂从未被试过（N=0），置信项视为无穷大——必被优先选中。</p>
+
+    <h3>手算例：t = 11 时各臂的置信项</h3>
+    <p>先备材料：ln 11 ≈ 2.3979，√2.3979 ≈ 1.5485。四个臂的已选次数分别为 5、3、1、0：</p>
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>臂</th><th>N(a)</th><th>置信项 c√(ln t / N)</th><th>数值（以 c 为单位）</th></tr>
+        <tr><td>1 号</td><td>5</td><td>c × √(2.3979/5) = c × √0.4796</td><td>≈ 0.6925c</td></tr>
+        <tr><td>2 号</td><td>3</td><td>c × √(2.3979/3) = c × √0.7993</td><td>≈ 0.8942c</td></tr>
+        <tr><td>3 号</td><td>1</td><td>c × √(2.3979/1)</td><td>≈ 1.5485c</td></tr>
+        <tr><td>4 号</td><td>0</td><td>未试过，视为 +∞</td><td>必被选中</td></tr>
+      </table>
+    </div>
+    <p>读表：3 号臂估值就算不高，也有 1.5485c 的"怀疑加成"；1 号臂被试得多，加成只剩 0.69c。<strong>UCB 把"不确定性"折算成分数加在估值上</strong>，选的是"乐观估计"最大的臂——这正是"面对不确定性保持乐观"原则的具体化。</p>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>"ln t 是玄学常数"——不是。它来自 Hoeffding 不等式给出的置信区间：要让"真值超过上界"的概率随时间足够快地衰减，上界宽度必须含 √ln t。换个更糙的项（如常数）会导致某些臂被永久误判。另外注意：UCB 假定问题平稳，且每次决策要遍历全部臂——在非平稳、大动作空间下不实用。</p>
+    </div>
+
+    <!-- 回忆卡片 2.4 -->
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 2.4-1</div>
+              <div class="q-text">写出 UCB 动作选择公式，并说明置信项随 N(a) 与 t 各自如何变化。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              A<sub>t</sub> = argmax [Q(a) + c√(ln t / N(a))]；N(a) 越小置信项越大（偏向没把握的臂），ln t 缓慢增长保证没有臂被永久冷落。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 2.4-2</div>
+              <div class="q-text">UCB 与 ε-贪心的探索方式有何本质不同？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              ε-贪心探索时均匀乱选，不区分把握程度；UCB 把不确定性定量折算成加分，优先探索没把握的臂——探索是有方向的。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 2.5 ============ -->
+    <h2><span class="sec-no">2.5</span>梯度老虎机：不估值，直接学"偏好"</h2>
+
+    <p>前三节都在"估计价值、再按价值选"。还有一条思路：跳过价值，直接学习每个动作的数值化<span class="term">偏好</span>（Preference）H<sub>t</sub>(a)，偏好越大被选概率越高。这就是<span class="term">梯度老虎机</span>（Gradient Bandit）。</p>
+
+    <p>动作概率由 <span class="term">softmax</span>（玻尔兹曼分布）给出：</p>
+
+    <div class="formula">π<sub>t</sub>(a) = <span class="frac"><span class="num-part">e<sup>H<sub>t</sub>(a)</sup></span><span class="den-part">∑<sub>b</sub> e<sup>H<sub>t</sub>(b)</sup></span></div></div>
+
+    <p>每步拿到奖励后更新偏好（α 为步长，R̄<sub>t</sub> 为到目前为止的平均奖励基线）：</p>
+
+    <div class="formula">H<sub>t+1</sub>(A<sub>t</sub>) = H<sub>t</sub>(A<sub>t</sub>) + α (R<sub>t</sub> − R̄<sub>t</sub>) (1 − π<sub>t</sub>(A<sub>t</sub>))<br>H<sub>t+1</sub>(a) = H<sub>t</sub>(a) − α (R<sub>t</sub> − R̄<sub>t</sub>) π<sub>t</sub>(a)，对其余所有 a ≠ A<sub>t</sub></div>
+
+    <p>直觉：奖励 R 超过基线 R̄，说明这步走得比平均水平好 → 提高该动作偏好（幅度按 1−π，越冷门的动作升幅越大），同时压低其余动作的偏好；低于基线则反向。基线 R̄ 用增量式样本均值维护即可。</p>
+
+    <h3>手算例：三臂梯度老虎机的一步更新</h3>
+    <p>设 H = [0.30, 0.50, −0.20]。先算 softmax（e<sup>0.3</sup>≈1.3499，e<sup>0.5</sup>≈1.6487，e<sup>−0.2</sup>≈0.8187，和≈3.8173）：</p>
+    <div class="formula">π = ( 1.3499/3.8173, 1.6487/3.8173, 0.8187/3.8173 ) ≈ ( <strong>0.3536, 0.4319, 0.2146</strong> )</div>
+    <p>设选中了 2 号臂，得 R = 1，基线 R̄ = 0.5，α = 0.1：</p>
+    <ul>
+      <li>2 号（被选中）：H₂ ← 0.50 + 0.1×(1−0.5)×(1−0.4319) = 0.50 + 0.05×0.5681 = <strong>0.5284</strong></li>
+      <li>1 号（未选中）：H₁ ← 0.30 − 0.05×0.3536 = <strong>0.2823</strong></li>
+      <li>3 号（未选中）：H₃ ← −0.20 − 0.05×0.2146 = <strong>−0.2107</strong></li>
+    </ul>
+    <p>新 softmax：exp(0.2823)≈1.3261，exp(0.5284)≈1.6962，exp(−0.2107)≈0.8101，和≈3.8324：</p>
+    <div class="formula">π′ ≈ ( 0.3460, <strong>0.4426</strong>, 0.2114 )</div>
+    <p>2 号臂被选中且奖励高于基线 → 选中概率从 0.4319 升到 0.4426；两个未选中臂概率被压。验证完毕。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>梯度老虎机更新式其实是<strong>随机梯度上升</strong>：可以证明它的期望方向正比于期望奖励对 H 的梯度。这条"直接对策略参数求梯度"的思路，是第 13 章策略梯度方法的雏形——本章先在最简环境里见到它。</p>
+    </div>
+
+    <!-- 回忆卡片 2.5 -->
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 2.5-1</div>
+              <div class="q-text">梯度老虎机中基线 R̄ 起什么作用？没有它会怎样？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              基线判断"这步比平均好还是差"，决定偏好升还是降；没有它，奖励的正负绝对值主导更新，方差大增、学习不稳（但期望方向不变）。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 2.5-2</div>
+              <div class="q-text">梯度老虎机与前三类方法在学习对象上有何不同？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              前者直接学习动作偏好 H(a)（相对大小即可），不估计动作价值；ε-贪心/乐观初值/UCB 都先估 Q 再按 Q 选。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 2.6 ============ -->
+    <h2><span class="sec-no">2.6</span>上下文老虎机：往完整 RL 迈半步</h2>
+
+    <p>本章所有方法共用一个致命假设：<strong>永远面对同一台机器</strong>。但如果"机器"会变呢？比如推荐系统：同一批内容，对不同用户（不同上下文）最优选择不同。</p>
+
+    <p>升级一步：<span class="term">上下文老虎机</span>（Contextual Bandit，又叫关联搜索 associative search）。每个时刻环境先给出一个"上下文"（状态），智能体依据上下文选动作，只收到即时奖励。<strong>动作影响的是"这一步赚多少"，不影响"下一步看到什么上下文"。</strong></p>
+
+    <p>策略自然变成 π(a|s)：每个上下文维护一套自己的 Q 或偏好——第 2 章的全部工具原封不动搬过来，只是按上下文各记一本账。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 为什么只是"半步"</span>
+      <p>完整 RL 比上下文老虎机多一件事：<strong>动作会改变下一个状态</strong>。下棋时你的落子改变了之后的局面；上下文老虎机里上下文与动作无关，像随机翻牌。少了"动作 → 状态转移"这条边，就没有延迟回报、没有信度分配——第 3 章的 MDP 正是把这条边补回来。</p>
+    </div>
+
+    <!-- 回忆卡片 2.6 -->
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 2.6-1</div>
+              <div class="q-text">上下文老虎机与普通老虎机的区别是什么？与完整 RL 还差什么？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              前者每个时刻有可观察的上下文（状态），策略依赖状态；但动作不影响下一个上下文。完整 RL 中动作会改变状态，从而引出延迟回报与信度分配。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 2.6-2</div>
+              <div class="q-text">推荐系统为什么适合建模成上下文老虎机？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              用户画像是上下文，推荐内容是动作，点击是即时奖励；单次推荐基本不改变下一个到达的用户，故无需建模状态转移。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 2.7 ============ -->
+    <h2><span class="sec-no">2.7</span>错误直觉大扫除</h2>
+
+    <p>本章公式少、策略多，误区集中在"把估计当真值"和"把技巧当原则"两类。集中拆三颗雷。</p>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 误区一：Q 收敛了，贪心就安全了</span>
+      <p>样本均值收敛需要"每个臂被试无穷多次"。ε-贪心能保证这一点，纯贪心不能——一旦某个臂早期运气好被锁定，其余臂的 Q 永远停在错误初值上。<strong>收敛性是被探索策略保证的，不是估计公式自带的。</strong></p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 误区二：ε 越小越好，最好为 0</span>
+      <p>ε=0 在平稳、确定的环境下也许侥幸成功，但只要奖励有噪声或环境非平稳，ε=0 就意味着"永不纠错"。10 臂测试台上 ε=0.1 通常显著优于 ε=0.01 和 ε=0：探索花掉的 10% 步数，换来的是找到并锁定真正最优臂。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 误区三："哪个方法最好"有标准答案</span>
+      <p>UCB 方向性探索通常优于 ε-贪心，乐观初值在特定设定下又能反超，梯度老虎机在动作很多时更稳——<strong>没有方法在所有问题上最优</strong>。工程上的正确姿势是：明确你的问题是否平稳、动作空间多大、奖励噪声多强，再挑匹配的工具。</p>
+    </div>
+
+    <div class="box idea">
+      <span class="box-tag">💡 本章给下一章留的账</span>
+      <p>本章的一切建立在"无状态"上：动作之间互不干涉，拉这个臂不影响那个臂的明天。可现实里决策相互影响——这一步棋改变了之后的所有局面。<strong>状态一旦出现，"动作价值"就必须升级为"状态与动作共同的价值"</strong>，这正是第 3 章 MDP 的任务。</p>
+    </div>
+
+    <!-- 回忆卡片 2.7 -->
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 2.7-1</div>
+              <div class="q-text">样本均值收敛到真值需要什么前提？谁负责保证这个前提？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              前提：每个动作被试无穷多次。由探索策略（如 ε&gt;0 的 ε-贪心）保证；纯贪心破坏该前提。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 2.7-2</div>
+              <div class="q-text">为什么说"没有绝对最好的老虎机算法"？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              各方法优劣依赖问题设定（平稳性、动作数、噪声强度）；选择应匹配问题特征而非追逐排名。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===== 章末五件套之 1：概念卡 ===== -->
+    <h2><span class="sec-no">🃏</span>概念卡：本章概念的一分钟画像</h2>
+    <p>翻面前先自问：这个概念我能用一句话讲清楚吗？</p>
+    <div class="flip-grid">
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 1</div>
+            <div class="q-text">动作价值（Action Value）q*(a)</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">选动作 a 时的期望奖励：q*(a) = 𝔼[R | A=a]。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">给"哪个动作好"一个客观标尺。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">每台老虎机隐藏的"真实赔率"。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">与估计 Q(a) 混为一谈——真值不可见，只能逼近。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">第 3 章升级为 q_π(s,a) 与 q*(s,a)，贯穿全书。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 2</div>
+            <div class="q-text">样本均值与增量式更新</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">用已得奖励的平均估计 q*；增量式 Q ← Q + (1/n)[R − Q]。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">从带噪声的样本中无偏地估计动作价值，且 O(1) 内存。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">每次只把估计往新样本方向挪一小步。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为收敛性免费——它需要"每臂无穷次"的探索保证。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">元模板：MC/TD/DQN 的更新全是"旧+步长×误差"。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 3</div>
+            <div class="q-text">ε-贪心（ε-Greedy）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">以 1−ε 概率选当前 Q 最大的动作，以 ε 概率均匀随机选任意动作。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">以最小代价保证持续探索，防止锁死次优。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">九成熟客点招牌菜，一成机会随机尝鲜。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为探索只洒向差臂——它均匀洒在全部臂上，含最优臂。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">第 5-7 章所有 on-policy 算法的默认探索机制。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 4</div>
+            <div class="q-text">UCB（Upper Confidence Bound）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">选 argmax [Q(a) + c√(ln t / N(a))]，估值加不确定性加成。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">让探索有方向：优先投向没把握的臂。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">给每个臂报一个"乐观到几乎不可能再高"的价，选报价最高的。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">把 ln t 当玄学——它来自置信区间的严格衰减要求。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">平稳小动作空间；启发第 8 章 MCTS 中的 UCT 树搜索。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 5</div>
+            <div class="q-text">梯度老虎机（Gradient Bandit）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">学动作偏好 H(a)，按 softmax 选；按奖励与基线之差升降偏好。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">不估计价值也能学策略；偏好只需相对大小。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">比平均好就加分、比平均差就减分的态度分。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为 H 是价值——H 只有相对意义，平移不变。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">第 13 章策略梯度的雏形；基线思想直通 actor-critic。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 6</div>
+            <div class="q-text">非平稳与恒定步长 α</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">目标随时间变化的问题；用恒定 α 使估计成为指数近因加权平均。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">1/n 步长萎缩后无法跟踪目标漂移。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">旧事按 (1−α) 逐次打对折，新账永远有话语权。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为 α 恒定是近似技巧——它是非平稳性的必然要求。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">几乎所有实际 RL 系统（真实环境很少严格平稳）。</span></div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- ===== 章末五件套之 2：分层习题 ===== -->
+    <h2><span class="sec-no">📝</span>分层习题</h2>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>以下说法哪些正确？① ε-贪心的探索分支只会在非最优臂中随机；② 样本均值估计在纯贪心策略下也保证收敛到 q*；③ UCB 中从未试过的臂会被优先选中；④ 梯度老虎机的偏好 H(a) 平移一个常数后，softmax 概率不变。</div>
+      <details>
+        <summary>提示</summary>
+        <p>逐条对照：探索分支的均匀性、收敛前提、N=0 的处理、softmax 的平移性质。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          ①错：探索分支在<strong>全部</strong>动作中均匀随机，包括当前最优臂（它因此多获 ε/k 的概率）。②错：纯贪心可能锁死某臂，其余臂采样次数不再增长，收敛前提被破坏。③对：N=0 时置信项视为无穷大。④对：softmax 分子分母同乘 e<sup>c</sup>，比值不变——偏好只有相对意义。
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>"既然探索的期望收益低，最优策略就应该尽快停止探索。"这句话对吗？</div>
+      <details>
+        <summary>提示</summary>
+        <p>分平稳/非平稳两种环境讨论；想想 ε 衰减策略与恒定 ε 各自的适用面。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          在严格平稳的环境里，随估计收敛而衰减 ε（如 ε<sub>t</sub> = 1/t）确实合理。但真实环境多是非平稳的，此时停止探索等于放弃跟踪目标变化——所以实践中常保留一个小的恒定 ε。结论：该说法只在理想平稳假设下成立，不是普适原则。
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>某臂已选 5 次，Q<sub>5</sub> = 1.6。第 6 次奖励 R<sub>6</sub> = 4。(a) 用增量式求 Q<sub>6</sub>；(b) 改用恒定步长 α = 0.5，求 Q<sub>6</sub>，并解释两种步长下结果差异的含义。</div>
+      <details>
+        <summary>提示</summary>
+        <p>(a) 步长是 1/6；(b) 步长固定 0.5。比较两个新估计离旧估计的距离。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          (a) Q<sub>6</sub> = 1.6 + (1/6)(4 − 1.6) = 1.6 + 0.4 = <strong>2.0</strong>（验证：(1.6×5+4)/6 = 12/6 = 2 ✓）。<br>
+          (b) Q<sub>6</sub> = 1.6 + 0.5×(4 − 1.6) = 1.6 + 1.2 = <strong>2.8</strong>。<br>
+          差异：恒定 α 给新样本 50% 的权重，更新更激进——能跟踪非平稳目标，但估计波动也更大；1/n 给新样本 1/6 权重，平稳环境下更稳、最终收敛。
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>UCB 选择：t = 101（ln 101 ≈ 4.6151，√4.6151 ≈ 2.1483），c = 1。三个臂：A 的 Q=1.0、N=20；B 的 Q=0.9、N=5；C 的 Q=0.5、N=2。求各臂的 UCB 总分并选出动作。</div>
+      <details>
+        <summary>提示</summary>
+        <p>分别算 c√(ln t / N)：N=20 → √0.2308；N=5 → √0.9230；N=2 → √2.3076。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          A：置信项 = √0.2308 ≈ 0.4804 → 总分 1.0 + 0.4804 = 1.4804<br>
+          B：置信项 = √0.9230 ≈ 0.9607 → 总分 0.9 + 0.9607 = 1.8607<br>
+          C：置信项 = √2.3076 ≈ 1.5191 → 总分 0.5 + 1.5191 = 2.0191<br>
+          <strong>选 C</strong>：虽然估值最低，但最少的尝试次数给了它最大的不确定性加成。这正是 UCB 与贪心的分水岭。
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l3">L3 建模应用</span>某新闻 App 要做文章推荐：每次用户打开，从候选池中推一篇，观察是否点击。产品方担心"总是推历史点击率最高的文章，新文章永远没机会"。请：(a) 指出这是哪类问题（普通/上下文老虎机/完整 RL）；(b) 给出两套解决方案并说明各自机制；(c) 指出若用户兴趣随时间变化，方案要做什么调整。</div>
+      <details>
+        <summary>提示</summary>
+        <p>(a) 用户画像是不是上下文？推荐是否改变下一个用户？(c) 联系 2.2 节的非平稳讨论。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          (a) 上下文老虎机：用户画像是上下文，推荐是动作，点击是即时奖励；单次推荐不改变下一个到达的用户。<br>
+          (b) 方案一 ε-贪心：90% 推当前最优，10% 随机推（含新文章）——简单但探索盲目；方案二 UCB：新文章 N=0 时置信项无穷大，自动获得曝光，且探索优先级随不确定性排序——更省流量。<br>
+          (c) 兴趣漂移意味着非平稳：步长改用恒定 α（指数近因加权），且 ε 不宜衰减到 0；UCB 的 ln t 机制假设平稳，可改用滑动窗口统计 N 与 Q。
+        </div>
+      </details>
+    </div>
+
+    <!-- ===== 章末五件套之 3：自测 ===== -->
+    <h2><span class="sec-no">✍️</span>本章自测</h2>
+    <p class="quiz-hint">点击选项判分，答错会给出原因。</p>
+
+    <div class="quiz-block" data-answer="c">
+      <div class="q-no">自测 1</div>
+      <div class="q-stem">增量式更新 Q<sub>n+1</sub> = Q<sub>n</sub> + (1/(n+1))[R<sub>n+1</sub> − Q<sub>n</sub>] 中，方括号里的量最准确的含义是：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 新奖励的绝对大小</li>
+        <li data-opt="b">B. 学习率</li>
+        <li data-opt="c">C. 预测误差：新信息与旧估计的差</li>
+        <li data-opt="d">D. 动作的真实价值 q*(a)</li>
+      </ul>
+      <div class="quiz-explain">解析：C 正确，它决定更新的方向与幅度。A 错：与旧估计无关就无法定向；B 错：步长是 1/(n+1)；D 错：真值不可见，若可见就无需估计了。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 2</div>
+      <div class="q-stem">10 臂测试台，ε-贪心、ε=0.1，当前 Q 最大的是 5 号臂。5 号臂被选中的概率是：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 0.9</li>
+        <li data-opt="b">B. 0.91</li>
+        <li data-opt="c">C. 0.99</li>
+        <li data-opt="d">D. 0.1</li>
+      </ul>
+      <div class="quiz-explain">解析：B 正确——利用分支 0.9 必中 5 号，探索分支 0.1 均匀选 10 臂再贡献 0.01，合计 0.91。A 错：漏掉探索分支也可能选中它；C 错：把 ε 当成了只洒在差臂上；D 错：0.1 是探索总占比。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="d">
+      <div class="q-no">自测 3</div>
+      <div class="q-stem">非平稳老虎机中，用恒定步长 α 替代 1/n 的根本原因是：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 恒定 α 计算量更小</li>
+        <li data-opt="b">B. 恒定 α 使估计收敛更快</li>
+        <li data-opt="c">C. 1/n 在数学上不合法</li>
+        <li data-opt="d">D. 1/n 的权重对新样本越来越小，无法跟踪目标漂移；恒定 α 让近期样本保持权重</li>
+      </ul>
+      <div class="quiz-explain">解析：D 正确。A 错：两者都是 O(1)；B 错：恰好相反，恒定 α 永不完全收敛；C 错：1/n 在平稳环境下是最优选择。代价与收益的取舍才是本质。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="a">
+      <div class="q-no">自测 4</div>
+      <div class="q-stem">UCB 公式中，当某臂 N(a) = 0（从未被试过）时，标准处理是：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 视为置信项无穷大，优先选中它</li>
+        <li data-opt="b">B. 视为置信项为零，最后才选</li>
+        <li data-opt="c">C. 随机赋一个尝试次数</li>
+        <li data-opt="d">D. 报错，算法无法运行</li>
+      </ul>
+      <div class="quiz-explain">解析：A 正确——未试过的臂不确定性最大，必须先试。B 错：方向反了，会永远冷落新臂；C 错：破坏理论保证；D 错：公式本身按"先选 N=0 的臂"约定运行良好。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="c">
+      <div class="q-no">自测 5</div>
+      <div class="q-stem">梯度老虎机中，若奖励 R<sub>t</sub> 高于基线 R̄<sub>t</sub>，则：</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 只有被选中动作的偏好下降</li>
+        <li data-opt="b">B. 所有动作的偏好都上升</li>
+        <li data-opt="c">C. 被选中动作的偏好上升，其余动作的偏好下降</li>
+        <li data-opt="d">D. 所有偏好不变，只更新基线</li>
+      </ul>
+      <div class="quiz-explain">解析：C 正确——R−R̄&gt;0 时，选中项加 α(R−R̄)(1−π)，其余项减 α(R−R̄)π。A、B、D 都与更新规则不符；该规则保证"比平均好"的经验提升该动作的相对受欢迎度。</div>
+    </div>
+
+    <!-- ===== 章末五件套之 4：三句话复述 ===== -->
+    <div class="retell">
+      <h3>🗣️ 用自己的话，三句话讲完本章</h3>
+      <p>对着空气（或室友）说出这三句。说卡壳的那句，回去重读对应小节。</p>
+      <details>
+        <summary>句1：这章解决什么问题？——</summary>
+        <div class="retell-answer">参考答案：在没有状态、只有动作与带噪声奖励的最简环境里，如何估计每个动作的价值，并在估计不可靠时决定下一步选谁（探索—利用的量化答案）。</div>
+      </details>
+      <details>
+        <summary>句2：核心机制是什么？——</summary>
+        <div class="retell-answer">参考答案：用"新估计 = 旧估计 + 步长×误差"维护动作价值估计（非平稳时换恒定步长），再配三种探索机制：ε-贪心（随机）、UCB（不确定性定价）、梯度老虎机（直接学偏好）。</div>
+      </details>
+      <details>
+        <summary>句3：它和前后章怎么分工？——</summary>
+        <div class="retell-answer">参考答案：第 1 章提出探索—利用两难，本章在无状态环境里给出全部经典答案；但所有方法都假设动作互不影响状态——第 3 章引入 MDP 把状态与状态转移补回来，本章的估计与选择工具将原样复用。</div>
+      </details>
+    </div>
+
+    <!-- ===== 章末五件套之 5：间隔复习计划 ===== -->
+    <div class="review-plan">
+      <h3>🔁 间隔复习计划</h3>
+      <p>回忆本身比重读有效 10 倍。到点只做一件事：翻卡 + 重做标记题。</p>
+      <table>
+        <tr><th>时间点</th><th>复习内容</th><th>预计用时</th></tr>
+        <tr><td>第 1 天</td><td>概念卡 1–6 全部 + 回忆卡 2.1-1、2.2-1、2.4-1</td><td>10 分钟</td></tr>
+        <tr><td>第 3 天</td><td>概念卡 3、4、5（三种探索机制对比）+ 重做自测错题 + L2 第 2 题（UCB 手算）</td><td>10 分钟</td></tr>
+        <tr><td>第 7 天</td><td>三句话复述出声说一遍 + 回忆卡 2.3-1、2.5-1、2.6-1</td><td>10 分钟</td></tr>
+        <tr><td>第 15 天</td><td>只做合上书挑战；六条全过则本章毕业，卡在哪条就重读对应小节</td><td>15 分钟</td></tr>
+      </table>
+    </div>
+
+    <!-- 合上书挑战 -->
+    <div class="final-challenge">
+      <h3>📕 合上书挑战</h3>
+      <p class="fc-sub">现在关掉这个页面（或遮住屏幕），拿一张纸，凭记忆完成以下任务。全部做完再回来核对——这是本章真正的毕业考试。</p>
+      <ol id="ch02-challenge-list">
+        <li><span class="fc-check"></span>写出增量式均值更新公式，手算 Q₃=2.4、R₄=3 的下一步 Q₄</li>
+        <li><span class="fc-check"></span>写出 ε-贪心规则，手算 10 臂 ε=0.1 时最优臂与其余臂各自被选中的概率</li>
+        <li><span class="fc-check"></span>写出 UCB 公式，手算 t=11（ln11≈2.3979）、c=1 时 N=5 与 N=1 两臂的置信项</li>
+        <li><span class="fc-check"></span>写出梯度老虎机的偏好更新规则，说明基线 R̄ 的作用</li>
+        <li><span class="fc-check"></span>解释为什么非平稳问题要用恒定 α，并写出指数近因加权平均的直觉</li>
+        <li><span class="fc-check"></span>回答本章的主线问题：只有动作、没有状态时，如何从带噪声的奖励中学到哪个动作最好？（一句话）</li>
+      </ol>
+    </div>
+
+    <div class="complete-zone">
+      <button class="btn-complete" id="ch02-btn-complete" onclick="markDone()">✓ 我已完成本章（含合上书挑战）</button>
+    </div>
+
+    <div class="chapter-nav">
+      <a href="chapter-01.html"><span class="nav-dir">← 上一章</span>第1章 引言：强化学习问题</a>
+      <a href="chapter-03.html" class="next"><span class="nav-dir">下一章 →</span>第3章 有限马尔可夫决策过程</a>
+    </div>
+
+  </div>
+</div>
+
+<footer class="footer">
+  <div class="wrap">第2章 多臂老虎机 · 强化学习互动讲义 · 基于 Sutton &amp; Barto (2018, 2nd ed)</div>
+</footer>
+
+<script src="assets/mermaid.min.js"></script>
+<script>
+mermaid.initialize({
+  startOnLoad: true,
+  theme: "base",
+  themeVariables: {
+    primaryColor: "#e3edf7",
+    primaryBorderColor: "#1d5f9e",
+    primaryTextColor: "#1d5f9e",
+    lineColor: "#5c554b",
+    secondaryColor: "#fbeedd",
+    tertiaryColor: "#f5f1e8",
+    fontFamily: "-apple-system, PingFang SC, sans-serif",
+    fontSize: "14px"
+  },
+  flowchart: { curve: "linear", htmlLabels: false }
+});
+</script>
+<script>
+// 自测题逻辑
+document.querySelectorAll(".quiz-block").forEach(block => {
+  const answer = block.dataset.answer;
+  const explain = block.querySelector(".quiz-explain");
+  block.querySelectorAll(".quiz-opts li").forEach(li => {
+    li.addEventListener("click", () => {
+      const opts = block.querySelectorAll(".quiz-opts li");
+      opts.forEach(o => o.classList.add("disabled"));
+      if (li.dataset.opt === answer) {
+        li.classList.add("correct");
+      } else {
+        li.classList.add("wrong");
+        block.querySelector(`[data-opt="${answer}"]`).classList.add("correct");
+      }
+      explain.classList.add("show");
+    });
+  });
+});
+
+// 合上书清单打勾
+document.querySelectorAll("#ch02-challenge-list li").forEach(li => {
+  li.addEventListener("click", () => li.classList.toggle("checked"));
+});
+
+// 完成标记 → localStorage（第2章）
+const KEY = "rl_progress_v1";
+function loadProgress() {
+  try { return JSON.parse(localStorage.getItem(KEY)) || {}; } catch (e) { return {}; }
+}
+const progress = loadProgress();
+const btn = document.getElementById("ch02-btn-complete");
+if (progress[2] && progress[2].done) {
+  btn.textContent = "✓ 已完成 · 再次点击重置";
+  btn.classList.add("done");
+}
+function markDone() {
+  const p = loadProgress();
+  if (p[2] && p[2].done) {
+    delete p[2];
+    btn.textContent = "✓ 我已完成本章（含合上书挑战）";
+    btn.classList.remove("done");
+  } else {
+    p[2] = { done: true, completedAt: Date.now(), reviewsDone: 0 };
+    btn.textContent = "✓ 已完成 · 复习提醒已开启";
+    btn.classList.add("done");
+  }
+  localStorage.setItem(KEY, JSON.stringify(p));
+}
+</script>
+
+</body>
+</html>

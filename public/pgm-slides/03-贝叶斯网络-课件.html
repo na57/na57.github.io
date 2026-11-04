@@ -1,0 +1,601 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第3章 贝叶斯网络 · PGM 课件</title>
+<script>
+window.MathJax = {
+  tex: {
+    inlineMath: [['$', '$'], ['\\(', '\\)']],
+    displayMath: [['$$', '$$'], ['\\[', '\\]']],
+    processEscapes: true,
+    tags: 'none'
+  },
+  svg: { fontCache: 'global', scale: 1.05 },
+  options: { skipHtmlTags: ['script','noscript','style','textarea','pre','code'] }
+};
+</script>
+<!-- MathJax 本地引用（tex-svg 单文件全量组件，约2MB，自带字体数据），file:// 与断网均可用 -->
+<script src="assets/tex-svg.js" async></script>
+<style>
+  :root{
+    --primary:#1a365d; --accent:#2b6cb0; --accent-light:#ebf8ff; --accent-border:#bee3f8;
+    --text:#2d3748; --muted:#718096; --border:#e2e8f0; --bg-light:#f7fafc;
+    --success:#38a169; --danger:#e53e3e; --warning:#dd6b20; --warn-bg:#fffaf0;
+  }
+  *{margin:0;padding:0;box-sizing:border-box;}
+  html,body{width:100%;height:100%;overflow:hidden;background:#0f172a;}
+  body{
+    font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Hiragino Sans GB","Microsoft YaHei","WenQuanYi Micro Hei",sans-serif;
+    color:var(--text);
+  }
+  #stage{
+    position:absolute; left:50%; top:50%;
+    width:1280px; height:720px;
+    transform:translate(-50%,-50%) scale(1);
+    transform-origin:center center;
+    background:#ffffff;
+    box-shadow:0 0 40px rgba(0,0,0,.4);
+    overflow:hidden;
+  }
+  .slide{
+    position:absolute; inset:0;
+    padding:36px 60px 52px;
+    display:none;
+    flex-direction:column;
+    background:#ffffff;
+    opacity:0;
+    transition:opacity .35s ease;
+  }
+  .slide.active{ display:flex; opacity:1; }
+
+  #progress{ position:absolute; top:0; left:0; height:6px; background:var(--accent); width:0; z-index:50; transition:width .35s; }
+
+  /* 封面 / 结束页 */
+  .slide-cover{ justify-content:center; align-items:center; text-align:center; }
+  .slide-cover{ background:linear-gradient(135deg,#1a365d 0%,#2b6cb0 100%); color:#fff; }
+  .slide-cover .kicker{ font-size:22px; letter-spacing:6px; opacity:.85; margin-bottom:18px;}
+  .slide-cover h1{ font-size:64px; font-weight:800; line-height:1.2; margin-bottom:22px; letter-spacing:2px;}
+  .slide-cover .sub{ font-size:26px; opacity:.92; margin-bottom:36px;}
+  .slide-cover .meta{ font-size:19px; opacity:.85; line-height:2;}
+  .slide-cover .divider{ width:160px;height:5px;background:#fff;opacity:.6;margin:0 auto 30px;border-radius:3px;}
+  .slide-cover .question{ font-size:24px; background:rgba(255,255,255,.12); border:1px solid rgba(255,255,255,.35); border-radius:12px; padding:12px 28px; margin-bottom:30px;}
+
+  /* 页头：结论式标题 */
+  .slide-head{ display:flex; align-items:baseline; gap:16px; border-bottom:3px solid var(--accent); padding-bottom:9px; margin-bottom:12px;}
+  .slide-head .sec{ font-size:17px; color:var(--accent); font-weight:700; background:var(--accent-light); padding:3px 11px; border-radius:6px; white-space:nowrap;}
+  .slide-head h3{ font-size:29px; color:var(--primary); font-weight:700;}
+  .slide-body{ flex:1; display:flex; flex-direction:column; justify-content:center; min-height:0; }
+
+  p{ font-size:21px; line-height:1.65; margin-bottom:8px;}
+  .lead{ font-size:23px; color:#374151; line-height:1.75;}
+  ul,ol{ margin:0 0 8px 26px; font-size:21px; line-height:1.7;}
+  li{ margin-bottom:5px;}
+  strong{ color:var(--primary); }
+
+  /* 公式块 */
+  .formula{ background:var(--accent-light); border-left:5px solid var(--accent); border-radius:0 10px 10px 0; padding:9px 22px; margin:9px 0; text-align:center; font-size:23px;}
+  .formula-concl{ background:#fffaf0; border-left:5px solid var(--warning);}
+  .MathJax{ font-size:1.05em !important; }
+  mjx-container[display="true"]{ margin:6px 0 !important; }
+
+  /* 表格 */
+  table{ width:100%; border-collapse:collapse; margin:10px 0; font-size:20px;}
+  th{ background:var(--accent); color:#fff; padding:8px 12px; text-align:center; font-weight:600;}
+  td{ padding:7px 12px; border:1px solid var(--border); text-align:center; vertical-align:middle;}
+  tr:nth-child(even) td{ background:var(--bg-light);}
+  td.l{ text-align:left; }
+  table.small{ font-size:18px; }
+  table.small td, table.small th{ padding:6px 10px; }
+
+  /* 组件 */
+  .card{ background:var(--accent-light); border:1px solid var(--accent-border); border-radius:12px; padding:12px 20px; margin:10px 0;}
+  .tip{ background:#ebf8ff; border-left:5px solid var(--accent); border-radius:0 10px 10px 0; padding:10px 20px; margin:10px 0; font-size:20px; color:#2c5282;}
+  .deep{ background:#f0fff4; border-left:5px solid var(--success); border-radius:0 10px 10px 0; padding:10px 20px; margin:10px 0; font-size:20px; color:#22543d;}
+  .warn{ background:var(--warn-bg); border-left:5px solid var(--warning); border-radius:0 10px 10px 0; padding:10px 20px; margin:10px 0; font-size:20px; color:#744210;}
+  .trap{ background:#fef2f2; border-left:5px solid var(--danger); border-radius:0 10px 10px 0; padding:10px 20px; margin:10px 0; font-size:20px; color:#7f1d1d;}
+
+  .pause{
+    background:var(--warn-bg); border:2px dashed var(--warning); border-radius:14px;
+    padding:10px 22px; margin:10px 0; display:flex; align-items:center; gap:16px;
+  }
+  .pause .icon{ font-size:36px; line-height:1; }
+  .pause .txt b{ color:var(--warning); font-size:21px; }
+  .pause .txt p{ font-size:18px; color:#744210; margin:3px 0 0; }
+
+  .cols{ display:flex; gap:28px; align-items:stretch; }
+  .col{ flex:1; min-width:0; }
+
+  /* 推导分步：仅互动模式隐藏，截图(autohide)模式全部可见 */
+  .step{ opacity:0; transform:translateY(8px); transition:opacity .3s ease, transform .3s ease; }
+  .step.on{ opacity:1; transform:none; }
+  body.autohide .step{ opacity:1 !important; transform:none !important; }
+  .step-hint{ font-size:14px; color:var(--muted); margin-top:4px;}
+  body.autohide .step-hint{ display:none; }
+
+  /* 因果链 */
+  .chain{ margin:6px 0; }
+  .chain .link{ display:flex; align-items:center; gap:14px; margin:6px 0;}
+  .chain .no{ width:34px; height:34px; border-radius:50%; background:var(--accent); color:#fff; font-size:18px; font-weight:700; display:flex; align-items:center; justify-content:center; flex-shrink:0;}
+  .chain .txt{ font-size:21px; line-height:1.5;}
+  .chain .txt strong{ color:var(--primary); }
+
+  /* mermaid 容器：高度封顶，防止溢出 720px 舞台 */
+  .mmd{ background:var(--bg-light); border:1px solid var(--border); border-radius:12px; padding:10px 14px; display:flex; justify-content:center; align-items:center; margin:8px 0;}
+  .mmd .mermaid{ display:flex; justify-content:center; width:100%; visibility:hidden; }
+  .mmd .mermaid[data-done]{ visibility:visible; }
+  .mmd .mermaid svg{ max-width:100%; height:auto; max-height:230px; }
+  .mmd.mmd-tall .mermaid svg{ max-height:330px; }
+  .mmd.mmd-sm svg{ max-height:150px; }
+  .mmd-row{ display:flex; gap:18px; }
+  .mmd-row .mmd{ flex:1; flex-direction:column; }
+  .mmd .cap{ font-size:17px; color:var(--muted); margin-top:6px; text-align:center;}
+  .mmd .cap b{ color:var(--text); }
+
+  #footer{ position:absolute; bottom:0; left:0; right:0; height:40px; display:flex; align-items:center; justify-content:space-between; padding:0 30px; font-size:15px; color:#94a3b8; background:rgba(247,250,252,.85); border-top:1px solid var(--border); z-index:40;}
+  #footer .brand{ font-weight:600; color:var(--accent); }
+
+  .nav{ position:absolute; bottom:48px; right:40px; display:flex; gap:12px; z-index:45;}
+  .nav button{ width:54px; height:54px; border-radius:50%; border:none; background:var(--accent); color:#fff; font-size:24px; cursor:pointer; box-shadow:0 3px 10px rgba(43,108,176,.4); display:flex; align-items:center; justify-content:center;}
+  .nav button:hover{ background:var(--primary); }
+  .nav button:disabled{ background:#cbd5d0; cursor:default; box-shadow:none;}
+
+  #hint{ position:absolute; bottom:48px; left:40px; font-size:14px; color:#94a3b8; z-index:45;}
+
+  body.autohide #progress, body.autohide #footer, body.autohide .nav, body.autohide #hint{ display:none !important; }
+</style>
+</head>
+<body>
+<div id="stage">
+
+  <div id="progress"></div>
+
+  <!-- 1 封面 -->
+  <section class="slide slide-cover active" data-narration="同学们好，我们进入概率图模型最重要的一章：贝叶斯网络。前两章复习的概率论和图论工具，从这里开始合体。这一章只回答一个核心问题：面对几十上百个随机变量，联合分布存不下、算不动，怎么办？贝叶斯网络给出的答案漂亮得出人意料——画一张有向图，配几张小表，就够了。这一章带你完成三件事：看懂这张图的定义，学会按图写出联合分布，掌握一个不算概率、只看图就能判断独立性的工具。建议准备好纸和笔，遇到推导页我会停下来等你。">
+    <div class="kicker">概率图模型 · 第 3 章 · 表示</div>
+    <h1>贝叶斯网络</h1>
+    <div class="sub">Bayesian Networks —— 全书的核心枢纽</div>
+    <div class="question">本章要回答：如何用一张有向图，紧凑表示一个高维概率分布？</div>
+    <div class="meta">
+      配套讲义：《PGM 互动讲义》第3章 · 基于 Koller &amp; Friedman (2009)<br>
+      ← → 或空格翻页 · 推导页逐步显示
+    </div>
+  </section>
+
+  <!-- 2 全书位置 -->
+  <section class="slide" data-narration="先看这一章在全书的位置。整本书的主线是一条链：图编码条件独立性，分布因此可以因子分解，推理得以高效，最后从数据中学出结构。第三章回答主线上的第一个问题：怎么用一张有向图紧凑表示高维分布。注意看它后面牵着的三章：第四章是它的无向版本，换一种眼光表达独立性；第九章拿这张图去算概率，做推理；第十八章反过来，从数据里把这张图学出来。可以说第三章是整个概率图模型的地基，这一章吃透了，后面全是它的应用和变体。">
+    <div class="slide-head"><span class="sec">定位</span><h3>第3章是全书枢纽：表示 → 推理 → 学习都从这里出发</h3></div>
+    <div class="slide-body">
+      <div class="mmd mmd-sm">
+        <div class="mermaid">
+flowchart LR
+  A["Ch1-2 背景知识"] --> B["Ch3 贝叶斯网络"]:::here
+  B --> C["Ch4 马尔可夫网络（无向版）"]
+  C --> D["Ch9 推理（用图算概率）"]
+  D --> E["Ch18 结构学习（从数据学图）"]
+  classDef here fill:#2b6cb0,color:#ffffff,stroke:#1a365d,stroke-width:3px
+        </div>
+      </div>
+      <p style="text-align:center; margin-top:10px;">本章解决「<strong>表示</strong>」——后面三章分别解决「换个表示」「用它推理」「把它学出来」</p>
+    </div>
+  </section>
+
+  <!-- 3 本章主线 -->
+  <section class="slide" data-narration="这一章的逻辑只有一条链，先整体摆出来。第一环，变量一多，联合分布的参数指数爆炸，这是灾难。第二环，灾难面前只有一条出路：利用变量之间的独立性，把大分布拆成小因子的乘积。第三环，独立性关系又多又杂，靠文字说不清，于是用一张图精确声明谁直接影响谁。第四环，图一画出来，联合分布怎么写、独立性怎么读，全部机械化。接下来每一页，都是这条链上的一环。">
+    <div class="slide-head"><span class="sec">主线</span><h3>联合分布存不下，独立性是唯一的出路</h3></div>
+    <div class="slide-body">
+      <div class="chain">
+        <div class="link"><span class="no">1</span><span class="txt">变量一多 → 联合分布参数<strong>指数爆炸</strong>（维度诅咒）</span></div>
+        <div class="link"><span class="no">2</span><span class="txt">唯一出路：利用<strong>独立性</strong>，把大分布拆成小因子乘积</span></div>
+        <div class="link"><span class="no">3</span><span class="txt">独立性太杂说不清 → 用一张 <strong>DAG</strong> 声明「谁直接影响谁」</span></div>
+        <div class="link"><span class="no">4</span><span class="txt">图一旦画出 → 分布写法（<strong>因子分解</strong>）与独立性读取（<strong>d-分离</strong>）全部机械化</span></div>
+      </div>
+      <div class="tip">这条链就是本章的目录：动机 → 定义 → 因子分解 → d-分离 → 图的边界（I-等价）</div>
+    </div>
+  </section>
+
+  <!-- 4 动机 -->
+  <section class="slide" data-narration="先看灾难有多大。对一百个二元变量，完整联合分布需要二的一百次方、约十的三十次方个参数，没有任何计算机存得下。如果变量全部独立，参数量降到线性，可惜现实里变量很少彻底独立。于是有了折中方案朴素贝叶斯：假设给定类别之后所有特征条件独立，联合分布写成类别概率乘上每个特征的条件概率。好用，但假设太强——现实里特征之间明明还有直接联系。贝叶斯网络做的事，就是把这个过强的假设放松成一张精确的图。">
+    <div class="slide-head"><span class="sec">动机</span><h3>100 个二元变量要 10³⁰ 个参数——蛮力必死</h3></div>
+    <div class="slide-body">
+      <p>对 $n$ 个随机变量做推理，原则上要完整联合分布 $P(X_1,\dots,X_n)$：</p>
+      <div class="formula">$$100 \text{ 个二元变量} \Rightarrow 2^{100} \approx 10^{30} \text{ 个参数} \quad\text{（存不下）}$$</div>
+      <div class="cols">
+        <div class="col"><div class="card">😇 <strong>假设全独立</strong><br>$P(X_1,\dots,X_n)=\prod_i P(X_i)$<br>参数降到线性，但现实中几乎不成立</div></div>
+        <div class="col"><div class="card">🙂 <strong>朴素贝叶斯（折中）</strong><br>$P(C,X_1,\dots,X_n)=P(C)\prod_i P(X_i\mid C)$<br>假设太强：特征只通过类别关联</div></div>
+      </div>
+      <div class="tip">💡 贝叶斯网络 = 放松朴素贝叶斯：用一张图精确声明「谁直接影响谁」，而不是人人只依赖同一个原因</div>
+    </div>
+  </section>
+
+  <!-- 5 定义 -->
+  <section class="slide" data-narration="正式定义来了，贝叶斯网络只有两个部件。第一，结构 G，一张有向无环图，节点是随机变量，箭头 X 指向 Y 表示 X 直接影响 Y——注意是直接，间接影响不画边。第二，参数，每个节点带一张条件概率表，写的是给定父节点取值下自己的分布；父节点就是图中指向它的那些点。两个部件合起来给出全书最重要的公式：联合分布等于每个变量以自己的父节点为条件的概率的乘积。图的作用，就是告诉你每个条件里该填谁。">
+    <div class="slide-head"><span class="sec">定义</span><h3>贝叶斯网络 = 一张 DAG ＋ 每个节点一张条件概率表</h3></div>
+    <div class="slide-body">
+      <div class="cols">
+        <div class="col"><div class="card">🗺️ <strong>结构 $\mathcal{G}$：有向无环图（DAG）</strong><br>节点 = 随机变量；边 $X \to Y$ = X <strong>直接</strong>影响 Y（间接影响不画边）</div></div>
+        <div class="col"><div class="card">📋 <strong>参数 $\Theta$：局部条件概率分布（CPD）</strong><br>每个节点带 $P(X_i \mid \mathrm{Pa}(X_i))$，$\mathrm{Pa}(X_i)$ = 图中指向 $X_i$ 的父节点</div></div>
+      </div>
+      <div class="formula formula-concl">$$\boldsymbol{P(X_1, X_2, \dots, X_n) = \prod_{i=1}^{n} P\big(X_i \,\big|\, \mathrm{Pa}(X_i)\big)} \quad\text{（全书最重要的公式）}$$</div>
+      <div class="deep">读法：联合分布 = 每个变量「以自己父节点为条件」的概率之积——图告诉你每个条件里填谁</div>
+    </div>
+  </section>
+
+  <!-- 6 学生例子 -->
+  <section class="slide" data-narration="这是全书反复使用的经典例子，必须熟悉。一位教授要根据学生情况写推荐信，涉及五个变量：课程难度 D、学生智力 I、成绩 G、SAT 分数 S、推荐信质量 L。直觉上：难度和智力共同影响成绩，智力影响 SAT，成绩影响推荐信。把这几句话画成箭头，就是右边这张图，四条边。注意成绩这个节点：难度和智力两个箭头都扎进它，这种形状叫 V 型结构，是本章后半部分最重要的角色，先记住它的长相。">
+    <div class="slide-head"><span class="sec">例子</span><h3>学生例子：五个变量、四条边，全书反复使用的沙盘</h3></div>
+    <div class="slide-body">
+      <div class="cols">
+        <div class="col">
+          <table class="small">
+            <thead><tr><th>变量</th><th>含义</th><th>取值</th></tr></thead>
+            <tbody>
+              <tr><td><strong>D</strong></td><td class="l">课程难度 Difficulty</td><td>简单 / 困难</td></tr>
+              <tr><td><strong>I</strong></td><td class="l">学生智力 Intelligence</td><td>低 / 高</td></tr>
+              <tr><td><strong>G</strong></td><td class="l">成绩 Grade</td><td>A / B / C</td></tr>
+              <tr><td><strong>S</strong></td><td class="l">SAT 分数</td><td>低 / 高</td></tr>
+              <tr><td><strong>L</strong></td><td class="l">推荐信质量 Letter</td><td>弱 / 强</td></tr>
+            </tbody>
+          </table>
+          <div class="tip">建模直觉：D、I → G；I → S；G → L</div>
+        </div>
+        <div class="col">
+          <div class="mmd mmd-tall">
+            <div class="mermaid">
+flowchart TD
+  D["D 难度"] --> G["G 成绩"]
+  I["I 智力"] --> G
+  I --> S["S SAT"]
+  G --> L["L 推荐信"]
+  style G fill:#fbeedd,stroke:#c4651f,stroke-width:3px
+            </div>
+          </div>
+          <p style="text-align:center; font-size:18px; color:var(--muted);">G 处：D → G ← I 是 <strong>V-结构</strong>（后面要考）</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 7 因子分解（分步推导） -->
+  <section class="slide" data-narration="现在做本章第一个推导，看图的威力。第一步，不写任何假设，用链式法则展开五个变量的联合分布，每一项都以前面所有变量为条件，又长又难存。第二步，看图说话：图里没有难度指向智力的边，所以智力不依赖难度，条件里的 D 删掉；S 的唯一父亲是 I，条件只留 I；L 的唯一父亲是 G，条件只留 G。第三步，砍完就得到干净的结果：五个小因子相乘，每一项的条件正好是图中该节点的父亲。这就是因子分解——链式法则的图结构化紧凑版。">
+    <div class="slide-head"><span class="sec">推导</span><h3>链式法则按图砍掉多余条件，就是因子分解</h3></div>
+    <div class="slide-body">
+      <div class="step">
+        <p><strong>① 链式法则</strong>（不做任何假设，每项依赖前面所有变量）：</p>
+        <div class="formula">$$P(D,I,G,S,L) = P(D)\,P(I|D)\,P(G|D,I)\,P(S|D,I,G)\,P(L|D,I,G,S)$$</div>
+      </div>
+      <div class="step">
+        <p><strong>② 按图砍条件</strong>：无 D→I 边 ⟹ I 不依赖 D；S 的父亲只有 I；L 的唯一父亲是 G：</p>
+        <div class="formula">$$P(D)\,P(I|\cancel{D})\,P(G|D,I)\,P(S|\cancel{D},\!I,\!\cancel{G})\,P(L|\cancel{D},\!\cancel{I},\!\cancel{G},\!\cancel{S})$$</div>
+      </div>
+      <div class="step">
+        <div class="formula formula-concl">$$\boldsymbol{P(D,I,G,S,L) = P(D)\cdot P(I)\cdot P(G\,|\,D,I)\cdot P(S\,|\,I)\cdot P(L\,|\,G)}$$</div>
+      </div>
+      <p class="step-hint">按空格 / → 逐步展开推导</p>
+    </div>
+  </section>
+
+  <!-- 8 参数对比手算 -->
+  <section class="slide" data-narration="光说紧凑不算数，手算一笔账。完整联合分布，二乘二乘三乘二乘二减一，四十七个自由参数。贝叶斯网络呢？D 没有父亲，一个参数；I 同样一个；G 有两个二元父亲，四种组合、每种两个自由参数，共八个；S 有一个二元父亲，两个参数；L 的父亲 G 有三个取值，三个参数。加起来十五个。才五个变量，参数已经砍掉三分之二。变量到一百个时，差距就是天文数字对线性增长——这就是因子分解的意义。">
+    <div class="slide-head"><span class="sec">手算</span><h3>一笔账：47 个参数被图砍到 15 个</h3></div>
+    <div class="slide-body">
+      <div class="cols">
+        <div class="col">
+          <p><strong>完整联合分布</strong>（G 三元，其余二元）</p>
+          <div class="formula">$$2\times2\times3\times2\times2 - 1 = \boldsymbol{47}$$</div>
+        </div>
+        <div class="col">
+          <p><strong>贝叶斯网络</strong>（逐节点数自由参数）</p>
+          <table class="small">
+            <thead><tr><th>CPD</th><th>参数数</th></tr></thead>
+            <tbody>
+              <tr><td>$P(D)$</td><td>1</td></tr>
+              <tr><td>$P(I)$</td><td>1</td></tr>
+              <tr><td>$P(G|D,I)$</td><td>$4 \times 2 = 8$</td></tr>
+              <tr><td>$P(S|I)$</td><td>2</td></tr>
+              <tr><td>$P(L|G)$</td><td>3</td></tr>
+              <tr><td><strong>合计</strong></td><td><strong>15</strong></td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+      <div class="deep">5 个变量已省 2/3；100 个变量时是「天文数字 vs 线性」——图结构就是压缩算法</div>
+    </div>
+  </section>
+
+  <!-- 9 过渡：读独立性 -->
+  <section class="slide" data-narration="到这里，图帮我们解决了存储问题，但它的本事不止于此。想象一个实际问题：给定这张图，观测了某些变量之后，另外两个变量还相关吗？比如知道了成绩，智力和课程难度在你眼里还互不相关吗？这个问题太重要了——推理、学习、因果分析，全都建立在「知道谁和谁独立」之上。而回答它不需要任何概率计算，只看图的连通性就行。这个工具叫 d-分离，d 是有向的意思。你可以把路径想成水管，把观测想成闸门，问题就变成了：水还能不能从 X 流到 Y。这是本章、也是全书最核心最实用的工具，接下来三页把它讲透。">
+    <div class="slide-head"><span class="sec">转折</span><h3>图不只是存储方案：不算概率，看图就能读出独立性</h3></div>
+    <div class="slide-body">
+      <div class="card" style="font-size:22px;">❓ <strong>核心问题</strong>：给定这张图，观测了变量集合 $\mathbf{Z}$ 之后，$X$ 和 $Y$ 还相关吗？</div>
+      <div class="cols">
+        <div class="col"><div class="card">🚫 <strong>不要</strong>：枚举所有取值、算联合概率再比较——指数级，回到灾难</div></div>
+        <div class="col"><div class="card">✅ <strong>而要</strong>：纯看图的连通性 —— <strong>d-分离（d-Separation）</strong>，把代数问题变成几何问题</div></div>
+      </div>
+      <div class="tip">直觉：路径是水管，观测是闸门——看水（信息）还能不能从 X 流到 Y</div>
+    </div>
+  </section>
+
+  <!-- 10 三种基本结构 -->
+  <section class="slide" data-narration="d-分离的秘诀是：任何长路径，都能分解成三种基本结构。第一种链式，X 通过 Z 间接影响 Y，比如火灾、烟雾、警报；观测中间的 Z，路径阻断。第二种分叉，Z 同时导致 X 和 Y，比如季节同时导致流感和过敏；观测 Z，同样阻断。前两种都是观测即阻断。第三种对撞，X 和 Y 共同导致 Z，规则恰好反过来：不观测 Z 时 X 和 Y 独立，一旦观测 Z 或者 Z 的后代，两者反而相关。前两种符合直觉，第三种非常反直觉，下一页专门讲。">
+    <div class="slide-head"><span class="sec">d-分离</span><h3>所有路径只有三种基本单元，各有通断规则</h3></div>
+    <div class="slide-body">
+      <div class="mmd-row">
+        <div class="mmd">
+          <div class="mermaid">
+flowchart LR
+  X --> Z --> Y
+  style Z fill:#fbeedd,stroke:#c4651f,stroke-width:2.5px
+          </div>
+          <div class="cap"><b>① 链式</b>（间接因果）<br>观测 Z ⟹ <b>阻断</b></div>
+        </div>
+        <div class="mmd">
+          <div class="mermaid">
+flowchart TD
+  Z --> X
+  Z --> Y
+  style Z fill:#fbeedd,stroke:#c4651f,stroke-width:2.5px
+          </div>
+          <div class="cap"><b>② 分叉</b>（共同原因）<br>观测 Z ⟹ <b>阻断</b></div>
+        </div>
+        <div class="mmd">
+          <div class="mermaid">
+flowchart TD
+  X --> Z
+  Y --> Z
+  style Z fill:#fae9e7,stroke:#b03a2e,stroke-width:2.5px
+          </div>
+          <div class="cap"><b>③ 对撞</b>（V-结构）<br>观测 Z ⟹ <b style="color:#b03a2e">反而激活！</b></div>
+        </div>
+      </div>
+      <div class="warn" style="margin-top:8px;">口诀：链式分叉「观测才断」，对撞结构「观测才通」——千万别记反</div>
+    </div>
+  </section>
+
+  <!-- 11 V-结构深挖 -->
+  <section class="slide" data-narration="为什么对撞反直觉？用学生例子。智力指向成绩，难度也指向成绩。一个学生聪明不聪明、课程难不难，本来毫不相干，数学上这叫边际独立。但是，一旦你得知他成绩是 C，再告诉你这门课其实很简单，你立刻会想：那这学生可能不太聪明。看到了吗？智力和难度突然相关了。这叫解释消除：两个原因竞争解释同一个结果，坐实一个就削弱另一个。这个机制解释了现实里大量选择偏差，比如著名的伯克森悖论：在被名校录取的学生里，家境和天赋负相关，因为录取正是那个对撞点。">
+    <div class="slide-head"><span class="sec">重点</span><h3>对撞反直觉：观测结果，两个不相干的原因突然相关</h3></div>
+    <div class="slide-body">
+      <div class="cols">
+        <div class="col">
+          <div class="mmd mmd-sm">
+            <div class="mermaid">
+flowchart TD
+  I["I 智力"] --> G["G = C（成绩差）"]
+  D["D 难度"] --> G
+  style G fill:#fae9e7,stroke:#b03a2e,stroke-width:2.5px
+            </div>
+          </div>
+          <p style="font-size:20px; text-align:center;">不观测 G：$I \perp D$　｜　观测 G 后：$I \not\perp D \mid G$</p>
+        </div>
+        <div class="col">
+          <div class="warn">⚠️ <strong>解释消除（Explaining Away）</strong>：得知成绩差、又知课程很简单 ⟹ 立刻推断「这学生可能不太聪明」——确认一个原因，就削弱另一个</div>
+          <div class="tip">现实版（伯克森悖论 Berkson's paradox）：名校录取者中「家境 ⊥̸ 天赋」呈负相关——录取正是对撞点</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 12 d-分离手算（互动停顿页） -->
+  <section class="slide" data-narration="学了规则就要会用。看着学生例子的图，请你判断三组关系：第一，不观测任何变量，难度和智力独立吗？第二，观测了成绩之后呢？第三，观测智力之后，难度和 SAT 独立吗？先暂停视频，拿纸自己推一遍。推出来了吗？好，对答案。第一组，唯一的路径是 D 进 G、I 也进 G，对撞结构，G 没被观测，路径阻断，独立。第二组，观测了 G，对撞被激活，不独立——这正是刚才的解释消除。第三组，路径从 D 经 G 到 I 再到 S，在 I 处是链式，而 I 被观测，路径阻断，独立。三组全对，d-分离你就拿下了。">
+    <div class="slide-head"><span class="sec">演练</span><h3>手算三组判定：每条路径都被阻断，才算独立</h3></div>
+    <div class="slide-body">
+      <div class="step"><p>① <strong>$D \perp I$ ?</strong>　唯一路径 $D \to G \leftarrow I$ 是对撞，G 未观测 ⟹ 阻断 ⟹ <strong>独立 ✓</strong></p></div>
+      <div class="step"><p>② <strong>$D \perp I \mid G$ ?</strong>　观测 G ⟹ 对撞被激活 ⟹ <strong>不独立 ✗</strong>（解释消除）</p></div>
+      <div class="step"><p>③ <strong>$D \perp S \mid I$ ?</strong>　路径 $D \to G \leftarrow I \to S$ 在 I 处是链式且 I 被观测 ⟹ 阻断 ⟹ <strong>独立 ✓</strong></p></div>
+      <div class="pause"><div class="icon">✍️</div><div class="txt"><b>暂停推导</b><p>遮住答案，自己把三组判定各推一遍——每组都要说出「哪条路径、哪个结构、通还是断」。</p></div></div>
+      <p class="step-hint">按空格 / → 逐步揭示答案</p>
+    </div>
+  </section>
+
+  <!-- 13 常见误区 -->
+  <section class="slide" data-narration="这页扫雷。第一个高频错误：把三种结构的通断规则记反。再念一遍口诀：链式和分叉观测才断，对撞观测才通。第二个错误：找到一条连通路径就宣布相关，或找到一条阻断路径就宣布独立，都不对——d-分离要求每一条路径都被阻断，少一条都不行。还有一个更隐蔽的观念错误：把箭头读成必然因果。在纯贝叶斯网络里，箭头首先是一个独立性声明；要谈因果，得等第二十一章的额外假设。这三个坑，考试和建模里年年有人掉。">
+    <div class="slide-head"><span class="sec">避坑</span><h3>两个高频错误 ＋ 一个观念错误</h3></div>
+    <div class="slide-body">
+      <div class="trap">❌ <strong>通断记反</strong>：以为对撞也是「观测即阻断」<br>✅ 口诀：链式分叉「观测<strong>才断</strong>」，对撞「观测<strong>才通</strong>」</div>
+      <div class="trap">❌ <strong>只看一条路径</strong>：一条通就说相关 / 一条断就说独立<br>✅ d-分离要求 X 与 Y 之间<strong>每一条</strong>路径都被阻断</div>
+      <div class="trap">❌ <strong>箭头 = 必然因果</strong><br>✅ 纯 BN 中箭头首先是<strong>独立性声明</strong>；因果解释需第21章的额外假设</div>
+    </div>
+  </section>
+
+  <!-- 14 I-Map / P-Map -->
+  <section class="slide" data-narration="前面回答的是：给定图，分布满足哪些独立性。现在反过来问：给定一个分布，哪张图能表示它？这是第十八章结构学习的理论根基。引入两个概念。图叫分布的 I-Map，意思是图声明的独立性在分布里确实都成立——图说的都对，但允许说不全。完全图永远是 I-Map，因为它什么都不声明，自然不会错，可它也没用；所以我们要最小 I-Map，再删任何一条边就不成立的那种。更强的叫 P-Map，图和分布的独立性完全一致。注意，P-Map 不一定存在：有些分布的独立结构，没有任何有向无环图能完美表达。">
+    <div class="slide-head"><span class="sec">反向</span><h3>图是分布的「承诺清单」：说到的必须对，但可以说不全</h3></div>
+    <div class="slide-body">
+      <div class="cols">
+        <div class="col"><div class="card">📜 <strong>I-Map（独立映射）</strong><br>图声明的独立性 ⟹ 分布中都成立，即 $I(\mathcal{G}) \subseteq I(P)$<br><span style="color:var(--muted); font-size:18px;">完全图永远是 I-Map——什么都不承诺，自然不会错；要的是<strong>最小 I-Map</strong></span></div></div>
+        <div class="col"><div class="card">🎯 <strong>P-Map（完美映射）</strong><br>图与分布独立性完全一致：$I(\mathcal{G}) = I(P)$<br><span style="color:var(--muted); font-size:18px;">⚠️ 不一定存在——有些分布没有 DAG 能完美表达</span></div></div>
+      </div>
+      <div class="deep">为什么在乎：第18章结构学习的目标定义——从数据找最小 I-Map，最好逼近 P-Map</div>
+    </div>
+  </section>
+
+  <!-- 15 I-等价 -->
+  <section class="slide" data-narration="一个惊人的事实：这三张方向不同的图——链、分叉、倒链——编码的独立性集合完全相同，都只有一条：给定 Y 时 X 与 Z 独立。它们互为 I-等价。判定定理很干净：两张图 I-等价，当且仅当骨架相同、而且对撞结构集合相同。推论很扎心：只有对撞结构的方向能从独立性信息里确定，其余方向永远学不出来。所以纯观测数据学结构，最多学到等价类，这跟样本量无关，数据再多也分不开。想从相关跨到因果方向，得靠时间顺序、干预实验或领域知识，那是第二十一章的事。">
+    <div class="slide-head"><span class="sec">边界</span><h3>三张方向不同的图，可以编码完全相同的独立性</h3></div>
+    <div class="slide-body">
+      <div class="mmd-row">
+        <div class="mmd mmd-sm"><div class="mermaid">
+flowchart LR
+  X --> Y --> Z
+        </div><div class="cap">链式</div></div>
+        <div class="mmd mmd-sm"><div class="mermaid">
+flowchart TD
+  Y --> X
+  Y --> Z
+        </div><div class="cap">分叉</div></div>
+        <div class="mmd mmd-sm"><div class="mermaid">
+flowchart LR
+  Z --> Y --> X
+        </div><div class="cap">倒链</div></div>
+      </div>
+      <p style="text-align:center;">三张图都只声明 $X \perp Z \mid Y$ —— 互为 <strong>I-等价</strong></p>
+      <div class="deep">✅ 判定定理：I-等价 ⟺ <strong>骨架相同</strong> ＋ <strong>V-结构集合相同</strong>　⟹　只有对撞的方向能从数据里学出来</div>
+      <div class="warn">坏消息：纯观测数据最多学到<strong>等价类</strong>，与样本量无关；跨向因果需时间顺序 / 干预实验 / 领域知识（第21章）</div>
+    </div>
+  </section>
+
+  <!-- 16 BN vs MRF 接口 -->
+  <section class="slide" data-narration="本章收尾前，看看邻居。贝叶斯网络用有向边，讲一个生成的故事：先有原因后有结果，配局部条件概率表，用 d-分离读独立性。可现实里有一类关系天生没有方向：图像里相邻像素的相互影响、社交网络里朋友间的相似性，都是对称的。硬给它们安箭头反而别扭，还会丢掉独立性信息。于是第四章登场：马尔可夫网络，用无向边、势函数和简单的图分离，表达有向图表达不好的那一类结构。有向和无向，是概率图模型的一体两面。">
+    <div class="slide-head"><span class="sec">接口</span><h3>有向图讲完了：有些结构天生适合无向图——那是第4章</h3></div>
+    <div class="slide-body">
+      <table>
+        <thead><tr><th></th><th>贝叶斯网络（本章）</th><th>马尔可夫网络（第4章）</th></tr></thead>
+        <tbody>
+          <tr><td class="l"><strong>边</strong></td><td class="l">有向：讲「谁导致谁」的生成故事</td><td class="l">无向：表达对称的相互影响</td></tr>
+          <tr><td class="l"><strong>参数</strong></td><td class="l">局部条件概率表 CPD</td><td class="l">因子 / 势函数</td></tr>
+          <tr><td class="l"><strong>独立性</strong></td><td class="l">d-分离（三种结构通断）</td><td class="l">图分离（观测即阻断，更直观）</td></tr>
+          <tr><td class="l"><strong>适合</strong></td><td class="l">因果链条明确的场景</td><td class="l">图像像素、社交网络等对称关系</td></tr>
+        </tbody>
+      </table>
+      <div class="tip">钩子：同一组独立性，有时无向图表达得更自然——下章见分晓</div>
+    </div>
+  </section>
+
+  <!-- 17 小结 -->
+  <section class="slide" data-narration="三句话讲完本章。第一句，这章解决什么问题：高维联合分布存不下算不动，贝叶斯网络用一张有向无环图加每个节点的局部条件概率表，把它紧凑表示出来。第二句，核心机制：因子分解和 d-分离是一体两面——图声明了哪些独立性，联合分布就按图拆成小因子相乘；反过来，看图的连通性就能读出独立性，不用算概率。第三句，前后怎么分工：本章立起有向表示的全部基础，I-等价划定了数据学习的边界，下一章换无向图，看世界对称的那一面。">
+    <div class="slide-head"><span class="sec">小结</span><h3>三句话讲完第3章</h3></div>
+    <div class="slide-body">
+      <div class="chain">
+        <div class="link"><span class="no">1</span><span class="txt"><strong>解决什么</strong>：高维联合分布存不下 → BN 用「DAG ＋ 局部 CPD」紧凑表示</span></div>
+        <div class="link"><span class="no">2</span><span class="txt"><strong>核心机制</strong>：因子分解与 d-分离一体两面——图声明独立，分布按图相乘；看图连通性即可读独立性</span></div>
+        <div class="link"><span class="no">3</span><span class="txt"><strong>承上启下</strong>：本章立起有向表示；I-等价划定学习边界；第4章换无向图看对称世界</span></div>
+      </div>
+      <div class="formula formula-concl">$$P(X_1,\dots,X_n)=\prod_i P(X_i \mid \mathrm{Pa}(X_i)) \quad\text{——合上书也要能默写}$$</div>
+    </div>
+  </section>
+
+  <!-- 18 结束页 -->
+  <section class="slide slide-cover" data-narration="第三章到此结束。合上书之前，留个毕业挑战，这也是本章真正的毕业考试：拿一张白纸，第一，默写因子分解公式；第二，画出学生例子五个变量四条边的图，并写出它的联合分布分解；第三，默画三种基本结构，标出观测之后是通还是断；第四，把刚才那三组 d-分离判定重做一遍，每组都要说出哪条路径、哪个结构、通还是断。全部拿下，你就可以带着这张图走进第四章——马尔可夫网络，看看同一个概率世界，用无向的眼光是什么样。我们下一章见。">
+    <div class="kicker">本 章 结 束</div>
+    <h1>把图画出来，公式就有了</h1>
+    <div class="sub">毕业挑战：合上书，拿一张纸</div>
+    <div class="divider"></div>
+    <div class="meta">
+      ☑ 默写因子分解公式　　☑ 画出学生例子 DAG（5 变量 4 条边）<br>
+      ☑ 默画三种结构及通断规则　　☑ 重做三组 d-分离判定<br><br>
+      下一章 · 第4章 马尔可夫网络：无向图看世界
+    </div>
+  </section>
+
+  <!-- 页脚 -->
+  <div id="footer">
+    <span class="brand">第3章 贝叶斯网络 · PGM 课件</span>
+    <span id="pagenum">1 / 18</span>
+  </div>
+
+  <!-- 导航 -->
+  <div class="nav">
+    <button id="prev" title="上一页 (←)">‹</button>
+    <button id="next" title="下一页 (→ / 空格)">›</button>
+  </div>
+  <div id="hint">← → 翻页 · 空格下一页 · 推导页逐步显示 · 点击左右半屏翻页</div>
+
+</div>
+
+<!-- mermaid 本地引用，保证离线可用 -->
+<script src="assets/mermaid.min.js"></script>
+<script>
+mermaid.initialize({
+  startOnLoad: false,   // 必须为 false：display:none 的隐藏页渲染会得到 0 宽高的退化 SVG，
+                        // 改为页面激活时懒渲染（见 renderMermaid）
+  theme: "base",
+  themeVariables: {
+    primaryColor: "#ebf8ff",
+    primaryBorderColor: "#2b6cb0",
+    primaryTextColor: "#1a365d",
+    lineColor: "#718096",
+    fontFamily: "-apple-system, PingFang SC, sans-serif",
+    fontSize: "15px"
+  },
+  flowchart: { curve: "linear", htmlLabels: false }
+});
+</script>
+<script>
+(function(){
+  const slides = Array.from(document.querySelectorAll('.slide'));
+  const total = slides.length;
+  let idx = 0;
+
+  const params = new URLSearchParams(location.search);
+  const startSlide = parseInt(params.get('slide'), 10);
+  if (params.get('autohide') === '1') document.body.classList.add('autohide');
+  if (!isNaN(startSlide) && startSlide >= 1 && startSlide <= total) idx = startSlide - 1;
+
+  const progress = document.getElementById('progress');
+  const pagenum = document.getElementById('pagenum');
+  const prevBtn = document.getElementById('prev');
+  const nextBtn = document.getElementById('next');
+
+  // 推导分步：每页记住已展开的步数；autohide（截图）模式下 CSS 强制全显
+  const stepState = new Map();
+  function stepsOf(i){ return Array.from(slides[i].querySelectorAll('.step')); }
+  function applySteps(){
+    stepsOf(idx).forEach((el, k)=> el.classList.toggle('on', k < (stepState.get(idx) || 0)));
+  }
+  // 前进一步：先展开本页下一步，全部展开后才翻页
+  function forward(){
+    const steps = stepsOf(idx);
+    const shown = stepState.get(idx) || 0;
+    if (shown < steps.length){ stepState.set(idx, shown + 1); applySteps(); return; }
+    go(idx + 1);
+  }
+  // 后退一步：先收起本页最后一步，收完才回上一页
+  function backward(){
+    const steps = stepsOf(idx);
+    const shown = stepState.get(idx) || 0;
+    if (shown > 0){ stepState.set(idx, shown - 1); applySteps(); return; }
+    go(idx - 1);
+  }
+
+  // mermaid 懒渲染：只在页面激活（有真实宽高）时渲染该页的图，渲染后打 data-done 防重复
+  function renderMermaid(slide){
+    if (typeof mermaid === 'undefined') return;
+    const nodes = Array.from(slide.querySelectorAll('.mermaid:not([data-done])'));
+    if (!nodes.length) return;
+    nodes.forEach(n => n.setAttribute('data-done', ''));
+    mermaid.run({ nodes }).catch(err => {
+      nodes.forEach(n => n.removeAttribute('data-done'));
+      console.error('mermaid 渲染失败：', err);
+    });
+  }
+
+  function render(){
+    slides.forEach((s,i)=> s.classList.toggle('active', i===idx));
+    progress.style.width = ((idx+1)/total*100) + '%';
+    pagenum.textContent = (idx+1) + ' / ' + total;
+    prevBtn.disabled = (idx===0);
+    nextBtn.disabled = (idx===total-1);
+    applySteps();
+    renderMermaid(slides[idx]);
+  }
+  function go(n){ idx = Math.max(0, Math.min(total-1, n)); render(); }
+
+  prevBtn.addEventListener('click', e=>{ e.stopPropagation(); backward(); });
+  nextBtn.addEventListener('click', e=>{ e.stopPropagation(); forward(); });
+
+  document.addEventListener('keydown', e=>{
+    if(e.key==='ArrowRight'||e.key===' '||e.key==='PageDown'){ e.preventDefault(); forward(); }
+    else if(e.key==='ArrowLeft'||e.key==='PageUp'){ e.preventDefault(); backward(); }
+    else if(e.key==='Home'){ stepState.set(idx, 0); go(0); }
+    else if(e.key==='End'){ go(total-1); }
+  });
+
+  document.getElementById('stage').addEventListener('click', e=>{
+    if(e.target.closest('.nav')) return;
+    const x = e.clientX;
+    if(x < window.innerWidth*0.5) backward(); else forward();
+  });
+
+  function fit(){
+    const s = Math.min(window.innerWidth/1280, window.innerHeight/720);
+    document.getElementById('stage').style.transform = 'translate(-50%,-50%) scale(' + s + ')';
+  }
+  window.addEventListener('resize', fit);
+  fit();
+  render();
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,790 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第7章 最小生成树与单源最短路 · 算法导论互动讲义</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+<nav class="topbar">
+  <div class="topbar-inner">
+    <span class="brand"><a href="index.html" style="color:inherit">← 学习地图</a></span>
+    <span class="crumb">阶段③ · 图算法 / 第7章</span>
+  </div>
+</nav>
+
+<div class="wrap">
+
+  <div class="lecture-head">
+    <span class="ch-label">CHAPTER 07 · 图算法</span>
+    <h1>最小生成树与单源最短路</h1>
+    <p class="lead">副标题：带权图上的两类"最优"问题——用最省的边连通一切，用最短的路到达一切——凭什么可以贪心地求出来？</p>
+  </div>
+
+  <!-- ===== 章首四件套之 1：全书定位 ===== -->
+  <div class="position-bar">
+    <strong>本章在主线上的位置：</strong>第6章给了图的遍历骨架（BFS/DFS）→ <u>本章给带权图的两个经典最优问题的贪心解法</u> → 第8章动态规划将回答"当贪心不再适用时，如何系统地枚举子结构"。<br>
+    第7章回答主线上的第5个问题：<strong>带权图上的"最小连通代价"与"最短距离"，为什么能用局部贪心或逐轮松弛全局正确地求出？</strong>
+    <div class="map-inline">
+      <span class="node">① 分析基础<br>Ch1 增长率 · Ch2 分治递归</span><span class="arrow">→</span>
+      <span class="node">② 排序与检索<br>Ch3 排序 · Ch4 哈希表 · Ch5 红黑树</span><span class="arrow">→</span>
+      <span class="node here">③ 图算法<br>Ch6 图基本算法 · <strong>Ch7 MST与最短路</strong></span><span class="arrow">→</span>
+      <span class="node">④ 设计范式<br>Ch8 动规 · Ch9 贪心 · Ch10 NP完全</span>
+    </div>
+  </div>
+
+  <!-- ===== 章首四件套之 2：学习目标 ===== -->
+  <div class="objectives">
+    <h4>🎯 学完本章，合上书你应该能：</h4>
+    <ol>
+      <li>说出割性质与环性质的内容，并在任意给定割/环上指出哪条边必在、哪条边必不在某棵最小生成树中；</li>
+      <li>在纸面上完整手算 Kruskal（边排序 → 并查集判环 → 总权重 39）与 Prim（七步 key/π 表），并解释二者复杂度的来源；</li>
+      <li>手算 Dijkstra 五轮"取出 + 松弛"表，并用收敛引理解释"取出即定值"为什么依赖非负权；</li>
+      <li>手算 Bellman-Ford 的逐轮 d 值表，解释为什么 |V|−1 轮封顶、第 |V| 轮在检测什么；</li>
+      <li>把一组差分约束画成约束图，用 Bellman-Ford 求出一组可行解，并说明负环 ⟺ 无解。</li>
+    </ol>
+  </div>
+
+  <div class="lecture">
+
+    <!-- ===== 章首四件套之 3：推导主线图 ===== -->
+    <div class="figure">
+      <div class="mermaid">
+flowchart TB
+  A["带权图两个基本问题<br>连通所有点最便宜 · 单源最短路"] --> B["贪心的依据<br>割性质与环性质"]
+  B --> C["Kruskal<br>排序加边 并查集判环"]
+  B --> D["Prim<br>堆维护 key 逐点长树"]
+  C --> E["换问题 最短路"]
+  D --> E
+  E --> F["非负权 Dijkstra<br>贪心加堆 取出即定值"]
+  E --> G["允许负权 Bellman-Ford<br>全体边松弛 V减1轮"]
+  F --> H["代价 怕负权边"]
+  G --> I["负环等于无解信号<br>差分约束的判定器"]
+  H --> J["遗留 松弛顺序能否更系统<br>指向第8章动态规划"]
+  classDef hot fill:#fbeedd,stroke:#c4651f,stroke-width:2.5px,color:#c4651f;
+  classDef danger fill:#fae9e7,stroke:#b03a2e,stroke-width:2.5px,color:#b03a2e;
+  class J danger;
+  class I hot;
+      </div>
+      <div class="caption">本章推导主线：一条"为什么需要下一步"的因果链——贪心性质支撑 MST 两算法；换成最短路后按"是否有负权"分流；负环既是 Dijkstra 的禁区，又恰好是差分约束的无解信号。</div>
+    </div>
+
+    <!-- ================= 7.1 ================= -->
+    <h2><span class="sec-no">7.1</span>为什么 MST 可以贪心：割性质与环性质</h2>
+
+    <p>第6章解决了"图里有什么、怎么走到"，但它带出一个更贪心的问题：给每条边标了价之后，<strong>怎么选边最省钱</strong>？全枚举所有生成树有指数级棵（完全图 K<sub>n</sub> 有 n<sup>n−2</sup> 棵），必须找到"哪条边一定要、哪条边一定不要"的判定规则——这就是本节的两个定理。</p>
+
+    <p>定义：连通无向带权图 G = (V, E) 的一棵<span class="term">最小生成树</span>（Minimum Spanning Tree, MST）是包含全部顶点、恰好 |V|−1 条边、无环、且总权重最小的子图。本章统一用下面这张贯穿图 G1（7 顶点 {a,b,c,d,e,f,g}、11 条边）：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>边</th><th>a–b</th><th>a–d</th><th>b–c</th><th>b–d</th><th>b–e</th><th>c–e</th><th>d–e</th><th>d–f</th><th>e–f</th><th>e–g</th><th>f–g</th></tr>
+        <tr><th>权重</th><td>7</td><td>5</td><td>8</td><td>9</td><td>7</td><td>5</td><td>15</td><td>6</td><td>8</td><td>9</td><td>11</td></tr>
+      </table>
+    </div>
+
+    <p><strong>割性质</strong>（Cut Property）：把顶点集任意切成两半 (S, V−S)，所有横跨这个<span class="term">割</span>（Cut）的边里，权重最小的那条<span class="term">轻边</span>（Light Edge）必属于某棵 MST。<br>
+    <strong>环性质</strong>（Cycle Property）：任取图中的一个环，环上权重最大的那条边（若唯一最重）必不属于任何 MST。</p>
+
+    <p>在 G1 上看两个具体实例：</p>
+    <ul>
+      <li><strong>割的实例</strong>：取 S = {a}，V−S = {b,c,d,e,f,g}。横跨割的边只有 a–b(7) 与 a–d(5)，轻边是 <strong>a–d(5)，它必在某棵 MST 中</strong>（本章算出的那棵就有它）。</li>
+      <li><strong>环的实例</strong>：取环 b–d–e–b，三条边权重 9、15、7，最重边 <strong>d–e(15) 不在任何 MST 中</strong>——绕过它的 b–e(7) 永远更便宜。</li>
+    </ul>
+
+    <div class="box insight">
+      <span class="box-tag">✅ 判定规则</span><p>割性质给出"安全边"的判据：每次只要找到某个割的轻边，把它加进答案就是安全的。Kruskal 与 Prim 并不神秘——它们只是两种不同的、保证每步都能找到一条割轻边的调度方式。环性质是它的镜像：最贵边可以安心扔掉。两条性质合起来，就是 MST 全部贪心算法的正确性根基。</p>
+    </div>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span><p>把 MST 想成"用最少的钱把所有村子接上网"：任何把村子分两组的方案里，最便宜的那条跨组电缆不买就是浪费（割性质）；任何绕圈的电缆网里，最贵的那一段必然多余（环性质）。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span><p>误区一："轻边必在<strong>每一棵</strong> MST 中"。错——等权时可能有多棵 MST，割性质只保证"存在某棵包含它"。误区二："最重边一定不在 MST"——必须是<strong>环上唯一最重</strong>才成立；若最重边有并列，结论弱化为"存在一棵不含它的 MST"。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 7.1-1</div><div class="q-text">用自己的话说出割性质，并在 G1 的割 S={a,d} 上找出轻边。</div><span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>任意割 (S, V−S) 的轻边必属于某棵 MST。S={a,d} 的跨割边为 a–b(7)、b–d(9)、d–e(15)、d–f(6)，轻边是 d–f(6)。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 7.1-2</div><div class="q-text">环性质说什么？在 G1 的环 d–f–e–d 上验证一遍。</div><span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>环上唯一最重的边不在任何 MST 中。环 d–f(6)、f–e(8)、e–d(15) 上最重边 d–e(15) 被排除。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ================= 7.2 ================= -->
+    <h2><span class="sec-no">7.2</span>Kruskal：按价格从小到大买，成环就退货</h2>
+
+    <p>上一节给了"哪条边安全"的判据，但它带出一个工程问题：割有指数多个，难道每个都检查一遍？<span class="term">Kruskal 算法</span>（Kruskal's Algorithm）的回答极其朴素——把所有边按权重升序排好，一条一条看：<strong>能买就买，会成环就跳过</strong>。为什么"成环"是唯一退货理由？因为成环意味着新边两端已被更便宜的边连通（环性质：它必是环上最贵者）；而"能买就买"的每一步，恰好都是某个割的轻边（割性质保证安全）。</p>
+
+    <p>判定"两端是否已连通"用<span class="term">并查集</span>（Disjoint-Set / Union-Find）：每个顶点初始自成一个集合，find(x) 返回 x 所在集合的代表元，union 合并两集合。下面在 G1 上完整手算（11 条边按升序）：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>次序</th><th>边（权）</th><th>find 两端同集？</th><th>选/弃</th><th>理由与集合并的变化</th><th>累计权重</th></tr>
+        <tr><td>1</td><td>a–d (5)</td><td>否</td><td>选</td><td>合并 {a,d}</td><td>5</td></tr>
+        <tr><td>2</td><td>c–e (5)</td><td>否</td><td>选</td><td>合并 {c,e}</td><td>10</td></tr>
+        <tr><td>3</td><td>d–f (6)</td><td>否</td><td>选</td><td>{a,d,f}</td><td>16</td></tr>
+        <tr><td>4</td><td>a–b (7)</td><td>否</td><td>选</td><td>{a,b,d,f}</td><td>23</td></tr>
+        <tr><td>5</td><td>b–e (7)</td><td>否</td><td>选</td><td>{a,b,c,d,e,f}，剩 {g}</td><td>30</td></tr>
+        <tr><td>6</td><td>b–c (8)</td><td>是</td><td>弃</td><td>b、c 已同集，加入即成环 b–e–c–b</td><td>30</td></tr>
+        <tr><td>7</td><td>e–f (8)</td><td>是</td><td>弃</td><td>成环 e–b–a–d–f–e</td><td>30</td></tr>
+        <tr><td>8</td><td>b–d (9)</td><td>是</td><td>弃</td><td>成环 b–a–d–b</td><td>30</td></tr>
+        <tr><td>9</td><td>e–g (9)</td><td>否</td><td>选</td><td>并入 g，全部连通</td><td>39</td></tr>
+        <tr><td>10</td><td>f–g (11)</td><td>是</td><td>弃</td><td>成环 f–e–g–f</td><td>39</td></tr>
+        <tr><td>11</td><td>d–e (15)</td><td>是</td><td>弃</td><td>全图最贵边，环上必弃</td><td>39</td></tr>
+      </table>
+    </div>
+
+    <p>选满 |V|−1 = 6 条边即停：{a–d, c–e, d–f, a–b, b–e, e–g}，<strong>总权重 5+5+6+7+7+9 = 39</strong>。这就是 G1 的 MST 权重。</p>
+
+    <div class="figure">
+      <div class="mermaid">
+flowchart LR
+  a(("a")) ---|"7"| b(("b"))
+  a ---|"5"| d(("d"))
+  b ---|"8"| c(("c"))
+  b ---|"9"| d
+  b ---|"7"| e(("e"))
+  c ---|"5"| e
+  d ---|"15"| e
+  d ---|"6"| f(("f"))
+  e ---|"8"| f
+  e ---|"9"| g(("g"))
+  f ---|"11"| g
+  linkStyle 0,1,4,5,7,9 stroke:#1d5f9e,stroke-width:3.5px;
+      </div>
+      <div class="caption">图 7.1 Kruskal 选出的 MST（蓝色加粗六条边），总权重 39。灰色的五条弃边恰好全是各自环上的最贵者——环性质的现场演示。</div>
+    </div>
+
+    <p>复杂度：排序占 O(E lg E)；并查集在路径压缩 + 按秩合并下，E 次 find/union 摊还近似 O(E·α(V))，α 是反阿克曼函数，增长慢到可视为常数。故总复杂度</p>
+    <div class="formula"><span class="var">T</span>(<span class="var">V</span>, <span class="var">E</span>) = O(<span class="var">E</span> lg <span class="var">E</span>) = O(<span class="var">E</span> lg <span class="var">V</span>)</div>
+    <p>（因为 E &lt; V²，lg E 与 lg V 只差常数因子。）</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span><p>Kruskal 是"全局价格导向"：它从不关心树长在哪里，只关心还没买的边里哪条最便宜。并查集是它的"账本"，O(α(V)) 就能回答"这两个村子通了吗"。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span><p>误区："Kruskal 每一步加的都是当前树能伸出去的最短边。"错——那是 Prim。Kruskal 加的边可能离已有部分很远（比如第 2 步的 c–e 与 {a,d} 毫不相邻），它维护的是一片<strong>森林</strong>，最后才合成一棵树。把两算法的"生长方式"混为一谈是最常见的丢分点。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 7.2-1</div><div class="q-text">Kruskal 的排序结果里，为什么第 6 条 b–c(8) 被弃？用并查集的语言说。</div><span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>因为 find(b) = find(c)：b 经 b–e–c 已与 c 同集，加入 b–c 必成环；由环性质它是环上最贵边，弃。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 7.2-2</div><div class="q-text">Kruskal 的复杂度是多少？排序与并查集各占多少？</div><span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>总 O(E lg E) = O(E lg V)；其中排序 O(E lg E)，E 次并查集操作摊还约 O(E·α(V))，被排序项吸收。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ================= 7.3 ================= -->
+    <h2><span class="sec-no">7.3</span>Prim：从一棵树苗开始，每次接最便宜的枝</h2>
+
+    <p>Kruskal 带出一个互补的思路：如果我不喜欢"满森林乱长"，能不能让一棵树从单个顶点连续长大？<span class="term">Prim 算法</span>（Prim's Algorithm）正是如此：维护一棵树 T，每一步在所有"一端在 T 内、一端在 T 外"的边里选最轻的那条接上——这恰是割 (T, V−T) 的轻边，割性质再次保证安全。为快速找到轻边，给每个树外顶点 v 维护一个 <strong>key</strong>：v 接到当前树的<strong>最轻边权</strong>，用最小<span class="term">优先级队列</span>（Priority Queue）取 key 最小者。</p>
+
+    <p>在同一 G1 上从 a 出发完整手算（表中每格为 key/π，✓ 表示已入树）：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>步（取出）</th><th>a</th><th>b</th><th>c</th><th>d</th><th>e</th><th>f</th><th>g</th></tr>
+        <tr><td>初始</td><td>0/–</td><td>∞/–</td><td>∞/–</td><td>∞/–</td><td>∞/–</td><td>∞/–</td><td>∞/–</td></tr>
+        <tr><td>1 取 a(0)</td><td>✓</td><td>7/a</td><td>∞/–</td><td>5/a</td><td>∞/–</td><td>∞/–</td><td>∞/–</td></tr>
+        <tr><td>2 取 d(5)</td><td>✓</td><td>7/a</td><td>∞/–</td><td>✓</td><td>15/d</td><td>6/d</td><td>∞/–</td></tr>
+        <tr><td>3 取 f(6)</td><td>✓</td><td>7/a</td><td>∞/–</td><td>✓</td><td>8/f</td><td>✓</td><td>11/f</td></tr>
+        <tr><td>4 取 b(7)</td><td>✓</td><td>✓</td><td>8/b</td><td>✓</td><td>7/b</td><td>✓</td><td>11/f</td></tr>
+        <tr><td>5 取 e(7)</td><td>✓</td><td>✓</td><td>5/e</td><td>✓</td><td>✓</td><td>✓</td><td>9/e</td></tr>
+        <tr><td>6 取 c(5)</td><td>✓</td><td>✓</td><td>✓</td><td>✓</td><td>✓</td><td>✓</td><td>9/e</td></tr>
+        <tr><td>7 取 g(9)</td><td>✓</td><td>✓</td><td>✓</td><td>✓</td><td>✓</td><td>✓</td><td>✓</td></tr>
+      </table>
+    </div>
+
+    <p>逐步核对关键变化：取 d 后 e 的 key 是 15（经 d–e），取 f 后被 f–e(8) 刷新为 8，取 b 后又被 b–e(7) 刷新为 7——同一个顶点的 key 随树的生长<strong>只降不升</strong>。选出的边 (a,d)(d,f)(a,b)(b,e)(e,c)(e,g)，权重 5+6+7+7+5+9 = <strong>39</strong>，与 Kruskal 同价、同边集。</p>
+
+    <p>取舍：Prim + 二叉堆每步一次 extract-min 加若干次 decrease-key，共 O(E lg V)；若用斐波那契堆可降到 O(E + V lg V)。稠密图上 E 接近</p>
+    <div class="formula"><span class="var">E</span> ≈ <span class="frac"><span class="num-part">V(V−1)</span><span class="den-part">2</span></span> = Θ(<span class="var">V</span>²)</div>
+    <p>此时 Prim（甚至 O(V²) 的数组版）优于 Kruskal；稀疏图（E = Θ(V)）上两者同为 O(E lg V) 级别，选谁都行。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span><p>Prim 像涟漪：从一滴水（起点）开始，每步把离岸最近的那块陆地并进来。key 就是"每块陆地离水面的最近距离"。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span><p>误区："key 是顶点到起点的距离。"错——key 是顶点到<strong>当前树</strong>的最轻连接边权，与"距离"无关；把 Prim 的 key 和 Dijkstra 的 d 值混用，是 7.4 节最容易连环出错的地方。另一个误区："MST 唯一所以两算法必出同一边集"——本章只是恰好唯一；等权边多时两算法可给出不同但同价的 MST。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 7.3-1</div><div class="q-text">Prim 中 key[v] 的精确定义是什么？为什么每步取 key 最小者是安全的？</div><span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>key[v] = v 与当前树 T 之间所有连边的最小权重（无连边则为 ∞）。取 key 最小者即取割 (T, V−T) 的轻边，由割性质安全。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 7.3-2</div><div class="q-text">稠密图上选 Prim 还是 Kruskal？各自的复杂度是多少？</div><span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>稠密图（E=Θ(V²)）选 Prim：二叉堆 O(E lg V)，斐波那契堆 O(E + V lg V)，数组版 O(V²)；Kruskal 永远是 O(E lg E)，稀疏图与 Prim 打平。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ================= 7.4 ================= -->
+    <h2><span class="sec-no">7.4</span>Dijkstra：非负权图上的"取出即定值"</h2>
+
+    <p>前三节解决了"连通一切最便宜"，但带权图还有第二个基本问题：从源点 s 出发，<strong>到每个顶点的最短距离</strong>是多少？这就是<span class="term">单源最短路</span>（Single-Source Shortest Paths）。记 δ(s, v) 为 s 到 v 的最短路权（不可达为 ∞）：</p>
+    <div class="formula">δ(<span class="var">s</span>, <span class="var">v</span>) = min { <span class="var">w</span>(<span class="var">p</span>) : <span class="var">p</span> 是从 <span class="var">s</span> 到 <span class="var">v</span> 的路径 }</div>
+    <p>所有算法的通用零件是<span class="term">松弛</span>（Relaxation）：维护上界估计 d[v]，对边 (u, v) 尝试"借道 u 是否更划算"：</p>
+    <div class="formula"><span class="var">d</span>[<span class="var">v</span>] ← min( <span class="var">d</span>[<span class="var">v</span>], <span class="var">d</span>[<span class="var">u</span>] + <span class="var">w</span>(<span class="var">u</span>, <span class="var">v</span>) )</div>
+
+    <p>换一张有向带权图 G2（5 顶点 10 条边）：s→t 10, s→y 5, t→x 1, t→y 2, y→t 3, y→x 9, y→z 2, x→z 4, z→x 6, z→s 7。</p>
+
+    <div class="figure">
+      <div class="mermaid">
+flowchart LR
+  s(("s")) -->|"10"| t(("t"))
+  s -->|"5"| y(("y"))
+  t -->|"1"| x(("x"))
+  t -->|"2"| y
+  y -->|"3"| t
+  y -->|"9"| x
+  y -->|"2"| z(("z"))
+  x -->|"4"| z
+  z -->|"6"| x
+  z -->|"7"| s
+      </div>
+      <div class="caption">图 7.2 有向带权图 G2：注意 t 与 y 之间有双向边（2 与 3），z 有一条指回 s 的长边。</div>
+    </div>
+
+    <p><span class="term">Dijkstra 算法</span>（Dijkstra's Algorithm）与 Prim 同构：每次取出 d 值最小的未确定顶点 u，宣布 d[u] 就是 δ(s,u)，再用 u 松弛所有出边。从 s 完整手算（每格 d/π，✓ 表示已确定）：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>轮</th><th>取出(d)</th><th>s</th><th>t</th><th>x</th><th>y</th><th>z</th></tr>
+        <tr><td>0</td><td>–</td><td>0</td><td>∞</td><td>∞</td><td>∞</td><td>∞</td></tr>
+        <tr><td>1</td><td>s(0)</td><td>✓</td><td>10/s</td><td>∞</td><td>5/s</td><td>∞</td></tr>
+        <tr><td>2</td><td>y(5)</td><td>✓</td><td>8/y</td><td>14/y</td><td>✓</td><td>7/y</td></tr>
+        <tr><td>3</td><td>z(7)</td><td>✓</td><td>8/y</td><td>13/z</td><td>✓</td><td>✓</td></tr>
+        <tr><td>4</td><td>t(8)</td><td>✓</td><td>✓</td><td>9/t</td><td>✓</td><td>✓</td></tr>
+        <tr><td>5</td><td>x(9)</td><td>✓</td><td>✓</td><td>✓</td><td>✓</td><td>✓</td></tr>
+      </table>
+    </div>
+
+    <p>最终结果：d[y]=5（直达），d[z]=7（s→y→z），d[t]=8（s→y→t），d[x]=9（s→y→t→x）。注意第 4 轮取出的是 t(8) 而不是 x(13)：堆顶永远先取当前最小估计。</p>
+
+    <div class="box insight">
+      <span class="box-tag">✅ 判定规则（收敛引理）</span><p>Dijkstra 每次从堆中取出 u 时必有 d[u] = δ(s, u)（<span class="term">收敛引理</span>，Convergence Lemma）。证明骨架：设 u 是首个被取出时 d[u] &gt; δ(s,u) 的顶点，取 s⇝u 最短路上第一个不在已确定集 S 中的顶点 y′，其前驱 x′ ∈ S 已确定。x′ 被取出时已松弛过 x′→y′，故 d[y′] = δ(s,y′) ≤ δ(s,u) &lt; d[u]，与"u 是堆顶最小者"矛盾。<strong>证明用到 w ≥ 0 的环节</strong>：δ(s,y′) ≤ δ(s,u) 这步要求 y′⇝u 这段非负。负权边会让"已确定"的顶点事后被更便宜的路径追上——贪心前提崩塌。</p>
+    </div>
+
+    <p>反例一（临界侥幸）：给 G2 加一条 x→y 权 −4 的边。重跑 Dijkstra，第 5 轮取出 x(9) 时松弛 x→y：9+(−4)=5，恰好<strong>等于</strong> d[y]=5，不更小——Dijkstra 侥幸逃过。但 −4 是临界值：权再小一点，y 就将在被取出之后收到更便宜的报价，定值被推翻，算法出错（此时环 y→t→x→y 的权 3+1+w &lt; 0，已成<span class="term">负环</span>（Negative Cycle），最短路本身也不存在了）。</p>
+
+    <p>反例二（真正失败，且无负环）：三顶点图 s→a 1, s→b 3, b→a −3。Dijkstra 第 2 轮取出 a(1) 并宣布定值；第 3 轮取出 b(3) 松弛 b→a 得 3+(−3)=0 &lt; 1——真正的 δ(s,a)=0 出现在 a 被"盖棺定论"之后。图是 DAG、根本没有环，Dijkstra 依然答错。<strong>负权边不需要成环就足以杀死 Dijkstra。</strong></p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span><p>Dijkstra 像水位上涨：非负权保证"水先到的地方就是离源最近的地方"。负权边像暗渠，会让水从你以为已经涨过的方向倒灌回来。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span><p>误区："含负权边的图 Dijkstra 一定算错。"错——反例一显示它可能碰巧对，但<strong>没有保证</strong>；工程上的正确姿势是"有负权就上 Bellman-Ford"。误区二："Prim 的 key 和 Dijkstra 的 d 是一回事。"key 只量"离树多近"，d 量"离源多远"，前者与路径无关，后者是路径总长。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 7.4-1</div><div class="q-text">收敛引理说什么？证明中非负权用在哪一步？</div><span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>取出 u 时 d[u]=δ(s,u)。用在"最短路上首个未确定顶点 y′ 满足 δ(s,y′) ≤ δ(s,u)"——这段比较要求 y′⇝u 的边权非负，否则后到的负权边会推翻先取的定值。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 7.4-2</div><div class="q-text">在 G2 上，Dijkstra 第 2 轮取出 y 后，t、x、z 的 d 值各变成多少、经谁松弛？</div><span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>t: 5+3=8（经 y→t）；x: 5+9=14（经 y→x）；z: 5+2=7（经 y→z）。后续 z→x 改 13、t→x 改 9，终值 x=9。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ================= 7.5 ================= -->
+    <h2><span class="sec-no">7.5</span>Bellman-Ford：允许负权的代价是 |V|−1 轮全体松弛</h2>
+
+    <p>Dijkstra 的失败带出一个问题：有没有不贪心、不怕负权的算法？<span class="term">Bellman-Ford 算法</span>（Bellman-Ford Algorithm）放弃"取出即定值"，改为最笨也最稳的策略：<strong>每一轮把图中所有边全部松弛一遍，重复 |V|−1 轮</strong>。为什么 |V|−1 轮封顶？不含负环时，任何最短路都可取成简单路径，至多 |V|−1 条边；第 i 轮结束时，所有"至多 i 条边的最短路"都已被找到，|V|−1 轮后收敛。第 |V| 轮再做一次全体松弛：若还能改进，说明存在可无限走短的环路——负环。于是 Bellman-Ford 顺带成为<strong>负环检测器</strong>。</p>
+
+    <p>在 G2 加上负边 x→y(−4) 后的图（11 条边）上完整手算。固定每轮边的处理顺序：s→t, s→y, t→x, t→y, y→t, y→x, y→z, x→z, z→x, z→s, x→y。</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>轮次</th><th>s</th><th>t</th><th>x</th><th>y</th><th>z</th><th>本轮发生的关键松弛</th></tr>
+        <tr><td>0（初始）</td><td>0</td><td>∞</td><td>∞</td><td>∞</td><td>∞</td><td>初始化</td></tr>
+        <tr><td>1</td><td>0</td><td>8</td><td>11</td><td>5</td><td>7</td><td>s→t 得 10，随后 y→t 改 8；t→x 得 11；s→y 得 5；y→z 得 7</td></tr>
+        <tr><td>2</td><td>0</td><td>8</td><td>9</td><td>5</td><td>7</td><td>t→x：8+1=9 改 9；x→y：9−4=5 不更小</td></tr>
+        <tr><td>3</td><td>0</td><td>8</td><td>9</td><td>5</td><td>7</td><td>无任何松弛</td></tr>
+        <tr><td>4（|V|−1 轮毕）</td><td>0</td><td>8</td><td>9</td><td>5</td><td>7</td><td>无任何松弛，收敛</td></tr>
+        <tr><td>5（检测轮）</td><td>0</td><td>8</td><td>9</td><td>5</td><td>7</td><td>无可松弛边 ⟹ <strong>无负环</strong></td></tr>
+      </table>
+    </div>
+
+    <p>结果与 Dijkstra 相同（t=8, y=5, z=7, x=9）——这印证了 7.4 的"侥幸"：这条 −4 的边恰好没造成破坏。把这条边改成 −7 再跑：第 2 轮 x→y 把 y 改成 2，第 3 轮 y→t、y→z 继续下压，第 4 轮 x→y 又把 y 压到 −1……到第 |V|=5 轮仍有边可松弛 ⟹ 检出负环 y→t→x→y（权和 3+1−7 = −3 &lt; 0）。负环上所有顶点的 δ 应报 −∞，算法如实报警。</p>
+
+    <p>代价写在复杂度里：每轮松弛全部 E 条边，共 |V|−1 轮，</p>
+    <div class="formula"><span class="var">T</span><sub>BF</sub> = O(<span class="var">V</span>·<span class="var">E</span>) ，<span class="var">T</span><sub>Dijkstra</sub> = O((<span class="var">V</span> + <span class="var">E</span>) lg <span class="var">V</span>)</div>
+    <p>稀疏图上 V·E 与 E lg V 差约一个 V 因子——用平方级的时间，换"负权可用 + 负环可查"两件礼物。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span><p>Dijkstra 是"每次拍板一个"，Bellman-Ford 是"谁也不拍板，全体报价刷新 |V|−1 轮"。第 i 轮 = 允许路径用满 i 条边；边数上限就是轮数上限。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span><p>误区："第 |V| 轮还能松弛说明算法写错了。"恰恰相反——还能松弛说明图里有负环，这是 Bellman-Ford 的设计功能，不是故障。另一个误区："Bellman-Ford 能算出负环图的最短路。"负环可达的最短路是 −∞，不存在有限答案；算法的职责是<strong>检测并报告</strong>，而不是给出数字。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 7.5-1</div><div class="q-text">为什么 Bellman-Ford 恰好需要 |V|−1 轮？第 |V| 轮还能松弛意味着什么？</div><span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>无负环时最短路可取简单路径，至多 |V|−1 条边；第 i 轮覆盖"至多 i 条边"的全部最短路。第 |V| 轮仍可松弛 ⟺ 存在负环。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 7.5-2</div><div class="q-text">BF 与 Dijkstra 的复杂度各是多少？什么图上差距最大？</div><span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>BF O(V·E)，Dijkstra（二叉堆）O((V+E) lg V)。稀疏图 E=Θ(V) 时差距最大：V² 对 V lg V。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ================= 7.6 ================= -->
+    <h2><span class="sec-no">7.6</span>差分约束：负环是"无解"的报警器</h2>
+
+    <p>Bellman-Ford 的负环检测看似只是报错功能，但它带出一个漂亮的应用：一大类"谁比谁至多晚多少"的约束系统，可以整体翻译成最短路问题。<span class="term">差分约束</span>（Difference Constraints）系统由若干形如 x<sub>j</sub> − x<sub>i</sub> ≤ c 的不等式组成；建图规则是<strong>每个不等式变一条边</strong>：x<sub>j</sub> − x<sub>i</sub> ≤ c ⟺ x<sub>j</sub> ≤ x<sub>i</sub> + c，对应边 i→j 权 c。再加一个<span class="term">超级源点</span>（Super Source）s，向每个变量连权 0 的边，从 s 跑 Bellman-Ford：x = (δ(s,x₁), …, δ(s,x<sub>n</sub>)) 就是一组可行解；<strong>检出负环 ⟺ 系统无可行解</strong>。</p>
+
+    <p>完整例。系统（5 条约束、3 个变量）：</p>
+    <ul>
+      <li>① x₂ − x₁ ≤ 2　⟹ 边 1→2 权 2</li>
+      <li>② x₃ − x₂ ≤ 3　⟹ 边 2→3 权 3</li>
+      <li>③ x₃ − x₁ ≤ 4　⟹ 边 1→3 权 4</li>
+      <li>④ x₁ − x₃ ≤ −1　⟹ 边 3→1 权 −1</li>
+      <li>⑤ x₂ − x₃ ≤ 0　⟹ 边 3→2 权 0</li>
+    </ul>
+    <p>加 s→1、s→2、s→3 各权 0 后跑 Bellman-Ford：第 1 轮边 3→1 给出 δ₁ = −1，其余保持 0；第 2 轮起无任何松弛。解得 x = (−1, 0, 0)。逐条验证：① 0−(−1)=1 ≤ 2 ✓；② 0−0=0 ≤ 3 ✓；③ 0−(−1)=1 ≤ 4 ✓；④ −1−0=−1 ≤ −1 ✓（恰好取等，这就是约束 ④ 在"拽紧"解）；⑤ 0 ≤ 0 ✓。（(0,1,1) 也是解——可行解不唯一，Bellman-Ford 给出的是以 s 为锚的"最紧"解。）</p>
+
+    <p>无解侧：把①换成 x₂ − x₁ ≤ −3（边 1→2 权 −3）。此时环 1→2→3→1 的权和 = −3+3+(−1) = −1 &lt; 0——Bellman-Ford 第 |V| 轮必然报警。代数上也确实矛盾：x₂ ≤ x₁−3、x₃ ≤ x₂+3、x₁ ≤ x₃−1 三式相加得 0 ≤ −1。<strong>负环上的约束链，正是互相打架的不等式链。</strong></p>
+
+    <div class="box insight">
+      <span class="box-tag">✅ 判定规则</span><p>差分约束系统可行 ⟺ 约束图无负环。证明方向：(⟸) 无负环时最短路过定义良，δ 本身满足所有约束（三角不等式 δ(s,v) ≤ δ(s,u) + w(u,v) 正是约束的图形式）；(⟹) 有解时任意环上约束相加得 0 ≤ 环权，故环权必非负。</p>
+    </div>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span><p>把不等式链想成一圈齿轮：每个约束限定了相邻齿轮的转角差。绕一圈回来要求总转角差既要 ≤ 0 又要 ≥ 0——如果约束逼出一圈"负转角"，齿轮卡死，这就是负环 = 无解。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span><p>误区："不等式 x<sub>j</sub> − x<sub>i</sub> ≤ c 画边 j→i。"方向记反是最常见错误——对照三角不等式 δ(v) ≤ δ(u) + w(u,v)，<strong>被约束的变量 x<sub>j</sub> 是箭头指向的终点</strong>，边永远是 i→j。另一个误区："超级源点的边权随便设。"必须是 0 且连向每个变量，否则 δ 会被平移或漏连。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 7.6-1</div><div class="q-text">xⱼ − xᵢ ≤ c 对应哪条边？为什么 δ(s,·) 自动是一组解？</div><span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>边 i→j 权 c。最短路的三角不等式 δ(s,xⱼ) ≤ δ(s,xᵢ) + c 逐条对应每个约束，故 δ 本身即解。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 7.6-2</div><div class="q-text">约束图里出现负环意味着什么？用环上约束相加来解释。</div><span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>无可行解。负环上所有约束相加，左边变量全部抵消得 0，右边是负的环权和，推出 0 ≤ 负数——矛盾。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ================= 概念卡 ================= -->
+    <h2><span class="sec-no">🃏</span>概念卡：本章概念的一分钟画像</h2>
+    <p>翻面前先自问：这个概念我能用一句话讲清楚吗？</p>
+    <div class="flip-grid">
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 1</div><div class="q-text">最小生成树（Minimum Spanning Tree, MST）</div><span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">连通无向带权图中含全部顶点、|V|−1 条边、无环且总权重最小的子图。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">用最低成本把网络连通：布线、管网、集群互联的底价。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">给所有村子通网线的最便宜方案——不许绕圈（环），不许漏村（连通）。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为 MST 总是唯一、以为它同时保证两点间路径最短（它只优化总价，不优化任意两点距离）。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">本章 Kruskal/Prim 的目标；第9章贪心范式把它当"贪心选择性质"的招牌案例。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 2</div><div class="q-text">割性质与环性质（Cut / Cycle Property）</div><span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">割的轻边必在某棵 MST 中；环上唯一最重边必不在任何 MST 中。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">给出"哪条边安全可选、哪条边放心可弃"的局部判据，使贪心成为可能。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">分组谈判时最便宜的跨组桥梁必买；绕圈路网里最贵一段必拆。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">忽略"唯一最重"前提，或在等权边存在时把"某棵"误读成"每棵"。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">Kruskal/Prim 正确性证明；第9章论证贪心选择性质的模板。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 3</div><div class="q-text">并查集（Disjoint-Set / Union-Find）</div><span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">维护元素分族的数据结构：find 查代表元，union 并族；路径压缩 + 按秩合并后摊还近 O(α(V))。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">让 Kruskal 能用近乎常数时间回答"加这条边会不会成环"。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">村庄合并的族谱：问两人是否同村只看族长；合并时小族并入大族。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">忘记它只维护连通性、不维护路径——find 相同不代表知道怎么走过去。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">Kruskal 内部；动态连通性问题的标准件。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 4</div><div class="q-text">松弛（Relaxation）</div><span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">对边 (u,v) 执行 d[v] ← min(d[v], d[u]+w(u,v))，并维护前驱 π。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">把"最短路"这一全局最优拆成一系列局部改进步，是所有最短路算法的通用原子操作。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">报价单刷新：听说邻居有更便宜的到货价，立刻更新自己的估价。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为松弛顺序无关紧要——Dijkstra 的全部正确性恰恰押在"谁先来谁定值"的顺序上。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">Dijkstra、Bellman-Ford、差分约束；第8章会看到松弛与动规状态转移的同构。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 5</div><div class="q-text">收敛引理（Convergence Lemma）</div><span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">Dijkstra 每次从堆中取出 u 时，d[u] 已等于 δ(s,u)。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">给"取出即定值"的贪心打包票，使每顶点只进一次堆、复杂度得以控制。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">水面上涨：非负权保证先到岸的必最近，后浪不会抄近道反超。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">忘记它依赖非负权；在含负权图上引用它等于引用一个不成立的定理。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">Dijkstra 正确性证明；判断"这个贪心能不能用"时的检查清单第一条。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 6</div><div class="q-text">差分约束（Difference Constraints）</div><span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">一组 xⱼ − xᵢ ≤ c 形不等式；系统可行 ⟺ 约束图（边 i→j 权 c）无负环。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">把排程、时序、界估计类问题整体翻译成单源最短路，一次 Bellman-Ford 同时给解与可行性判定。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">一圈齿轮的转角差约束；能顺畅咬合就是可行，卡死就是负环。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">边方向记反（被约束的变量是终点）；忘记超级源点及其 0 权边。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">任务排程（开始时间差约束）、VLSI 时序、各类"区间可行解"问题。</span></div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- ================= 分层习题 ================= -->
+    <h2><span class="sec-no">📝</span>分层习题</h2>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>判断正误并说明理由：①若连通带权图所有边权互不相同，则 MST 唯一；②若 MST 唯一，则所有边权互不相同。</div>
+      <details><summary>提示</summary><p>①用割性质或换边论证每条树边的不可替代性；②只需找一个有等权边但 MST 唯一的小图作反例。</p></details>
+      <details><summary>完整解答</summary><div class="ex-answer">①正确。反证：设有两棵不同 MST，取对称差中权最小的边 e（它在一棵中、不在另一棵中），把 e 加进另一棵必成环；环上边权互异，故存在比 e 严格更重的边，换掉它得到更小的生成树，矛盾。②错误。反例：取一棵本身就是树的图——四顶点路径 a–b–c–d，三条边权全为 5。MST 被迫取全部三条边，显然唯一，但边权并不互异。逻辑关系要记牢：互异 ⟹ 唯一，反之不成立。</div></details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>"图中含有负权边，Dijkstra 就一定算错；不含负环，Dijkstra 就一定算对。"这两句话各自错在哪？</div>
+      <details><summary>提示</summary><p>回忆 7.4 的两个反例：一个是"侥幸"，一个是"真失败"，对照两句话各取一个反驳。</p></details>
+      <details><summary>完整解答</summary><div class="ex-answer">前半句错：G2 加 x→y(−4) 后含负权边且无负环，Dijkstra 结果仍正确（9+(−4)=5 不更小，只是侥幸）。负权边是"不保证对"，不是"必然错"。后半句错：三顶点反例 s→a 1、s→b 3、b→a −3 是 DAG（根本无环，更无负环），Dijkstra 却把 δ(s,a) 错报为 1（真值 0）。正确结论：非负权 ⟹ Dijkstra 必对；存在负权 ⟹ 结果不可信，应改用 Bellman-Ford。</div></details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>把 G1 中边 b–e 的权重从 7 改为 2，重跑 Kruskal，写出新的排序序列、每条边的选/弃判定，以及新 MST 的总权重。</div>
+      <details><summary>提示</summary><p>b–e(2) 将排到最前面，先于一切被选中；之后按原顺序推进，看原来的边集是否会被顶掉。</p></details>
+      <details><summary>完整解答</summary><div class="ex-answer">新排序：be2, ad5, ce5, df6, ab7, bc8, ef8, bd9, eg9, fg11, de15。<br>① be2：选（{b,e}），累计 2；② ad5：选（{a,d}），累计 7；③ ce5：选（{b,c,e}），累计 12；④ df6：选（{a,d,f}），累计 18；⑤ ab7：a∈{a,d,f}、b∈{b,c,e} 不同集，选，合并为 {a,b,c,d,e,f}，累计 25；⑥ bc8：同集，弃（成环 b–e–c–b）；⑦ ef8：同集，弃；⑧ bd9：同集，弃；⑨ eg9：g 独立，选，全部连通，累计 34；⑩ fg11、⑪ de15：同集，弃。<br>新 MST = {be, ad, ce, df, ab, eg}，总权重 <strong>2+5+5+6+7+9 = 34</strong>。边集与原 MST 完全相同——be 降价 5 全部转化为净省 5，没有任何边被顶掉。</div></details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>在 G2 上把边 y→z 的权从 2 改为 6，从 s 重跑 Dijkstra，给出五轮"取出顶点 + 松弛后各 d 值"的完整表格与最终 δ。</div>
+      <details><summary>提示</summary><p>前两轮与原来几乎相同；第三轮起堆顶顺序会变——z 的 d 值变大后，第 3 轮取出的不再是 z。</p></details>
+      <details><summary>完整解答</summary><div class="ex-answer">轮 0：s0, t∞, x∞, y∞, z∞。<br>轮 1 取 s(0)：t=10/s，y=5/s，x、z 仍 ∞。<br>轮 2 取 y(5)：y→t 3 得 t=8/y；y→x 9 得 x=14/y；y→z 6 得 z=11/y。堆：t8, z11, x14。<br>轮 3 取 t(8)（不再是 z！）：t→x 1 得 x=9/t；t→y 2 无效。堆：x9, z11。<br>轮 4 取 x(9)：x→z 4 得 13，不 &lt; 11，z 保持 11/y。堆：z11。<br>轮 5 取 z(11)：z→x 6 得 17 无效；z→s 7 无效。<br>最终 δ：s=0, y=5, t=8（s→y→t），x=9（s→y→t→x），z=11（s→y→z）。与改前相比只有 z 从 7 涨到 11；x 没有被 x→z 反超，因为 9+4=13 &gt; 11。</div></details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l3">L3 建模应用</span>某小区要给 7 栋楼 {a,b,c,d,e,f,g} 铺设光纤，可铺管道的楼对及造价（万元）恰为 G1 的 11 条边。①求保证全小区互通的最低造价方案；②施工前 d–f 段因故涨价到 10 万元，方案要不要改？改成什么？</div>
+      <details><summary>提示</summary><p>①"全部互通 + 最低造价"直接映射为 MST；②不必从头重算：df 涨过哪些"替补边"的价格后，哪条替补会先顶上来？</p></details>
+      <details><summary>完整解答</summary><div class="ex-answer">①即 G1 的 MST：管道选 a–d、c–e、d–f、a–b、b–e、e–g 六段，最低造价 <strong>39 万元</strong>。<br>②要改。df 涨到 10 后重排关键段：ad5, ce5, ab7, be7, bc8, ef8, bd9, eg9, df10, fg11, de15。Kruskal 依次选 ad、ce、ab、be 后，{a,b,c,e} 与 {d}、{f}、{g} 分立；bc8 弃（成环）；ef8：e∈大集、f 独立，<strong>选</strong>（顶替原 df 的角色），累计 5+5+7+7+8=32；bd9 弃；eg9 选入 g，累计 41；此后全连通。新方案 {ad, ce, ab, be, ef, eg}，造价 <strong>41 万元</strong>。结论：df 涨 4 万导致它被 ef(8) 替换，总造价只涨 2 万——MST 对边价变化的响应是"局部换边"，不必整体推翻。</div></details>
+    </div>
+
+    <!-- ================= 自测 ================= -->
+    <h2><span class="sec-no">✍️</span>本章自测</h2>
+    <p class="quiz-hint">点击选项判分，答错会给出原因。</p>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 1</div><div class="q-stem">关于割性质，下列哪句完全正确？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 任意割的最轻边必在每一棵 MST 中</li>
+        <li data-opt="b">B. 任意割的最轻边必在某一棵 MST 中，且 Kruskal/Prim 的每步加边都对应某个割的轻边</li>
+        <li data-opt="c">C. 割性质只适用于边权互不相同的图</li>
+        <li data-opt="d">D. 环上最重边必在 MST 中，因为需要保持连通</li>
+      </ul>
+      <div class="quiz-explain">解析：B 对——"某棵"是精确表述，两个算法的加边步都是在找割的轻边。A 错在"每棵"：等权时可能有多棵 MST 分占不同轻边。C 错：割性质不要求边权互异（互异只让 MST 唯一）。D 把环性质说反了：环上唯一最重边必<strong>不在</strong>任何 MST 中。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="c">
+      <div class="q-no">自测 2</div><div class="q-stem">Kruskal 中判断"加入边 (u,v) 是否成环"的标准做法是？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 对当前森林做一次 DFS 看 u 能否到 v</li>
+        <li data-opt="b">B. 检查 u、v 的度数是否都 ≥ 1</li>
+        <li data-opt="c">C. 查询并查集 find(u) 与 find(v) 是否相同</li>
+        <li data-opt="d">D. 比较 (u,v) 与当前最小边的权重</li>
+      </ul>
+      <div class="quiz-explain">解析：C 对——成环 ⟺ 两端已连通 ⟺ find 相同，摊还近 O(α(V))。A 逻辑上可行但每次 O(V+E)，把总复杂度拖到 O(E·V)，丢掉并查集的优势。B 错：度数与成环无必然关系（两个不同连通分量里的高度数顶点相连并不成环）。D 与成环判定毫无关系，是比较对象错误。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="a">
+      <div class="q-no">自测 3</div><div class="q-stem">Prim 的 key[v] 与 Dijkstra 的 d[v] 的本质区别是？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. key 是 v 到当前树的最轻单边权；d 是 s 到 v 的当前最短路径总长</li>
+        <li data-opt="b">B. key 只对无向图定义，d 只对 DAG 定义</li>
+        <li data-opt="c">C. key 只能增不能减，d 只能减不能增</li>
+        <li data-opt="d">D. 二者完全等价，只是名字不同</li>
+      </ul>
+      <div class="quiz-explain">解析：A 对——一个是"离树的距离"（单边），一个是"离源的距离"（路径和）；松弛式 d[v] ← min(d[v], d[u]+w) 含累加项，而 key 的更新不含。B 错：d 用于一般非负权有向/无向图，不限 DAG。C 错：二者都只降不升。D 错：同构的是算法框架（堆 + 贪心取出），量的含义不同——这正是"Prim 不需要累加、Dijkstra 需要"的根源。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="d">
+      <div class="q-no">自测 4</div><div class="q-stem">Dijkstra 遇到负权边可能出错的根本原因是？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 堆不支持负数关键字</li>
+        <li data-opt="b">B. 负权边会使边数超过 |V|−1</li>
+        <li data-opt="c">C. 负权图一定含负环</li>
+        <li data-opt="d">D. 收敛引理失效：已取出定值的顶点可能被后经负边的更便宜路径追上</li>
+      </ul>
+      <div class="quiz-explain">解析：D 对——证明中 δ(s,y′) ≤ δ(s,u) 依赖 y′⇝u 段非负；负边让"后来者居上"成为可能，7.4 的三顶点 DAG 反例（s→a 1, s→b 3, b→a −3）即现场。A 错：二叉堆完全支持负数键。B 错：边数与权重符号无关。C 错：负权边不必成环（该反例就无环），而无负环也不能保证 Dijkstra 正确。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 5</div><div class="q-stem">Bellman-Ford 跑到第 |V| 轮（检测轮）发现仍有一条边可以松弛，说明什么？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 算法实现有 bug，应减少轮数重跑</li>
+        <li data-opt="b">B. 图中存在从 s 可达的负环，相关最短路为 −∞，算法应报告</li>
+        <li data-opt="c">C. 说明图是稠密图，应改用 Dijkstra</li>
+        <li data-opt="d">D. 说明 |V|−1 轮不够，应继续跑到收敛为止</li>
+      </ul>
+      <div class="quiz-explain">解析：B 对——|V|−1 轮已覆盖全部至多 |V|−1 条边的简单路径，第 |V| 轮仍可改进只能意味着存在可无限绕短的负环；这正是差分约束"无可行解"的判定信号。A 错：这是设计功能而非故障。C 错：负环时 Dijkstra 更不可用。D 错：负环上永远收敛不了，继续跑只是无限降价；正确动作是报警停机。</div>
+    </div>
+
+    <!-- ================= 三句话复述 ================= -->
+    <div class="retell">
+      <h3>🗣️ 用自己的话，三句话讲完本章</h3>
+      <p>对着空气（或室友）说出这三句。说卡壳的那句，回去重读对应小节。</p>
+      <details><summary>句1：这章解决什么问题？——</summary><div class="retell-answer">参考答案：带权图上的两类全局最优问题——用最小总权连通全部顶点（MST），以及从单源出发到各顶点的最短距离（含负权时的可行性判定）。</div></details>
+      <details><summary>句2：核心机制是什么？——</summary><div class="retell-answer">参考答案：MST 靠割/环性质保证每步选轻边、弃重边都安全（Kruskal 全局排序 + 并查集，Prim 局部生长 + 堆）；最短路靠松弛原子操作——非负权时用 Dijkstra 贪心"取出即定值"，含负权时用 Bellman-Ford 全体松弛 |V|−1 轮并用第 |V| 轮检测负环。</div></details>
+      <details><summary>句3：它和前后章怎么分工？——</summary><div class="retell-answer">参考答案：第6章给图的表示与遍历骨架，本章在其上加"权"并给出第一批贪心图算法；第8章动态规划将回答"当贪心选择性质失效时如何系统地枚举子问题"，第9章再把割性质上升为贪心范式的通用证明模板。</div></details>
+    </div>
+
+    <!-- ================= 复习计划 ================= -->
+    <div class="review-plan">
+      <h3>🔁 间隔复习计划</h3>
+      <p>回忆本身比重读有效 10 倍。到点只做一件事：翻卡 + 重做标记题。</p>
+      <table>
+        <tr><th>时间点</th><th>复习内容</th><th>预计用时</th></tr>
+        <tr><td>第 1 天</td><td>概念卡 1–6 全部翻一遍 + 回忆卡 7.1-1、7.2-1、7.4-1；重做 Kruskal 手算表</td><td>12 分钟</td></tr>
+        <tr><td>第 3 天</td><td>概念卡 2、4、5（翻错的重点重翻）+ 自测错题；默写 Dijkstra 五轮表</td><td>10 分钟</td></tr>
+        <tr><td>第 7 天</td><td>三句话复述录音自评 + 重做习题 L2 两题；默写 Bellman-Ford 轮次表</td><td>12 分钟</td></tr>
+        <tr><td>第 15 天</td><td>只做合上书挑战 7 条；差分约束建图规则默写一遍；能全过就毕业</td><td>15 分钟</td></tr>
+      </table>
+    </div>
+
+    <!-- ================= 合上书挑战 ================= -->
+    <div class="final-challenge">
+      <h3>📕 合上书挑战</h3>
+      <p class="fc-sub">现在关掉这个页面，拿一张纸，凭记忆完成以下任务。全部做完再回来核对——这是本章真正的毕业考试。</p>
+      <ol id="challenge-list">
+        <li><span class="fc-check"></span>默写割性质与环性质，并在 G1 上各指一个具体实例（一个割 + 轻边，一个环 + 最重边）</li>
+        <li><span class="fc-check"></span>不看书把 G1 的 11 条边排序并重跑 Kruskal，逐条说出选/弃理由，核对总权 39</li>
+        <li><span class="fc-check"></span>从 a 出发重画 Prim 的七步 key/π 表，指出 e 的 key 三次被刷新的过程</li>
+        <li><span class="fc-check"></span>重跑 G2 的 Dijkstra 五轮表，并口头讲出收敛引理的反证法骨架及非负权用在哪一步</li>
+        <li><span class="fc-check"></span>默写 Bellman-Ford 在 G2+x→y(−4) 上的轮次表，解释 |V|−1 轮封顶与第 |V| 轮检测负环的原理</li>
+        <li><span class="fc-check"></span>把 7.6 的五条差分约束画成约束图（含超级源点），解出 x = (−1, 0, 0) 并逐条验证</li>
+        <li><span class="fc-check"></span>一句话回答本章主线问题：MST 与单源最短路凭什么能用贪心或逐轮松弛全局正确地求出？</li>
+      </ol>
+    </div>
+
+    <div class="complete-zone">
+      <button class="btn-complete" id="btn-complete" onclick="markDone()">✓ 我已完成本章（含合上书挑战）</button>
+    </div>
+
+    <div class="chapter-nav">
+      <a href="chapter-06.html"><span class="nav-dir">← 上一章</span>第6章 图的基本算法</a>
+      <a href="chapter-08.html" class="next"><span class="nav-dir">下一章 →</span>第8章 动态规划</a>
+    </div>
+
+  </div>
+</div>
+
+<footer class="footer">
+  <div class="wrap">第7章 最小生成树与单源最短路 · 算法导论互动讲义 · 基于 CLRS《算法导论》</div>
+</footer>
+
+<script src="assets/mermaid.min.js"></script>
+<script>
+mermaid.initialize({
+  startOnLoad: true,
+  theme: "base",
+  themeVariables: {
+    primaryColor: "#e3edf7",
+    primaryBorderColor: "#1d5f9e",
+    primaryTextColor: "#1d5f9e",
+    lineColor: "#5c554b",
+    secondaryColor: "#fbeedd",
+    tertiaryColor: "#f5f1e8",
+    fontFamily: "-apple-system, PingFang SC, sans-serif",
+    fontSize: "14px"
+  },
+  flowchart: { curve: "linear", htmlLabels: false }
+});
+</script>
+<script>
+// 自测题判分（原样复用，勿改）
+document.querySelectorAll(".quiz-block").forEach(block => {
+  const answer = block.dataset.answer;
+  const explain = block.querySelector(".quiz-explain");
+  block.querySelectorAll(".quiz-opts li").forEach(li => {
+    li.addEventListener("click", () => {
+      const opts = block.querySelectorAll(".quiz-opts li");
+      opts.forEach(o => o.classList.add("disabled"));
+      if (li.dataset.opt === answer) {
+        li.classList.add("correct");
+      } else {
+        li.classList.add("wrong");
+        block.querySelector(`[data-opt="${answer}"]`).classList.add("correct");
+      }
+      explain.classList.add("show");
+    });
+  });
+});
+
+// 合上书清单打勾（原样复用，勿改）
+document.querySelectorAll("#challenge-list li").forEach(li => {
+  li.addEventListener("click", () => li.classList.toggle("checked"));
+});
+
+// 完成标记 → localStorage（键 algo_progress_v1，章号 "7"）
+const KEY = "algo_progress_v1";
+function loadProgress() {
+  try { return JSON.parse(localStorage.getItem(KEY)) || {}; } catch (e) { return {}; }
+}
+const progress = loadProgress();
+const btn = document.getElementById("btn-complete");
+if (progress["7"] && progress["7"].done) {
+  btn.textContent = "✓ 已完成 · 再次点击重置";
+  btn.classList.add("done");
+}
+function markDone() {
+  const p = loadProgress();
+  if (p["7"] && p["7"].done) {
+    delete p["7"];
+    btn.textContent = "✓ 我已完成本章（含合上书挑战）";
+    btn.classList.remove("done");
+  } else {
+    p["7"] = { done: true, completedAt: Date.now(), reviewsDone: 0 };
+    btn.textContent = "✓ 已完成 · 复习提醒已开启";
+    btn.classList.add("done");
+  }
+  localStorage.setItem(KEY, JSON.stringify(p));
+}
+</script>
+
+</body>
+</html>

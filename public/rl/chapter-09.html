@@ -1,0 +1,903 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第9章 带近似的在策略预测 · 强化学习互动讲义</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+<nav class="topbar">
+  <div class="topbar-inner">
+    <span class="brand"><a href="index.html" style="color:inherit">← 学习地图</a></span>
+    <span class="crumb">阶段三 · 函数逼近 / 第9章</span>
+  </div>
+</nav>
+
+<div class="wrap">
+
+  <div class="lecture-head">
+    <span class="ch-label">CHAPTER 09 · 函数逼近</span>
+    <h1>带近似的在策略预测</h1>
+    <p class="lead">状态多到存不下一张表时，预测问题必须换一种问法——本章回答：换成什么，收敛到的又是什么。</p>
+  </div>
+
+  <!-- 本章定位 -->
+  <div class="position-bar">
+    <strong>本章在主线上的位置：</strong>表格法假设每个状态占一格 → <u>状态爆炸后用参数化函数 v̂(s,w) 换泛化，目标换成 μ 加权 VE，更新换成半梯度 TD</u> → 第10章才能用它做控制，第11章才能看清它在离策略下的代价。<br>
+    第9章回答主线上的第三个问题：<strong>状态存不下表时怎么做预测，收敛到的是什么？</strong>
+    <div class="map-inline">
+      <span class="node">Ch1-4 表格法基础（MDP与动态规划）</span><span class="arrow">→</span>
+      <span class="node">Ch5-8 表格型无模型（MC与TD）</span><span class="arrow">→</span>
+      <span class="node here">Ch9 带近似的在策略预测</span><span class="arrow">→</span>
+      <span class="node">Ch12-13 策略与前沿（资格迹与策略梯度）</span>
+    </div>
+  </div>
+
+  <!-- 学习目标 -->
+  <div class="objectives">
+    <h4>🎯 学完本章，合上书你应该能：</h4>
+    <ol>
+      <li>说出为什么表格法在大状态空间必然失效，以及函数逼近用"泛化"换来了什么、冒了什么险</li>
+      <li>写出均方价值误差 VE 与在策略分布 μ 的定义，并解释为什么只有 μ 加权才可学习</li>
+      <li>写出半梯度 TD(0) 的更新式，指认它相对真梯度丢了哪一项、为什么是有意丢的</li>
+      <li>手算一个两状态聚合例子的 VE 最优点 w_VE 与 TD 固定点 w_TD，并比较两者的 μ 加权误差</li>
+      <li>解释 LSTD 与迭代 TD 的关系，以及兴趣 I(s) 与强调 M_t 为什么让"不关心"的状态也甩不掉</li>
+    </ol>
+  </div>
+
+  <div class="lecture">
+
+    <!-- 章首推导主线图 -->
+    <div class="figure">
+      <div class="mermaid">
+flowchart TB
+  A["状态空间爆炸<br>存不下也访问不完 V 表"] --> B["参数化 v̂(s, w)<br>用泛化换覆盖"]
+  B --> C["需要标量目标<br>μ 加权均方价值误差 VE"]
+  C --> D["SGD 要真值目标<br>TD 改用自举目标"]
+  D --> E["半梯度<br>故意丢掉 γ∇v̂(s′) 项"]
+  E --> F["线性时收敛到 TD 固定点<br>而非 VE 最优"]
+  F --> G["代价 收敛保证只剩线性加在策略<br>通向 Ch11"]
+  classDef danger fill:#fae9e7,stroke:#b03a2e,stroke-width:2.5px,color:#b03a2e;
+  class G danger;
+      </div>
+      <div class="caption">本章推导主线：从"表存不下"到"收敛保证缩水"，每一步都被上一步逼出来；末节点的代价留给第11章清算。</div>
+    </div>
+
+    <!-- ============ 9.1 ============ -->
+    <h2><span class="sec-no">9.1</span>为什么不能再用一张表：状态爆炸与泛化</h2>
+
+    <p>第5到8章的蒙特卡洛与时序差分方法都建立在同一个沉默的假设上：<strong>每个状态的价值占表里的一格</strong>。这一节要戳破它：当状态多到连访问一遍都不可能时，"查表"这个动作本身就不存在了。</p>
+
+    <p>看两个数字。围棋的合法局面数约为 10¹⁷⁰——可观测宇宙的原子总数才约 10⁸⁰。而一个机械臂的关节角度是连续量，状态空间干脆是无穷的。<strong>存不下，更访问不完</strong>：即使你有无穷大的硬盘，每个状态一辈子也见不到几次，表格法"用访问平均逼近期望"的逻辑直接破产。</p>
+
+    <p>出路是把价值函数写成参数化形式——<span class="term">函数逼近</span>（Function Approximation）：</p>
+
+    <div class="formula">v̂(<span class="var">s</span>, <span class="var">w</span>) ≈ v<sub>π</sub>(<span class="var">s</span>)，其中 <span class="var">w</span> ∈ ℝ<sup>d</sup>，且 d ≪ |𝒮|</div>
+
+    <p>v̂ 是一个由参数向量 w 控制的函数：输入状态 s（实际输入的是 s 的特征），输出对价值的估计。参数只有 d 个，远少于状态数——存储问题解决了。但更重要的是副产品：<span class="term">泛化</span>（Generalization）。更新 w 的一个分量，会同时改变<strong>一大片</strong>状态的估计值。没见过围棋的某个具体局面不要紧，只要它和见过的局面特征相似，估计就能迁移过去。</p>
+
+    <p>形式上看，这把强化学习变成了监督学习的样子：每个时刻拿到一个样本 (S<sub>t</sub>, U<sub>t</sub>)，U<sub>t</sub> 是训练目标——蒙特卡洛用真实回报 U<sub>t</sub> = G<sub>t</sub>，TD 用自举目标 U<sub>t</sub> = R<sub>t+1</sub> + γv̂(S<sub>t+1</sub>, w)。9.2 和 9.3 就沿着"目标怎么定、梯度怎么下"展开。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>泛化是力量也是风险。同一次更新既可能"举一反三"，也可能把从未访问过的状态改坏——这叫干扰（interference）与遗忘。表格法里更新一格绝不影响别格；函数逼近里，这个隔离墙被拆掉了。本章后半部分的所有收敛性讨论，本质上都是在为这堵被拆掉的墙付账。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>以为函数逼近只是"把表压缩存起来"，学到的东西不变。错。一旦参数化，"学到的东西"本身被重新定义了：收敛点由特征选取和目标函数共同决定（9.4 会用数字证明，同一个 MDP、同样的数据，换目标就换答案）。逼近器不是容器，是问题的一部分。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <p class="recall-hint">不要直接点开。先在心里或纸上说出答案，再翻面核对。</p>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 9.1-1</div>
+              <div class="q-text">表格法在大状态空间失效的两层原因分别是什么？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              存不下（|𝒮| 超过任何存储能力，如围棋约 10¹⁷⁰）与访问不完（每个状态被访问的次数太少，用样本平均逼近期望的逻辑失效）。前者是存储问题，后者是统计问题。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 9.1-2</div>
+              <div class="q-text">什么是泛化？它给强化学习同时带来好处和什么风险？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              泛化：更新参数 w 一处，影响一片状态的估计，使未见状态的值可从相似状态迁移。好处是样本效率；风险是干扰与遗忘——一次更新可能改坏没访问过的状态。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 9.2 ============ -->
+    <h2><span class="sec-no">9.2</span>把"学得好"写成一个数：预测目标 VE 与在策略分布 μ</h2>
+
+    <p>上一节说要把预测变成监督学习，但监督学习需要一个标量损失。这一节定义它——而定义里藏着一个极易被跳过、却决定"能不能学"的加权分布。</p>
+
+    <p>在策略下，智能体按 π 行动，各状态被访问的长期时间比例构成<span class="term">在策略分布</span>（On-policy Distribution）μ(s)：μ(s) ≥ 0，Σ<sub>s</sub> μ(s) = 1。于是预测误差定义为<span class="term">均方价值误差</span>（Mean Squared Value Error）：</p>
+
+    <div class="formula">VE(<span class="var">w</span>) = ∑<sub><span class="var">s</span></sub> μ(<span class="var">s</span>) [ v<sub>π</sub>(<span class="var">s</span>) − v̂(<span class="var">s</span>, <span class="var">w</span>) ]²</div>
+
+    <p>读法：一个状态的误差被它<strong>被访问的频率</strong>加权。常来的状态算数，不来的状态不算数。</p>
+
+    <p>为什么非要用 μ 加权？因为在策略设定下，μ 是<strong>数据中天然自带的分布</strong>：沿策略采样，状态 S<sub>t</sub> 自动按 μ 出现。于是用样本平均 (1/T)Σ[v̂ 误差] 就能无偏地估计 VE——VE 因此是一个"可学习的"目标，它只依赖可观测的访问频率与回报。这里先埋一个对比：第11章会看到，看似更自然的贝尔曼误差（BE）恰恰<strong>不可</strong>从样本无偏估计，这是它被淘汰为目标的根本原因。</p>
+
+    <p>最后一个细节：VE 的最优点 w* = argmin VE(w) 不一定唯一——两个不同的 w 可能在所有被访问的状态上给出完全相同的估计（比如某个特征恒为 0）。这在理论上无妨，我们关心的是达到的 VE 值。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>μ 把"学得好"翻译成了"在会出现的地方准"。这不是权宜之计，而是使目标与数据分布对齐的必要条件：你只能用你访问到的状态来评估自己。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>把目标当成"对所有状态一视同仁"（均匀加权）。均匀加权的 VE 无法从在策略数据中估计——你根本没有按均匀分布访问状态。目标里的 μ 不是偏好，是数据本身。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 9.2-1</div>
+              <div class="q-text">写出 VE(w) 的定义，并说明 μ(s) 的含义。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              VE(w) = Σ<sub>s</sub> μ(s)[v_π(s) − v̂(s,w)]²。μ(s) 是在策略分布：按 π 行动时状态 s 被访问的长期时间比例。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 9.2-2</div>
+              <div class="q-text">为什么说 VE 是"可学习的"目标？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              因为 μ 就是在策略数据的采样分布，沿策略得到的状态自动按 μ 加权，样本平均即可无偏估计 VE；对比之下贝尔曼误差无法从样本无偏估计（Ch11）。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 9.3 ============ -->
+    <h2><span class="sec-no">9.3</span>梯度下降遇上自举：半梯度 TD 丢了什么</h2>
+
+    <p>目标 VE 定好了，下一步是用随机梯度下降去优化它。蒙特卡洛走这条路一帆风顺；TD 走到一半会撞上一堵墙——撞墙之后的那个"将就"，就是本章最重要的技术名词。</p>
+
+    <p>标准的<span class="term">随机梯度下降</span>（Stochastic Gradient Descent, SGD）：对每个样本 (S<sub>t</sub>, U<sub>t</sub>)，沿平方误差对 w 的负梯度走一步：</p>
+
+    <div class="formula"><span class="var">w</span> ← <span class="var">w</span> + α [ U<sub>t</sub> − v̂(S<sub>t</sub>, <span class="var">w</span>) ] ∇v̂(S<sub>t</sub>, <span class="var">w</span>)</div>
+
+    <p>蒙特卡洛取 U<sub>t</sub> = G<sub>t</sub>：目标虽 noisy 但不依赖 w，期望意义下就是真梯度，SGD 收敛到 VE 的局部最优。干净利落。</p>
+
+    <p>TD 取 U<sub>t</sub> = R<sub>t+1</sub> + γv̂(S<sub>t+1</sub>, w)：<strong>目标自己也含 w</strong>。写出平方误差 [R + γv̂(S′,w) − v̂(S,w)]² 对 w 的真梯度，负方向应是</p>
+
+    <div class="formula">δ<sub>t</sub> [ ∇v̂(S<sub>t</sub>, <span class="var">w</span>) − γ∇v̂(S<sub>t+1</sub>, <span class="var">w</span>) ]，其中 δ<sub>t</sub> = R<sub>t+1</sub> + γv̂(S<sub>t+1</sub>) − v̂(S<sub>t</sub>)</div>
+
+    <p><span class="term">半梯度</span>（Semi-gradient）方法<strong>故意丢掉</strong> −γ∇v̂(S′) 这一项，只保留 ∇v̂(S)：把自举目标当作与 w 无关的常数来求导。于是 TD(0) 更新就是 SGD 形式里代入 U<sub>t</sub> = R + γv̂(S′)。为什么敢丢？两个理由：第11章会证明真梯度对应的贝尔曼误差目标不可从样本学习；而丢掉之后，线性情形下在策略 TD 反而有收敛保证（9.4）。</p>
+
+    <p>步长怎么选？一个经验法则：α ≈ 1/(τ·E[xᵀx])，其中 τ 是期望到达目标的时间尺度（任务越长，步长越小），E[xᵀx] 是特征向量平方长度的期望。它来自对每步进度量级的要求，不是严格定理，但比盲调好一个量级。</p>
+
+    <h3>完整算例：一条两步轨迹上的半梯度 TD(0)</h3>
+    <p>线性 v̂(s) = wᵀx(s)。三个状态 A、B、C（C 为终止态，x(C) = (0,0)，价值恒 0）。特征 x(A) = (1,0)，x(B) = (1,1)。γ = 1，α = 0.1，初始 w₀ = (0.5, 0.5)。</p>
+
+    <p><strong>第一步，转移 A→B，R = 1</strong>：</p>
+    <ul>
+      <li>当前估计：v̂(A) = wᵀx(A) = 0.5×1 + 0.5×0 = 0.5；v̂(B) = 0.5×1 + 0.5×1 = 1.0</li>
+      <li>TD 误差：δ = R + γv̂(B) − v̂(A) = 1 + 1.0 − 0.5 = 1.5</li>
+      <li>更新：w ← (0.5, 0.5) + 0.1 × 1.5 × x(A) = (0.5, 0.5) + 0.15 × (1, 0) = <strong>(0.65, 0.5)</strong></li>
+    </ul>
+
+    <p><strong>第二步，转移 B→C，R = 0</strong>（用更新后的 w）：</p>
+    <ul>
+      <li>当前估计：v̂(B) = 0.65 + 0.5 = 1.15；v̂(C) = 0（终止态）</li>
+      <li>TD 误差：δ = 0 + 0 − 1.15 = −1.15</li>
+      <li>更新：w ← (0.65, 0.5) + 0.1 × (−1.15) × x(B) = (0.65, 0.5) − 0.115 × (1, 1) = <strong>(0.535, 0.385)</strong></li>
+    </ul>
+
+    <p>检验方向：真实值 v(A) = 1（A→B 得 1，之后 0），v(B) = 0。第一步把 v̂(A) 从 0.5 推向 0.65（朝 1）；第二步用新权重算 v̂(B) = 0.535 + 0.385 = 0.92，从 1.15 压向 0.92（朝 0）。两步都在朝真值走。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>半梯度把 TD 目标"冻结"成常数再求导：我先相信你给的靶子不动，只调我的枪。靶子其实随枪动，但每一小步里近似不动——这就是它能工作的原因，也是它只在特定条件下收敛的根源。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>把半梯度当成笔误或偷懒。它是有意的取舍：真梯度对应的目标（贝尔曼误差）在 Ch11 被证明不可从数据学习。代价是收敛保证只剩下"线性 + 在策略"这一小块地盘——这正是本章推导主线末端的红色节点。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 9.3-1</div>
+              <div class="q-text">半梯度 TD 相对真梯度丢了哪一项？为什么是"故意"丢的？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              丢掉 −γ∇v̂(S′, w)（即把自举目标当常数）。故意的原因：真梯度对应的贝尔曼误差目标不可从样本学习（Ch11），且半梯度在线性+在策略下保证收敛。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 9.3-2</div>
+              <div class="q-text">蒙特卡洛目标与 TD 目标在"是否依赖 w"上有何区别？后果是什么？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              MC 目标 G_t 不依赖 w，SGD 是真梯度下降，收敛到 VE 局部最优；TD 目标 R+γv̂(S′,w) 依赖 w，直接套 SGD 只是半梯度，收敛点不再是 VE 最优（见 9.4）。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 9.4 ============ -->
+    <h2><span class="sec-no">9.4</span>线性方法：TD 固定点不是 VE 最优</h2>
+
+    <p>上一节留下了悬念：半梯度 TD 收敛，但收敛到哪儿？这一节用线性函数逼近把答案算出来——一个具体的两状态例子会让你看到 TD 固定点和 VE 最优点是两个不同的数。</p>
+
+    <p>线性情形 v̂(s) = wᵀx(s)，此时 ∇v̂(s) = x(s)，半梯度 TD(0) 更新为 w ← w + αδx(s)。在在策略、适当步长下，它收敛到<span class="term">TD 固定点</span>（TD Fixed Point）：</p>
+
+    <div class="formula"><span class="var">w</span><sub>TD</sub> = A<sup>−1</sup><span class="var">b</span>，A = E[ x( x − γx′ )ᵀ ]，<span class="var">b</span> = E[ R x ]</div>
+
+    <p>其中期望对在策略分布 μ 下的状态 s 与其后继 s′ 取。直觉：不动点处更新量的期望为零，即 E[δx] = 0，展开就是 b − Aw = 0。</p>
+
+    <h3>完整算例：状态聚合把两个状态焊在一起</h3>
+    <p>MDP：S1 → S2（确定性，R = 0），S2 → 终止（R = 2），γ = 0.9。每回合从 S1 出发，故在策略分布 μ(S1) = μ(S2) = 1/2。真值：v(S2) = 2，v(S1) = 0.9 × 2 = 1.8。</p>
+    <p>逼近器用<span class="term">状态聚合</span>（State Aggregation）：x(S1) = x(S2) = (1)——两个状态共享同一个标量权重 w。这是最粗糙的线性逼近，正好把差别暴露出来。</p>
+
+    <p><strong>先算 VE 最优点</strong>。VE(w) = 0.5(w − 1.8)² + 0.5(w − 2)²。对 w 求导：(w − 1.8) + (w − 2) = 0，得</p>
+    <div class="formula"><span class="var">w</span><sub>VE</sub> = <span class="frac"><span class="num-part">1.8 + 2</span><span class="den-part">2</span></span> = 1.9</div>
+
+    <p><strong>再算 TD 固定点</strong>。逐项组装 A 与 b（终止态特征为 0）：</p>
+    <ul>
+      <li>从 S1（μ 权重 0.5）：x = 1，x′ = x(S2) = 1，R = 0 → A 得 0.5 × 1 × (1 − 0.9 × 1) = 0.05，b 得 0.5 × 0 × 1 = 0</li>
+      <li>从 S2（μ 权重 0.5）：x = 1，x′ = 0，R = 2 → A 得 0.5 × 1 × (1 − 0.9 × 0) = 0.5，b 得 0.5 × 2 × 1 = 1</li>
+    </ul>
+    <div class="formula">A = 0.05 + 0.5 = 0.55，<span class="var">b</span> = 1，<span class="var">w</span><sub>TD</sub> = <span class="frac"><span class="num-part">1</span><span class="den-part">0.55</span></span> ≈ 1.8182</div>
+
+    <p><strong>误差对比</strong>（μ 加权范数 ‖e‖<sub>μ</sub> = √(Σ μ(s)e(s)²)）：</p>
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>权重</th><th>v̂(S1) 误差</th><th>v̂(S2) 误差</th><th>μ 加权误差</th></tr>
+        <tr><td>w_TD ≈ 1.8182</td><td>|1.8182 − 1.8| = 0.0182</td><td>|1.8182 − 2| = 0.1818</td><td>√(0.5×0.0182² + 0.5×0.1818²) ≈ 0.1292</td></tr>
+        <tr><td>w_VE = 1.9</td><td>0.1</td><td>0.1</td><td>√(0.5×0.01 + 0.5×0.01) = 0.1</td></tr>
+      </table>
+    </div>
+    <p>TD 收敛点 1.8182 ≠ VE 最优点 1.9，且误差 0.1292 &gt; 0.1。<strong>TD 没有收敛到它"应该"最小化的那个目标</strong>。不过有兜底——误差界：</p>
+    <div class="formula">‖v<sub>π</sub> − v̂<sub>TD</sub>‖<sub>μ</sub> ≤ <span class="frac"><span class="num-part">1</span><span class="den-part">1 − γ</span></span> · ‖v<sub>π</sub> − Πv<sub>π</sub>‖<sub>μ</sub></div>
+    <p>Πv<sub>π</sub> 是真值在函数空间的最佳投影（这里就是 w_VE 对应的 0.1）。本例上界 = 10 × 0.1 = 1.0 ≥ 0.1292，成立但非常松；γ → 1 时因子 1/(1−γ) 爆炸，界失去信息量。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>TD 固定点不只"离真值近"，它还被转移结构牵引：自举目标里混着下一个状态的估计 v̂(S′)，所以 w_TD 偏向"让 δ 处处为零"而不是"让 v̂ 处处像 v_π"。本例中 S1 的目标含 v̂(S2) = w 自己，这把 w 往下拽——0.05 那一小项（A 里的 1 − 0.9）正是拽的痕迹。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>以为 TD 收敛到 VE 的最小值。那是蒙特卡洛（线性情形下）的性质。半梯度 TD 优化的是一个隐含目标，其不动点是 A⁻¹b，与 argmin VE 一般不同；两者只在表格表示等特例下重合。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 9.4-1</div>
+              <div class="q-text">写出线性半梯度 TD(0) 的固定点公式，并说明 A、b 各是什么。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              w_TD = A⁻¹b，A = E[x(x − γx′)ᵀ]，b = E[Rx]，期望对在策略分布 μ 下的转移取。来自不动点条件 E[δx] = 0。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 9.4-2</div>
+              <div class="q-text">9.4 算例中 w_TD ≈ 1.8182 与 w_VE = 1.9 哪个误差更小？这说明了什么？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              w_VE 误差更小（0.1 &lt; 0.1292）。说明半梯度 TD 的收敛点不是 VE 最优点；TD 误差有 ‖·‖ ≤ 1/(1−γ)·‖v_π − Πv_π‖ 的界，γ 大时界很松。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 9.5 ============ -->
+    <h2><span class="sec-no">9.5</span>最小二乘 TD：不解迭代，直接解固定点</h2>
+
+    <p>既然知道线性 TD 的终点站是 w_TD = A⁻¹b，一个自然的想法冒出来：为什么要一步步迭代走过去，不能直接解线性方程组跳过去吗？能——这就是 LSTD。</p>
+
+    <p><span class="term">最小二乘 TD</span>（Least-Squares TD, LSTD）：用 t 步样本直接估计 A 与 b，</p>
+    <div class="formula">Â<sub>t</sub> = <span class="frac"><span class="num-part">1</span><span class="den-part">t</span></span> ∑<sub>k</sub> x<sub>k</sub>(x<sub>k</sub> − γx<sub>k+1</sub>)ᵀ，b̂<sub>t</sub> = <span class="frac"><span class="num-part">1</span><span class="den-part">t</span></span> ∑<sub>k</sub> R<sub>k+1</sub> x<sub>k</sub>，然后一步解 <span class="var">w</span> = Â<sub>t</sub><sup>−1</sup>b̂<sub>t</sub></div>
+
+    <p>与迭代 TD 相比：没有步长 α 要调；每个样本都进了充分统计量，数据利用更彻底。代价是 O(d²) 的存储（Â 是 d×d 矩阵）和 O(d²)~O(d³) 的求逆开销——特征维度大时用递推求逆（Sherman–Morrison）或干脆回到迭代法。</p>
+
+    <h3>算例：同一 MDP，一步到达</h3>
+    <p>沿用 9.4 的两状态例子。样本流是无限循环的 S1→S2→终止，Â 与 b̂ 的样本均值正好等于其期望：Â = 0.55，b̂ = 1。一步求解：</p>
+    <div class="formula"><span class="var">w</span> = Â<sup>−1</sup>b̂ = <span class="frac"><span class="num-part">1</span><span class="den-part">0.55</span></span> ≈ 1.8182 = <span class="var">w</span><sub>TD</sub></div>
+    <p>与迭代 TD 的极限完全一致——连小数点后都一样，因为它们解的是同一个不动点方程。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>迭代 TD 是"沿着噪声梯度慢慢晃到固定点"，LSTD 是"把固定点方程的系数估出来直接解"。同一个目的地，不同的交通工具。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>以为 LSTD 是"更准的新算法"。不是。它解的仍是 TD 固定点，9.4 的误差对比对 LSTD 一字不差地成立——逼近极限没变，只是到达方式从迭代变成了解方程。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 9.5-1</div>
+              <div class="q-text">LSTD 相对迭代 TD 的两个优点和一个代价是什么？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              优点：无步长调参、数据利用充分（样本进入充分统计量 Â、b̂）。代价：O(d²) 存储与矩阵求逆，特征维度高时不划算。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 9.5-2</div>
+              <div class="q-text">LSTD 的解与迭代 TD 的极限是什么关系？为什么？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              相等（样本充分时）。LSTD 直接解不动点方程 b − Aw = 0 的样本版，迭代 TD 的极限是同一个方程的期望版解。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 9.6 ============ -->
+    <h2><span class="sec-no">9.6</span>只关心部分状态：兴趣与强调</h2>
+
+    <p>VE 用 μ 加权，等于宣布"按访问频率分配在乎程度"。但很多任务里我们有自己的偏好：比如只关心某个关键状态的预测准不准。这一节给出改写目标的工具，以及一个反直觉的连锁反应。</p>
+
+    <p><span class="term">兴趣</span>（Interest）I(s) ∈ [0,1]：表示我们多在乎状态 s 的预测精度。目标变为 Σ<sub>s</sub> I(s)μ(s)[v_π(s) − v̂(s)]²（或直接把 μ 换成带兴趣的分布）。但自举带来连锁：S1 的 TD 目标含 v̂(S2)，把 S2 估错会污染 S1 的更新。于是引入<span class="term">强调</span>（Emphasis）M<sub>t</sub>，沿轨迹递归累积兴趣：</p>
+
+    <div class="formula">M<sub>t</sub> = I<sub>t</sub> + γM<sub>t−1</sub>（M<sub>−1</sub> = 0），更新 <span class="var">w</span> ← <span class="var">w</span> + α M<sub>t</sub> δ<sub>t</sub> ∇v̂(S<sub>t</sub>, <span class="var">w</span>)</div>
+
+    <p>读法：当前状态的更新力度 = 它自己的兴趣 + 折扣后的"上游兴趣遗产"。</p>
+
+    <h3>算例：不感兴趣的状态甩不掉</h3>
+    <p>两状态链 S1 → S2 → 终止，γ = 0.9，只关心起点：I(S1) = 1，I(S2) = 0。</p>
+    <ul>
+      <li>t 时刻在 S1：M<sub>t</sub> = 1 + 0.9 × 0 = <strong>1</strong>（正常更新）</li>
+      <li>t+1 时刻在 S2：M<sub>t+1</sub> = 0 + 0.9 × 1 = <strong>0.9</strong>（兴趣为 0，强调却是 0.9！）</li>
+    </ul>
+    <p>为什么必须这样？因为 S2 的估计出现在 S1 的自举目标 R + γv̂(S2) 里。在乎 S1 的精度，就被迫在乎 S2 的估计——兴趣沿转移图的反方向流动。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>兴趣是你对目标的声明，强调是动力学对这个声明的回应：自举把"在乎"沿时间轴往后传染，一步 γ 折一次价。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>以为 I(s) = 0 的状态可以完全不管。只要它出现在任何被关心状态的自举目标可达的下游，它的强调 M 就非零，更新照样发生。"不关心"不等于"不更新"。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 9.6-1</div>
+              <div class="q-text">写出强调的递推式，并解释各项含义。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              M_t = I_t + γM_{t−1}（M₋₁=0）。I_t 是当前状态兴趣；γM_{t−1} 是沿轨迹从上游关心状态继承来的强调，乘进更新步长 αM_t。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 9.6-2</div>
+              <div class="q-text">为什么 I(S2)=0 时 S2 的更新力度仍可能是 0.9？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              因为 S2 的估计进入被关心状态 S1 的自举目标 R+γv̂(S2)；强调沿"被谁的目标引用"的关系反向流动，S2 继承了 S1 兴趣的折扣版 0.9×1。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 9.7 ============ -->
+    <h2><span class="sec-no">9.7</span>错误直觉："函数逼近只是实现细节"</h2>
+
+    <p>最后一节不设新工具，只拆一个流传极广的错觉：先把算法学好，函数逼近留到工程阶段再套上。前面六节的每个数字都在反驳它。</p>
+
+    <p>先看一个常被忽略的事实：<strong>表格法本身就是函数逼近的特例</strong>——取 one-hot 特征 x(s) = (0,…,1,…,0)，w 的每个分量就是一个状态的值，d = |𝒮|。所以本章所有公式都覆盖前五章；反过来，前五章"必然收敛"的安心感却无法推广到本章。一旦 d &lt; |𝒮|，三个选择同时浮出水面，且每一个都改变收敛点：</p>
+    <ul>
+      <li><strong>目标函数的选择</strong>：VE 可学习但 TD 不收敛到其最优（9.4 的 1.9 vs 1.8182）；贝尔曼误差更"对称"却不可学习（Ch11）。</li>
+      <li><strong>更新分布的选择</strong>：μ 加权使目标可从数据估计（9.2）；换成兴趣加权，连"哪些状态会被更新"都改变（9.6）。</li>
+      <li><strong>梯度定义的选择</strong>：真梯度不可学，半梯度可学但换了不动点（9.3、9.4）。</li>
+    </ul>
+
+    <p>回敬"细节论"只需一组数字：9.4 中同一个 MDP、同样的数据、同一个线性逼近器，把目标从 VE 换成 TD 自举，收敛点就从 <strong>1.9</strong> 变成 <strong>1.8182</strong>，μ 加权误差从 0.1 涨到 0.1292。如果逼近只是实现细节，这两个数应该相等。它们不相等，说明<strong>算法行为由目标、分布、梯度三者共同决定，逼近方式是算法定义的一部分</strong>。</p>
+
+    <p>收敛保证的账本也重写了：表格法的"必然收敛"缩水为"<strong>线性 + 在策略 + 半梯度 TD</strong> 才收敛"。三个条件缺一个，第11章的"致命三元组"（函数逼近、自举、离策略）就会让权重发散——那是下一阶段要面对的代价。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>评价一个逼近预测算法，永远问三件事：目标是什么（VE 还是别的）、按什么分布更新（μ 还是带兴趣）、梯度怎么取（真还是半）。三者定了，收敛点就定了——与工程实现无关。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>以为换个逼近器（比如从表格换成线性、从线性换成神经网络）算法行为不变。9.4 的反例：连目标都不换、只把 one-hot 换成聚合特征，收敛点的数值就变了。逼近器进的是问题的定义，不是实现的后台。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 9.7-1</div>
+              <div class="q-text">为什么说表格法是函数逼近的特例？</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              取 one-hot 特征 x(s)=(0,…,1,…,0)，线性 v̂ = wᵀx 的每个权重分量就是一个状态的值，d=|𝒮|，退化为查表。
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front">
+              <div class="q-tag">回忆 9.7-2</div>
+              <div class="q-text">用 9.4 的数字反驳"函数逼近只是实现细节"。</div>
+              <span class="tap">点击翻面 →</span>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="a-tag">参考答案</div>
+              同一 MDP、同一数据、同一线性逼近器：目标取 VE 收敛到 w=1.9，取 TD 自举收敛到 w≈1.8182，误差 0.1 vs 0.1292。收敛点随目标/逼近而变，故逼近属于算法定义而非实现细节。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 概念卡 ============ -->
+    <h2><span class="sec-no">🃏</span>概念卡：本章概念的一分钟画像</h2>
+    <p>翻面前先自问：这个概念我能用一句话讲清楚吗？</p>
+    <div class="flip-grid">
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 1</div>
+            <div class="q-text">函数逼近与泛化（Function Approximation &amp; Generalization）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">用参数化函数 v̂(s,w)（w∈ℝᵈ，d≪|𝒮|）代替逐状态的值表；更新 w 一处影响一片状态，即为泛化。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">状态空间太大存不下、访问不完（围棋 10¹⁷⁰、连续状态无穷），表格法直接破产。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">从"背词典"变成"学语法"：不再逐条记忆，而是掌握可迁移的规律。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为只是压缩存储；其实它重新定义了收敛点（由特征与目标共同决定），还引入干扰与遗忘风险。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">本章全部；Ch10 逼近控制、Ch11 离策略崩溃分析、Ch13 策略梯度的函数逼近。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 2</div>
+            <div class="q-text">在策略分布 μ 与 VE（On-policy Distribution &amp; VE）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">μ(s) 是按 π 行动时状态被访问的长期频率；VE(w) = Σ μ(s)[v_π(s) − v̂(s,w)]²。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">把"预测学得好不好"写成一个可优化的标量目标。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">按出场率打分：常来的状态算数，不来的不算。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">均匀加权所有状态——那无法从在策略样本估计；μ 加权才使 VE 可学习。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">本章所有误差度量与收敛分析；Ch11 对比不可学习的贝尔曼误差。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 3</div>
+            <div class="q-text">半梯度（Semi-gradient）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">对含自举目标的误差求导时，把目标 R+γv̂(S′,w) 当常数，丢掉 −γ∇v̂(S′) 项，只保留 ∇v̂(S)。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">TD 目标依赖 w，真梯度对应的贝尔曼误差目标不可从样本学习（Ch11）。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">每小步先把靶子冻住再开枪；靶子其实在动，但一步之内近似不动。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">当成笔误或近似偷懒——它是有意取舍，换来了线性+在策略下的收敛保证。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">本章 TD 更新；Ch10 半梯度 Sarsa；Ch11 分析它在离策略下为何失效。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 4</div>
+            <div class="q-text">TD 固定点（TD Fixed Point）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">线性半梯度 TD(0) 在在策略下的收敛点 w_TD = A⁻¹b，A = E[x(x−γx′)ᵀ]，b = E[Rx]。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">回答"半梯度 TD 到底收敛到哪儿"：不动点条件 E[δx] = 0 的解。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">被转移结构牵引的平衡点：让 δ 处处期望为零，而不是让 v̂ 最像 v_π。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为等于 VE 最优点——9.4 算例 w_TD≈1.8182 ≠ w_VE=1.9；只有 MC（线性时）收敛到 VE 最优。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">本章 9.4-9.5；误差界 ‖·‖≤(1−γ)⁻¹‖v_π−Πv_π‖；Ch11 讨论其稳定性边界。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 5</div>
+            <div class="q-text">LSTD（Least-Squares TD）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">用样本估计 Â=(1/t)Σx(x−γx′)ᵀ、b̂=(1/t)ΣRx，一步解 w = Â⁻¹b̂。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">免去迭代与步长调参，样本利用充分，直接跳到固定点。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">迭代 TD 是沿噪声梯度晃过去，LSTD 是把方程系数估出来直接解。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为更"准"——它解的是同一个 TD 固定点，逼近极限不变；代价是 O(d²) 存储与求逆。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">特征维度不大、样本珍贵的在策略预测；是 LSPE、LSPI（控制版）的出发点。</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front">
+            <div class="q-tag">概念卡 6</div>
+            <div class="q-text">兴趣与强调（Interest &amp; Emphasis）</div>
+            <span class="tap">点击翻面 →</span>
+          </div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">I(s)∈[0,1] 声明多在乎状态 s；M_t = I_t + γM_{t−1} 沿轨迹累积，更新乘上 M_t。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">目标不再被 μ 绑架：可以只关心部分状态的预测精度。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">在乎会沿自举链传染：你关心上游，就被迫打折关心下游。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为 I(s)=0 就不更新——只要它进入被关心状态的自举目标，其强调非零（0.9 的例子）。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">带重点区域的预测任务；为 Ch11 强调式离策略方法（Emphatic-TD）铺路。</span></div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- ============ 分层习题 ============ -->
+    <h2><span class="sec-no">📝</span>分层习题</h2>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>VE 为什么必须用 μ 加权，而不能对所有状态均匀加权？</div>
+      <details>
+        <summary>提示</summary>
+        <p>想想目标函数必须满足什么性质，才能"从数据中估计出来"。在策略下你实际按什么分布访问状态？</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">只有 μ 加权才能从在策略样本无偏估计：沿策略行动时，状态自动按 μ 出现，样本平均 (1/T)Σ[·] 收敛到 E_μ[·] = VE。均匀加权要求按均匀分布访问所有状态，而在策略数据根本不给这样的样本——目标就不可学习。易错点：把"公平对待所有状态"当作美德；目标函数的第一要务是与数据分布对齐，不是公平。</div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>半梯度 TD 的"半"体现在哪里？为什么说它不是笔误？</div>
+      <details>
+        <summary>提示</summary>
+        <p>把 [R + γv̂(S′,w) − v̂(S,w)]² 对 w 完整求导，看 TD 实际更新缺了哪一项；再想真梯度对应的目标有什么毛病。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">"半"在：真梯度的负方向是 δ[∇v̂(S) − γ∇v̂(S′)]，TD 更新只保留 ∇v̂(S)，丢掉了 −γ∇v̂(S′)——相当于把自举目标当成与 w 无关的常数。不是笔误的两条理由：①真梯度对应的贝尔曼误差目标无法从样本无偏估计（Ch11 证明），学了也白学；②丢掉之后，线性+在策略条件下反而有收敛保证（收敛到 TD 固定点）。易错点：把"数学上不完整"等同于"错误"，忽略了可学习性才是目标选择的硬约束。</div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>线性 v̂ = wᵀx。当前 w = (1, 1)，x(S) = (1, 0)，x(S′) = (0, 1)，S′ 非终止，R = 1，γ = 0.5，α = 0.2。手算一步半梯度 TD(0) 更新。</div>
+      <details>
+        <summary>提示</summary>
+        <p>顺序：先算两个状态当前的估计 → 算 δ → 更新式 w ← w + αδx(S)，注意梯度取的是 x(S) 而不是 x(S′)。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p>① v̂(S) = wᵀx(S) = 1×1 + 1×0 = 1</p>
+          <p>② v̂(S′) = wᵀx(S′) = 1×0 + 1×1 = 1</p>
+          <p>③ δ = R + γv̂(S′) − v̂(S) = 1 + 0.5×1 − 1 = 0.5</p>
+          <p>④ ∇v̂(S) = x(S) = (1, 0)（线性情形梯度就是特征）</p>
+          <p>⑤ w ← (1, 1) + 0.2 × 0.5 × (1, 0) = (1, 1) + (0.1, 0) = <strong>(1.1, 1)</strong></p>
+          <p>检查：只动了第一个权重分量，因为只有 x(S) 的第一个分量非零——自举目标里的 v̂(S′) 被冻结，第二分量这一步不背锅。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>把 9.4 的两状态聚合例子改为 γ = 0.5（其余不变：S1→S2 得 R=0，S2→终止得 R=2，x(S1)=x(S2)=(1)，μ 各半）。重算真值、w_VE 与 w_TD。</div>
+      <details>
+        <summary>提示</summary>
+        <p>真值先用贝尔曼方程 v(S1) = γ·2；w_VE 是最小化 0.5(w−v₁)²+0.5(w−v₂)²；w_TD = b/A，逐项组装 A、b 时别忘了终止态特征为 0。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p>① 真值：v(S2) = 2；v(S1) = 0 + 0.5×2 = 1</p>
+          <p>② VE 最优：VE(w) = 0.5(w−1)² + 0.5(w−2)²，求导 (w−1)+(w−2) = 0 → <strong>w_VE = 1.5</strong></p>
+          <p>③ A = 0.5×1×(1 − 0.5×1) + 0.5×1×(1 − 0.5×0) = 0.5×0.5 + 0.5×1 = 0.25 + 0.5 = 0.75</p>
+          <p>④ b = 0.5×0×1 + 0.5×2×1 = 1</p>
+          <p>⑤ <strong>w_TD = b/A = 1/0.75 ≈ 1.3333</strong></p>
+          <p>对比：w_TD ≈ 1.3333 ≠ w_VE = 1.5，差距比 γ=0.9 时更大——γ 越小，自举牵引越强（A 中 1−γ 项越大），两个解离得越远；同时误差界因子 1/(1−γ) 越小，界越紧。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l3">L3 建模应用</span>1000 格随机游走预测：格子 1…1000 一字排开，每步等概率左/右移一格，走到左端之外得 −1、走到右端之外得 +1，中间奖励 0，γ = 1。要求：①设计状态聚合特征；②写出该任务的 VE；③解释 TD 固定点与 VE 最优的差别在这个任务里意味着什么。</div>
+      <details>
+        <summary>提示</summary>
+        <p>状态数 1000 不算天文数字，但足以让"每格独立学"样本效率低下。真值 v(s) 是 s 的线性函数（从 −1 到 1 单调），想想什么聚合粒度会让组内真值差异最大。</p>
+      </details>
+      <details>
+        <summary>完整解答</summary>
+        <div class="ex-answer">
+          <p>① 特征设计：每 100 格聚成一组，共 10 组，one-hot 组指示 x(s) ∈ {0,1}¹⁰（s 属于第 g 组时仅第 g 维为 1），v̂(s) = wᵀx(s) = w_{g(s)}，10 个权重代替 1000 格。真值 v(s) = s/500 − 1.001 近似线性上升，组内真值差异即聚合误差来源。</p>
+          <p>② VE：对称随机游走下在策略分布 μ 中部高、两端低（中间格访问频繁），VE(w) = Σ<sub>g=1…10</sub> Σ<sub>s∈组g</sub> μ(s)[v(s) − w_g]²。最优组权重 w_g* 是组内真值的 μ 加权均值。</p>
+          <p>③ 差别的含义：VE 最优让每组权重取"组内真值均值"，对所有组一视同仁地按 μ 拟合；TD 固定点则额外受转移结构牵引——相邻组互为自举目标，边界组（邻接高价值组）的权重会被邻居"拖"过去，系统性偏离组内均值。后果：中间高频区域的误差被压小、靠近两端且组内真值跨度大的区域误差被放大。γ=1 时误差界 1/(1−γ) 失效（无穷大），只能靠实际计算比较——这正是"γ→1 界变松"的实例。工程含义：若两端的预测精度对后续控制重要，应加细两端的聚合粒度或用兴趣/强调加权。</p>
+        </div>
+      </details>
+    </div>
+
+    <!-- ============ 自测 ============ -->
+    <h2><span class="sec-no">✍️</span>本章自测</h2>
+    <p class="quiz-hint">点击选项判分，答错会给出原因。</p>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 1</div>
+      <div class="q-stem">函数逼近带来的"泛化"指的是什么？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 用更少的比特压缩存储价值表，查询速度更快</li>
+        <li data-opt="b">B. 更新参数一处会同时改变一片状态的估计，使未见状态可借相似状态估值</li>
+        <li data-opt="c">C. 对所有状态给出相同的价值初值，便于后续微调</li>
+        <li data-opt="d">D. 用神经网络代替线性模型，提高最终精度上限</li>
+      </ul>
+      <div class="quiz-explain">解析：B 对——泛化的定义就是"更新一处、影响一片"，它让估计在相似状态间迁移。A 错：压缩存储只是副产品，且没抓住"更新连带"这一本质；C 错：那是初始化，与泛化无关；D 错：泛化不专属神经网络，线性模型同样有，且换网络改变的是函数类而非泛化的定义。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="c">
+      <div class="q-no">自测 2</div>
+      <div class="q-stem">为什么 VE 采用 μ 加权后被称为"可学习的"目标？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 因为 μ 加权使 VE 变成凸函数，梯度下降必然找到全局最优</li>
+        <li data-opt="b">B. 因为 μ 是人为设定的偏好，可以按照任务需要随时调整</li>
+        <li data-opt="c">C. 因为在策略数据自动按 μ 采样，样本平均可无偏估计 VE，无需额外假设</li>
+        <li data-opt="d">D. 因为 μ 加权后每个状态的误差权重相等，计算更简单</li>
+      </ul>
+      <div class="quiz-explain">解析：C 对——可学习性的核心是目标只依赖可观测的访问频率与回报，而在策略样本的分布恰是 μ。A 错：VE 对 w 的凸性（线性时成立）与能否从数据估计是两回事；B 错：μ 由策略与动力学决定，不是可调偏好（可调的是 9.6 的兴趣 I）；D 错：μ 加权恰恰是不等权，等权才无法从在策略数据估计。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="a">
+      <div class="q-no">自测 3</div>
+      <div class="q-stem">半梯度 TD 相对"真梯度下降"丢掉了哪一项？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. −γ∇v̂(S′, w)：自举目标对参数的那部分梯度</li>
+        <li data-opt="b">B. ∇v̂(S, w)：当前状态估计对参数的梯度</li>
+        <li data-opt="c">C. TD 误差 δ 中的即时奖励 R</li>
+        <li data-opt="d">D. 步长 α 前的折扣因子 γ</li>
+      </ul>
+      <div class="quiz-explain">解析：A 对——真梯度负方向是 δ[∇v̂(S) − γ∇v̂(S′)]，TD 只留 ∇v̂(S)，丢的是 −γ∇v̂(S′)。B 错：∇v̂(S) 恰恰被保留，丢了它就不是下降方向了；C 错：R 完整保留在 δ 里；D 错：γ 在目标 R+γv̂(S′) 里照常在，丢的是目标对 w 的依赖关系，不是 γ 本身。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="d">
+      <div class="q-no">自测 4</div>
+      <div class="q-stem">9.4 的两状态聚合例子（γ=0.9）中，线性半梯度 TD 收敛到 w_TD ≈ 1.8182，VE 最优点是 w_VE = 1.9。这说明了什么？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 计算有误：正确实现下 TD 应精确收敛到 1.9</li>
+        <li data-opt="b">B. 步长太小导致 TD 停在半路，继续训练会到 1.9</li>
+        <li data-opt="c">C. 特征选得太差，换 one-hot 特征后两数才会不同</li>
+        <li data-opt="d">D. 半梯度 TD 的收敛点是 TD 固定点 A⁻¹b，一般不等于 VE 最优点，其误差由 1/(1−γ) 倍投影误差界定</li>
+      </ul>
+      <div class="quiz-explain">解析：D 对——这是本章核心事实：TD 最小化的是隐含的自举目标，不动点是 A⁻¹b；误差界 ‖·‖ ≤ (1−γ)⁻¹‖v_π−Πv_π‖ 本例为 1.0 ≥ 0.1292。A 错：数字精确正确，差异是结构性的；B 错：w_TD 是渐近不动点，与训练时长无关；C 错：one-hot 时（表格特例）两解才重合，差异恰恰是聚合造成的。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 5</div>
+      <div class="q-stem">关于 LSTD 与迭代半梯度 TD 的关系，哪句正确？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. LSTD 是更先进的算法，收敛到比 TD 固定点更接近真值的解</li>
+        <li data-opt="b">B. 两者收敛到同一个 TD 固定点；LSTD 直接解样本版不动点方程，免步长但需 O(d²) 存储与求逆</li>
+        <li data-opt="c">C. LSTD 因为用了全部数据，收敛到 VE 最优点而不是 TD 固定点</li>
+        <li data-opt="d">D. LSTD 只适用于离线数据，迭代 TD 只适用于在线数据</li>
+      </ul>
+      <div class="quiz-explain">解析：B 对——LSTD 解 w = Â⁻¹b̂，是同一不动点方程 b−Aw=0 的样本版；9.5 算例两者都得 1.8182。A、C 错：逼近极限由目标决定而非求解方式，LSTD 并没有更接近真值或 VE 最优；D 错：两者都能在线/离线使用（LSTD 可用递推求逆在线更新），区别在"迭代 vs 直接解方程"。</div>
+    </div>
+
+    <!-- ============ 三句话复述 ============ -->
+    <div class="retell">
+      <h3>🗣️ 用自己的话，三句话讲完本章</h3>
+      <p>对着空气（或室友）说出这三句。说卡壳的那句，回去重读对应小节。</p>
+      <details>
+        <summary>句1：这章解决什么问题？——</summary>
+        <div class="retell-answer">参考答案：状态空间太大（围棋 10¹⁷⁰、连续空间无穷）无法再用逐状态的值表时，如何在按策略行动的条件下做价值预测——用参数化函数 v̂(s,w) 代替查表，并用泛化让有限样本覆盖无限状态。</div>
+      </details>
+      <details>
+        <summary>句2：核心机制是什么？——</summary>
+        <div class="retell-answer">参考答案：目标换成在策略分布 μ 加权的均方价值误差 VE（只有 μ 加权才可从数据学习）；更新用半梯度 TD——故意丢掉自举目标对参数的 −γ∇v̂(S′) 项；线性情形下收敛到 TD 固定点 w_TD = A⁻¹b，它一般不等于 VE 最优点，误差以 1/(1−γ) 倍投影误差为界；LSTD 直接解这个固定点，兴趣与强调则允许改写"在乎哪些状态"。</div>
+      </details>
+      <details>
+        <summary>句3：它和前后章怎么分工？——</summary>
+        <div class="retell-answer">参考答案：Ch5-8 在表格假设下给预测方法（MC/TD），本章把预测推广到函数逼近并付清代价（收敛保证只剩线性+在策略）；Ch10 把同样的逼近机制用于控制（半梯度 Sarsa）；Ch11 用本章的目标与固定点概念分析离策略+自举+逼近组合下的发散（致命三元组）。</div>
+      </details>
+    </div>
+
+    <!-- ============ 复习计划 ============ -->
+    <div class="review-plan">
+      <h3>🔁 间隔复习计划</h3>
+      <p>回忆本身比重读有效 10 倍。到点只做一件事：翻卡 + 重做标记题。</p>
+      <table>
+        <tr><th>时间点</th><th>复习内容</th><th>预计用时</th></tr>
+        <tr><td>第 1 天</td><td>概念卡 1–6 全部 + 回忆 9.1-1、9.2-1、9.3-1、9.4-1</td><td>10 分钟</td></tr>
+        <tr><td>第 3 天</td><td>概念卡 3、4 + 回忆 9.4-2、9.6-2 + 重做 L2 两题（手算，不看答案）+ 自测错题</td><td>12 分钟</td></tr>
+        <tr><td>第 7 天</td><td>概念卡 2、5、6 + 回忆 9.2-2、9.5-1、9.7-2 + 三句话复述</td><td>10 分钟</td></tr>
+        <tr><td>第 15 天</td><td>只做合上书挑战；重推 9.4 算例（w_VE 与 w_TD 各是什么、误差各多少）；能全过就毕业</td><td>15 分钟</td></tr>
+      </table>
+    </div>
+
+    <!-- ============ 合上书挑战 ============ -->
+    <div class="final-challenge">
+      <h3>📕 合上书挑战</h3>
+      <p class="fc-sub">现在关掉这个页面，拿一张纸，凭记忆完成以下任务。全部做完再回来核对——这是本章真正的毕业考试。</p>
+      <ol id="ch09-challenge-list">
+        <li><span class="fc-check"></span>写出 VE(w) 的定义，并解释 μ 为什么使目标可学习</li>
+        <li><span class="fc-check"></span>写出半梯度 TD(0) 更新式，指认相对真梯度丢掉的项，并给出一个"故意丢"的理由</li>
+        <li><span class="fc-check"></span>手算 9.4 例子：真值、w_VE = 1.9、A = 0.55、b = 1、w_TD ≈ 1.8182，并算出两者的 μ 加权误差</li>
+        <li><span class="fc-check"></span>写出 TD 误差界公式，并解释 γ→1 时会发生什么</li>
+        <li><span class="fc-check"></span>解释 LSTD 的 w = Â⁻¹b̂ 与迭代 TD 的关系，以及兴趣 I 与强调 M 的递推为什么让 I=0 的状态仍被更新</li>
+        <li><span class="fc-check"></span>回答本章的主线问题：状态存不下表时怎么做预测，收敛到的是什么？（一句话）</li>
+      </ol>
+    </div>
+
+    <div class="complete-zone">
+      <button class="btn-complete" id="ch09-btn-complete" onclick="markDone()">✓ 我已完成本章（含合上书挑战）</button>
+    </div>
+
+    <div class="chapter-nav">
+      <a href="chapter-08.html"><span class="nav-dir">← 上一章</span>第8章 规划与学习</a>
+      <a href="chapter-10.html" class="next"><span class="nav-dir">下一章 →</span>第10章 带近似的在策略控制</a>
+    </div>
+
+  </div>
+</div>
+
+<footer class="footer">
+  <div class="wrap">第9章 带近似的在策略预测 · 强化学习互动讲义 · 基于 Sutton &amp; Barto (2018, 2nd ed)</div>
+</footer>
+
+<script src="assets/mermaid.min.js"></script>
+<script>
+mermaid.initialize({
+  startOnLoad: true,
+  theme: "base",
+  themeVariables: {
+    primaryColor: "#e3edf7",
+    primaryBorderColor: "#1d5f9e",
+    primaryTextColor: "#1d5f9e",
+    lineColor: "#5c554b",
+    secondaryColor: "#fbeedd",
+    tertiaryColor: "#f5f1e8",
+    fontFamily: "-apple-system, PingFang SC, sans-serif",
+    fontSize: "14px"
+  },
+  flowchart: { curve: "linear", htmlLabels: false }
+});
+</script>
+<script>
+// 自测题判分（原样复用，勿改）
+document.querySelectorAll(".quiz-block").forEach(block => {
+  const answer = block.dataset.answer;
+  const explain = block.querySelector(".quiz-explain");
+  block.querySelectorAll(".quiz-opts li").forEach(li => {
+    li.addEventListener("click", () => {
+      const opts = block.querySelectorAll(".quiz-opts li");
+      opts.forEach(o => o.classList.add("disabled"));
+      if (li.dataset.opt === answer) {
+        li.classList.add("correct");
+      } else {
+        li.classList.add("wrong");
+        block.querySelector(`[data-opt="${answer}"]`).classList.add("correct");
+      }
+      explain.classList.add("show");
+    });
+  });
+});
+
+// 合上书清单打勾（原样复用，勿改）
+document.querySelectorAll("#ch09-challenge-list li").forEach(li => {
+  li.addEventListener("click", () => li.classList.toggle("checked"));
+});
+
+// 完成标记 → localStorage（本章章号 "9"）
+const KEY = "rl_progress_v1";
+function loadProgress() {
+  try { return JSON.parse(localStorage.getItem(KEY)) || {}; } catch (e) { return {}; }
+}
+const progress = loadProgress();
+const btn = document.getElementById("ch09-btn-complete");
+if (progress["9"] && progress["9"].done) {
+  btn.textContent = "✓ 已完成 · 再次点击重置";
+  btn.classList.add("done");
+}
+function markDone() {
+  const p = loadProgress();
+  if (p["9"] && p["9"].done) {
+    delete p["9"];
+    btn.textContent = "✓ 我已完成本章（含合上书挑战）";
+    btn.classList.remove("done");
+  } else {
+    p["9"] = { done: true, completedAt: Date.now(), reviewsDone: 0 };
+    btn.textContent = "✓ 已完成 · 复习提醒已开启";
+    btn.classList.add("done");
+  }
+  localStorage.setItem(KEY, JSON.stringify(p));
+}
+</script>
+
+</body>
+</html>
