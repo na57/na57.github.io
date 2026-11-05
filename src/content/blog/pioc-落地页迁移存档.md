@@ -9,9 +9,9 @@ tags: ["PIOC", "存档"]
 
 ## 存档页面
 
-- [PIOC - 个人智慧运行中心（落地页）](/pioc-pages/)
+- [PIOC - 个人智慧运行中心（落地页）](/pioc/)
 
 ## 说明
 
 - 页面为单文件静态 HTML，仅引用 Google Fonts 等公共资源，无其他本地依赖。
-- 原 Pages 的自定义域名为 `nagu.cc`，与当前博客域名一致，故迁移后访问路径为 `https://nagu.cc/pioc-pages/`。
+- 原 Pages 的自定义域名为 `nagu.cc`，与当前博客域名一致，故迁移后访问路径为 `https://nagu.cc/pioc/`；旧地址 `/pioc-pages/` 保留自动跳转。
