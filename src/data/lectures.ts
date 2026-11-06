@@ -18,8 +18,8 @@ export const courses: Course[] = [
     desc: "用图结构表达高维联合分布：表示、推理、学习三条主线",
     chapters: [
       { no: 1, file: "chapter-01.html", title: "引言", slide: "01-引言-课件.html", video: { bvid: "BV1w2xS6LELD", url: "https://www.bilibili.com/video/BV1w2xS6LELD" } },
-      { no: 2, file: "chapter-02.html", title: "背景知识", slide: "02-背景知识-课件.html" },
-      { no: 3, file: "chapter-03.html", title: "贝叶斯网络", slide: "03-贝叶斯网络-课件.html" },
+      { no: 2, file: "chapter-02.html", title: "背景知识", slide: "02-背景知识-课件.html", video: { bvid: "BV1aV4B6wErE", url: "https://www.bilibili.com/video/BV1aV4B6wErE" } },
+      { no: 3, file: "chapter-03.html", title: "贝叶斯网络", slide: "03-贝叶斯网络-课件.html", video: { bvid: "BV1aV4B6wEaG", url: "https://www.bilibili.com/video/BV1aV4B6wEaG" } },
       { no: 4, file: "chapter-04.html", title: "马尔可夫网络", slide: "04-马尔可夫网络-课件.html" },
       { no: 5, file: "chapter-05.html", title: "局部概率模型", slide: "05-局部概率模型-课件.html" },
       { no: 6, file: "chapter-06.html", title: "基于模板的表示", slide: "06-基于模板的表示-课件.html" },
