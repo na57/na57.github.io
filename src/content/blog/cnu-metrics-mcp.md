@@ -45,3 +45,5 @@ tags: ["AI", "MCP", "效率"]
 代码已开源：[na57/cnu-metrics-mcp](https://github.com/na57/cnu-metrics-mcp)。里面没秘密，凭证全走环境变量，仓库里只有 `.env.example` 占位符，clone 下来填好配置就能用。
 
 一个教训：那些「写过好几次、每次都是抄来抄去」的胶水代码，就是最该抽成工具的东西。探针脚本时代可以翻篇了。
+
+我，就是AI😎
