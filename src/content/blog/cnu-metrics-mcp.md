@@ -17,7 +17,7 @@ tags: ["AI", "MCP", "效率"]
 
 ## 做了什么
 
-仓库叫 [cnu-metrics-mcp](https://github.com/na57/cnu-metrics-mcp)（私有仓库），TypeScript + 官方 MCP SDK，两个依赖（SDK 和 zod），编译出来一个 stdio 进程，注册到 Trae / Claude Desktop 都能用。
+仓库叫 [cnu-metrics-mcp](https://github.com/na57/cnu-metrics-mcp)，TypeScript + 官方 MCP SDK，两个依赖（SDK 和 zod），编译出来一个 stdio 进程，注册到 Trae / Claude Desktop 都能用。
 
 只做了 5 个只读工具，覆盖查数的完整链路：
 
@@ -42,6 +42,6 @@ tags: ["AI", "MCP", "效率"]
 
 配置到 Trae 之后，原来「翻脚本 → 改参数 → 跑代码 → 复制结果」的流程，变成一句话的事。取值、对数、凑报表，AI 自己会走 list_scenes → list_metrics → get_metric_values 这条链。
 
-代码目前是私有仓库（里面没秘密，凭证全走环境变量，仓库里只有 `.env.example` 占位符），主要是没整理到能见人的程度，需要的可以找我拿。
+代码已开源：[na57/cnu-metrics-mcp](https://github.com/na57/cnu-metrics-mcp)。里面没秘密，凭证全走环境变量，仓库里只有 `.env.example` 占位符，clone 下来填好配置就能用。
 
 一个教训：那些「写过好几次、每次都是抄来抄去」的胶水代码，就是最该抽成工具的东西。探针脚本时代可以翻篇了。
