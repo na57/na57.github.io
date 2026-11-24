@@ -77,7 +77,7 @@ export const courses: Course[] = [
     color: "#e08a2e",
     desc: "试错与延迟回报中的决策：从多臂老虎机到策略梯度",
     chapters: [
-      { no: 1, file: "chapter-01.html", title: "引言：强化学习问题", slide: "01-引言-课件.html" },
+      { no: 1, file: "chapter-01.html", title: "引言：强化学习问题", slide: "01-引言-课件.html", video: { bvid: "BV1xRyRzFEpo", url: "https://www.bilibili.com/video/BV1xRyRzFEpo" } },
       { no: 2, file: "chapter-02.html", title: "多臂老虎机", slide: "02-多臂老虎机-课件.html" },
       { no: 3, file: "chapter-03.html", title: "有限马尔可夫决策过程", slide: "03-有限MDP-课件.html" },
       { no: 4, file: "chapter-04.html", title: "动态规划", slide: "04-动态规划-课件.html" },
