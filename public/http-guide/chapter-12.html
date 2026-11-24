@@ -1,0 +1,765 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第12讲 HTTP 重定向 · HTTP 精通</title>
+<link rel="stylesheet" href="assets/style.css">
+<style>
+/* 本套专用：协议报文原文展示与 MDN 来源条 */
+.wire{background:var(--bg-deep);border:1px solid var(--line);border-left:4px solid var(--accent);border-radius:8px;padding:14px 18px;margin:14px 0;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:13.5px;line-height:1.78;white-space:pre-wrap;overflow-wrap:anywhere;color:var(--ink-soft);}
+.wire b{color:var(--accent);font-weight:700;}
+.wire i{color:var(--orange);font-style:normal;}
+.wire em{color:var(--ink-faint);font-style:normal;}
+.wire.sm{font-size:12.5px;}
+.wire-cap{font-size:13px;color:var(--ink-faint);margin:-8px 0 16px;}
+.mdn-src{background:var(--bg-deep);border:1px solid var(--line);border-left:4px solid var(--accent);border-radius:8px;padding:12px 18px;margin:16px 0 0;font-size:13px;line-height:1.8;color:var(--ink-soft);}
+.mdn-src strong{color:var(--accent);}
+.mdn-src a{color:var(--accent);text-decoration:none;border-bottom:1px dashed var(--line);}
+.mdn-src a:hover{border-bottom-style:solid;}
+.to-slide{font-size:13px;color:var(--accent);text-decoration:none;border:1px solid var(--line);border-radius:6px;padding:4px 11px;white-space:nowrap;}
+.to-slide:hover{background:var(--bg-deep);}
+</style>
+</head>
+<body>
+
+<nav class="topbar">
+  <div class="topbar-inner">
+    <span class="brand"><a href="index.html" style="color:inherit">← HTTP 精通 · 学习地图</a></span>
+    <span class="crumb">第④组 · 中间层与分发 / 第12讲</span>
+    <a class="to-slide" href="../http-guide-slides/12-HTTP%E9%87%8D%E5%AE%9A%E5%90%91-%E8%AF%BE%E4%BB%B6.html" target="_blank" rel="noopener noreferrer">配套课件 ↗</a>
+  </div>
+</nav>
+
+<div class="wrap">
+
+  <div class="lecture-head">
+    <span class="ch-label">GUIDE 12 · 中间层与分发</span>
+    <h1>HTTP 重定向</h1>
+    <p class="lead">12 讲主线走到终点：当一个资源换了地址，HTTP 用 3xx 与 Location 告诉客户端去哪里——这也是一次请求生命周期的收束。</p>
+    <div class="mdn-src"><strong>本讲对应的 MDN 指南：</strong><a href="https://developer.mozilla.org/zh-CN/docs/Web/HTTP/Guides/Redirections" target="_blank" rel="noopener">HTTP 的重定向</a></div>
+  </div>
+
+  <!-- 本章定位 -->
+  <div class="position-bar">
+    <strong>本讲在主线上的位置：</strong>第 11 讲的代理与隧道 → <u>本讲：HTTP 重定向</u> → 终点：一次请求从发起到落地全程闭合。<br>
+    第12讲回答主线上的第12个问题：<strong>301 与 302、307 与 308 分别承诺了什么，为什么方法被改写会出事？</strong>
+    <div class="map-inline">
+      <span class="node">第11讲 代理、隧道与协议升级</span><span class="arrow">→</span>
+      <span class="node here">第12讲 HTTP 重定向</span><span class="arrow">→</span>
+      <span class="node">终点：请求生命周期闭合</span><span class="arrow">→</span>
+      <span class="node">终点：分发与重定向</span>
+    </div>
+  </div>
+
+  <!-- 学习目标 -->
+  <div class="objectives">
+    <h4>🎯 学完本讲，合上书你应该能：</h4>
+    <ol>
+      <li>区分 301 / 302 / 303 / 307 / 308 的语义</li>
+      <li>写出 Location 相对 URL 的解析过程</li>
+      <li>判断 POST 经各状态码重定向后方法是否保留</li>
+      <li>识别并打破重定向循环</li>
+      <li>说明永久重定向被浏览器缓存带来的长期影响</li>
+    </ol>
+  </div>
+
+  <!-- 视频卡插槽：后面录制 B 站讲解时在此插入 <details class="video-card" id="video-card">…</details> -->
+  <!-- VIDEO_CARD_SLOT -->
+
+  <div class="lecture">
+
+    <!-- 推导主线图 -->
+    <div class="figure">
+      <div class="mermaid">
+flowchart LR
+  A["请求一个旧地址"]
+  B["服务器返回 3xx"]
+  C["Location 指向新地址"]
+  D["按状态码决定是否改写方法"]
+  E["客户端重新发起请求"]
+  F["循环指向无法收敛"]
+  A --> B
+  B --> C
+  C --> D
+  D --> E
+  E --> F
+  classDef hot fill:#fbeedd,stroke:#c4651f,stroke-width:2.5px,color:#c4651f;
+  classDef danger fill:#fae9e7,stroke:#b03a2e,stroke-width:2.5px,color:#b03a2e;
+  class D hot;
+  class F danger;
+      </div>
+      <div class="caption">重定向的主线：服务器用状态码和 Location 把客户端带往新地址；黄色节点是方法是否被改写的判据，红色节点是地址互相指回导致的死循环。</div>
+    </div>
+
+<!-- ============ 12.1 ============ -->
+    <h2><span class="sec-no">12.1</span>服务器用一条 3xx 加 Location 把请求改道，用户几乎察觉不到</h2>
+
+    <p>第 11 讲把代理、隧道与协议升级讲完，客户端与源站之间的中间层似乎已经清点完毕。其实还差最后一种、也是日常最常见的一种干预：服务器不在原地交出资源，而是回一条特殊响应，请客户端「去另一个地址取」。这就是本讲的主角——<span class="term">HTTP 重定向</span>（HTTP Redirect）。它恰好是全书主线的收束处：一次请求从建立连接、交换报文，到连接复用或结束，中途可能被重定向改写去向，但最终仍要落到一个能返回 2xx 的资源上，这条 journey 才算闭合。</p>
+
+    <p>先看为什么需要它。假设站点重构，文章从 <code>https://www.example.com/blog/post-42</code> 搬到了 <code>https://www.example.com/articles/42</code>。站内链接你可以逐个改，但用户的书签、搜索引擎收录的条目、别的网站引用你的外链，你一个也改不了。旧地址若直接回 404，用户以为站点坏了，搜索引擎也会把这条收录慢慢降级。更好的做法是让旧地址回一条响应，意思是「这东西搬家了，请去新地址拿」。MDN 把这类技术称为 <span class="term">URL 重定向</span>（URL Redirect，也叫 URL 转发），而 HTTP 为它准备了一整类专门的响应。</p>
+
+    <p>MDN 的原理描述很简洁：重定向由服务器向请求发送一条特殊的重定向响应触发，这条响应包含以 <code>3</code> 开头的<span class="term">状态码</span>（Status Code），以及一个 <span class="term">Location 首部</span>（Location Header），其中保存着重定向的目标 URL。浏览器接收到重定向时，会立刻加载 Location 中提供的新 URL。除了额外往返带来的一小部分性能损失之外，重定向操作对用户是不可见的——地址栏最后显示的是新地址，用户只会觉得页面「慢了一点点」。</p>
+
+    <p>把三个术语钉牢：<code>3xx</code> 是重定向状态码所在的类别；<strong>状态码</strong>是响应起始行里那个三位数；<strong>Location 首部</strong>是携带目标地址的首部。一条最小的重定向响应长这样：</p>
+
+    <div class="wire"><i>HTTP/1.1 301 Moved Permanently</i>
+<i>Date:</i> Mon, 16 Nov 2026 00:30:00 GMT
+<i>Location:</i> https://www.example.com/articles/42
+<i>Content-Length:</i> 0
+
+<em>（空行：首部结束；这类响应通常没有主体）</em></div>
+    <div class="wire-cap">一条最小的重定向响应：状态行给出 301 与原因短语，Location 告诉客户端新地址。浏览器不会把这条响应渲染给用户，而是直接朝新地址再发一次请求。</div>
+
+    <p>注意这条响应和一条 200 响应的差别：它没有可渲染的主体，Location 才是重点。客户端拿到它之后的行为，等于把用户原本的请求「照原样、换个地址」再发一遍——方法、主体、大部分首部都带过去，只是请求目标换成 Location 指向的 URL。这一步叫「自动重定向」，由浏览器或 HTTP 客户端库完成，不需要用户点任何东西。</p>
+
+    <p>MDN 把重定向映射划分为三个类别：<strong>永久重定向</strong>、<strong>临时重定向</strong>与<strong>特殊重定向</strong>。这个分类不是学术偏好，而是直接决定状态码怎么选、以及客户端会不会把它记下来：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>类别</th><th>包含的状态码</th><th>对客户端的核心暗示</th><th>MDN 给出的典型场景</th></tr>
+        <tr><td>永久重定向</td><td>301、308</td><td>原 URL 不应再被使用，请用新 URL 替换它；爬虫会更新收录的旧地址</td><td>网站重构、URL 永久变更</td></tr>
+        <tr><td>临时重定向</td><td>302、303、307</td><td>资源只是暂时不在标准地址；爬虫不会记录这个临时新地址</td><td>页面暂不可用、POST 完成后跳转、进度页</td></tr>
+        <tr><td>特殊重定向</td><td>300、304</td><td>不是「去另一个地址」，而是「让你选」或「用你手上的缓存」</td><td>多选项列表、条件请求重新验证</td></tr>
+      </table>
+    </div>
+
+    <p>这张表先建立地图，具体的状态码语义在 12.2 与 12.3 两节逐个拆开。这里要强调一个贯穿全讲的事实：<strong>决定「重定向之后怎么办」的，是状态码，而不是 Location</strong>。Location 只回答「去哪」，状态码回答「这次搬家是永久还是临时」「原来的方法要不要保留」——后者正是方法改写事故的总根源，也是本讲的主线问题。</p>
+
+    <p>Location 的值并不总是完整 URL。它可以是<strong>相对 URL</strong>（Relative URL），客户端要以当前请求的 URL 为基准把它解析成绝对地址。MDN 在「HTTP 的发展」与 URI 相关文档里都强调，这件事要按标准的引用解析算法做，而不是简单字符串拼接。下面做一次完整手算。</p>
+
+    <p>给定基准请求 URL：<code>https://www.example.com/docs/guide/intro.html</code>。先把它拆成标准组成部分：scheme = <code>https</code>，authority = <code>www.example.com</code>，path = <code>/docs/guide/intro.html</code>，query = 空，fragment = 空。解析相对引用有四条判据：① 若引用带 scheme，直接整体采用；② 否则若引用以 <code>//</code> 开头带 authority，沿用基准 scheme、采用引用的 authority 与 path；③ 否则若引用 path 以 <code>/</code> 开头，直接替换整个 path；④ 否则把「基准 path 去掉最后一段」作为目录，拼上引用 path，再消除 <code>.</code> 与 <code>..</code> 段。query 与 fragment 单独处理：引用带了就用引用的，没带则 query 在引用 path 为空时沿用基准、fragment 一律不沿用基准。</p>
+
+    <div class="wire"><em>基准：https://www.example.com/docs/guide/intro.html</em>
+<i>Location:</i> /new/guide.html        → https://www.example.com/new/guide.html
+<i>Location:</i> ./next.html           → https://www.example.com/docs/guide/next.html
+<i>Location:</i> ../index.html         → https://www.example.com/docs/index.html
+<i>Location:</i> ?page=2               → https://www.example.com/docs/guide/intro.html?page=2
+<i>Location:</i> #section-3            → https://www.example.com/docs/guide/intro.html#section-3
+<i>Location:</i> //cdn.example.com/a.css → https://cdn.example.com/a.css</div>
+    <div class="wire-cap">相对 Location 的解析手算：逐一以基准 URL 各组成部分为参照，套用「scheme → authority → 绝对 path → 相对 path → query/fragment」的优先级，得到右侧绝对目标。</div>
+
+    <p>逐条说明推导。第一条 <code>/new/guide.html</code> 以斜杠开头，属判据③，直接替换 path，scheme 与 authority 不变，得到 <code>https://www.example.com/new/guide.html</code>。第二条 <code>./next.html</code> 是相对路径，基准 path 去掉最后一段 <code>intro.html</code> 得目录 <code>/docs/guide/</code>，拼上 <code>next.html</code> 并消除 <code>.</code> 段，得 <code>/docs/guide/next.html</code>。第三条 <code>../index.html</code> 同理，目录 <code>/docs/guide/</code> 拼上 <code>../index.html</code> 后消掉 <code>guide/..</code>，回退一级得 <code>/docs/index.html</code>。第四条只带 query，引用 path 为空，于是 path 沿用基准、query 改为 <code>page=2</code>，得到同一个页面带新查询串。第五条只带 fragment，其余全部沿用基准，仅追加 <code>#section-3</code>。第六条以 <code>//</code> 开头，属判据②，沿用基准 scheme <code>https</code>、authority 换成 <code>cdn.example.com</code>，于是协议跟着基准走——这也是「协议相对 URL」的历史用法。</p>
+
+    <div class="figure"><div class="mermaid">flowchart LR
+  A["请求旧地址"] --> B["服务器返回 3xx"]
+  B --> C["Location 给出目标"]
+  C --> D["客户端按目标重发"]
+  D --> E["拿到最终资源"]
+</div><div class="caption">图 12.1 一次重定向把请求改道：客户端拿到 3xx 后自动重发，用户只感到多一次往返。</div></div>
+
+    <p>HTTP 不是定义重定向的唯一方式。MDN 列出另外两种：HTML 的 <code>&lt;meta&gt;</code> 元素把 <code>http-equiv</code> 设为 <code>refresh</code>，例如 <code>&lt;meta http-equiv="Refresh" content="0; URL=http://example.com/" /&gt;</code>，<code>content</code> 开头的数字是等待秒数，建议设为 0 以照顾无障碍；以及 JavaScript 设置 <code>window.location = "https://example.com/";</code>。当三种方式同时出现，MDN 给出的优先级是：<strong>HTTP 重定向永远最先触发，甚至页面还没传输就已经存在；HTML 重定向在没有 HTTP 重定向时才触发；JavaScript 重定向是最后手段，且只在客户端开启脚本时生效</strong>。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>把重定向想成「服务器给请求换了个收件地址，然后客户端重投一次」，很多细节就顺了：既然是重投，就存在「这次重投还算不算原来的方法」这个天然问题——这正是 307/308 要回答的。既然要多一次投递，就存在性能开销与「投错成环」的风险。MDN 反复劝「优先用 HTTP 重定向、尽量少用、能改内部链接就别做内部重定向」，本质都是围绕这两件事。先记住「换地址 + 重投」这个心像，后面三节都从它长出来。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>「在 HTTP 层做了重定向，再在页面里加一条 <code>&lt;meta&gt;</code> 或 JS 跳转做双保险」——这是制造无限循环的常见手法。MDN 明确提醒：如果开发者改了 HTTP 重定向却忘了改 HTML 里的重定向，二者就会不一致，结果不是无限循环就是别的噩梦。因为 HTTP 重定向先触发，meta 跳转型同虚设；一旦两边目标不同且互相指回，浏览器就会在两个地址间反复弹跳。正确做法是只在 HTTP 层做重定向，并且只做一处。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front"><div class="q-tag">回忆 12.1-1</div><div class="q-text">一条 HTTP 重定向响应由哪两样东西构成？浏览器收到后做什么？用户看得见吗？</div><span class="tap">点击翻面 →</span></div>
+            <div class="flip-face flip-back"><div class="a-tag">参考答案</div>以 3 开头的状态码 + Location 首部（保存目标 URL）。浏览器立刻加载 Location 的新 URL，把原请求「换个地址重发一次」。除一次额外往返的性能损失外对用户不可见。</div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front"><div class="q-tag">回忆 12.1-2</div><div class="q-text">基准为 https://www.example.com/docs/guide/intro.html 时，Location 为 ./next.html 与 ?page=2 分别解析成什么？</div><span class="tap">点击翻面 →</span></div>
+            <div class="flip-face flip-back"><div class="a-tag">参考答案</div><code>./next.html</code> → <code>https://www.example.com/docs/guide/next.html</code>（去掉末段得目录再拼接）；<code>?page=2</code> → <code>https://www.example.com/docs/guide/intro.html?page=2</code>（path 沿用基准，只换 query）。</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 12.2 ============ -->
+    <h2><span class="sec-no">12.2</span>永久与临时不是措辞之分：它决定缓存、SEO 和「能不能反悔」</h2>
+
+    <p>上一节建立了「换地址 + 重投」的心像，也留下一个关键问题：服务器凭什么告诉客户端「这次搬家是永久的还是临时的」？答案就在状态码里。MDN 把 301 / 308 归入永久重定向，把 302 / 303 / 307 归入临时重定向。这一字之差不是学术分类，而是直接决定了三件要命的事：浏览器与代理会不会把这条跳转记下来、搜索引擎会不会更新收录、以及你哪天改主意时能不能反悔。先看 MDN 对这两类的原始分工。</p>
+
+    <p><strong>永久重定向</strong>表示原 URL 不应再被使用，应选用新 URL 替换它。MDN 特别指出：搜索引擎机器人、RSS 阅读器以及其他爬虫会据此更新资源原始的 URL。换句话说，永久重定向是一次「对外发布变更声明」——你等于告诉全世界「旧地址作废了，请改记新地址」。<strong>临时重定向</strong>则说资源只是暂时无法从标准地址访问，但可以从别处访问；搜索引擎和其他爬虫不会记录这个临时的新 URL。它是一次「暂时借用一下别处」的说明，不改变资源的正式身份。</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>维度</th><th>永久（301 / 308）</th><th>临时（302 / 303 / 307）</th></tr>
+        <tr><td>给爬虫的信号</td><td>旧地址作废，更新收录到新地址</td><td>不记录新地址，保留旧地址收录</td></tr>
+        <tr><td>给缓存的信号</td><td>可被长期缓存，浏览器可能记住跳转</td><td>默认不缓存，每次重新问服务器</td></tr>
+        <tr><td>能否反悔</td><td>难：旧跳转已被缓存与收录，回退代价高</td><td>易：改回配置后一般立即生效</td></tr>
+        <tr><td>典型场景</td><td>站点重构、域名永久迁移、强制 HTTPS</td><td>维护停机、进度页、POST 提交后跳转</td></tr>
+      </table>
+    </div>
+
+    <p>MDN 列出几类典型应用场景，正好用来体会「永久 / 临时」的选择。<strong>域名别称</strong>：站点在 <code>www.example.com</code>，希望 <code>example.com</code> 也能访问，于是从后者重定向到前者；公司改名后希望旧域名仍能把人带到新域名；把 <code>http://</code> 的请求重定向到 <code>https://</code> 版本。这些都是长期决定，通常用永久重定向。<strong>保持链接有效</strong>：重构时外部链接指向旧地址，你无法改别人的站点，于是建立旧到新的重定向映射保住流量与 SEO；但 MDN 特意加了一句备注——这项技术虽也能用于内部链接，却应尽量避免，因为重定向会带来不小的性能开销，内部链接能直接改就直接改。<strong>不安全请求与耗时请求的临时响应</strong>：这两类都用 303，放到 12.3 节连同方法改写一起讲。</p>
+
+    <p>现在看一个真实的故障链——永久重定向被长期缓存之后，一次误配会怎样在「修好之后」继续作祟。这也是 course 里要求你特别记住的长期影响。</p>
+
+    <p><strong>第 1 步，误配发生。</strong>运维把活动页 <code>https://old.example.com/sale</code> 配成永久重定向，指向 <code>https://new.example.com/sale</code>：</p>
+
+    <div class="wire"><b>GET /sale HTTP/1.1</b>
+<b>Host:</b> old.example.com
+
+<i>HTTP/1.1 301 Moved Permanently</i>
+<i>Date:</i> Mon, 16 Nov 2026 00:30:00 GMT
+<i>Location:</i> https://new.example.com/sale
+<i>Cache-Control:</i> max-age=31536000
+<i>Content-Length:</i> 0</div>
+    <div class="wire-cap">误配的永久重定向：本意只是临时把流量导到新活动页，却用了 301 并给出长达一年的缓存时间。</div>
+
+    <p><strong>第 2 步，浏览器把它记下来。</strong>301 属于默认可缓存的响应（RFC 9111 的口径下一节详述），加上显式的 <code>max-age=31536000</code>，浏览器会把「<code>/sale</code> → <code>new.example.com/sale</code>」这条映射存进缓存，有效期一年。此后用户再次输入旧地址，浏览器<strong>在发出任何请求之前</strong>就从缓存里命中这条跳转，直接去新地址——旧地址的服务器根本收不到请求，也就没有机会纠正它。</p>
+
+    <p><strong>第 3 步，问题被发现并「修好」。</strong>运维意识到活动做完了，把 <code>old.example.com/sale</code> 改回正常的 200 页面，甚至把 Location 撤掉。但那些已经缓存了 301 的浏览器毫不知情：它们仍旧从本地缓存里取出旧跳转，跳到可能已经下线的 <code>new.example.com/sale</code>，看到 404。用户向客服抱怨「旧地址打不开」，运维抓日志却发现旧地址<strong>一条请求都没有</strong>——因为请求被浏览器缓存拦在了半路。这就是永久重定向最阴险的地方：修复发生在服务端，症状却留在客户端。</p>
+
+    <p><strong>第 4 步，清除与预防。</strong>清除手段按作用域从小到大：用户可在开发者工具 Network 面板勾选 Disable cache 后重试，或清除该站点的缓存与站点数据；共享缓存（CDN、代理）一侧要在控制台主动 purge 对应 URL；但浏览器里那条 301 若没有可靠过期时间，用户自己往往清不干净，最后一招是换一个全新 URL（例如给路径加版本号 <code>/sale-v2</code>）彻底绕开旧缓存。预防手段更值得记住：只在「确定永不回头」时才发永久重定向；拿不准先用 302 观察一段时间，稳定后再升级为 301/308；给重定向设置你真正想要的 <code>Cache-Control</code>（而不是顺手写一年）；上线前用 <code>curl -I</code> 核对返回的到底是什么状态码。</p>
+
+    <div class="box insight">
+      <span class="box-tag">✅ 判定规则</span>
+      <p>选 301/308 还是 302/303/307，用一句话判断：「这个新地址，我愿不愿意让搜索引擎和浏览器记一年？」愿意（永久迁移、强制 HTTPS、重构后的固定新路径）才用永久；只是维护、活动、进度页、POST 后跳转，一律临时。拿不准就当临时处理——临时发错了顶多少一次往返，永久发错了要让缓存和收录慢慢消化。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>「我把服务端的 301 改回 302 了，用户马上就会走新配置」——错。缓存了旧 301 的浏览器不会再问服务器，你的修改对它们完全无效。另一个误区是把 MDN 说的「爬虫会更新 URL」当成即时生效——收录更新需要时间，而错误的永久重定向一旦被收录，纠正周期以周计。永久这两个字，签下去就要负责到底。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front"><div class="q-tag">回忆 12.2-1</div><div class="q-text">永久与临时重定向在「爬虫收录」和「缓存」两个维度上分别差在哪？</div><span class="tap">点击翻面 →</span></div>
+            <div class="flip-face flip-back"><div class="a-tag">参考答案</div>永久（301/308）：爬虫更新旧 URL、响应默认可长期缓存、难反悔；临时（302/303/307）：爬虫不记录新 URL、默认不缓存、改回配置一般立即生效。</div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front"><div class="q-tag">回忆 12.2-2</div><div class="q-text">误配的 301 在服务端改回 200 后，用户为何仍打不开旧地址？给出两条清除与两条预防手段。</div><span class="tap">点击翻面 →</span></div>
+            <div class="flip-face flip-back"><div class="a-tag">参考答案</div>浏览器缓存了旧跳转，重访时不发请求、直接跳到失效目标，故服务端收不到请求也改不了。清除：DevTools 禁用缓存重试、清站点数据、CDN purge、换新 URL 绕开。预防：拿不准先用 302、设置合理 Cache-Control、上线前 curl -I 核对。</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 12.3 ============ -->
+    <h2><span class="sec-no">12.3</span>POST 被重定向时方法会不会变：301/302/303 与 307/308 的分水岭</h2>
+
+    <p>上一节讲清了「永久 vs 临时」这条维度，但还留着一个更危险的维度没碰：重定向之后，原来那个 POST 还是不是 POST？这看似细节，实则是线上事故的高发地——一个把表单 POST 重定向成 GET 的配置，轻则让参数跑到 URL 里，重则让「下单」「转账」被重复提交。 MDN 在永久与临时两族里都反复提到同一句耐人寻味的话：「规范无意使方法发生改变，但在实际应用中用户代理会更改其方法」，并说明 308 与 307 正是为了消除这种歧义才被创建。这一节把这句话彻底拆开。</p>
+
+    <p>先把背景钉牢。<span class="term">安全方法</span>（Safe Method）指不修改服务器状态的方法，如 GET、HEAD；POST、PUT、DELETE 则是<strong>不安全</strong>的，会改变服务器状态。MDN 在「不安全请求的临时响应」里提醒：你通常不希望用户重复发送 PUT、POST、DELETE——若服务器直接返回正常页面，用户点一下刷新就可能把同一个操作再提交一次。重定向正好被用来打断这个链条：提交成功后回一个 303，让浏览器改为 GET 去取结果页，刷新时只会刷新那个 GET 页面，不会重投表单。这就是著名的「提交后重定向」（PRG，Post/Redirect/Get）模式。</p>
+
+    <p>问题在于：并非所有重定向都会把 POST 改成 GET。到底改不改，取决于状态码。下面给出完整的判定表，基准请求统一为 <code>POST /submit</code>，主体为 <code>name=alice&amp;city=sz</code>。</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>状态码</th><th>名称 / 类别</th><th>POST 重定向后的方法</th><th>主体</th><th>MDN 口径与缘由</th></tr>
+        <tr><td>301</td><td>Moved Permanently / 永久</td><td>通常会改成 GET</td><td>丢失</td><td>GET 不变，其他方法「有可能」变 GET；规范无意改方法，但用户代理实际会改；308 用来消除歧义</td></tr>
+        <tr><td>302</td><td>Found / 临时</td><td>通常会改成 GET</td><td>丢失</td><td>GET 不变，其他方法可能变 GET；规范无意改方法，但用户代理实际会改；307 用来消除歧义</td></tr>
+        <tr><td>303</td><td>See Other / 临时</td><td>明确改成 GET</td><td>丢失（明确）</td><td>GET 不变，其他方法「会变更」为 GET，主体丢失；用于 POST/PUT 完成后防刷新重复提交</td></tr>
+        <tr><td>307</td><td>Temporary Redirect / 临时</td><td>保持 POST</td><td>保留</td><td>方法与主体都不变；站点支持非 GET 链接或操作时优于 302</td></tr>
+        <tr><td>308</td><td>Permanent Redirect / 永久</td><td>保持 POST</td><td>保留</td><td>方法与主体都不变；用于非 GET 链接或操作的永久重组</td></tr>
+      </table>
+    </div>
+
+    <p>读这张表要抓住一条分水岭：<strong>303 是「明确要你改成 GET」，307/308 是「明确要你保持原样」，而 301/302 处在中间——规范说不该改，现实里浏览器却常改</strong>。历史包袱就在这里：早期的浏览器把 301/302 一律当「跳到新页面」处理，实现成 GET，这个行为流传太广，规范无法推翻，只能新增 307/308 给需要严格保方法的人用。所以工程上的结论很干脆：想保持 POST，别用 301/302，用 307/308；想主动改成 GET（例如提交后跳结果页），用 303。</p>
+
+    <p>为每一种状态码给出一条携带 Location 的完整响应报文，方便对照：</p>
+
+    <div class="wire"><i>HTTP/1.1 301 Moved Permanently</i>
+<i>Location:</i> https://www.example.com/submit-v2
+<i>Cache-Control:</i> max-age=3600
+<i>Content-Length:</i> 0
+
+<i>HTTP/1.1 302 Found</i>
+<i>Location:</i> https://www.example.com/submit-temp
+<i>Cache-Control:</i> no-store
+<i>Content-Length:</i> 0</div>
+    <div class="wire-cap">301 与 302：浏览器实际处理时，多数会把随后的 POST 改为 GET，原主体 name=alice&amp;city=sz 丢失。</div>
+
+    <div class="wire"><i>HTTP/1.1 303 See Other</i>
+<i>Location:</i> https://www.example.com/order/42/done
+<i>Cache-Control:</i> no-store
+<i>Content-Length:</i> 0
+
+<em>随后浏览器发出：GET /order/42/done HTTP/1.1 —— 方法已改为 GET，主体为空</em></div>
+    <div class="wire-cap">303：明确要求改为 GET 去取结果页。这正是 PRG 模式——刷新只会刷新这个 GET 页面，不会重复提交订单。</div>
+
+    <div class="wire"><i>HTTP/1.1 307 Temporary Redirect</i>
+<i>Location:</i> https://www.example.com/submit-new
+<i>Cache-Control:</i> no-store
+<i>Content-Length:</i> 0
+
+<em>随后浏览器发出：POST /submit-new HTTP/1.1，主体仍为 name=alice&amp;city=sz</em></div>
+    <div class="wire-cap">307：临时但严格保持方法与主体，适合「服务暂时搬到别处、但请求语义不能变」的场景。</div>
+
+    <div class="wire"><i>HTTP/1.1 308 Permanent Redirect</i>
+<i>Location:</i> https://api.example.com/v2/submit
+<i>Cache-Control:</i> max-age=86400
+<i>Content-Length:</i> 0
+
+<em>随后浏览器发出：POST /v2/submit HTTP/1.1，主体仍为 name=alice&amp;city=sz</em></div>
+    <div class="wire-cap">308：永久且严格保持方法与主体，适合 API 端点永久迁移而客户端必须继续用 POST 的情形。</div>
+
+    <p>把四种重投结果放在一起看，差别一目了然：301/302 下浏览器「通常改成 GET」（规范本意不改，但历史实现改了，属于不可靠行为）；303 下「按规范改成 GET」（可靠，主体丢失是有意的）；307/308 下「严格保持 POST 与主体」（可靠）。MDN 说 303 用于 PUT 或 POST 请求完成之后重定向、防止刷新导致操作重复触发，又说 307 在站点支持非 GET 方法的链接或操作时优于 302——这两句话合起来，就是选择指南。</p>
+
+    <p>还有一个常被问到的边界：304 Not Modified 算不算重定向？MDN 把它归入「特殊重定向」，但它并不让客户端去另一个地址，而是让页面跳到本地缓存副本（可能已过时），表示缓存的响应仍然是新的、可以使用。它是第 6 讲条件请求的产物，与 Location 无关。300 Multiple Choice 则是「手动重定向」：服务器把可选链接以 HTML 主体列出来让用户自己选，并鼓励在 Link 首部里放机器可读的 <code>rel=alternate</code>。特殊这一族只是被归在同一状态码段，并不遵循「Location + 重投」那套流程。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>方法改写问题的本质，是「重投一次」时客户端要决定：这次是照抄原请求，还是降级成 GET 取页面？MDN 用两个新增状态码把模糊地带钉死——要保方法就用 307/308，要改 GET 就用 303，而 301/302 因为历史实现不统一，只能算「赌浏览器心情」。记住这条，你就不会在下单接口上误用 302 而让客户的 POST 变成一次无害却无效的 GET。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>「重定向反正都是跳到新页面，方法无所谓」——这是最贵的一个误解。给接收 POST 的支付回调、表单提交、文件上传配 302，浏览器可能把 POST 改成 GET，参数从请求主体跑到 URL 里，既可能泄露敏感信息，又会让服务端收不到预期数据。反过来，在提交成功后本该用 303 的地方用了 307，用户一刷新就会重投表单。方法这件事，必须按状态码精确选择。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front"><div class="q-tag">回忆 12.3-1</div><div class="q-text">POST /submit 遇到 301、302、303、307、308，各自会变成什么方法？</div><span class="tap">点击翻面 →</span></div>
+            <div class="flip-face flip-back"><div class="a-tag">参考答案</div>301/302 通常被浏览器改成 GET（规范无意改、实现常改，不可靠）；303 明确改 GET、主体丢失；307/308 严格保持 POST 与主体不变。</div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front"><div class="q-tag">回忆 12.3-2</div><div class="q-text">为什么要有 307 和 308？PRG 模式为什么用 303 而不是 302？</div><span class="tap">点击翻面 →</span></div>
+            <div class="flip-face flip-back"><div class="a-tag">参考答案</div>301/302 历史上被浏览器实现成改方法，307/308 用来明确保持方法与主体、消除歧义。PRG 要「提交后改成 GET 取结果页」，303 明确承诺改 GET，刷新不会重投；302 是否改方法不可靠，故不用。</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 12.4 ============ -->
+    <h2><span class="sec-no">12.4</span>当重定向的箭头指回自己：重定向循环与一次请求的终点</h2>
+
+    <p>前三节都在讲「重定向怎么把请求正确送到新地址」，这一节讲它失灵的极端情形，并借此把全书的主线合拢。既然重定向就是「收到 3xx 就朝新地址重发一次」，那么只要这条重发链永远指不到一个 2xx 资源，客户端就会一直重发下去——这就是<span class="term">重定向循环</span>（Redirect Loop），MDN 称之为「重定向死锁」。它是这一讲最该警惕的故障，也是「一次请求全程闭合」这个承诺的反面教材。</p>
+
+    <p>MDN 的定义很直接：当后续的重定向路径重复之前的路径时，循环就产生了，换句话说陷入了无限循环，不会有一个最终的页面返回。多数情况下这属于服务器端错误。下面按 A→B→C→A 做一次完整的分步推演，看报文怎么走、浏览器怎么发现、用户看到什么。</p>
+
+    <p>设三个地址分别是 <code>https://site.example/a</code>、<code>/b</code>、<code>/c</code>，服务器被误配成 a 指 b、b 指 c、c 又指回 a。浏览器依次发出并收到：</p>
+
+    <div class="wire"><em>第 1 次请求</em>
+<b>GET /a HTTP/1.1</b>
+<b>Host:</b> site.example
+<i>← HTTP/1.1 302 Found</i>
+<i>Location:</i> /b
+
+<em>第 2 次请求</em>
+<b>GET /b HTTP/1.1</b>
+<b>Host:</b> site.example
+<i>← HTTP/1.1 302 Found</i>
+<i>Location:</i> /c
+
+<em>第 3 次请求</em>
+<b>GET /c HTTP/1.1</b>
+<b>Host:</b> site.example
+<i>← HTTP/1.1 302 Found</i>
+<i>Location:</i> /a
+
+<em>第 4 次请求</em>
+<b>GET /a HTTP/1.1</b>
+<i>← HTTP/1.1 302 Found，Location: /b</i>
+<em>…如此往复，永远等不到 2xx</em></div>
+    <div class="wire-cap">A→B→C→A 的报文序列：每一跳都是合法的 302 + Location，但地址集合首尾相接，重发链无法收敛到任何资源。</div>
+
+    <p>浏览器怎么发现？MDN 说分两种情况。第一种：<strong>服务器自己能检测到</strong>，例如同一台服务器发现路径又要回到已访问过的地址，于是返回 <code>500 Internal Server Error</code>。第二种：<strong>服务器检测不到</strong>——循环发生在多台服务器之间，每台都只看见自己那一跳，没有全局视野。这时由浏览器负责检测：它跟踪这条重定向链，一旦发现目标地址重复出现、或自动重定向次数超过自身上限（不同浏览器阈值不同），就中止跳转并给出错误。MDN 给出的用户可见文案是：Firefox 显示「检测到该服务器正在将指向此网址的请求无限循环重定向」，Chrome 显示「该网页将你重定向的次数过多」。MDN 还补了一句很现实的话：无论哪种场景，用户对此都无能为力，除非客户端发生突变（例如缓存或 Cookie 不匹配）。</p>
+
+    <p>为什么会形成这样的环？最常见的手法正是前面提醒过的：HTTP 层、<code>&lt;meta&gt;</code>、JavaScript 三处重定向互相指，或者改了其中一处忘了另两处；其次是 HTTPS 强制跳转写反——本该「http 跳 https」，却让 https 也跳向 http，于是两边互踢；再就是 12.2 节那种缓存了旧 301、与当前配置目标互相矛盾的残留。定位方法也直接：用 <code>curl -I</code> 跟住每一跳的 Location（或用浏览器 Network 面板看重定向链），画一张「地址→目标」的有向图，出现环的那个节点就是故障点；清掉冲突的 meta/JS、修正协议跳转方向、purge 掉陈旧缓存即可打破。</p>
+
+    <div class="figure"><div class="mermaid">flowchart LR
+  A["地址 A"] --> B["地址 B"]
+  B --> C["地址 C"]
+  C --> A
+  C --> D["浏览器计数超限"]
+  D --> E["显示重定向次数过多"]
+</div><div class="caption">图 12.2 A→B→C→A 收不敛：浏览器靠跟踪重复地址与跳转次数上限，在途中断并报错。</div></div>
+
+    <p>讲到这里，全书的主线刚好合拢。回想第 1 讲，MDN 把一次典型会话分成三个阶段：<strong>客户端建立连接 → 客户端发送请求并等待应答 → 服务器处理并返回响应</strong>，之后连接关闭或复用。这一讲讲的重定向，全部发生在第二阶段与第三阶段之间——客户端发出请求（阶段二），服务器不直接给资源，而是用 3xx + Location 回一条「去别处」（阶段三的变体），客户端于是开启新一轮的「建立连接（若换了主机）+ 发送请求 + 等待响应」。一次重定向，就是把第 1 讲那套三阶段再走一遍；重定向循环，则是这套三阶段被卡在中间、永远走不到终点。</p>
+
+    <p>把这条闭合路线完整走一遍：用户在地址栏输入网址（第 1 讲的起点）→ DNS 解析、TCP 与 TLS 建连（阶段一）→ 浏览器把意图编码成请求报文发出、携带 cookie 与认证凭据（阶段二，第 7、8 讲补上的状态与身份）→ 请求可能经代理转发、必要时 CORS/CSP 判定边界（第 9、10、11 讲）→ 服务器返回 3xx 与 Location，本讲登场 → 客户端按状态码决定是否改写方法、按相对 URL 规则算出目标（12.1、12.3）→ 重发请求，可能命中缓存里的旧跳转（12.2，第 5、6 讲的缓存机制在此显形）→ 若地址成环则被浏览器截断（12.4）→ 最终拿到一份 2xx 表示，按 MIME 类型渲染（第 2、3 讲）→ 连接复用或关闭（第 4 讲），一次请求全程闭合。这就是 course 开篇那句话的完整落地：连接、缓存、cookie、认证、CORS、代理与重定向，都是在这条主线上插入的规则。第 12 讲把这些规则里最后一个「把请求送到正确地方」的环节补齐，于是全书闭环。</p>
+
+    <div class="box insight">
+      <span class="box-tag">✅ 判定规则</span>
+      <p>排查「页面一直转圈最后报重定向次数过多」：先看是不是 http/https 互跳（协议写反）、再看是不是 HTTP/meta/JS 三处重定向目标不一致、最后查是不是缓存了旧的永久重定向与当前配置打架。用 <code>curl -I -L</code> 打印完整跳转链，出现重复地址即为环。修正后记得清缓存，否则「修好了却仍跳旧的」会让你以为是配置没生效。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>「重定向只是性能优化的小问题，多一次往返而已」——平时确实只是小开销，MDN 也劝尽量少用；但一旦成环或撞上永久缓存，它就能让整个站点对特定用户完全不可用，而且因为故障发生在浏览器端，服务端日志一片正常，排查难度远超普通 4xx/5xx。把重定向当成「会写进客户端状态的路由决策」来对待，才不会在上线后被它反咬。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front"><div class="q-tag">回忆 12.4-1</div><div class="q-text">A→B→C→A 的循环里，服务器可检测与不可检测两种情况分别怎么处理？用户看到什么？</div><span class="tap">点击翻面 →</span></div>
+            <div class="flip-face flip-back"><div class="a-tag">参考答案</div>可检测：服务器返回 500。不可检测（跨多台服务器）：浏览器跟踪重复地址/超过跳转上限后中止，Firefox 报「无限循环重定向」，Chrome 报「重定向次数过多」。用户通常无能为力。</div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front"><div class="q-tag">回忆 12.4-2</div><div class="q-text">重定向发生在第 1 讲会话三阶段的哪个位置？为什么说一次重定向相当于把三阶段再走一遍？</div><span class="tap">点击翻面 →</span></div>
+            <div class="flip-face flip-back"><div class="a-tag">参考答案</div>发生在「服务器返回响应」之后、客户端重新发起请求之前。换地址重发时，若主机变了要重新建连，再发请求并等待、服务器再返回响应，等于把「建连→发请求等待→返回响应」三阶段重走一遍；成环就是走不到终点。</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 12.5 ============ -->
+    <h2><span class="sec-no">12.5</span>延伸：规范怎么写：RFC 9110 的 3xx 家族与永久重定向缓存</h2>
+
+    <p>MDN 是面向开发者的指南，它告诉你「301/308 永久、302/303/307 临时」「浏览器会缓存永久重定向」，但刻意没写「凭什么」。当你要实现客户端的自动重定向、决定某条响应能不能缓存、或者判定一个边界行为时，就要看 IETF 的规范口径。HTTP 语义集中在 <strong>RFC 9110</strong>：3xx 状态码整体定义在 §15.4，301 在 §15.4.2、302 在 §15.4.3、303 在 §15.4.4、307 在 §15.4.7、308 在 §15.4.8；缓存行为在 <strong>RFC 9111</strong>；Location 首部在 RFC 9110 §10.2.2；相对引用的解析算法在 RFC 3986 §5.2。这一节把 MDN 的工程说法与规范逐条对齐。</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>MDN 的说法</th><th>RFC 怎么写</th><th>为什么值得知道</th></tr>
+        <tr><td>3xx 表示需要客户端进一步动作才能完成请求，Location 给出目标 URL</td><td>RFC 9110 §15.4 定义：3xx 类状态码表示用户代理需要采取进一步动作才能完成请求；Location 的值是一个 URI 引用（§10.2.2），可为绝对或相对</td><td>「进一步动作」是规范性定义，不是描述；明白 Location 是 URI 引用而非必填绝对 URL，才知道相对解析为何必须按算法走</td></tr>
+        <tr><td>301/302「规范无意改方法，但实际用户代理会改」，307/308 消除歧义</td><td>RFC 9110 §15.4.2/§15.4.3 允许出于历史原因把 POST 改为 GET（MAY）；§15.4.7 307 与 §15.4.8 308 要求用户代理不得自动改变方法（MUST NOT change the method）</td><td>MAY 与 MUST NOT 是规范里完全不同强度的措辞。这解释了为何 301/302 的行为不可靠、而 307/308 可作为严格保证——实现客户端时必须照此办理</td></tr>
+        <tr><td>303 用于 POST/PUT 完成后重定向，防止刷新重复提交</td><td>RFC 9110 §15.4.4：303 指示用户代理执行GET 或 HEAD 取回目标资源，且目标通常与原始 URI 不同；这是 PRG 模式的规范基础</td><td>「改成 GET」不是浏览器好心，而是规范要求；据此可放心用 303 打断重复提交，而不必担心各浏览器实现不一</td></tr>
+        <tr><td>浏览器会缓存永久重定向</td><td>RFC 9111 §3 规定可缓存性：301/308 这类响应用户代理可长期存储（若无明确禁止），并可在后续请求中直接复用；缓存新鲜度与再验证按 §4 计算</td><td>MDN 的「会缓存」在规范里是「默认可缓存 + 按缓存规则计算」，所以你能用 Cache-Control 精确控制它，也理解 12.2 节那条误配 301 为何能长期作祟</td></tr>
+        <tr><td>互相指向会形成重定向循环，浏览器负责检测</td><td>RFC 9110 §15.4 首段要求用户代理应当检测无限重定向循环（SHOULD detect），并对自动重定向做限制；检测到即视为错误</td><td>SHOULD 而非 MUST 解释了各浏览器阈值不同、文案不同；也说明检测责任在客户端，服务端只能尽量自查并返回 500</td></tr>
+        <tr><td>304 Not Modified、300 Multiple Choice 归入「特殊重定向」</td><td>RFC 9110 §15.4.5 定义 304 为条件请求命中、表示仍新鲜且无主体；§15.4.1 定义 300 为多个可选表示需用户或代理选择</td><td>它们被归在 3xx 段却不是「Location + 重投」流程；读规范时按各自章节理解，别硬套重定向心像</td></tr>
+      </table>
+    </div>
+
+    <p>这张表想传达的元规则只有一条：<strong>MDN 说「通常」「建议」的地方，规范里往往藏着 MAY / SHOULD / MUST 的精确分级</strong>。301/302 方法改写的「看浏览器心情」，规范写作 MAY；307/308 的「必须保持方法」，规范写作 MUST NOT；循环检测的「浏览器会管」，规范写作 SHOULD。看懂这几个词，你就能判断一条行为是「可靠保证」还是「尽力而为」，这在实现客户端或排查疑难杂症时是决定性的。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>把 RFC 9110 的语义层与 RFC 9111 的缓存层分开看，重定向的许多困惑会一次性解开：状态码决定「方法怎么处理、是否永久」（这是 9110 的语义），Cache-Control 与缓存规则决定「这条跳转被记多久」（这是 9111 的缓存）。301/308 之所以危险，正是因为它的语义（永久）与缓存的默认行为（可长期存）叠加——语义说「别再来了」，缓存说「我替你记着」，于是服务端即使改了，客户端也不再来问。这正是全书反复强调的「语义与传输分离」在重定向上的具体体现。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>别把 MDN 的「浏览器会缓存永久重定向」理解成「所有重定向都会缓存」。临时重定向（302/303/307）默认不缓存，除非另有首部指示；只有 301/308 这类才默认可长期存储。反过来也别以为「有 Cache-Control 就一定不缓存」——要看具体指令，no-store 才是禁止存储，no-cache 只是每次要再验证。这些精确口径都在 RFC 9111，而不是凭经验猜。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front"><div class="q-tag">回忆 12.5-1</div><div class="q-text">RFC 9110 用哪组措辞区分 301/302 与 307/308 的方法处理？各在哪一节？</div><span class="tap">点击翻面 →</span></div>
+            <div class="flip-face flip-back"><div class="a-tag">参考答案</div>§15.4.2/§15.4.3 用 MAY 允许 301/302 出于历史原因把 POST 改 GET；§15.4.7 307 与 §15.4.8 308 用 MUST NOT 要求不得自动改变方法。MAY 不可靠，MUST NOT 是保证。</div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front"><div class="q-tag">回忆 12.5-2</div><div class="q-text">「永久重定向被缓存」在规范上由哪两层共同决定？Location 的相对解析依据哪份 RFC？</div><span class="tap">点击翻面 →</span></div>
+            <div class="flip-face flip-back"><div class="a-tag">参考答案</div>语义层 RFC 9110（301/308 的永久语义）+ 缓存层 RFC 9111（可缓存性与新鲜度计算）。Location 作为 URI 引用，其相对解析按 RFC 3986 §5.2 的引用解析算法。</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===== 概念卡 ===== -->
+    <h2><span class="sec-no">🃏</span>概念卡：本讲概念的一分钟画像</h2>
+    <p>翻面前先自问：这个概念我能用一句话讲清楚吗？作为全书最后一讲，这七张卡也顺带把散落各讲的概念串成一条闭合的线。</p>
+    <div class="flip-grid">
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front"><div class="q-tag">概念卡 1</div><div class="q-text">HTTP 重定向（Redirect）与 3xx</div><span class="tap">点击翻面 →</span></div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">服务器用 3xx 状态码加 Location 首部，指示客户端换地址重发请求的机制。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">资源换了地址后，让旧链接、书签与外部引用继续可用，而不必返回 404。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">快递单改了收件地址，邮局按新地址重投一次。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为重定向无成本；每次多一次往返，成环或撞上永久缓存时更会致命。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">域名别称、强制 HTTPS、站点重构保链接；能改内部链接就别做内部重定向。</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front"><div class="q-tag">概念卡 2</div><div class="q-text">Location 首部与相对 URL 解析</div><span class="tap">点击翻面 →</span></div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">重定向响应里保存目标地址的首部，其值是一个 URI 引用，可为绝对或相对。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">告诉客户端「去哪」，并允许用简短的相对写法指向同一站点的其它资源。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">路牌既可以写完整地址，也可以写「往左再走两条街」。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">用字符串拼接解析相对 URL；应按 RFC 3986 §5.2 以请求 URL 为基准逐段合并。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">每次读 3xx 响应、实现客户端跳转、或做相对链接解析时。</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front"><div class="q-tag">概念卡 3</div><div class="q-text">永久重定向（301 / 308）</div><span class="tap">点击翻面 →</span></div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">声明原 URL 作废、应由新 URL 取代的重定向；爬虫会更新收录，响应默认可被长期缓存。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">站点永久重构或强制 HTTPS 后，把权重与流量整体迁移到新地址。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">旧门牌彻底拆掉，邮局和地图都改成新门牌。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">把临时活动也发成永久；一旦被缓存与收录，改回 200 也救不回已记住跳转的用户。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">确定永不回头的迁移；308 在需要保持非 GET 方法与主体时优于 301。</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front"><div class="q-tag">概念卡 4</div><div class="q-text">临时重定向（302 / 303 / 307）</div><span class="tap">点击翻面 →</span></div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">声明资源只是暂时不在标准地址的重定向；爬虫不记录新地址，默认不缓存。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">维护停机、进度页、POST 提交后跳转等「临时借用别处」的场景。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">门店装修，临时在隔壁营业，装修完就回来。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为三者方法行为一样；303 明确改 GET，307 严格保持，302 介于两者之间不可靠。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">拿不准永久与否时先用临时；支持非 GET 操作且要保方法时用 307。</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front"><div class="q-tag">概念卡 5</div><div class="q-text">方法保持与 307 / 308</div><span class="tap">点击翻面 →</span></div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">重定向后严格保留原请求方法与主体的语义，由 307（临时）与 308（永久）明确承诺。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">消除 301/302 历史上被浏览器改成 GET 的歧义，保护 POST/PUT 等不安全请求。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">换地址重投时原封不动地照抄整张单据，而不是偷偷改成「只看一眼」。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">给会被 POST 的端点配 302；方法可能被改、主体丢失，导致请求无效或参数泄漏。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">API 端点迁移、表单/文件上传跳转等任何「方法必须保持」的场合。</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front"><div class="q-tag">概念卡 6</div><div class="q-text">303 与 PRG（提交后重定向）</div><span class="tap">点击翻面 →</span></div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">303 明确要求客户端改用 GET 取目标资源、丢弃原主体；由此形成 Post/Redirect/Get 模式。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">提交表单或下单后跳到结果页，用户刷新只刷新 GET 页面，不重复触发不安全请求。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">交完表给你一张回执号，再让你去另一个窗口凭号看结果。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">在提交成功后用 307 保方法，结果一刷新就重复下单；该改 GET 时就要用 303。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">POST/PUT 完成后的结果展示、耗时操作的进度页与取消页。</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front"><div class="q-tag">概念卡 7</div><div class="q-text">重定向循环（Redirect Loop）与缓存残留</div><span class="tap">点击翻面 →</span></div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">重定向路径首尾相接、永远到不了 2xx；服务器可返 500，否则由浏览器检测并报错。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">识别 http/https 互跳、HTTP/meta/JS 目标冲突、陈旧永久缓存这三类常见成因。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">两个路牌互相指路，你在原地绕圈，直到巡逻的浏览器把你拦下。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为改好服务端就立刻生效；缓存了旧 301 的浏览器不再来问，必须一并清缓存。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">排查「重定向次数过多」时，用 curl -I -L 追链画有向图找环，再清缓存。</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===== 分层习题 ===== -->
+    <h2><span class="sec-no">✍️</span>分层习题：先自己写，再点开核对</h2>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>判断下列说法正误并说明理由：①「301 和 302 都是临时重定向」；②「304 Not Modified 会让浏览器去另一个 URL」；③「308 与 301 都是永久重定向，但 308 明确保持方法与主体」。</div>
+      <details><summary>提示</summary><p>回到 12.1 的三分类表与 12.3 的方法判定表，逐句对照状态码的类别与方法承诺。</p></details>
+      <details><summary>完整解答</summary><div class="ex-answer">① 错。301 是永久重定向（Moved Permanently），302 才是临时重定向（Found）。二者方法行为相似（都可能被浏览器改成 GET），但「永久/临时」的语义与缓存行为完全不同，不可混为一谈。② 错。304 属于特殊重定向，它让页面跳到<strong>本地缓存副本</strong>（可能已过时），表示缓存响应仍新鲜可用，并不携带 Location 指向另一个 URL；它是条件请求的产物。③ 对。308 与 301 同为永久重定向，但按 MDN 与 RFC 9110，308 明确要求方法与消息主体都不变化，而 301 只是「GET 不变、其他方法可能变 GET」，308 正是为消除这一歧义而创建。</div></details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>某同学说：「既然 HTTP 重定向、<code>&lt;meta&gt;</code> 和 JS 都能跳转，那我三个都写上最保险。」这句话为什么危险？请按 MDN 给出三者的优先级，并说明会发生什么故障。</div>
+      <details><summary>提示</summary><p>想想三者同时存在时谁先触发，以及改了一处忘了另两处会怎样。</p></details>
+      <details><summary>完整解答</summary><div class="ex-answer">MDN 的优先级是：① HTTP 重定向永远最先触发，甚至页面还没传输就已存在；② HTML 的 <code>&lt;meta&gt;</code> 重定向在没有 HTTP 重定向时才触发；③ JavaScript 重定向最后，且只在客户端开启脚本时生效。三者都写并不会「更保险」，反而制造不一致：HTTP 跳转先生效，meta 与 JS 基本没机会执行；一旦开发者只改了其中一处的目标地址，两处目标就可能互相指回，形成无限循环（MDN 明确警告这会带来「无限循环或其他噩梦」）。正确做法是只在 HTTP 层做一处重定向。</div></details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>基准请求 URL 为 <code>https://shop.example.com/a/b/c.html</code>。请逐一算出下列 Location 值对应的绝对目标 URL，并写出每一步依据：① <code>/login</code>；② <code>./../img/logo.png</code>；③ <code>?sort=price&amp;page=2</code>；④ <code>//static.example.com/x.css</code>。</div>
+      <details><summary>提示</summary><p>按「scheme → authority → 绝对 path → 相对 path → query/fragment」优先级；相对 path 先去掉基准末段得目录，再拼接并消除 . 与 .. 段。</p></details>
+      <details><summary>完整解答</summary><div class="ex-answer">基准拆分：scheme=https，authority=shop.example.com，path=/a/b/c.html，query 与 fragment 为空。<br>① <code>/login</code> 以 <code>/</code> 开头，直接替换整个 path，scheme 与 authority 不变 → <code>https://shop.example.com/login</code>。<br>② <code>./../img/logo.png</code> 是相对路径：基准 path 去掉末段 <code>c.html</code> 得目录 <code>/a/b/</code>，拼接得 <code>/a/b/./../img/logo.png</code>，消除 <code>.</code> 得 <code>/a/b/../img/logo.png</code>，再消 <code>b/..</code> 回退一级得 <code>/a/img/logo.png</code> → <code>https://shop.example.com/a/img/logo.png</code>。<br>③ 只带 query、引用 path 为空，故 path 沿用基准 <code>/a/b/c.html</code>，query 改为 <code>sort=price&amp;page=2</code> → <code>https://shop.example.com/a/b/c.html?sort=price&amp;page=2</code>。<br>④ 以 <code>//</code> 开头带 authority，沿用基准 scheme=https，authority 换成 static.example.com，path 取 <code>/x.css</code> → <code>https://static.example.com/x.css</code>。</div></details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>一个下单接口收到 <code>POST /order</code>，主体 <code>item=book&amp;qty=1</code>。服务器要把它迁到 <code>/order-v2</code>，且要求「方法严格保持、主体不丢」；随后下单成功页希望用户刷新时不重复提交。请回答：① 迁移跳转该用哪个状态码，写出响应报文与该重投的方法/主体；② 成功后跳结果页又该用哪个状态码，写出随后请求的方法；③ 若迁移误用 302，最可能发生什么？</div>
+      <details><summary>提示</summary><p>用 12.3 的方法判定表：要保方法看 307/308，要改成 GET 看 303；注意迁移的 permanence。</p></details>
+      <details><summary>完整解答</summary><div class="ex-answer">① 迁移要求方法严格保持，应选 307 或 308；若这次迁移是永久的，选 308（方法与主体都不变且语义永久）。响应：<code>HTTP/1.1 308 Permanent Redirect</code> + <code>Location: /order-v2</code> + <code>Content-Length: 0</code>。随后浏览器重发 <code>POST /order-v2</code>，主体仍是 <code>item=book&amp;qty=1</code>。<br>② 成功后跳结果页要「改成 GET、防刷新重投」，应选 303：<code>HTTP/1.1 303 See Other</code> + <code>Location: /order/result?id=42</code>，随后浏览器发出 <code>GET /order/result?id=42</code>，主体为空；刷新只刷新这个 GET 页面。<br>③ 若迁移误用 302，按 MDN/RFC 的口径，302 下的 POST 可能被用户代理改成 GET，主体 <code>item=book&amp;qty=1</code> 丢失，参数从主体跑到 URL 或干脆消失，服务端收不到下单数据，请求实际上失败。这正是必须用 307/308 保方法的原因。</div></details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l3">L3 建模应用</span>你要把一个站点整体迁到新域名并强制 HTTPS：<code>http://old.example.com</code> 与 <code>https://old.example.com</code> 都要最终落到 <code>https://www.new.example.com</code>，站点里有接收 POST 的 <code>/api/order</code> 接口；此外还要保留若干只在活动期间使用的临时落地页 <code>/campaign</code>。请用本讲概念给出一套方案：① 每类跳转选哪个状态码；② POST 接口迁移如何保证不丢请求；③ 如何避免永久缓存与循环；④ 上线后如何验证。</div>
+      <details><summary>提示</summary><p>把「永久 / 临时」「方法保持」「缓存」「循环」四个维度分别套到每类跳转上。</p></details>
+      <details><summary>完整解答</summary><div class="ex-answer">① 旧域名到新域名、http 到 https 都是长期决定，用永久重定向：<code>301 Moved Permanently</code>（GET 场景）或 <code>308</code>（需保方法的场景）；强制 HTTPS 时确保只在 http 上跳 https、<strong>绝不让 https 再跳回 http</strong>，否则形成互跳环。临时活动落地页 <code>/campaign</code> 用 <code>302</code> 或 <code>303</code>，活动结束即可撤掉，不进缓存、不改收录。<br>② <code>/api/order</code> 接收 POST，迁移必须用 <code>308</code>：它与 301 同为永久，但明确要求方法与主体都不变，客户端会把 POST 与请求体原样发到新域名；若误用 301/302，POST 可能被改成 GET、主体丢失，订单提交失败。下单成功后如需跳结果页，再用 303 改为 GET。<br>③ 永久缓存：只在这些跳转确定永不回头时才发 301/308，并显式设置你真正想要的 Cache-Control；上线前确认没有给临时页面误发永久码。循环：只在 HTTP 层做一处重定向，不要叠加 meta/JS；画「旧→新」有向图确认无环，尤其核对 http/https 跳转方向。<br>④ 验证：用 <code>curl -I</code> 逐条核对每个 URL 返回的状态码与 Location；用 <code>curl -I -L</code> 跟踪完整跳转链，确认最终落到 2xx 且无重复地址；对 POST 接口用带主体的请求实测 methods 是否被保持；浏览器清缓存后与带旧缓存两种情形都测一遍，确认「修好即生效」而非被旧 301 卡住。</div></details>
+    </div>
+
+    <!-- ===== 自测 ===== -->
+    <h2><span class="sec-no">✅</span>本章自测：每题只选一个答案</h2>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 1</div>
+      <div class="q-stem">一条 HTTP 重定向响应，最关键的两个组成部分是？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 200 状态码与 Content-Type 首部</li>
+        <li data-opt="b">B. 以 3 开头的状态码与 Location 首部</li>
+        <li data-opt="c">C. Set-Cookie 首部与主体</li>
+        <li data-opt="d">D. Host 首部与 Content-Length 首部</li>
+      </ul>
+      <div class="quiz-explain">解析：B 对。MDN 明确：重定向响应包含以 3 开头的状态码，以及保存目标 URL 的 Location 首部。A 是普通成功响应；C 属于 cookie 机制（第 7 讲）；D 是请求的必需首部与主体定界（第 1、2 讲），都不是重定向的构成要素。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="c">
+      <div class="q-no">自测 2</div>
+      <div class="q-stem">POST /order 被重定向，哪种状态码能最可靠地保证方法与主体都不丢失？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 301 Moved Permanently</li>
+        <li data-opt="b">B. 302 Found</li>
+        <li data-opt="c">C. 307 Temporary Redirect</li>
+        <li data-opt="d">D. 303 See Other</li>
+      </ul>
+      <div class="quiz-explain">解析：C 对。307 明确要求方法与主体都不变化，是四个选项里唯一可靠的「保方法」临时重定向。A、B 虽规范无意改方法，但历史上浏览器常把 POST 改成 GET、主体丢失，不可靠；D 的 303 恰恰是<strong>明确要改成 GET</strong>、丢弃主体，用于提交后跳结果页，与「保持方法」相反。永久场景下同等可靠的是 308，但本题选项里没有。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="a">
+      <div class="q-no">自测 3</div>
+      <div class="q-stem">关于永久重定向与临时重定向，下列说法正确的是？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 爬虫会更新永久重定向的旧 URL，而临时重定向的新 URL 不会被记录</li>
+        <li data-opt="b">B. 临时重定向会被浏览器长期缓存，永久重定向不会</li>
+        <li data-opt="c">C. 301 与 302 都是临时重定向</li>
+        <li data-opt="d">D. 永久重定向一旦发出就能随时无损回退</li>
+      </ul>
+      <div class="quiz-explain">解析：A 对，正是 MDN 的原文口径。B 说反了：默认可长期缓存的是 301/308 这类永久重定向，临时重定向默认不缓存。C 错：301 永久、302 临时。D 错：永久重定向会被缓存与收录，改回配置后已记住跳转的浏览器与搜索引擎不会立刻更新，回退代价高、并不「无损」。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="d">
+      <div class="q-no">自测 4</div>
+      <div class="q-stem">基准 URL 为 https://www.example.com/docs/guide/intro.html，Location 为 ../index.html，解析后的绝对地址是？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. https://www.example.com/docs/guide/index.html</li>
+        <li data-opt="b">B. https://www.example.com/index.html</li>
+        <li data-opt="c">C. https://www.example.com/docs/guide/intro.html/index.html</li>
+        <li data-opt="d">D. https://www.example.com/docs/index.html</li>
+      </ul>
+      <div class="quiz-explain">解析：D 对。相对路径先去掉基准末段 intro.html 得目录 /docs/guide/，拼上 ../index.html 得 /docs/guide/../index.html，消除 .. 回退一级得 /docs/index.html。A 忽略了 .. 的回退作用；B 多退了一级（把 docs 也退掉了）；C 把相对路径当成相对文件名直接拼接，完全没有消除 .. 段，属于典型的「字符串拼接」错误做法。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 5</div>
+      <div class="q-stem">用户报「该网页将你重定向的次数过多」，最不可能的原因是？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. http 与 https 互相跳转，方向写反形成环</li>
+        <li data-opt="b">B. 服务器返回了一条带正确 Location 的 301，跳转到全新且有效的地址</li>
+        <li data-opt="c">C. HTTP、meta、JS 三处重定向目标不一致、互相指回</li>
+        <li data-opt="d">D. 缓存了旧的永久重定向，与当前配置目标互相矛盾</li>
+      </ul>
+      <div class="quiz-explain">解析：B 对（最不可能）。一条正确且指向有效新地址的 301 只会产生一次正常跳转，最终落到 2xx，不会成环。A 是经典的协议互踢环；C 是 MDN 明确警告的多机制不一致；D 是 12.2 节讲过的陈旧缓存与当前配置打架——三者都能让重发链首尾相接，触发浏览器的循环检测并报「次数过多」。</div>
+    </div>
+
+    <div class="retell">
+      <h3>🗣️ 用自己的话，三句话讲完本讲</h3>
+      <p>对着空气（或室友）说出这三句。说卡壳的那句，回去重读对应小节。作为全书收官，请把第三句和第 1 讲的会话三阶段连起来说。</p>
+      <details><summary>句1：这讲解决什么问题？——</summary><div class="retell-answer">参考答案：解决「资源换了地址、旧链接还要能用」的问题——服务器用 3xx 加 Location 让客户端换地址重发一次，并区分永久与临时、决定方法是否改写、防止成环与永久缓存反噬。</div></details>
+      <details><summary>句2：核心机制是什么？——</summary><div class="retell-answer">参考答案：状态码决定语义与缓存（301/308 永久且默认可缓存，302/303/307 临时；307/308 保方法、303 改 GET、301/302 不可靠），Location 用相对 URL 算法给出目标，客户端据此重投；地址首尾相接就成了循环，永久跳转被缓存后客户端不再来问。</div></details>
+      <details><summary>句3：它和前后讲怎么分工？——</summary><div class="retell-answer">参考答案：本讲补上第 1 讲会话「服务器返回响应」之后、「客户端重新发起请求」之前的那一跳。一次重定向就是把第 1 讲的三阶段——建立连接、发送请求并等待应答、服务器返回响应——再走一遍；成环就是卡在这三阶段中间到不了终点。至此，从第 1 讲的会话骨架，到第 4 讲连接、第 5/6 讲缓存、第 7/8 讲状态与身份、第 9/10 讲边界、第 11 讲代理、第 12 讲重定向，一次请求从发起到落地全程闭合。</div></details>
+    </div>
+
+    <div class="review-plan">
+      <h3>🔁 间隔复习计划</h3>
+      <p>回忆本身比重读有效 10 倍。到点只做一件事：翻卡 + 重做标记题。本讲是全书最后一讲，第 15 天请把十二讲的合上书挑战整体过一遍。</p>
+      <table>
+        <tr><th>时间点</th><th>复习内容</th><th>预计用时</th></tr>
+        <tr><td>第 1 天</td><td>概念卡 1–7 + 回忆 12.1 / 12.2 / 12.3 / 12.4 / 12.5 各 2 张</td><td>14 分钟</td></tr>
+        <tr><td>第 3 天</td><td>重做自测 2、4、5 + 翻错的概念卡 3、4、5、7；默写五种状态码的方法判定表</td><td>10 分钟</td></tr>
+        <tr><td>第 7 天</td><td>三句话复述 + L2 两题（相对 URL 手算、POST 迁移选码）+ 画一次 A→B→C→A 环路</td><td>14 分钟</td></tr>
+        <tr><td>第 15 天</td><td>先重做本讲合上书挑战，再串做全书十二讲的末条主线问题；能全过就毕业</td><td>18 分钟</td></tr>
+      </table>
+    </div>
+
+    <div class="final-challenge">
+      <h3>🚪 合上书挑战：能全写出来，这一讲才毕业</h3>
+      <ol id="challenge-list">
+        <li>写出一条最小重定向响应，并说明浏览器收到后做什么、用户是否看得见。</li>
+        <li>给定基准 URL 与若干相对 Location（以 / 开头、以 ./ 开头、只带查询串），逐一算出绝对目标并说明依据。</li>
+        <li>默画五种状态码 301/302/303/307/308 对 POST 的方法判定表，并说出 307/308 为何被创建。</li>
+        <li>用报文推演 A→B→C→A 的重定向循环，说出服务器可检测与浏览器检测的两种处理及用户看到的信息。</li>
+        <li>复述一次误配的 301 如何在修复后仍让用户打不开旧地址的故障链，给出两条清除与两条预防手段。</li>
+        <li>说出 RFC 9110 用什么措辞区分 301/302 与 307/308 的方法处理，以及永久重定向缓存由哪两层规范共同决定。</li>
+        <li>一句话回答本讲主线问题并回扣第 1 讲：301 与 302、307 与 308 分别承诺了什么，为什么方法被改写会出事——并说明重定向发生在会话三阶段的哪个位置、为什么说一次重定向就是把三阶段再走一遍，至此一次请求如何全程闭合。</li>
+      </ol>
+    </div>
+
+    <div class="complete-zone">
+      <button class="btn-complete" id="btn-complete" onclick="markDone()">✓ 我已完成本讲（含合上书挑战）</button>
+    </div>
+
+    <div class="chapter-nav">
+      <a href="chapter-11.html"><span class="nav-dir">← 上一讲</span>第11讲 代理、隧道与协议升级</a>
+      <a href="index.html" class="next"><span class="nav-dir">下一讲 →</span>12 讲学完 · 回到学习地图</a>
+    </div>
+
+  </div>
+</div>
+
+<footer class="footer">
+  <div class="wrap">第12讲 HTTP 重定向 · HTTP 精通 · 依据 MDN Web Docs《HTTP 指南》整理，延伸板块对照 RFC 9110 系列 · 学习进度保存在本机浏览器中</div>
+</footer>
+
+<script src="assets/mermaid.min.js"></script>
+<script>
+mermaid.initialize({
+  startOnLoad: true,
+  theme: "base",
+  themeVariables: {
+    primaryColor: "#e3edf7",
+    primaryBorderColor: "#1d5f9e",
+    primaryTextColor: "#1d5f9e",
+    lineColor: "#5c554b",
+    secondaryColor: "#fbeedd",
+    tertiaryColor: "#f5f1e8",
+    fontFamily: "-apple-system, PingFang SC, sans-serif",
+    fontSize: "14px"
+  },
+  flowchart: { curve: "linear", htmlLabels: false }
+});
+</script>
+<script>
+document.querySelectorAll(".quiz-block").forEach(block => {
+  const answer = block.dataset.answer;
+  const explain = block.querySelector(".quiz-explain");
+  block.querySelectorAll(".quiz-opts li").forEach(li => {
+    li.addEventListener("click", () => {
+      const opts = block.querySelectorAll(".quiz-opts li");
+      opts.forEach(o => o.classList.add("disabled"));
+      if (li.dataset.opt === answer) {
+        li.classList.add("correct");
+      } else {
+        li.classList.add("wrong");
+        block.querySelector(`[data-opt="${answer}"]`).classList.add("correct");
+      }
+      explain.classList.add("show");
+    });
+  });
+});
+
+document.querySelectorAll("#challenge-list li").forEach(li => {
+  li.addEventListener("click", () => li.classList.toggle("checked"));
+});
+
+const KEY = "http_guide_progress_v1";
+function loadProgress() {
+  try { return JSON.parse(localStorage.getItem(KEY)) || {}; } catch (e) { return {}; }
+}
+const progress = loadProgress();
+const btn = document.getElementById("btn-complete");
+if (progress[12] && progress[12].done) {
+  btn.textContent = "✓ 已完成 · 再次点击重置";
+  btn.classList.add("done");
+}
+function markDone() {
+  const p = loadProgress();
+  if (p[12] && p[12].done) {
+    delete p[12];
+    btn.textContent = "✓ 我已完成本讲（含合上书挑战）";
+    btn.classList.remove("done");
+  } else {
+    p[12] = { done: true, completedAt: Date.now(), reviewsDone: 0 };
+    btn.textContent = "✓ 已完成 · 复习提醒已开启";
+    btn.classList.add("done");
+  }
+  localStorage.setItem(KEY, JSON.stringify(p));
+}
+</script>
+
+</body>
+</html>

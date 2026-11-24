@@ -1,0 +1,814 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第9讲 跨源资源共享 CORS · HTTP 精通</title>
+<link rel="stylesheet" href="assets/style.css">
+<style>
+/* 本套专用：协议报文原文展示与 MDN 来源条 */
+.wire{background:var(--bg-deep);border:1px solid var(--line);border-left:4px solid var(--accent);border-radius:8px;padding:14px 18px;margin:14px 0;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:13.5px;line-height:1.78;white-space:pre-wrap;overflow-wrap:anywhere;color:var(--ink-soft);}
+.wire b{color:var(--accent);font-weight:700;}
+.wire i{color:var(--orange);font-style:normal;}
+.wire em{color:var(--ink-faint);font-style:normal;}
+.wire.sm{font-size:12.5px;}
+.wire-cap{font-size:13px;color:var(--ink-faint);margin:-8px 0 16px;}
+.mdn-src{background:var(--bg-deep);border:1px solid var(--line);border-left:4px solid var(--accent);border-radius:8px;padding:12px 18px;margin:16px 0 0;font-size:13px;line-height:1.8;color:var(--ink-soft);}
+.mdn-src strong{color:var(--accent);}
+.mdn-src a{color:var(--accent);text-decoration:none;border-bottom:1px dashed var(--line);}
+.mdn-src a:hover{border-bottom-style:solid;}
+.to-slide{font-size:13px;color:var(--accent);text-decoration:none;border:1px solid var(--line);border-radius:6px;padding:4px 11px;white-space:nowrap;}
+.to-slide:hover{background:var(--bg-deep);}
+</style>
+</head>
+<body>
+
+<nav class="topbar">
+  <div class="topbar-inner">
+    <span class="brand"><a href="index.html" style="color:inherit">← HTTP 精通 · 学习地图</a></span>
+    <span class="crumb">第③组 · 状态与安全 / 第9讲</span>
+    <a class="to-slide" href="../http-guide-slides/09-CORS-%E8%AF%BE%E4%BB%B6.html" target="_blank" rel="noopener noreferrer">配套课件 ↗</a>
+  </div>
+</nav>
+
+<div class="wrap">
+
+  <div class="lecture-head">
+    <span class="ch-label">GUIDE 09 · 状态与安全</span>
+    <h1>跨源资源共享 CORS</h1>
+    <p class="lead">同源策略挡住了跨站读取，CORS 是有组织地开一个口子——本讲讲清这个口子怎么开、预检在问什么。</p>
+    <div class="mdn-src"><strong>本讲对应的 MDN 指南：</strong><a href="https://developer.mozilla.org/zh-CN/docs/Web/HTTP/Guides/CORS" target="_blank" rel="noopener">跨源资源共享 CORS</a></div>
+  </div>
+
+  <!-- 本章定位 -->
+  <div class="position-bar">
+    <strong>本讲在主线上的位置：</strong>第 8 讲的认证与凭据 → <u>本讲：跨源资源共享 CORS</u> → 第 10 讲转向页面自身能做什么。<br>
+    第9讲回答主线上的第9个问题：<strong>浏览器凭什么允许一个源读取另一个源的资源，预检请求到底在问什么？</strong>
+    <div class="map-inline">
+      <span class="node">第8讲 HTTP 身份验证</span><span class="arrow">→</span>
+      <span class="node here">第9讲 跨源资源共享 CORS</span><span class="arrow">→</span>
+      <span class="node">第10讲 CSP、权限策略与 Fetch 元数据</span><span class="arrow">→</span>
+      <span class="node">第11–12讲 中间层与分发</span>
+    </div>
+  </div>
+
+  <!-- 学习目标 -->
+  <div class="objectives">
+    <h4>🎯 学完本讲，合上书你应该能：</h4>
+    <ol>
+      <li>用协议、主机、端口三元组判定两个 URL 是否同源</li>
+      <li>区分简单请求与需要预检的请求</li>
+      <li>走通 OPTIONS 预检与真实请求的完整报文</li>
+      <li>解释为何带凭据时不能用通配符</li>
+      <li>定位并修复常见的 CORS 报错</li>
+    </ol>
+  </div>
+
+  <!-- 视频卡插槽：后面录制 B 站讲解时在此插入 <details class="video-card" id="video-card">…</details> -->
+  <!-- VIDEO_CARD_SLOT -->
+
+  <div class="lecture">
+
+    <!-- 推导主线图 -->
+    <div class="figure">
+      <div class="mermaid">
+flowchart LR
+  A["页面发起跨源请求"]
+  B["浏览器判断是否简单请求"]
+  C["简单请求直接带 Origin"]
+  D["非简单请求先发预检"]
+  E["放行后发真实请求"]
+  F["凭据与通配符的冲突"]
+  A --> B
+  B --> C
+  B --> D
+  D --> E
+  C --> E
+  E --> F
+  classDef hot fill:#fbeedd,stroke:#c4651f,stroke-width:2.5px,color:#c4651f;
+  classDef danger fill:#fae9e7,stroke:#b03a2e,stroke-width:2.5px,color:#b03a2e;
+  class D hot;
+  class F danger;
+      </div>
+      <div class="caption">CORS 的主线：先用同源策略设默认拒绝，再由服务器首部逐个开口子；红色节点是带凭据场景里通配符规则失效的陷阱。</div>
+    </div>
+
+<!-- ============ 9.1 ============ -->
+    <h2><span class="sec-no">9.1</span>浏览器为什么挡住跨站读取：先把「源」的边界划准</h2>
+
+    <p>第 8 讲把认证与凭据装进了请求，但那些请求都发生在同一个站点内部。一旦页面里的脚本伸手去读另一个站点的数据，浏览器会先拦一道。这一节不急着讲怎么放行，先把这道墙画准确——因为「跨源」这三个字在 HTTP 里有严格的判定规则，凭直觉猜往往猜错。</p>
+
+    <p>设想一个最常见的场景：用户在 <code>https://app.shop.example</code> 打开页面，页面里的 JavaScript 执行 <code>fetch("https://api.weather.example/v1/today")</code>。请求真的发到了天气服务，服务器也真的回了一段 JSON，可浏览器就是不把这段 JSON 交给脚本，控制台里只留下一行模糊的报错。MDN 给出的根因是：出于安全性，浏览器限制脚本内发起的跨源 HTTP 请求，<code>XMLHttpRequest</code> 与 <span class="term">Fetch API</span>（Fetch API）都遵循<span class="term">同源策略</span>（Same-origin policy）。用这些 API 的 Web 应用只能从加载它的那个源请求资源，除非响应报文里带了正确的 CORS 首部。</p>
+
+    <p>那「同一个源」到底怎么算？MDN 的定义是一个三元组：如果两个 URL 的<strong>协议</strong>、<strong>主机</strong>与<strong>端口</strong>（如果有指定）都相同，它们就是同源的。这个方案被称为「协议/主机/端口元组」，也直接叫「元组」。注意三个词一个都不能少：只看域名会漏掉协议与端口的差别，而这两项恰恰是攻击者最常用的缝隙。</p>
+
+    <p>下面这张表是本讲第一个完整手算。以 <code>http://store.company.com/dir/page.html</code> 为基准源，逐行按协议、主机、端口三元组比对。判定的方法是：先写基准元组 <code>{http, store.company.com, 80}</code>，再把每个候选 URL 归一成同样形式，三项逐一对照。</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>候选 URL</th><th>归一化元组</th><th>判定</th><th>逐项说明</th></tr>
+        <tr><td>http://store.company.com/dir2/other.html</td><td>{http, store.company.com, 80}</td><td>同源</td><td>三项全同，只有路径不同；路径不参与同源判定</td></tr>
+        <tr><td>http://store.company.com/dir/inner/another.html</td><td>{http, store.company.com, 80}</td><td>同源</td><td>同样只有路径不同，查询串与片段也同样不影响</td></tr>
+        <tr><td>https://store.company.com/secure.html</td><td>{https, store.company.com, 443}</td><td>跨源</td><td>协议不同：http 变 https，默认端口随之变 443</td></tr>
+        <tr><td>http://store.company.com:81/dir/etc.html</td><td>{http, store.company.com, 81}</td><td>跨源</td><td>端口不同：81 ≠ 80，主机与协议虽同也不算</td></tr>
+        <tr><td>http://news.company.com/dir/other.html</td><td>{http, news.company.com, 80}</td><td>跨源</td><td>主机不同：news 与 store 是两个名字</td></tr>
+        <tr><td>http://store.company.com:80/dir/page.html</td><td>{http, store.company.com, 80}</td><td>同源</td><td>显式写出的 80 就是 http 的默认端口，与省略端口等价</td></tr>
+        <tr><td>http://STORE.company.com/dir/page.html</td><td>{http, store.company.com, 80}</td><td>同源</td><td>主机大小写不敏感，归一化后小写再比较</td></tr>
+        <tr><td>http://store.company.com.evil.net/x</td><td>{http, store.company.com.evil.net, 80}</td><td>跨源</td><td>主机是完整字符串，结尾多一段 evil.net 就是另一台主机</td></tr>
+      </table>
+    </div>
+
+    <p>这张表还引出一个必须分清的对照：<strong>cookie 用的是另一套「源」定义</strong>。MDN 明确写道，cookie 使用不同的源定义方式——一个页面可以为本域及其父域设置 cookie，只要父域不是公共后缀（public suffix）。你可以用 <code>Domain</code>、<code>Path</code>、<code>Secure</code>、<code>HttpOnly</code> 限定它的可访问范围。于是出现一个看似矛盾、实则各司其职的局面：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>比较维度</th><th>同源判定</th><th>cookie 的 Domain 判定</th></tr>
+        <tr><td>主机</td><td>必须完全相等，子域与父域不同源</td><td>可向上放宽到父域，<code>shop.example.com</code> 可设 <code>Domain=example.com</code></td></tr>
+        <tr><td>协议</td><td>严格比较，http 与 https 不同源</td><td>不参与 Domain 判定；不设 Secure 时 http 下发的 cookie 可能被 https 读到</td></tr>
+        <tr><td>端口</td><td>严格比较，80 与 8080 不同源</td><td>完全不参与，cookie 没有端口概念</td></tr>
+        <tr><td>路径</td><td>完全不参与</td><td>有独立的 Path 属性可缩小发送范围</td></tr>
+        <tr><td>父域边界</td><td>无「父域」概念，一律不等</td><td>受公共后缀列表约束，不能给 <code>com</code> 这种后缀设 cookie</td></tr>
+      </table>
+    </div>
+
+    <p>把结论压缩成一句话：<strong>同源是三元组严格相等，cookie 的 Domain 是「本域或合法父域」的包含关系</strong>。所以「两个子域共享 cookie」完全不等于「两个子域同源」；反过来，同源的两个页面天然共享同一份存储，却没有必要设置 Domain。第 7 讲讲 cookie 属性时还会回到这条分界。</p>
+
+    <p>MDN 把跨源交互分成三类，这个分类解释了为什么浏览器只在一类上较真：<strong>跨源写</strong>一般被允许（链接、重定向、表单提交），<strong>跨源嵌入</strong>一般也被允许（<code>&lt;img&gt;</code>、<code>&lt;script&gt;</code>、<code>&lt;iframe&gt;</code> 等），而<strong>跨源读取</strong>一般不被允许——脚本不能把另一个源响应的字节读进自己的内存。CORS 正是为第三类开的一扇门：它让服务器用首部声明哪些源有资格读取。这就是<span class="term">跨源资源共享</span>（Cross-Origin Resource Sharing，CORS）的定位——一种基于 HTTP 首部的机制，服务器借它标示除自己以外的哪些源可以加载自己的资源。</p>
+
+    <div class="box insight">
+      <span class="box-tag">✅ 判定规则</span>
+      <p>手判同源按固定三步走：① 把两个 URL 的协议都写成小写；② 把主机都写成小写，并把空端口补成默认端口（http=80，https=443）；③ 比较归一后的三项，全等才同源。路径、查询串、片段一律涂掉不看。遇到「共享 cookie」的说法，立刻切换到另一套规则：那里没有端口、不较协议，只看父域包含关系。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>「同源就是同一个网站，看域名就够了」——错。<code>http://example.com</code> 与 <code>https://example.com</code> 不同源，<code>https://example.com</code> 与 <code>https://example.com:8443</code> 也不同源。反过来，「子域之间共享了 cookie，所以同源」同样错：cookie 的 Domain 能向上放宽，同源判定却一步不让。把这两套规则混用，是 CORS 配置出错的高频起因。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front"><div class="q-tag">回忆 9.1-1</div><div class="q-text">写出同源判定的三元组，并说明为什么路径不参与判定。</div><span class="tap">点击翻面 →</span></div>
+            <div class="flip-face flip-back"><div class="a-tag">参考答案</div>协议、主机、端口三项都相同才同源，合称协议/主机/端口元组。同源策略约束的是「哪个源」，路径只是同一源内不同资源的地址，不进入源的身份，所以路径不同仍同源。</div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front"><div class="q-tag">回忆 9.1-2</div><div class="q-text">子域共享 cookie 与子域同源是一回事吗？举出两点差别。</div><span class="tap">点击翻面 →</span></div>
+            <div class="flip-face flip-back"><div class="a-tag">参考答案</div>不是。同源要求主机完全相等且严格比较协议与端口；cookie 的 Domain 可放宽到合法父域、不比较协议与端口，另有 Path 属性。差别至少两点：① a.example.com 与 b.example.com 可共享 Domain=example.com 的 cookie 却不同源；② http 与 https 不同源，但 cookie 不带 Secure 时可跨协议发送。</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 9.2 ============ -->
+    <h2><span class="sec-no">9.2</span>一个带 Origin 的 GET：服务器用一行首部决定脚本能否读到响应</h2>
+
+    <p>上一节把墙画准了。这一节看墙上第一道门：条件最宽松的那类跨源请求，浏览器不先打招呼，直接把请求发出去，却在响应回来时把最后一道关。MDN 沿用旧 CORS 规范的说法把它叫<span class="term">简单请求</span>（simple request），并提醒这个术语在现行的 Fetch 规范里已经不再使用——但理解它仍然是理解放行逻辑的最短路径。</p>
+
+    <p>先说清楚它「简单」在哪。按 MDN 列出的条件，请求必须<strong>同时</strong>满足：① 方法只能是 GET、HEAD 或 POST；② 人为设置的首部只能出自 Fetch 规范定义的「对 CORS 安全的标头字段集合」，即 <code>Accept</code>、<code>Accept-Language</code>、<code>Content-Language</code>、<code>Content-Type</code>（有额外限制）与 <code>Range</code>（且值必须是 <code>bytes=256-</code> 这样的简单范围）；由用户代理自动设置的 <code>Connection</code>、<code>User-Agent</code> 等以及「禁用标头名称」不算在内；③ <code>Content-Type</code> 的媒体类型只能是 <code>text/plain</code>、<code>multipart/form-data</code>、<code>application/x-www-form-urlencoded</code> 三者之一；④ 若用 <code>XMLHttpRequest</code>，<code>xhr.upload</code> 上没有注册任何事件监听器；⑤ 请求没有使用 <code>ReadableStream</code> 对象。少一条都要走预检，下一节展开。</p>
+
+    <p>MDN 还解释了为什么要给这类请求开特例：HTML 4.0 的 <code>&lt;form&gt;</code> 元素早于跨站 XHR 和 fetch，它本来就能向任何来源提交简单请求，所以写服务器的人一定已经在防跨站请求伪造（CSRF）了。在这个前提下，服务器不必通过「响应预检」来选择是否接收看起来像表单提交的请求；但服务器<strong>仍然必须</strong>用 <code>Access-Control-Allow-Origin</code> 做出选择，才能把响应与脚本<strong>共享</strong>。注意这两句话的分寸：不预检 ≠ 自动放行读取。</p>
+
+    <p>现在给出本讲第二个完整例子。页面 <code>https://app.shop.example</code> 用 <code>fetch("https://api.weather.example/v1/today")</code> 读当天气象数据。这是一条没有自定义首部、没有请求体的 GET，符合全部简单条件。浏览器实际发出的报文是：</p>
+
+    <div class="wire"><b>GET /v1/today HTTP/1.1</b>
+<b>Host:</b> api.weather.example
+<b>User-Agent:</b> Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)
+<b>Accept:</b> */*
+<b>Accept-Language:</b> zh-CN,zh;q=0.9
+<b>Accept-Encoding:</b> gzip, deflate, br
+<b>Connection:</b> keep-alive
+<b>Origin:</b> https://app.shop.example
+
+<em>（空行：首部结束，GET 无主体）</em></div>
+    <div class="wire-cap">简单跨源 GET：最关键的一行是最后的 Origin。它由浏览器自动加上，值只有协议、主机、端口，不带路径，脚本无法伪造或改写它。</div>
+
+    <p><code><span class="term">Origin</span>（Origin）</code>首部表明预检请求或实际跨源请求的源站，值是一个源 URL，不含任何路径信息，且在所有访问控制请求中<strong>总是</strong>被发送。它的值还可以是 <code>null</code>（例如来自 <code>data:</code> URL 的场景）。服务器收到这条请求后，按自己的策略回复：</p>
+
+    <div class="wire"><i>HTTP/1.1 200 OK</i>
+<i>Date:</i> Mon, 16 Nov 2026 01:05:00 GMT
+<i>Server:</i> nginx
+<i>Access-Control-Allow-Origin:</i> *
+<i>Content-Type:</i> application/json
+<i>Content-Length:</i> 29
+<i>Connection:</i> keep-alive
+
+{"city":"shenzhen","temp":26}</div>
+    <div class="wire-cap">服务器用 Access-Control-Allow-Origin 回答「谁可以读这份响应」。这里用 * 表示任意源，前提是请求不携带身份凭据——凭据的限制留在 9.4 节。</div>
+
+    <p>现在到了本例的核心问题：<strong>浏览器拿到响应后，怎样决定放不放行给脚本</strong>？按顺序是四步：</p>
+
+    <p><strong>第一步，识别跨源。</strong>浏览器比较页面源 <code>https://app.shop.example</code> 与请求目标源 <code>https://api.weather.example</code>，主机不同，判定为跨源，于是以 CORS 模式发起请求并自动附加 <code>Origin</code> 首部。</p>
+
+    <p><strong>第二步，判定是否预检。</strong>方法 GET、首部全在安全列表、Content-Type 缺席（GET 无主体），没有任何触发条件，所以<strong>不预检</strong>，请求直接抵达服务器。此处要建立一个重要直觉：服务器已经把这个 GET 执行完了，响应也已经生成；CORS 拦的不是「请求发出」。</p>
+
+    <p><strong>第三步，做 CORS 检查。</strong>浏览器读取响应首部 <code>Access-Control-Allow-Origin</code>。其值语法是 <code>&lt;origin&gt;</code> 或 <code>*</code>：若是 <code>*</code>，且请求没有携带凭据，则匹配成功，响应放行；若是具体的源，则必须与请求里的 <code>Origin</code> <strong>逐字符相等</strong>，例如 <code>https://foo.example</code> 放行来自该源的请求，其他源一律不放行；若首部缺失或值不匹配，检查失败。</p>
+
+    <p><strong>第四步，决定交给谁。</strong>检查成功，响应体才被交给 <code>fetch()</code> 返回的 Promise，脚本可以 <code>response.json()</code> 拿到那 29 个字节。检查失败，响应被丢弃，脚本侧只收到一个笼统的网络类错误。MDN 特别强调：CORS 请求失败会产生错误，但为了安全，JavaScript 代码层面<strong>无法</strong>获知具体是哪里出了问题，唯一办法是查看浏览器控制台。这条「信息不对脚本披露」的设计，正是 CORS 检查独立于服务器授权逻辑的证据。</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>ACAO 响应值</th><th>请求是否带凭据</th><th>CORS 检查结果</th><th>脚本能否读到响应体</th></tr>
+        <tr><td>*</td><td>否</td><td>匹配成功</td><td>能</td></tr>
+        <tr><td>https://app.shop.example</td><td>否</td><td>与 Origin 相等，成功</td><td>能</td></tr>
+        <tr><td>https://other.example</td><td>否</td><td>与 Origin 不等，失败</td><td>不能</td></tr>
+        <tr><td>首部缺失</td><td>否</td><td>无可匹配值，失败</td><td>不能</td></tr>
+        <tr><td>*</td><td>是</td><td>失败（9.4 节解释原因）</td><td>不能</td></tr>
+      </table>
+    </div>
+
+    <p>还有一个容易漏掉的配套动作。MDN 指出：如果服务器指定的是具体的单个源（可能作为允许列表的一部分随请求来源动态变化），而不是通配符，那么响应首部 <code>Vary</code> 的值<strong>必须</strong>包含 <code>Origin</code>，用来告诉客户端——服务器对不同 Origin 返回不同内容。漏了这一行，中间缓存可能把「给 A 源的响应」直接端给 B 源，CORS 首部再正确也救不回来。第 5 讲讲 Vary 缓存键时会把这条规则展开成完整的命中判定。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>把「服务器执行了请求」和「浏览器把响应交给脚本」拆成两件事，CORS 的一半难点就消失了。简单请求从来没有被拦在门口：它带着 Origin 抵达服务器、触发了副作用、拿到了 200；被拦的是最后那一步共享。MDN 用「共享响应」而不用「允许请求」来描述 ACAO，用词非常精确。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>「浏览器报了 CORS 错，说明服务器没收到请求」——对简单请求是错的。请求不但收到了，副作用也可能已经发生；这正是 MDN 要用「可能对服务器数据产生副作用」来解释预检存在的原因。另一个误区是以为脚本可以自己写 <code>Origin</code> 首部来骗过检查：它是禁用首部，由浏览器接管，脚本改写不了。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front"><div class="q-tag">回忆 9.2-1</div><div class="q-text">列出简单请求必须同时满足的三条核心条件，并说出 Content-Type 的三种合法值。</div><span class="tap">点击翻面 →</span></div>
+            <div class="flip-face flip-back"><div class="a-tag">参考答案</div>① 方法限于 GET / HEAD / POST；② 人为首部限于 CORS 安全列表 Accept、Accept-Language、Content-Language、Content-Type、Range（简单范围）；③ Content-Type 限于 text/plain、multipart/form-data、application/x-www-form-urlencoded。另需 upload 无监听器、不使用 ReadableStream。</div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front"><div class="q-tag">回忆 9.2-2</div><div class="q-text">ACAO 值分别是什么时，简单跨源 GET 的响应能交给脚本？首部缺失时脚本看到什么？</div><span class="tap">点击翻面 →</span></div>
+            <div class="flip-face flip-back"><div class="a-tag">参考答案</div>值为 * 且请求不带凭据时放行；值为具体源且与 Origin 逐字符相等时放行。缺失或不匹配时响应被浏览器丢弃，脚本只收到笼统错误，无法得知具体原因，须查控制台。返回具体源时还应带 Vary: Origin。</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 9.3 ============ -->
+    <h2><span class="sec-no">9.3</span>OPTIONS 预检到底在问什么：先问方法和首部，再发真实请求</h2>
+
+    <p>上一节处理的请求只问「这个源能不能读」。可一旦你要改数据，或者往请求里塞一个自定义首部，问题的性质就变了——这一节把浏览器额外发出的那趟 OPTIONS 拆成报文，逐行看它问的是什么、服务器答的又是什么。</p>
+
+    <p>MDN 的口径是：对那些可能对服务器数据产生副作用的请求方法（尤其是 GET 以外的 HTTP 方法，或搭配某些 MIME 类型的 POST 请求），浏览器必须先用 <code>OPTIONS</code> 发起<span class="term">预检请求</span>（preflight request），获知服务端是否允许该跨源请求；服务器确认之后才发起实际请求。使用预检是为了避免跨域请求对服务器的用户数据产生未预期影响。<code>OPTIONS</code> 是 HTTP/1.1 定义的安全方法，不会对服务器资源产生影响——让它来承担「先问一声」的角色，代价最小。</p>
+
+    <p>触发条件很好记，就是 9.2 节那份清单的补集：方法不是 GET / HEAD / POST（例如 PUT、DELETE、PATCH）；或人为首部超出安全列表（例如 <code>X-API-Key</code>、<code>Authorization</code>）；或 <code>Content-Type</code> 不是那三种之一（例如 <code>application/json</code>、<code>text/xml</code>）。任意一条命中就预检。</p>
+
+    <p>本讲第三个完整例子：页面 <code>https://app.shop.example</code> 要用 <code>PUT</code> 更新天气订阅配置，并带上自定义首部 <code>X-API-Key</code>，请求体是 JSON。浏览器先发出预检请求：</p>
+
+    <div class="wire"><b>OPTIONS /v1/forecast HTTP/1.1</b>
+<b>Host:</b> api.weather.example
+<b>User-Agent:</b> Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)
+<b>Accept:</b> */*
+<b>Accept-Language:</b> zh-CN,zh;q=0.9
+<b>Accept-Encoding:</b> gzip, deflate, br
+<b>Connection:</b> keep-alive
+<b>Origin:</b> https://app.shop.example
+<b>Access-Control-Request-Method:</b> PUT
+<b>Access-Control-Request-Headers:</b> X-API-Key, Content-Type
+
+<em>（空行：预检请求没有主体）</em></div>
+    <div class="wire-cap">预检请求的两行新首部是整场问答的核心：一个报告真实请求将用的方法，一个报告真实请求将带的非安全首部。真实请求的路径只用于定位资源，预检真正比较的是方法与首部。</div>
+
+    <p>逐行解释这两个新首部。<code><span class="term">Access-Control-Request-Method</span>（Access-Control-Request-Method）</code>只出现在预检里，作用是告知服务器实际请求将使用 <code>PUT</code> 方法，语法是单个方法值。<code><span class="term">Access-Control-Request-Headers</span>（Access-Control-Request-Headers）</code>同样只在预检里出现，用逗号分隔的列表告知服务器实际请求将携带哪些自定义首部，这里是 <code>X-API-Key</code> 与 <code>Content-Type</code>。为什么 <code>Content-Type</code> 也列进来了？因为本次值是 <code>application/json</code>，不在三种安全值之内，所以它不再享受安全列表豁免。MDN 特别提醒：实际的 POST / PUT 请求<strong>不会</strong>携带任何 <code>Access-Control-Request-*</code> 首部，这两行只属于 OPTIONS 预检。</p>
+
+    <p>服务器据此决定能否接受，回复一条通常没有主体的 204：</p>
+
+    <div class="wire"><i>HTTP/1.1 204 No Content</i>
+<i>Date:</i> Mon, 16 Nov 2026 01:06:00 GMT
+<i>Server:</i> nginx
+<i>Access-Control-Allow-Origin:</i> https://app.shop.example
+<i>Access-Control-Allow-Methods:</i> PUT, GET, OPTIONS
+<i>Access-Control-Allow-Headers:</i> X-API-Key, Content-Type
+<i>Access-Control-Max-Age:</i> 86400
+<i>Vary:</i> Origin, Access-Control-Request-Method, Access-Control-Request-Headers
+<i>Connection:</i> keep-alive
+
+<em>（204 响应无主体）</em></div>
+    <div class="wire-cap">预检响应把「源、方法、首部、缓存时长」四项一次答齐。注意 ACAO 给的是具体源而不是 *，因为紧随其后的真实请求要带自定义首部，服务器端选择了收紧策略。</div>
+
+    <p>把预检响应里的首部逐个拆开：<code>Access-Control-Allow-Origin: https://app.shop.example</code> 把可读取的源限定为页面所在源；<code><span class="term">Access-Control-Allow-Methods</span>（Access-Control-Allow-Methods）</code>列出实际请求被允许使用的方法 <code>PUT, GET, OPTIONS</code>，MDN 说它类似 <code>Allow</code> 首部，但带有严格的访问控制含义，且只对预检响应有意义；<code><span class="term">Access-Control-Allow-Headers</span>（Access-Control-Allow-Headers）</code>正是对 <code>Access-Control-Request-Headers</code> 的回答，列出允许携带的 <code>X-API-Key, Content-Type</code>，与 Allow-Methods 一样是逗号分隔列表；<code><span class="term">Access-Control-Max-Age</span>（Access-Control-Max-Age）</code>给出预检结果可缓存的秒数，本例 86400 秒即 24 小时，默认值只有 5 秒，且浏览器自身维护一个上限，超过上限的值不会生效。<code>Vary</code> 把 Origin 与两项请求首部写进缓存键，避免缓存把「给另一种方法/首部组合的答案」误用过来。</p>
+
+    <p>浏览器比对通过，才发出真实请求；注意它不再带任何 <code>Access-Control-Request-*</code> 首部：</p>
+
+    <div class="wire"><b>PUT /v1/forecast HTTP/1.1</b>
+<b>Host:</b> api.weather.example
+<b>User-Agent:</b> Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)
+<b>Accept:</b> */*
+<b>Accept-Language:</b> zh-CN,zh;q=0.9
+<b>Content-Type:</b> application/json
+<b>Content-Length:</b> 28
+<b>Origin:</b> https://app.shop.example
+<b>X-API-Key:</b> demo-7f3a
+
+{"city":"shenzhen","days":3}</div>
+    <div class="wire-cap">预检通过后的真实 PUT：方法、自定义首部与 JSON 主体原样发出，Origin 仍在，但 Access-Control-Request-Method / Headers 已消失。</div>
+
+    <div class="wire"><i>HTTP/1.1 200 OK</i>
+<i>Date:</i> Mon, 16 Nov 2026 01:06:01 GMT
+<i>Server:</i> nginx
+<i>Access-Control-Allow-Origin:</i> https://app.shop.example
+<i>Vary:</i> Origin
+<i>Content-Type:</i> application/json
+<i>Content-Length:</i> 23
+<i>Connection:</i> keep-alive
+
+{"ok":true,"updated":3}</div>
+    <div class="wire-cap">真实请求的响应同样要做一次 CORS 检查：ACAO 与 Origin 匹配，脚本才能读到结果。预检放行不等于真实响应自动放行，两道检查各做各的。</div>
+
+    <p>下面这张流程图把两条路径并在一起。看点在于：预检检查失败时，真实请求<strong>根本没有发出</strong>；简单请求则可以抵达服务器、在响应阶段才被丢弃。这正是「预检在问什么」的最佳回答——它在问「我接下来要用的方法与首部，你认不认」，认才放行真实请求。</p>
+
+    <div class="figure"><div class="mermaid">
+flowchart LR
+  A["页面发起跨源请求"] --> B{"是否命中预检条件"}
+  B -->|否 简单请求| C["直接发送并携带 Origin"]
+  B -->|是 非简单请求| D["先发 OPTIONS 预检"]
+  D --> E{"预检响应是否放行方法与首部"}
+  E -->|否| F["真实请求不发出 脚本收到笼统错误"]
+  E -->|是| G["发送真实请求"]
+  C --> H{"ACAO 是否匹配 Origin"}
+  G --> H
+  H -->|否| F
+  H -->|是| I["响应体交给脚本"]
+</div><div class="caption">图 9.3 CORS 两条路径：简单请求在响应阶段检查，非简单请求多一道 OPTIONS 关卡；任一检查失败，脚本都只能看到笼统错误。</div></div>
+
+    <p>MDN 还提醒了一个容易被忽略的边界：<strong>并非所有浏览器都支持预检请求的重定向</strong>。如果预检被重定向，一部分浏览器会直接报错，提示请求被重定向到不允许跨源预检的地址。CORS 最初要求这一行为，后续修订虽然废弃了它，但并非所有浏览器都跟上。规避办法有两条——服务端去掉对预检请求的重定向，或把实际请求改造成简单请求。若请求是因为 <code>Authorization</code> 首部才触发预检，这两条都难走，只能改服务端配置。这一条在排查「本地能通、上线就报错」时经常是元凶。</p>
+
+    <div class="box insight">
+      <span class="box-tag">✅ 判定规则</span>
+      <p>读预检报文按「两问四答」记：两问是 ACRM（要用什么方法）与 ACRH（要带什么首部）；四答是 ACAO（哪个源可读）、Allow-Methods（准哪些方法）、Allow-Headers（准哪些首部）、Max-Age（缓存多久）。四项里缺一项或与请求值不匹配，真实请求就不会发出。缓存时长要同时看服务器给的值和浏览器自身的上限，取小者。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>「预检通过以后，真实响应的 CORS 检查就可以省了」——错。预检与真实请求是两次独立检查：预检判断方法与首部是否被允许，真实响应仍要按 ACAO 判断是否可共享。另一个误区是以为真实请求里也有 <code>Access-Control-Request-Method</code>；MDN 明确说这两个 <code>Access-Control-Request-*</code> 首部只出现在 OPTIONS 预检中。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front"><div class="q-tag">回忆 9.3-1</div><div class="q-text">写出预检请求里的两个 Access-Control-Request-* 首部，各回答什么问题？它们会出现在真实请求里吗？</div><span class="tap">点击翻面 →</span></div>
+            <div class="flip-face flip-back"><div class="a-tag">参考答案</div>Access-Control-Request-Method 报告真实请求将用的方法，如 PUT；Access-Control-Request-Headers 报告真实请求将带的非安全首部，如 X-API-Key, Content-Type。二者只出现在 OPTIONS 预检中，真实请求不带。</div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front"><div class="q-tag">回忆 9.3-2</div><div class="q-text">预检响应的四个关键首部是什么？Max-Age 的作用与默认值是什么？</div><span class="tap">点击翻面 →</span></div>
+            <div class="flip-face flip-back"><div class="a-tag">参考答案</div>Access-Control-Allow-Origin、Allow-Methods、Allow-Headers、Access-Control-Max-Age。Max-Age 指定预检结果可缓存的秒数，默认 5 秒，且不能超过浏览器自身上限；有效期内同一请求不再重复预检。</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 9.4 ============ -->
+    <h2><span class="sec-no">9.4</span>带凭据时通配符失灵：从一条 Cookie 请求走到三类报错的定位</h2>
+
+    <p>前三节处理的是「谁在读」。这一节多出一个变量：请求里带着 Cookie 这类身份凭据，防护的天平要再往回收一格。MDN 把这类场景单列，原因很简单——能读到「某个已登录用户的数据」，比读到「公开的天气数据」危险得多，规则自然更严。</p>
+
+    <p>先立规矩：一般而言，对于跨源 <code>XMLHttpRequest</code> 或 Fetch 请求，浏览器<strong>不会</strong>发送身份凭证信息。要发送，必须显式表达意图——在 XHR 上设置特殊标志位，或在构造 <code>Request</code> 对象时设置 <code>credentials: "include"</code>。MDN 同时提醒：无论怎么改服务器和客户端设置，第三方 cookie 策略仍然适用，会强制执行。</p>
+
+    <p>本讲第四个完整例子的上半部分：页面 <code>https://app.shop.example</code> 用 <code>credentials: "include"</code> 读 <code>https://api.weather.example/v1/account</code>。这是一条简单 GET，所以不预检，但会带上 Cookie：</p>
+
+    <div class="wire"><b>GET /v1/account HTTP/1.1</b>
+<b>Host:</b> api.weather.example
+<b>Accept:</b> */*
+<b>Connection:</b> keep-alive
+<b>Referer:</b> https://app.shop.example/
+<b>Origin:</b> https://app.shop.example
+<b>Cookie:</b> session=abc123
+
+<em>（空行：GET 无主体）</em></div>
+    <div class="wire-cap">带凭据的跨源 GET：Cookie 首部是浏览器在 credentials 为 include 时附上的，Origin 仍在。第三方 cookie 策略可能让这条 Cookie 根本不被发送或保存。</div>
+
+    <div class="wire"><i>HTTP/1.1 200 OK</i>
+<i>Date:</i> Mon, 16 Nov 2026 01:07:00 GMT
+<i>Server:</i> nginx
+<i>Access-Control-Allow-Origin:</i> https://app.shop.example
+<i>Access-Control-Allow-Credentials:</i> true
+<i>Cache-Control:</i> no-cache
+<i>Set-Cookie:</i> session=def456; Path=/; HttpOnly; Secure
+<i>Vary:</i> Origin
+<i>Content-Type:</i> application/json
+<i>Content-Length:</i> 14
+
+{"user":"ada"}</div>
+    <div class="wire-cap">服务器必须同时给出「具体源的 ACAO」与「ACAC: true」，浏览器才把这 14 字节交给脚本；少任何一项，响应都会被忽略。</div>
+
+    <p>浏览器在这里多一道检查：MDN 明确写道，浏览器会<strong>拒绝</strong>任何不带 <code><span class="term">Access-Control-Allow-Credentials</span>（Access-Control-Allow-Credentials）: true</code> 的响应，且不会把响应提供给调用的网页内容。这条规则对简单 GET 与真实请求一视同仁；用在对预检的响应中时，它则表示「实际请求可以携带凭据」。还有一个细节：CORS 预检请求本身<strong>不能</strong>包含凭据，但预检的响应必须指定 <code>ACAC: true</code>，才能允许后续实际请求带凭据。</p>
+
+    <p>现在回答本讲最容易被死记硬背的问题：<strong>带凭据时，ACAO 为什么不能是通配符</strong>？从机制上推一遍就清楚了。</p>
+
+    <p>第一步，<code>ACAO: *</code> 的语义是「任意源都可以读取这份响应」。第二步，带凭据的请求会让这份响应变成<strong>用户相关</strong>的内容——本例里是 <code>{"user":"ada"}</code>，不是公共天气数据。第三步，把前两步合起来：任意站点只要在页面里发一条带 Cookie 的跨源请求，就能读到已登录用户的私人数据。这等于让 CORS 亲手推翻它要守的边界。第四步，规范的取舍是把「可以带凭据」和「可以读」拆成两道独立的肯定：<code>ACAC: true</code> 只说明服务器允许凭据参与，<code>ACAO</code> 则必须用<strong>具体的源</strong>明确点名读取者。通配符合法的前提是不带凭据；一旦带上，浏览器会直接判失败。</p>
+
+    <p>MDN 把这条限制扩展到四个首部：响应附带身份凭证的请求时，服务器不能把 <code>ACAO</code>、<code>Access-Control-Allow-Headers</code>、<code>Access-Control-Allow-Methods</code>、<code>Access-Control-Expose-Headers</code> 中任何一个设为 <code>*</code>，而应给出具体的源、首部名列表与方法名列表。原因一致：通配符表达的是「一律允许」，与凭据场景要求的「逐一确认」在语义上互斥。</p>
+
+    <p>再看第三方 cookie。MDN 的例子里，页面从 <code>foo.example</code> 加载，cookie 却由 <code>bar.other</code> 下发；如果用户浏览器拒绝所有第三方 cookie，它就不会被保存；请求中原有的 cookie 也可能在正常第三方 cookie 策略下被阻止。这条策略受 <code>SameSite</code> 属性控制。换句话说，CORS 首部配得再对，也可能被 cookie 策略单独否掉——这是排错时必须并查的第二条线。</p>
+
+    <p>本例的下半部分是三类最常见 CORS 报错的定位步骤。先记住 MDN 的总原则：出于安全原因，JavaScript 代码无法给出 CORS 出错的详细信息，所有代码只知道发生了错误；确定具体问题的唯一方法是查看浏览器控制台。所以每一步都从控制台的「Reason」字段开始。</p>
+
+    <p><strong>报错一：<code>Reason: CORS header 'Access-Control-Allow-Origin' missing</code>。</strong>定位步骤：① 打开开发者工具，重现失败请求，在控制台找到这条 Reason；② 切到 Network 面板，点选那条标红的跨源请求，逐字检查响应首部里到底有没有 ACAO；③ 确认你看的是正确的那一条——非简单请求会有 OPTIONS 预检与真实请求两条，预检响应缺 ACAO 会导致真实请求根本不发，真实响应缺则会在拿到数据后被丢弃；④ 在服务器对应端点补上 ACAO，注意错误状态码（4xx/5xx）的响应也要带，否则失败分支照样报 CORS 错；⑤ 若 ACAO 是按 Origin 动态生成的，同时补 <code>Vary: Origin</code>。</p>
+
+    <p><strong>报错二：<code>Reason: CORS header 'Access-Control-Allow-Origin' does not match 'xyz'</code>。</strong>定位步骤：① 从控制台抄下 <code>xyz</code> 的完整值，它就是浏览器发出的 <code>Origin</code>；② 在 Network 里读响应 ACAO，两者逐字符比对，注意结尾斜杠、大小写与空白；③ 按 9.1 的三元组规则检查协议与端口是否一致——<code>http</code> 与 <code>https</code>、省略端口与显式非默认端口都会造成不匹配；④ 若响应里出现<strong>两条</strong> ACAO（常见于应用服务器与反向代理各加一次），会触发 <code>Multiple CORS header 'Access-Control-Allow-Origin' not allowed</code>，需在一处统一收口；⑤ 修正后清掉缓存再试，必要时确认预检响应也带同样的值。</p>
+
+    <p><strong>报错三：<code>Reason: Credential is not supported if the CORS header 'Access-Control-Allow-Origin' is '*'</code>，以及同源家族的 <code>expected 'true' in CORS header 'Access-Control-Allow-Credentials'</code>。</strong>定位步骤：① 先在客户端代码里确认是否设了 <code>credentials: "include"</code> 或 XHR 的凭据标志，或请求是否带了 <code>Authorization</code>；② 若确实带凭据，把 ACAO 从 <code>*</code> 改成具体源，例如 <code>https://app.shop.example</code>；③ 在预检响应<strong>和</strong>真实响应上都补 <code>Access-Control-Allow-Credentials: true</code>，只补一处会在另一阶段失败；④ 同时检查 Allow-Methods、Allow-Headers、Expose-Headers 是否也误用了 <code>*</code>，MDN 列出这四项都不可通配；⑤ 若仍失败，单独排查第三方 cookie 策略与 <code>SameSite</code>，这条线不受 CORS 首部控制。</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>控制台 Reason 关键字</th><th>最可能的层</th><th>先查哪一个首部</th><th>典型成因</th></tr>
+        <tr><td>'Access-Control-Allow-Origin' missing</td><td>真实响应或预检响应</td><td>ACAO 是否存在</td><td>中间件未挂载、错误分支漏配</td></tr>
+        <tr><td>'Access-Control-Allow-Origin' does not match</td><td>值比对</td><td>ACAO 与 Origin 是否逐字符相等</td><td>协议或端口不同、结尾斜杠、重复首部</td></tr>
+        <tr><td>Credential is not supported / expected 'true'</td><td>凭据规则</td><td>ACAO 是否为 *、ACAC 是否为 true</td><td>带凭据却用通配符；只补了一处 ACAC</td></tr>
+        <tr><td>missing token 'xyz' in Allow-Headers</td><td>预检响应</td><td>Allow-Headers 是否含该首部</td><td>自定义首部未列入允许清单</td></tr>
+        <tr><td>Did not find method in Allow-Methods</td><td>预检响应</td><td>Allow-Methods 是否含该方法</td><td>PUT / DELETE 未列入允许清单</td></tr>
+      </table>
+    </div>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>通配符与凭据的冲突不是实现 bug，而是语义设计：<code>*</code> 说「谁来都行」，凭据说「这是某个具体用户的数据」，两句放在一起必然矛盾。规范的解法是把两件事分别确认——用 <code>ACAC: true</code> 确认「允许凭据」，用具体 <code>ACAO</code> 确认「允许这个源读」。记住这个拆法，四个首部的通配限制就都能自己推出来。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>「服务器收到带 Cookie 的请求，说明 CORS 配好了」——错。请求带不带 Cookie 由客户端的 credentials 设置与浏览器 cookie 策略决定；能不能被脚本读到，由 ACAO 与 ACAC 共同决定。两者可以一成一败。另一个误区是只给真实响应补 ACAC、忘了预检响应，结果 PUT 类请求在预检阶段就失败。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front"><div class="q-tag">回忆 9.4-1</div><div class="q-text">带凭据时为什么 ACAO 不能用 *？写出这句话背后的四步推理。</div><span class="tap">点击翻面 →</span></div>
+            <div class="flip-face flip-back"><div class="a-tag">参考答案</div>* 表示任意源可读；带凭据让响应变成用户相关数据；两者叠加等于任意站点都能读已登录用户数据，违背边界。故 CORS 把两件事拆开：ACAC: true 确认允许凭据，ACAO 用具体源点名读者。Allow-Headers / Methods / Expose-Headers 同样不可通配。</div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front"><div class="q-tag">回忆 9.4-2</div><div class="q-text">遇到 CORS 报错，为什么必须看控制台而不能靠 try/catch 判断原因？说出三类报错各自先查的首部。</div><span class="tap">点击翻面 →</span></div>
+            <div class="flip-face flip-back"><div class="a-tag">参考答案</div>出于安全，脚本层无法得知具体失败原因，只知道出错。ACAO missing 先查 ACAO 是否存在；does not match 先查 ACAO 与 Origin 是否逐字符相等；Credential / expected true 先查 ACAO 是否为 *、ACAC 是否为 true。另需并查 Vary、重复首部与第三方 cookie 策略。</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 9.5 ============ -->
+    <h2><span class="sec-no">9.5</span>延伸：规范怎么写：Fetch 的 CORS 算法、RFC 9110 的 origin 与「浏览器约束」的定位</h2>
+
+    <p>前四节全部按 MDN 的工程口径讲。到了要实现客户端、写网关或判定一个边界行为时，你会需要确定的对错，这就得去规范里找规范性措辞。这一节把 MDN 的说法与它背后的规范对齐：CORS 的现行定义在 WHATWG 的 Fetch 标准里，而「origin」这个概念的正式定义来自 RFC 9110。MDN 自己在文末「规范」一节指向的也是 Fetch 标准的 <code>http-access-control-allow-origin</code> 小节，而不是某份独立的 CORS RFC。</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>MDN 的说法</th><th>RFC 怎么写</th><th>为什么值得知道</th></tr>
+        <tr><td>同源 = 协议、主机、端口三者都相同</td><td>RFC 9110 §4.3.1 把 URI 的 origin 定义为 scheme、host、port 构成的三元组；§4.2.3 规定 scheme 与 host 不区分大小写、应归一为小写，空端口等价于该 scheme 的默认端口（http 为 80、https 为 443）</td><td>大小写与显式默认端口不再是「经验判断」而是规范要求；写 URL 比较函数时应先归一化再逐项比较，不能做字符串相等</td></tr>
+        <tr><td>Origin 首部总是随访问控制请求发送，值可为 null</td><td>RFC 9110 并不定义 <code>Origin</code> 请求首部。该首部定义在 RFC 6454 §7「The Origin Header Field」，现行 Web 平台由 Fetch 标准继续使用与维护</td><td>到 RFC 9110 里翻 CORS 首部会一无所获，容易得出「规范没这件事」的错误结论；找准规范才算找对答案</td></tr>
+        <tr><td>把请求分为「简单请求」与需要预检的请求</td><td>Fetch 标准不再使用「简单请求」这一术语，改用「CORS-safelisted request header」判定哪些首部免预检，并定义了 CORS-preflight fetch 与 CORS check 的算法步骤</td><td>读规范时按安全列表与算法条件逐步判定，别按「简单」二字望文生义；MDN 保留旧术语是出于教学便利</td></tr>
+        <tr><td>预检用 OPTIONS，服务器回 Allow-Methods 与 Allow-Headers</td><td>Fetch 标准规定预检响应须逐项通过方法与首部检查，任一请求方法或首部未被允许，CORS check 即失败，真实请求不会发出</td><td>实现网关或客户端时要按算法顺序检查全部项，不能只验证 ACAO 就放行；这解释了为何排错要看「missing token」类 Reason</td></tr>
+        <tr><td>ACAO 为具体源时响应必须带 Vary: Origin；带凭据时不能用通配符</td><td>缓存键由 RFC 9111 §4.1 的 Vary 机制决定；凭据场景下 Fetch 标准把 <code>*</code> 判为不匹配，要求响应给出具体源</td><td>CORS 与缓存是两套规范的交点：Vary 漏配会让正确首部在 CDN 上失效， wildcard 漏改会让凭据请求在浏览器侧直接失败</td></tr>
+        <tr><td>跨源请求由浏览器施加限制，脚本看不到失败细节</td><td>Fetch 标准把 CORS 建模为用户代理在「读取响应」环节执行的检查，服务器侧始终按普通 HTTP 处理请求</td><td>用 curl 或 Postman 能拿到 200 不能证明浏览器可读；反过来浏览器能读也不代表服务器做了授权，可能只是配了 ACAO: *</td></tr>
+      </table>
+    </div>
+
+    <p>这张表里最值得展开的是最后一行。<strong>CORS 是浏览器约束，不是服务器约束</strong>。服务器不会因为一条跨源请求就拒绝处理它：请求带着 Host、Origin、Cookie 抵达，服务器照常执行方法、查数据库、生成响应。真正把响应扣下的是用户代理——它在把响应交给脚本之前执行 CORS check，不通过就把字节丢掉。这解释了一连串让人困惑的现象：用 <code>curl</code> 请求同一个 URL 完全正常，因为它不是浏览器、不执行 CORS 检查；浏览器里脚本却读不到，因为它执行了。反方向也成立：浏览器能读到，只说明响应带了合适的 ACAO，并不证明服务器做了身份认证或授权——公开资源配 <code>ACAO: *</code> 本来就是允许的。</p>
+
+    <p>把这条定性再往前推一步，就能理解「简单请求为何不预检」的规范逻辑：Fetch 标准之所以允许某些请求跳过预检，是因为它们与 HTML 表单能发出的请求等价，服务器既然要防 CSRF 就必须已经能处理它们，多问一次并不能增加安全收益。而 PUT、DELETE 或带自定义首部的请求超出了表单的表达能力，服务器未必预期它们出现，所以要先问。MDN 用 CSRF 与表单兼容性来解释这件事，Fetch 标准用算法把它写成可实现的条件——两者是同一件事的两种表述。</p>
+
+    <p>还有一处细节值得单独记：RFC 9110 §2.2 规定 <code>MUST</code>、<code>SHOULD</code>、<code>MAY</code> 按 BCP 14 解释。MDN 里说「应该带 Vary: Origin」时，你需要在规范里确认它到底是 MUST 还是 SHOULD，才能判断漏掉它算不算不合规。本讲不要求你通读规范，只要求你在遇到「MDN 说通常、我需要一个确定对错」时，知道去 Fetch 标准与 RFC 9110 的哪一段找答案。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>把三层规范各归其位：RFC 9110 §4.3.1 定义「源」是什么，RFC 6454 与 Fetch 标准定义 <code>Origin</code> 首部与 CORS 检查算法，RFC 9111 定义 Vary 如何参与缓存键。CORS 横跨这三层，却始终只是<strong>用户代理的读取约束</strong>。一旦你用「谁在拦、拦在哪一步」来定位问题，就不会再把它误当成服务器的安全功能。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>「CORS 是服务器用来防止跨站攻击的」——表述不准确。服务器用 ACAO 做的是<strong>是否共享响应</strong>的声明，执行拦截的是浏览器；对不遵守 CORS 的客户端，服务器侧那几条首部毫无强制力。真正防写操作的仍是 CSRF 令牌等措施，MDN 在同源策略文档里明确说跨源写一般被允许，需要 CSRF token 来阻止。把 CORS 当万能安全开关，会漏掉真正该做的防护。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front"><div class="q-tag">回忆 9.5-1</div><div class="q-text">origin 的规范定义在哪一份文档的哪一节？它由哪三项构成？Origin 首部又在哪份文档定义？</div><span class="tap">点击翻面 →</span></div>
+            <div class="flip-face flip-back"><div class="a-tag">参考答案</div>RFC 9110 §4.3.1 定义 URI origin 为 scheme、host、port 三元组；§4.2.3 规定大小写与默认端口归一化。RFC 9110 不定义 Origin 请求首部；它由 RFC 6454 §7 定义，现行 Web 平台由 Fetch 标准维护，CORS 检查算法也在 Fetch 标准里。</div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front"><div class="q-tag">回忆 9.5-2</div><div class="q-text">为什么说 CORS 是浏览器约束而非服务器约束？举出两个能证明这一点的现象。</div><span class="tap">点击翻面 →</span></div>
+            <div class="flip-face flip-back"><div class="a-tag">参考答案</div>服务器照常执行请求并生成响应，是用户代理在把响应交给脚本前执行 CORS check，失败即丢弃。证据：① curl / Postman 不受 CORS 限制，同一个 URL 能正常拿到 200；② 浏览器能读到只说明 ACAO 匹配，不代表服务器做了授权，配 ACAO: * 的公开资源同样可读。脚本拿不到失败细节也是这条设计的体现。</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===== 概念卡 ===== -->
+    <h2><span class="sec-no">🃏</span>概念卡：本讲概念的一分钟画像</h2>
+    <p>翻面前先自问：这个概念我能用一句话讲清楚吗？讲不清的那张，回到对应小节重读一遍。</p>
+    <div class="flip-grid">
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front"><div class="q-tag">概念卡 1</div><div class="q-text">源与三元组（Origin / Scheme-Host-Port Tuple）</div><span class="tap">点击翻面 →</span></div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">由协议、主机、端口三项构成的整体；三项全等才算同一个源。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">给「谁和谁算同一家」一个可机械判定的标准，是同源策略与 CORS 的地基。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">源是门牌：协议是街道，主机是楼号，端口是房间号，三项都写对才找得到。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">只看域名；忘了 http 与 https、80 与 8080 都会把「同一个站」劈成两个源。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">9.1 同源判定表、9.5 对照 RFC 9110 §4.3.1；也用于 origin 与 cookie Domain 的区分。</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front"><div class="q-tag">概念卡 2</div><div class="q-text">同源策略（Same-origin policy）</div><span class="tap">点击翻面 →</span></div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">浏览器安全策略，限制一个源的文档或脚本如何与另一个源的资源交互。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">阻止恶意站点读取已登录用户的第三方数据或内网资源。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">默认各回各家：写和嵌入通常放行，读取要单独申请。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为它禁止一切跨源交互；跨源写与跨源嵌入一般是允许的。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">9.1 三类交互分类；CORS 正是为「跨源读」开的受控口子。</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front"><div class="q-tag">概念卡 3</div><div class="q-text">跨源资源共享（CORS）</div><span class="tap">点击翻面 →</span></div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">基于 HTTP 首部的机制：服务器声明哪些源可加载自己的资源，浏览器据此决定是否共享响应。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">在同源策略的默认拒绝上，有组织地开一个口子，让跨源读取安全进行。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">服务器挂出访客名单，浏览器在门口核对名单后才把包裹交给脚本。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">当作服务器安全功能；它是用户代理的读取约束，curl 根本不看这些首部。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">全程主线；规范落点在 Fetch 标准，见 9.5。</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front"><div class="q-tag">概念卡 4</div><div class="q-text">简单请求（Simple request）与安全列表首部</div><span class="tap">点击翻面 →</span></div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">方法为 GET/HEAD/POST、人为首部限于 CORS 安全列表、Content-Type 限于三种表单类型、无 upload 监听器与 ReadableStream 的请求。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">与 HTML 表单能力等价的请求无需预检，服务器本就要防 CSRF，多问一次无益。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">表单能写出来的就直接发；表单写不出来的先举手问。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">把 application/json 当成简单类型；它必须预检。也别以为 Fetch 规范仍用「简单请求」这个词。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">9.2 完整条件清单；9.3 用它取补集判断预检触发。</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front"><div class="q-tag">概念卡 5</div><div class="q-text">Origin 与 Access-Control-Allow-Origin</div><span class="tap">点击翻面 →</span></div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">Origin 由浏览器自动附加，标明请求源站；ACAO 由服务器返回，值为具体源或 *。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">一问一答完成最小粒度的读取授权：具体源相等或 * 且无凭据即放行。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">Origin 是访客自报家门，ACAO 是主人回一句「我认识你」。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为脚本能改 Origin；它是禁用首部。返回具体源时还要配 Vary: Origin。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">9.2 简单请求放行四步；9.4 凭据场景下 * 失效的推理。</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front"><div class="q-tag">概念卡 6</div><div class="q-text">预检请求（Preflight request）</div><span class="tap">点击翻面 →</span></div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">用 OPTIONS 先发一趟安全请求，带 ACRM 与 ACRH，询问真实请求的方法与首部是否被允许。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">避免可能改写数据的跨源请求在服务器产生未预期副作用后才被拒绝。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">先打电话问「你们收这种快递吗」，确认了再发货。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为预检通过就万事大吉；真实响应仍要单独做 CORS 检查。预检本身不带凭据。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">9.3 完整 OPTIONS 与真实报文、两问四答、Max-Age 缓存与预检重定向。</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front"><div class="q-tag">概念卡 7</div><div class="q-text">附带身份凭证的请求（Credentialed request）</div><span class="tap">点击翻面 →</span></div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">客户端显式设置 credentials 后携带 Cookie 或认证信息的跨源请求；服务器须回具体 ACAO 与 ACAC: true。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">让已登录用户在跨源场景下也能读取自己的数据，同时把读取者钉死为具体源。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">包裹里装着身份证，主人必须点名收件人，不能写「谁都行」。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为 ACAC: true 就万事大吉；ACAO 若仍是 * 照样失败，且四项首部都不可通配。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">9.4 凭据推演、第三方 cookie 策略与三类报错定位。</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===== 分层习题 ===== -->
+    <h2><span class="sec-no">✍️</span>分层习题：先自己写，再点开核对</h2>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>有人说：「浏览器报了 CORS 错，就说明这次请求根本没到服务器。」这句话对哪类请求成立、对哪类不成立？请分别说明两种情况下请求与响应各自走到哪一步。</div>
+      <details><summary>提示</summary><p>把 9.2 的简单请求路径与 9.3 的预检路径并排画出来，找「拦截发生的位置」。</p></details>
+      <details><summary>完整解答</summary><div class="ex-answer">这句话对<strong>非简单请求且预检失败</strong>的情况成立：浏览器先发 OPTIONS，若预检响应里 ACAO、Allow-Methods 或 Allow-Headers 有任何一项不匹配，真实请求<strong>根本不会发出</strong>，服务器确实没收到它。对<strong>简单请求</strong>不成立：请求直接带着 Origin 抵达服务器，方法已被执行、响应已生成；被拦的是响应阶段——浏览器检查 ACAO 失败后把响应体丢弃，脚本只拿到笼统错误。还有第三种：非简单请求预检通过、真实请求也发到了服务器，但真实响应的 ACAO 不匹配，同样在响应阶段被丢弃。结论：CORS 拦的是「把响应交给脚本」这一步，或（有预检时）更早地拦住真实请求的发出；它不是服务器侧的访问控制。</div></details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>判断下列说法正误并各给一句理由：①「<code>http://a.example</code> 与 <code>https://a.example</code> 同源，因为都是 a.example」；②「只要服务端返回 <code>ACAC: true</code>，带凭据的请求就能用 <code>ACAO: *</code>」；③「预检请求本身不会携带 Cookie」；④「子域共享 cookie，所以子域之间同源」。</div>
+      <details><summary>提示</summary><p>逐句锁定被混淆的概念：三元组、凭据两道确认、预检无凭据、cookie Domain 与同源两套规则。</p></details>
+      <details><summary>完整解答</summary><div class="ex-answer">① 错。协议不同即跨源，三元组必须三项全等；http 默认端口 80、https 默认端口 443，端口也不同。② 错。带凭据时 ACAO 必须是具体源，<code>*</code> 一律失败；ACAC: true 只确认「允许凭据」，不能替代 ACAO 的点名作用，且 Allow-Headers / Methods / Expose-Headers 同样不可通配。③ 对。MDN 明确说 CORS 预检请求不能包含凭据；但预检响应须带 ACAC: true，才允许后续实际请求带凭据。④ 错。cookie 的 Domain 可放宽到合法父域、不看协议与端口；同源判定要求主机完全相等且严格比较协议与端口，两者是不同规则。</div></details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>以 <code>https://shop.example.com:8443/app/index.html</code> 为基准源，逐项判定下列 URL 是否同源，写出归一化三元组：① <code>https://shop.example.com:8443/api/data</code>；② <code>https://shop.example.com/api/data</code>；③ <code>http://shop.example.com:8443/api/data</code>；④ <code>https://SHOP.example.com:8443/x</code>；⑤ <code>https://cdn.example.com:8443/x</code>。再回答：若 <code>shop.example.com</code> 给 <code>api.example.com</code> 下发了 <code>Domain=example.com</code> 的 cookie，这两个子域是否同源？为什么cookie 能共享而读取不能？</div>
+      <details><summary>提示</summary><p>基准三元组先写成 {https, shop.example.com, 8443}；注意 8443 不是 https 默认端口，不能省略。主机大小写要归一。</p></details>
+      <details><summary>完整解答</summary><div class="ex-answer">基准三元组为 <code>{https, shop.example.com, 8443}</code>（8443 非默认端口，必须显式写出）。① 归一为 {https, shop.example.com, 8443}，三项全等，<strong>同源</strong>，路径不同不影响。② 归一为 {https, shop.example.com, 443}，端口 443 ≠ 8443，<strong>跨源</strong>——省略端口等价于默认 443，而不是继承对方的 8443。③ 归一为 {http, shop.example.com, 8443}，协议不同，<strong>跨源</strong>。④ 主机大小写不敏感，归一为 {https, shop.example.com, 8443}，<strong>同源</strong>。⑤ 主机 cdn 与 shop 不同，<strong>跨源</strong>。第二问：两个子域<strong>不同源</strong>（主机不同），但 cookie 使用另一套定义——页面可为自身域及合法父域设置 cookie，只要父域不是公共后缀，所以 <code>Domain=example.com</code> 的 cookie 能被两个子域共享。共享 cookie 不等于同源：同源判定严格比较主机、协议、端口，cookie 的 Domain 只看父域包含关系，不比较协议与端口，另有 Path 属性；跨源读取因此仍被同源策略拦截，必须靠 CORS 首部放行。</div></details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>页面 <code>https://web.example</code> 要向 <code>https://api.example</code> 发一条 <code>DELETE /v1/item/7</code>，并带自定义首部 <code>X-Trace-Id: abc</code> 与 <code>Content-Type: application/json</code>。请纸笔写出：① 预检请求里 <code>Origin</code>、<code>Access-Control-Request-Method</code>、<code>Access-Control-Request-Headers</code> 三行的值；② 一条能让该请求放行的预检响应所需的最少四个首部及取值；③ 若预检响应的 <code>Access-Control-Max-Age: 1200</code>，10 分钟后再次发同样请求还需不需要预检？若响应漏掉 <code>Access-Control-Allow-Headers</code>，结果是什么？</div>
+      <details><summary>提示</summary><p>DELETE 不在 GET/HEAD/POST 之列；application/json 不在三种安全值之列，因此 Content-Type 也要列进请求首部清单。Max-Age 单位是秒。</p></details>
+      <details><summary>完整解答</summary><div class="ex-answer">① 预检请求三行：<code>Origin: https://web.example</code>；<code>Access-Control-Request-Method: DELETE</code>；<code>Access-Control-Request-Headers: X-Trace-Id, Content-Type</code>（逗号分隔；Content-Type 入列是因为 application/json 非安全值；真实请求不会带这两行 Access-Control-Request-*）。② 最少四个首部：<code>Access-Control-Allow-Origin: https://web.example</code>（具体源）；<code>Access-Control-Allow-Methods: DELETE</code>（至少含 DELETE，可再加 OPTIONS）；<code>Access-Control-Allow-Headers: X-Trace-Id, Content-Type</code>（逐项回应 ACRH）；<code>Access-Control-Max-Age: 1200</code>（缓存时长，秒）。实际部署还应给 Vary 写入 Origin 及两项请求首部。③ 1200 秒 = 20 分钟，10 分钟 &lt; 20 分钟，且未超过浏览器自身上限，因此<strong>不需要</strong>再次预检，浏览器复用缓存结果直接发真实请求。若响应漏掉 Access-Control-Allow-Headers，则 ACRH 列出的首部未获允许，CORS check 失败，真实请求<strong>不会发出</strong>，脚本只收到笼统错误，须查控制台中「missing token」类 Reason。</div></details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l3">L3 建模应用</span>你要为天气服务设计跨源 API：<code>GET /v1/public</code> 返回公开的当前天气，任何人可读；<code>GET /v1/account</code> 返回登录用户的订阅信息，只允许 <code>https://app.shop.example</code> 读取且必须带 Cookie。请给出两组端点的 CORS 响应首部具体取值（ACAO、ACAC、Vary、Allow-Methods、Allow-Headers、Max-Age 中适用的项），并回答：① 为什么不能对全站统一配 <code>ACAO: *</code>？② 公开端点用 <code>*</code> 时还需要 Vary: Origin 吗？③ 若 /v1/account 也允许 PUT 更新，预检响应要额外带什么、客户端要显式做什么？给出至少四条设计决策。</div>
+      <details><summary>提示</summary><p>按「公开 / 用户相关」分成两套策略；把 9.4 的四项不可通配规则与 9.3 的两问四答套进去；Vary 是否需要取决于 ACAO 是否随 Origin 动态变化。</p></details>
+      <details><summary>完整解答</summary><div class="ex-answer">一组参考配置。<strong>公开端点</strong> <code>/v1/public</code>：<code>Access-Control-Allow-Origin: *</code>，不带 ACAC；由于 ACAO 是固定通配符、不随 Origin 变化，<strong>不需要</strong>为 CORS 目的加 <code>Vary: Origin</code>（若响应内容本身还按其他维度变化，则按那些维度另配 Vary）；可给 <code>Access-Control-Allow-Methods: GET, HEAD, OPTIONS</code>、<code>Access-Control-Max-Age: 600</code>。<strong>用户端点</strong> <code>/v1/account</code>：<code>Access-Control-Allow-Origin: https://app.shop.example</code>、<code>Access-Control-Allow-Credentials: true</code>、<code>Vary: Origin</code>（具体源按允许列表动态判定，必须写进缓存键）；Allow-Headers / Expose-Headers 若使用也须列出具体名而不能用 *。① 不能全站统一 *，因为 /v1/account 带凭据，<code>ACAO: *</code> 会让任意站点都能读已登录用户数据，浏览器也会直接判失败；同时 Allow-* 与 Expose-Headers 在凭据场景下同样不可通配。② 公开端点用固定的 <code>*</code> 时，ACAO 不随 Origin 变化，没有按 Origin 区分响应，因此不必为 CORS 加 Vary: Origin；只有当 ACAO 是按请求 Origin 动态回显的具体源时才必须加。③ /v1/account 允许 PUT 后，请求触发预检，预检响应须额外给出 <code>Access-Control-Allow-Methods: GET, PUT, OPTIONS</code>、与请求首部匹配的 <code>Access-Control-Allow-Headers</code>，并在预检响应上也带 <code>ACAC: true</code>（预检本身不带凭据，但响应要声明实际请求可带）；客户端必须显式设置 <code>credentials: "include"</code>，且注意第三方 cookie 策略与 SameSite 可能单独阻断。设计决策示例：按敏感度分组配置而非全局一套；凭据端点把允许源写成明确清单并配 Vary: Origin；开启自定义的 CDN 缓存键校验，避免混缓存；避免对预检请求做重定向；错误响应分支也要带同样的 CORS 首部，否则失败路径会伪装成 CORS 错。</div></details>
+    </div>
+
+    <!-- ===== 自测 ===== -->
+    <h2><span class="sec-no">✅</span>本章自测：每题只选一个答案</h2>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 1</div>
+      <div class="q-stem">下列哪一对 URL 属于同源？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. <code>http://example.com/a</code> 与 <code>https://example.com/b</code></li>
+        <li data-opt="b">B. <code>https://example.com:443/a</code> 与 <code>https://EXAMPLE.com/b</code></li>
+        <li data-opt="c">C. <code>https://example.com/a</code> 与 <code>https://example.com:8080/b</code></li>
+        <li data-opt="d">D. <code>https://a.example.com/x</code> 与 <code>https://b.example.com/y</code></li>
+      </ul>
+      <div class="quiz-explain">解析：B 对。https 的默认端口是 443，显式写出与省略等价；主机大小写不敏感，归一后相等。A 错在协议不同（80 与 443）；C 错在 8080 不是默认端口，端口不等；D 错在主机的完整字符串不同，子域之间不同源——即使它们可能共享 Domain 为 example.com 的 cookie，那也是另一套规则。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="c">
+      <div class="q-no">自测 2</div>
+      <div class="q-stem">下列哪个请求会触发 CORS 预检？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. GET 请求，只带浏览器自动设置的 Accept 与 User-Agent</li>
+        <li data-opt="b">B. POST 请求，Content-Type 为 <code>application/x-www-form-urlencoded</code></li>
+        <li data-opt="c">C. PUT 请求，Content-Type 为 <code>application/json</code></li>
+        <li data-opt="d">D. HEAD 请求，只带 Accept-Language 首部</li>
+      </ul>
+      <div class="quiz-explain">解析：C 对。PUT 不在 GET/HEAD/POST 之列，且 application/json 不在三种安全媒体类型之内，两条都触发预检。A、B、D 都满足简单请求条件：方法合法、首部在安全列表、Content-Type 属于表单类型或缺省，无需预检。注意 B 的 POST 虽然可能产生副作用，但因其等价于表单提交而被归入简单请求。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="a">
+      <div class="q-no">自测 3</div>
+      <div class="q-stem"><code>Access-Control-Request-Method</code> 与 <code>Access-Control-Request-Headers</code> 出现在哪里？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 只出现在 OPTIONS 预检请求中</li>
+        <li data-opt="b">B. 只出现在真实请求中</li>
+        <li data-opt="c">C. 同时出现在预检请求与真实请求中</li>
+        <li data-opt="d">D. 出现在服务器的响应中</li>
+      </ul>
+      <div class="quiz-explain">解析：A 对。MDN 明确说实际的 POST / PUT 请求不会携带任何 Access-Control-Request-* 首部，它们只用于 OPTIONS 预检，分别报告真实请求将用的方法与将带的非安全首部。B、C 与此相反；D 混淆了请求首部与响应首部——服务器一侧对应的回答是 Access-Control-Allow-Methods 与 Access-Control-Allow-Headers。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="d">
+      <div class="q-no">自测 4</div>
+      <div class="q-stem">关于带凭据的跨源请求，下列哪种配置是正确的？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. <code>ACAO: *</code> 配合 <code>ACAC: true</code> 即可放行</li>
+        <li data-opt="b">B. 只需 <code>ACAC: true</code>，ACAO 可省略</li>
+        <li data-opt="c">C. 预检请求应携带 Cookie，以便服务器识别用户</li>
+        <li data-opt="d">D. ACAO 必须是具体源，且预检与真实响应都要带 <code>ACAC: true</code></li>
+      </ul>
+      <div class="quiz-explain">解析：D 对。凭据场景下 ACAO 必须点名具体源，ACAC 只负责确认允许凭据，两者缺一不可；预检响应也必须带 ACAC: true 才允许实际请求带凭据。A 错在通配符与凭据互斥，浏览器会直接判失败；B 错在省略 ACAO 时根本没有可匹配的源；C 错在 CORS 预检请求本身不能包含凭据，MDN 明确禁止。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 5</div>
+      <div class="q-stem">用 curl 请求某 URL 得到 200，但浏览器里的 fetch 读不到响应。最合理的解释是？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 服务器拒绝了 curl 的请求，但接受了浏览器的请求</li>
+        <li data-opt="b">B. CORS 是浏览器在读取响应时执行的约束；curl 不执行该检查，浏览器因首部不合格丢弃了响应</li>
+        <li data-opt="c">C. 浏览器不支持 HTTP/1.1 的 OPTIONS 方法</li>
+        <li data-opt="d">D. 同源策略禁止 curl 与服务器通信</li>
+      </ul>
+      <div class="quiz-explain">解析：B 对。服务器照常处理请求并生成响应，是用户代理在把响应交给脚本前执行 CORS check；curl 不是浏览器，不做这项检查。A 与事实相反，curl 拿到了 200。C 错在 OPTIONS 是 HTTP/1.1 标准方法，浏览器支持与否不是这里的原因。D 错在同源策略约束的是浏览器内脚本的跨源交互，与命令行工具无关。</div>
+    </div>
+
+    <div class="retell">
+      <h3>🗣️ 用自己的话，三句话讲完本讲</h3>
+      <p>对着空气（或室友）说出这三句。说卡壳的那句，回去重读对应小节。</p>
+      <details><summary>句1：这讲解决什么问题？——</summary><div class="retell-answer">参考答案：给「浏览器为什么挡住跨站读取、又是怎么有组织地放开」一个可机械判定的答案：先用协议/主机/端口三元组划出源的边界，再用 Origin 与 ACAO、预检、凭据规则把这道口子的开法讲清楚。</div></details>
+      <details><summary>句2：核心机制是什么？——</summary><div class="retell-answer">参考答案：同源策略默认禁止脚本跨源读取；简单请求带 Origin 直达服务器，响应回来后由浏览器按 ACAO 决定是否交给脚本；非简单请求先用 OPTIONS 带 ACRM/ACRH 问方法与首部，放行后才发真实请求；带凭据时 ACAO 必须具体且 ACAC 必须为 true，通配符一律失效。</div></details>
+      <details><summary>句3：它和前后讲怎么分工？——</summary><div class="retell-answer">参考答案：第 8 讲把认证与凭据装进请求，本讲回答这些凭据跨源时如何被 CORS 约束；预检缓存与 Vary 依赖第 5 讲的缓存键规则；cookie 的 Domain/SameSite 属于第 7 讲；第 10 讲转向页面自身能做什么，同源策略的其余边界在那里继续展开。</div></details>
+    </div>
+
+    <div class="review-plan">
+      <h3>🔁 间隔复习计划</h3>
+      <p>回忆本身比重读有效 10 倍。到点只做一件事：翻卡 + 重做标记题。</p>
+      <table>
+        <tr><th>时间点</th><th>复习内容</th><th>预计用时</th></tr>
+        <tr><td>第 1 天</td><td>概念卡 1–7 全翻 + 回忆 9.1-1、9.2-1、9.3-1、9.4-1、9.5-1</td><td>14 分钟</td></tr>
+        <tr><td>第 3 天</td><td>重做自测 1、2、4 + 翻错的概念卡 4、5、7 + 回忆 9.4-2</td><td>10 分钟</td></tr>
+        <tr><td>第 7 天</td><td>三句话复述 + L2 两题（同源判定表、OPTIONS 预检报文推演）+ 概念卡 6</td><td>14 分钟</td></tr>
+        <tr><td>第 15 天</td><td>只重做合上书挑战；重点过第 4 条凭据推理与第 7 条主线回答，能全过就毕业</td><td>15 分钟</td></tr>
+      </table>
+    </div>
+
+    <div class="final-challenge">
+      <h3>🚪 合上书挑战：能全写出来，这一讲才毕业</h3>
+      <ol id="challenge-list">
+        <li>默写出同源判定的三元组，并用两分钟判完 5 个 URL 对；再说出它与 cookie Domain 判定的两点差别。</li>
+        <li>徒手写一条带 Origin 的简单跨源 GET 请求与带 ACAO 的响应，按四步说出浏览器如何决定是否把响应交给脚本。</li>
+        <li>列出简单请求必须同时满足的条件，并指出 application/json 与 PUT 各自命中哪一条触发预检。</li>
+        <li>写出一条 OPTIONS 预检请求与响应的完整关键首部，逐项解释 ACRM、ACRH、Allow-Methods、Allow-Headers、Max-Age 各问什么、答什么。</li>
+        <li>用四步推理说明带凭据时 ACAO 为何不能是通配符，并列出另外三个同样不可通配的首部。</li>
+        <li>针对 ACAO missing、does not match、Credential 三类报错，各写出三步定位动作，并说明为什么必须看控制台。</li>
+        <li>一句话回答本讲主线问题：浏览器凭什么允许一个源读取另一个源的资源，预检请求到底在问什么？</li>
+      </ol>
+    </div>
+
+    <div class="complete-zone">
+      <button class="btn-complete" id="btn-complete" onclick="markDone()">✓ 我已完成本讲（含合上书挑战）</button>
+    </div>
+
+    <div class="chapter-nav">
+      <a href="chapter-08.html"><span class="nav-dir">← 上一讲</span>第8讲 HTTP 身份验证</a>
+      <a href="chapter-10.html" class="next"><span class="nav-dir">下一讲 →</span>第10讲 CSP、权限策略与 Fetch 元数据</a>
+    </div>
+
+  </div>
+</div>
+
+<footer class="footer">
+  <div class="wrap">第9讲 跨源资源共享 CORS · HTTP 精通 · 依据 MDN Web Docs《HTTP 指南》整理，延伸板块对照 RFC 9110 系列 · 学习进度保存在本机浏览器中</div>
+</footer>
+
+<script src="assets/mermaid.min.js"></script>
+<script>
+mermaid.initialize({
+  startOnLoad: true,
+  theme: "base",
+  themeVariables: {
+    primaryColor: "#e3edf7",
+    primaryBorderColor: "#1d5f9e",
+    primaryTextColor: "#1d5f9e",
+    lineColor: "#5c554b",
+    secondaryColor: "#fbeedd",
+    tertiaryColor: "#f5f1e8",
+    fontFamily: "-apple-system, PingFang SC, sans-serif",
+    fontSize: "14px"
+  },
+  flowchart: { curve: "linear", htmlLabels: false }
+});
+</script>
+<script>
+document.querySelectorAll(".quiz-block").forEach(block => {
+  const answer = block.dataset.answer;
+  const explain = block.querySelector(".quiz-explain");
+  block.querySelectorAll(".quiz-opts li").forEach(li => {
+    li.addEventListener("click", () => {
+      const opts = block.querySelectorAll(".quiz-opts li");
+      opts.forEach(o => o.classList.add("disabled"));
+      if (li.dataset.opt === answer) {
+        li.classList.add("correct");
+      } else {
+        li.classList.add("wrong");
+        block.querySelector(`[data-opt="${answer}"]`).classList.add("correct");
+      }
+      explain.classList.add("show");
+    });
+  });
+});
+
+document.querySelectorAll("#challenge-list li").forEach(li => {
+  li.addEventListener("click", () => li.classList.toggle("checked"));
+});
+
+const KEY = "http_guide_progress_v1";
+function loadProgress() {
+  try { return JSON.parse(localStorage.getItem(KEY)) || {}; } catch (e) { return {}; }
+}
+const progress = loadProgress();
+const btn = document.getElementById("btn-complete");
+if (progress[9] && progress[9].done) {
+  btn.textContent = "✓ 已完成 · 再次点击重置";
+  btn.classList.add("done");
+}
+function markDone() {
+  const p = loadProgress();
+  if (p[9] && p[9].done) {
+    delete p[9];
+    btn.textContent = "✓ 我已完成本讲（含合上书挑战）";
+    btn.classList.remove("done");
+  } else {
+    p[9] = { done: true, completedAt: Date.now(), reviewsDone: 0 };
+    btn.textContent = "✓ 已完成 · 复习提醒已开启";
+    btn.classList.add("done");
+  }
+  localStorage.setItem(KEY, JSON.stringify(p));
+}
+</script>
+
+</body>
+</html>

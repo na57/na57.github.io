@@ -1,0 +1,663 @@
+<!DOCTYPE html>
+<!--
+  ======================================================================
+  别急着点：校园钓鱼邮件识别 · 课件外壳（deck-shell.html）
+  由 build-slides.mjs 把 slides/NN.html 注入幻灯片区域，
+  输出 public/phishing-guide-slides/NN-xxx-课件.html。
+  骨架来自站内通用 1280×720 课件模板；本套保留 .wire 用于展示邮件原文与链接，新增 .mail-box 邮件仿真卡。
+  每页必须写 data-narration（120–280 字口语稿，禁半角双引号、禁换行、禁小于号）。
+  ======================================================================
+-->
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第2讲 攻击链六步 · 别急着点：校园钓鱼邮件识别 课件</title>
+<script>
+window.MathJax = {
+  tex: {
+    inlineMath: [['$', '$'], ['\\(', '\\)']],
+    displayMath: [['$$', '$$'], ['\\[', '\\]']],
+    processEscapes: true,
+    tags: 'none'
+  },
+  svg: { fontCache: 'global', scale: 1.05 },
+  options: { skipHtmlTags: ['script','noscript','style','textarea','pre','code'] }
+};
+</script>
+<!-- MathJax 本地引用（tex-svg 单文件全量组件，约2MB，自带字体数据），file:// 与断网均可用 -->
+<script src="assets/tex-svg.js" async></script>
+<style>
+  :root{
+    --primary:#1a365d; --accent:#2b6cb0; --accent-light:#ebf8ff; --accent-border:#bee3f8;
+    --text:#2d3748; --muted:#718096; --border:#e2e8f0; --bg-light:#f7fafc;
+    --success:#38a169; --danger:#e53e3e; --warning:#dd6b20; --warn-bg:#fffaf0;
+  }
+  *{margin:0;padding:0;box-sizing:border-box;}
+  html,body{width:100%;height:100%;overflow:hidden;background:#0f172a;}
+  body{
+    font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Hiragino Sans GB","Microsoft YaHei","WenQuanYi Micro Hei",sans-serif;
+    color:var(--text);
+  }
+  #stage{
+    position:absolute; left:50%; top:50%;
+    width:1280px; height:720px;
+    transform:translate(-50%,-50%) scale(1);
+    transform-origin:center center;
+    background:#ffffff;
+    box-shadow:0 0 40px rgba(0,0,0,.4);
+    overflow:hidden;
+  }
+  .slide{
+    position:absolute; inset:0;
+    padding:36px 60px 52px;
+    display:none;
+    flex-direction:column;
+    background:#ffffff;
+    opacity:0;
+    transition:opacity .35s ease;
+  }
+  .slide.active{ display:flex; opacity:1; }
+
+  #progress{ position:absolute; top:0; left:0; height:6px; background:var(--accent); width:0; z-index:50; transition:width .35s; }
+
+  /* 封面 / 结束页 */
+  .slide-cover{ justify-content:center; align-items:center; text-align:center; }
+  .slide-cover{ background:linear-gradient(135deg,#1a365d 0%,#2b6cb0 100%); color:#fff; }
+  .slide-cover .kicker{ font-size:22px; letter-spacing:6px; opacity:.85; margin-bottom:18px;}
+  .slide-cover h1{ font-size:64px; font-weight:800; line-height:1.2; margin-bottom:22px; letter-spacing:2px;}
+  .slide-cover .sub{ font-size:26px; opacity:.92; margin-bottom:36px;}
+  .slide-cover .meta{ font-size:19px; opacity:.85; line-height:2;}
+  .slide-cover .divider{ width:160px;height:5px;background:#fff;opacity:.6;margin:0 auto 30px;border-radius:3px;}
+  .slide-cover .question{ font-size:24px; background:rgba(255,255,255,.12); border:1px solid rgba(255,255,255,.35); border-radius:12px; padding:12px 28px; margin-bottom:30px;}
+
+  /* 页头：结论式标题 */
+  .slide-head{ display:flex; align-items:baseline; gap:16px; border-bottom:3px solid var(--accent); padding-bottom:9px; margin-bottom:12px;}
+  .slide-head .sec{ font-size:17px; color:var(--accent); font-weight:700; background:var(--accent-light); padding:3px 11px; border-radius:6px; white-space:nowrap;}
+  .slide-head h3{ font-size:29px; color:var(--primary); font-weight:700;}
+  .slide-body{ flex:1; display:flex; flex-direction:column; justify-content:center; min-height:0; }
+
+  p{ font-size:21px; line-height:1.65; margin-bottom:8px;}
+  .lead{ font-size:23px; color:#374151; line-height:1.75;}
+  ul,ol{ margin:0 0 8px 26px; font-size:21px; line-height:1.7;}
+  li{ margin-bottom:5px;}
+  strong{ color:var(--primary); }
+
+  /* 公式块 */
+  .formula{ background:var(--accent-light); border-left:5px solid var(--accent); border-radius:0 10px 10px 0; padding:9px 22px; margin:9px 0; text-align:center; font-size:23px;}
+  .formula-concl{ background:#fffaf0; border-left:5px solid var(--warning);}
+  .MathJax{ font-size:1.05em !important; }
+  mjx-container[display="true"]{ margin:6px 0 !important; }
+
+  /* 表格 */
+  table{ width:100%; border-collapse:collapse; margin:10px 0; font-size:20px;}
+  th{ background:var(--accent); color:#fff; padding:8px 12px; text-align:center; font-weight:600;}
+  td{ padding:7px 12px; border:1px solid var(--border); text-align:center; vertical-align:middle;}
+  tr:nth-child(even) td{ background:var(--bg-light);}
+  td.l{ text-align:left; }
+  table.small{ font-size:18px; }
+  table.small td, table.small th{ padding:6px 10px; }
+
+  /* 组件 */
+  .card{ background:var(--accent-light); border:1px solid var(--accent-border); border-radius:12px; padding:12px 20px; margin:10px 0;}
+  .tip{ background:#ebf8ff; border-left:5px solid var(--accent); border-radius:0 10px 10px 0; padding:10px 20px; margin:10px 0; font-size:20px; color:#2c5282;}
+  .deep{ background:#f0fff4; border-left:5px solid var(--success); border-radius:0 10px 10px 0; padding:10px 20px; margin:10px 0; font-size:20px; color:#22543d;}
+  .warn{ background:var(--warn-bg); border-left:5px solid var(--warning); border-radius:0 10px 10px 0; padding:10px 20px; margin:10px 0; font-size:20px; color:#744210;}
+  .trap{ background:#fef2f2; border-left:5px solid var(--danger); border-radius:0 10px 10px 0; padding:10px 20px; margin:10px 0; font-size:20px; color:#7f1d1d;}
+
+  .pause{
+    background:var(--warn-bg); border:2px dashed var(--warning); border-radius:14px;
+    padding:10px 22px; margin:10px 0; display:flex; align-items:center; gap:16px;
+  }
+  .pause .icon{ font-size:36px; line-height:1; }
+  .pause .txt b{ color:var(--warning); font-size:21px; }
+  .pause .txt p{ font-size:18px; color:#744210; margin:3px 0 0; }
+
+  .cols{ display:flex; gap:28px; align-items:stretch; }
+  .col{ flex:1; min-width:0; }
+
+  /* 推导分步：仅互动模式隐藏，截图(autohide)模式全部可见——此规则不可删 */
+  .step{ opacity:0; transform:translateY(8px); transition:opacity .3s ease, transform .3s ease; }
+  .step.on{ opacity:1; transform:none; }
+  body.autohide .step{ opacity:1 !important; transform:none !important; }
+  .step-hint{ font-size:14px; color:var(--muted); margin-top:4px;}
+  body.autohide .step-hint{ display:none; }
+
+  /* 本课专用：邮件原文/链接与邮件仿真卡 */
+  .wire{background:#0f172a;color:#e2e8f0;border-radius:10px;padding:12px 18px;margin:8px 0;
+    font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:17px;line-height:1.55;
+    white-space:pre-wrap;overflow-wrap:anywhere;}
+  .wire b{color:#7dd3fc;font-weight:700;}
+  .wire i{color:#fde68a;font-style:normal;}
+  .wire em{color:#86efac;font-style:normal;}
+  .wire.sm{font-size:15px;line-height:1.45;}
+  .wire-cap{font-size:15px;color:var(--muted);margin:0 0 8px;}
+  .mail-box{background:#fff;border:2px solid var(--border);border-left:6px solid var(--danger);border-radius:10px;
+    padding:10px 16px;margin:8px 0;font-size:17px;line-height:1.6;}
+  .mail-box.safe{border-left-color:var(--success);}
+  .mail-box .mb-row{display:flex;gap:12px;padding:3px 0;border-bottom:1px dashed var(--border);}
+  .mail-box .mb-row:last-child{border-bottom:0;}
+  .mail-box .mo{display:inline-block;background:#e05a2b;color:#fff;font-size:14px;line-height:22px;height:22px;
+    padding:0 6px;border-radius:3px;flex:none;font-weight:700;}
+  .mail-box .mb-k{color:var(--muted);min-width:74px;}
+  .mail-box .mb-v{font-weight:700;color:var(--primary);}
+  .mail-box .mb-link{color:#2b6cb0;text-decoration:underline;}
+  .mail-box .mb-flag{background:#fbeedd;color:#c4651f;padding:0 5px;border-radius:3px;font-weight:700;}
+  .mail-box .mb-bad{background:#fae9e7;color:#b03a2e;padding:0 5px;border-radius:3px;font-weight:700;}
+  .mail-box .mb-ok{background:#e4f0e9;color:#33735a;padding:0 5px;border-radius:3px;font-weight:700;}
+  .mail-box .mb-cap{font-size:15px;color:var(--muted);margin-top:5px;}
+  /* 真实邮件系统截图（脱敏）：课件中展示本校真实案例 */
+  .shot-img{display:block;width:100%;max-width:900px;height:auto;max-height:430px;object-fit:contain;object-position:top left;
+    border:1px solid var(--border);border-radius:6px;background:#fff;}
+  .shot-cap{font-size:14px;color:var(--muted);margin-top:6px;}
+  .shot-cap b{color:var(--warning);}
+  .to-lec{color:#bee3f8;text-decoration:none;font-size:15px;margin-left:12px;}
+  .to-lec:hover{text-decoration:underline;}
+  .badge{display:inline-block;background:var(--accent-light);color:var(--accent);border:1px solid var(--accent-border);
+    border-radius:6px;padding:2px 10px;font-size:17px;font-weight:700;margin-right:8px;}
+
+  /* 因果链 */
+  .chain{ margin:6px 0; }
+  .chain .link{ display:flex; align-items:center; gap:14px; margin:6px 0;}
+  .chain .no{ width:34px; height:34px; border-radius:50%; background:var(--accent); color:#fff; font-size:18px; font-weight:700; display:flex; align-items:center; justify-content:center; flex-shrink:0;}
+  .chain .txt{ font-size:21px; line-height:1.5;}
+  .chain .txt strong{ color:var(--primary); }
+
+  /* mermaid 容器：高度封顶，防止溢出 720px 舞台 */
+  .mmd{ background:var(--bg-light); border:1px solid var(--border); border-radius:12px; padding:10px 14px; display:flex; justify-content:center; align-items:center; margin:8px 0;}
+  .mmd .mermaid{ display:flex; justify-content:center; width:100%; visibility:hidden; }
+  .mmd .mermaid[data-done]{ visibility:visible; }
+  .mmd .mermaid svg{ max-width:100%; height:auto; max-height:230px; }
+  .mmd.mmd-tall .mermaid svg{ max-height:330px; }
+  .mmd.mmd-sm svg{ max-height:150px; }
+  .mmd-row{ display:flex; gap:18px; }
+  .mmd-row .mmd{ flex:1; flex-direction:column; }
+  .mmd .cap{ font-size:17px; color:var(--muted); margin-top:6px; text-align:center;}
+  .mmd .cap b{ color:var(--text); }
+
+  #footer{ position:absolute; bottom:0; left:0; right:0; height:40px; display:flex; align-items:center; justify-content:space-between; padding:0 30px; font-size:15px; color:#94a3b8; background:rgba(247,250,252,.85); border-top:1px solid var(--border); z-index:40;}
+  #footer .brand{ font-weight:600; color:var(--accent); }
+  #footer .ai-mark{ font-weight:400; color:#94a3b8; font-size:13px; margin-left:14px; padding-left:14px; border-left:1px solid var(--border);}
+
+  .nav{ position:absolute; bottom:48px; right:40px; display:flex; gap:12px; z-index:45;}
+  .nav button{ width:54px; height:54px; border-radius:50%; border:none; background:var(--accent); color:#fff; font-size:24px; cursor:pointer; box-shadow:0 3px 10px rgba(43,108,176,.4); display:flex; align-items:center; justify-content:center;}
+  .nav button:hover{ background:var(--primary); }
+  .nav button:disabled{ background:#cbd5d0; cursor:default; box-shadow:none;}
+
+  #hint{ position:absolute; bottom:48px; left:40px; font-size:14px; color:#94a3b8; z-index:45;}
+
+  body.autohide #progress, body.autohide #footer, body.autohide .nav, body.autohide #hint{ display:none !important; }
+
+  /* 录视频模式（?auto=1）：隐藏全部 UI，只留纯画面；分步仍按节奏逐条展开 */
+  body.recording #progress, body.recording #footer, body.recording .nav, body.recording #hint{ display:none !important; }
+</style>
+</head>
+<body>
+<div id="stage">
+
+  <div id="progress"></div>
+
+<section class="slide slide-cover active" data-narration="欢迎来到别急着点校园钓鱼邮件识别第2讲，攻击链六步。上一讲我们看清了为什么想点，知道骗子骗的是怕出事、信权威、怕错过这三种本能。这一讲把从发件到得手的全程拉成一条链，一步一步看骗子在赌什么，你又能在哪一步踩下刹车。本讲要回答封面这个问题：从收件到账号失守中间有几步，每一步骗子在赌什么。学完你要能按顺序复述六步，在链上标出四个刹车处，说清为什么换通道核实比找破绽更可靠。我们从那封信息技术部的异地登录演练邮件说起。">
+  <div class="kicker">第 2 讲 · 第①组 认识这条链</div>
+  <h1>攻击链六步</h1>
+  <div class="sub">从发件到得手，每一步骗子在赌什么</div>
+  <div class="question">从收件到账号失守中间有几步，每一步骗子在赌什么？</div>
+  <div class="meta">
+    配套讲义：别急着点 第 2 讲 · 伪装投递触发诱导收集利用<br>
+    ← → 翻页 · 演练页按空格逐步展开
+  </div>
+</section>
+
+<section class="slide" data-narration="先看这一讲在八讲主线上的位置。第1讲讲为什么会上当，看清三种情绪触发；第2讲也就是本讲，把那次上当拉成一条六步攻击链；第3到第6讲是四个检查点，依次看谁发的、说什么、点哪里、开什么；第7讲把检查点收成核实与上报的动作；第8讲在模拟收件箱里验收。图上高亮的是本讲，属第一组认识这条链，任务是画出全程地图，标出四个能刹车的位置。第1讲给了情绪触发点，本讲给它排上顺序，后面六讲都挂在这条链的某一步上。下一页把六步摊成一条因果链。">
+  <div class="slide-head"><span class="sec">定位</span><h3>第 2 讲把一次上当拉成一条六步链</h3></div>
+  <div class="slide-body">
+    <div class="mmd mmd-sm">
+      <div class="mermaid">
+flowchart LR
+  A["第1讲 为什么会上当"] --> B["第2讲 攻击链六步"]:::here --> C["第3到6讲 四个检查点"] --> D["第7讲 核实与上报"] --> E["第8讲 结业演练"]
+  classDef here fill:#2b6cb0,color:#ffffff,stroke:#1a365d,stroke-width:3px
+      </div>
+    </div>
+    <p>本讲解决「<strong>画出全程</strong>」：把一次上当拆成可标号的六步，并找出能刹车的位置。</p>
+    <div class="tip">本讲对应讲义里的完整链路复盘：以信息技术部异地登录那封演练邮件为例，逐环节还原六步。</div>
+  </div>
+</section>
+
+<section class="slide" data-narration="本讲的主线是一条六环因果链，也是一封钓鱼邮件从发出到得手的真实顺序。第一环伪装身份，骗子把自己扮成你信的部门。第二环批量投递，同一封信群发给全校，成本几乎为零。第三环制造触发，用限时和冻结逼你来不及想。第四环诱导动作，让你去点那个系统验证链接。第五环收集凭据，你在高仿登录页输入账号密码。第六环横向利用，拿你的账号再去骗别人。橙色标出的触发和诱导是两个高风险环，红色是凭据交出这个不可逆点。这条链就是本讲目录，后面每个例子都挂在某一步上。">
+  <div class="slide-head"><span class="sec">主线</span><h3>从伪装到利用的六环因果链</h3></div>
+  <div class="slide-body">
+    <div class="chain">
+      <div class="link"><span class="no">1</span><span class="txt"><strong>伪装身份</strong>：把自己扮成你信的学校部门</span></div>
+      <div class="link"><span class="no">2</span><span class="txt"><strong>批量投递</strong>：一封群发全校，单人成本近零</span></div>
+      <div class="link"><span class="no" style="background:#dd6b20">3</span><span class="txt"><strong>制造触发</strong>：限时与冻结，逼你来不及想</span></div>
+      <div class="link"><span class="no" style="background:#dd6b20">4</span><span class="txt"><strong>诱导动作</strong>：让你去点那个系统验证链接</span></div>
+      <div class="link"><span class="no" style="background:#e53e3e">5</span><span class="txt"><strong>收集凭据</strong>：高仿登录页骗走账号密码</span></div>
+      <div class="link"><span class="no">6</span><span class="txt"><strong>横向利用</strong>：拿你的账号再去骗别人</span></div>
+    </div>
+    <div style="text-align:center;color:#c53030;font-size:19px;font-weight:700;margin:8px 0;">1 → 2 → 3 → 4 → 5 → 6　越往右，止损越贵</div>
+    <div class="tip">越往右止损越贵：触发与诱导是高风险环，收集凭据是不可逆点，到了利用就只能补救。</div>
+  </div>
+</section>
+
+<section class="slide" data-narration="先用一个具体场景逼出为什么需要本讲。你收到一封显示名是信息技术部的邮件，说你的邮箱二十四小时后冻结，请点系统验证。上一讲你已经知道这封在骗你，但这次要问的是：它到底是怎么一步步把你从收件箱走到交出账号的？如果只背一句带陌就是钓鱼，你会在两个地方栽跟头：真的外校学术邮件也带陌，你会误报；AI写的邮件已经没有错别字，你找不到破绽。所以需要一张链状地图，不是一张破绽清单，让你在任何一步都知道骗子下一步要干什么。左边是只看破绽的困境，右边是看链的追问。">
+  <div class="slide-head"><span class="sec">动机</span><h3>为什么背破绽清单不够，要看整条链</h3></div>
+  <div class="slide-body">
+    <div class="cols">
+      <div class="col"><div class="card"><strong>只背破绽的困境</strong><br>带陌就是钓鱼会误报正常外校来信；AI写的邮件没有错别字，破绽清单突然失灵。</div></div>
+      <div class="col"><div class="card"><strong>看链的追问</strong><br>这封信怎么从收件箱走到我交出账号？每一步骗子在赌什么，我能在哪一步刹车？</div></div>
+    </div>
+    <div class="tip">本讲方案：画一张六步链状地图，任何一步都问一句下一步他要我干什么，而不是死找破绽。</div>
+    <div class="deep">破绽会过期，动作不会：邮件样式会变、AI会写好文案，但链上的六步和刹车点基本不变。</div>
+  </div>
+</section>
+
+<section class="slide" data-narration="给攻击链一个能复述的定义。一封钓鱼邮件从发出到你交出账号，固定走六步：伪装、投递、触发、诱导、收集、利用。每一步骗子在赌一件不同的事。伪装赌你信这个身份；投递赌信能进你的收件箱；触发赌你着急；诱导赌你会照做；收集赌你会填；利用赌能拿你的账号撬开更多门。把这六步记成一句话，就是扮成你信的人、把信送到你眼前、让你来不及想、指使你点一下、骗你填账号、拿你去骗别人。请注意链是顺序的，前一步是后一步的前提，断了前面后面就接不上。下一页用那封演练邮件把这六步逐一坐实。">
+  <div class="slide-head"><span class="sec">定义</span><h3>六步，每一步骗子在赌一件事</h3></div>
+  <div class="slide-body">
+    <p class="lead"><strong>攻击链六步</strong>：伪装身份 → 批量投递 → 制造触发 → 诱导动作 → 收集凭据 → 横向利用，顺序不可跳过。</p>
+    <div class="cols">
+      <div class="col"><div class="card"><strong>前三步：把信送到并让你急</strong><br>伪装赌你信身份，投递赌信进收件箱，触发赌你来不及想。</div></div>
+      <div class="col"><div class="card"><strong>后三步：让你做并拿走</strong><br>诱导赌你照做，收集赌你填账号，利用赌拿你去骗更多人。</div></div>
+    </div>
+    <div class="formula formula-concl">伪装 → 投递 → 触发 → 诱导 → 收集 → 利用</div>
+    <div class="deep">链是顺序的：前一步是后一步的前提，任何一步刹车，后面都接不上，这正是四个刹车点有效的原理。</div>
+  </div>
+</section>
+
+<section class="slide" data-narration="这是一封本校钓鱼演练邮件的真实界面截图，个人信息已经脱敏。请看左上角橙色的陌字，再看发件人信息技术部这个显示名，正文里写着二十四小时后冻结，下面有一个叫系统验证的链接。先别急着点，记住这几个位置。下一页我们把这封信逐字段拆开，看看显示名和真实域名到底差在哪。这值得多看一眼。">>
+  <div class="slide-head"><span class="sec">案例 · 真实截图</span><h3>我校邮箱里的原封信，长这样</h3></div>
+  <div class="slide-body">
+    <div class="figure" style="flex:1;display:flex;justify-content:center;align-items:flex-start;">
+      <img class="shot-img" src="assets/shots/phish-body.png" alt="本校邮件系统真实截图，已脱敏">
+    </div>
+    <div class="formula formula-concl" style="margin-top:8px"><b>真实截图 · 已脱敏</b>：左上「陌」标、发件人「信息技术部」、「24 小时后冻结」话术、「系统验证」链接，都是原信里的真实样子。</div>
+  </div>
+</section>
+
+<section class="slide" data-narration="看第一个邮件案例，本校演练邮件的前两步：伪装与投递。屏幕上这封显示名写着信息技术部，开头挂着橙色的陌字，主题是您的邮箱账户存在异地登录风险。注意两件事：第一，显示名可以随便填，它自称信息技术部不等于真是；第二，那个陌字只是校内系统提示这是陌生来信，不是钓鱼判决，正常外校学术邮件也带。这一步骗子在赌你信这个身份、赌这封信能进你的收件箱。把显示名和真实地址分开看，是拆这一步的关键，也是第3讲要细讲的内容。">
+  <div class="slide-head"><span class="sec">案例 · 伪装与投递</span><h3>显示名信息技术部，真身却不是校内</h3></div>
+  <div class="slide-body">
+    <div class="mail-box">
+      <div class="mb-row"><span class="mo">陌</span><span class="mb-k">发件人</span><span class="mb-v">信息技术部</span> <span class="mb-flag">显示名可伪造</span></div>
+      <div class="mb-row"><span class="mb-k">真实地址</span><span class="mb-v">fake@example.com</span> <span class="mb-bad">非校内域名</span></div>
+      <div class="mb-row"><span class="mb-k">收件范围</span><span class="mb-v">同一封信群发全校多个邮箱</span></div>
+      <div class="mb-row"><span class="mb-k">主题</span><span class="mb-v">您的邮箱账户存在异地登录风险</span></div>
+      <div class="mb-cap">前两步坐实：伪装成可信部门，批量投递进收件箱。陌是陌生来信提示，不是钓鱼判决，正常外校来信也带。</div>
+    </div>
+    <div class="tip">骗子在赌：你信这个显示名，且这封信能顺利躺进收件箱。拆法是把显示名和 @ 后面的真实域名分开看。</div>
+  </div>
+</section>
+
+<section class="slide" data-narration="看第二步案例，触发与诱导，这是骗子下功夫最重的地方。正文写着为保障邮件系统安全，您的邮箱账户将于二十四小时后冻结，请及时点击系统验证。这是一记权威加紧急的组合拳：权威让你不敢质疑，紧急让你来不及核实。这里骗子在赌你先动手后思考。注意那个系统验证链接，显示文字看着像校内系统，真实指向却是演练平台域名。把显示文字和真实链接分开，是拆这一步的核心，下一页专门把这条链接的真面目摊开看。">
+  <div class="slide-head"><span class="sec">案例 · 触发与诱导</span><h3>24 小时冻结，把你的思考时间挤掉</h3></div>
+  <div class="slide-body">
+    <div class="wire sm"><b>主题：您的邮箱账户存在异地登录风险</b>
+<i>正文：</i>为保障邮件系统安全，您的邮箱账户将于 24 小时后冻结。
+请及时点击下方链接完成系统验证，逾期将无法恢复。
+<i>按钮文字：</i>立即进行系统验证
+<i>真实指向：</i>phishsim.cacter.com/verify</div>
+    <div class="wire-cap">权威加紧急的组合拳：24 小时冻结是制造触发，系统验证按钮是诱导动作，两者都指向同一个外部链接。</div>
+    <div class="tip">骗子在赌：你看到冻结就慌，慌了就来不及换通道核实，直接照着按钮点下去。</div>
+  </div>
+</section>
+
+<section class="slide" data-narration="把那封邮件的链接单独拆开看，这是全案最关键的一处证据。邮件里按钮写着系统验证，看着像学校统一身份认证，可把鼠标移上去读状态栏，或者手机上长按预览，真实地址是 phishsim.cacter.com 这个演练平台域名，和学校一点关系没有。这里有两个陷阱：一是显示文字可以随便写，真实目标藏在链接属性里；二是即便页面有 HTTPS 小锁，也只是说明传输加密，不证明它是学校官方。骗子在收集这一步赌的就是你只看文字不看地址。记住链接文字不可信，只认真实地址。">
+  <div class="slide-head"><span class="sec">专题 · 真实指向</span><h3>显示文字像校内，真实域名露马脚</h3></div>
+  <div class="slide-body">
+    <div class="mail-box">
+      <div class="mb-row"><span class="mb-k">显示文字</span><span class="mb-v">系统验证 / 统一身份认证</span> <span class="mb-flag">看着可信</span></div>
+      <div class="mb-row"><span class="mb-k">真实链接</span><span class="mb-link">phishsim.cacter.com/verify</span> <span class="mb-bad">非校内域名</span></div>
+      <div class="mb-row"><span class="mb-k">页面标识</span><span class="mb-v">带 HTTPS 小锁的模拟登录页</span> <span class="mb-bad">小锁只证明加密</span></div>
+      <div class="mb-cap">收集凭据这一环：按钮文字是诱饵，真实域名才是证据。鼠标悬停看状态栏，手机长按看预览，就能当场识破。</div>
+    </div>
+    <div class="formula formula-concl">显示文字不可信　·　只认真实地址　·　小锁不等于官方</div>
+  </div>
+</section>
+
+<section class="slide" data-narration="第二个关键案例是演练平台落地页，它把收集凭据这一环长什么样摆在你眼前。顺着链路看：你点了系统验证，跳到 phishsim.cacter.com 上一个和学校登录页几乎一样的页面，要你输入学号和密码，你一填，凭据就被收走了。图上高亮的这一段就是收集，也是讲义里标红的不可逆点。为什么不可逆？因为密码一旦交出去，对方立刻就能拿它登录，你再改密码也追不回已经泄露的那一次。这一步骗子在赌你分不出高仿页和真页。第5讲会专门教怎么认出假登录页。">
+  <div class="slide-head"><span class="sec">案例 · 收集凭据</span><h3>一次点击，走到凭据被收走的不可逆点</h3></div>
+  <div class="slide-body">
+    <div class="mmd">
+      <div class="mermaid">
+flowchart LR
+  A["读到系统验证按钮"] --> B["点击跳转"] --> C["phishsim 模拟登录页"] --> D["输入学号和密码"] --> E["凭据被收集"]:::danger --> F["拿账号横向利用"]
+  classDef danger fill:#c53030,color:#ffffff,stroke:#742a2a,stroke-width:3px
+      </div>
+    </div>
+    <div class="cap">演练平台落地页：红色是不可逆点，密码交出后只能补救、不能阻止这一次泄露。</div>
+    <div class="deep">收集这一环骗子在赌你分不出高仿页与真页。统一身份认证页只从官方入口进，绝不从邮件链接进。</div>
+  </div>
+</section>
+
+<section class="slide" data-narration="现在把六步连起来逐步走一遍，按空格一步步展开，看骗子每一步在赌什么、你每一步能做什么。第一步伪装，赌你信身份，你能做的是别只看显示名。第二步投递，赌信进收件箱，你能做的是对陌生来信多留一眼。第三步触发，赌你着急，你能做的是看到限时先慢三分钟。第四步诱导，赌你照做，你能做的是不点邮件里的链接。第五步收集，赌你填账号，你能做的是只从官方入口登录。第六步利用，此时已经晚了，只能补救。前五步你都有刹车机会，第六步就只能止损。">
+  <div class="slide-head"><span class="sec">拆解</span><h3>六步逐步：赌什么，你能做什么</h3></div>
+  <div class="slide-body">
+    <div class="step"><p><strong>① 伪装</strong>：赌你信身份 → 别只看显示名，展开真实地址。</p></div>
+    <div class="step"><p><strong>② 投递</strong>：赌信进收件箱 → 对陌生来信多留一眼。</p></div>
+    <div class="step"><p><strong>③ 触发</strong>：赌你着急 → 看到限时先慢三分钟再动。</p></div>
+    <div class="step"><p><strong>④ 诱导</strong>：赌你照做 → 不点邮件里的链接与附件。</p></div>
+    <div class="step"><p><strong>⑤ 收集</strong>：赌你填账号 → 只从官方入口进登录页。</p></div>
+    <div class="step"><div class="formula formula-concl">⑥ 利用：已晚 → 只能改密、报备、追溯，代价陡增</div></div>
+    <p class="step-hint">按空格 / → 逐步展开六步的赌注与应对</p>
+  </div>
+</section>
+
+<section class="slide" data-narration="链上有四个能刹车的位置，记住它们比记破绽管用。第一个刹车点在发件人：展开真实地址，看 @ 后面是不是学校域名。第二个在话术：慢读一遍，凡是催你立刻、要求保密、绕开流程的都值得停。第三个在链接：不点邮件里的地址，改用悬挂预览或直接无视。第四个在核实：换一条独立于这封邮件的通道去确认，比如自己打开官网或打电话。前三个刹车点动用的是观察，第四个是动作，也是成本最低、最可靠的一个。下一页专门讲为什么换通道核实能一次切断后面好几步。">
+  <div class="slide-head"><span class="sec">刹车</span><h3>四个可刹车处，一处比一处靠后</h3></div>
+  <div class="slide-body">
+    <div class="chain">
+      <div class="link"><span class="no">1</span><span class="txt"><strong>看发件人</strong>：展开地址，看 @ 后面是不是校内域名</span></div>
+      <div class="link"><span class="no">2</span><span class="txt"><strong>慢读话术</strong>：催立刻、要保密、绕流程，先停三分钟</span></div>
+      <div class="link"><span class="no">3</span><span class="txt"><strong>不点链接</strong>：别在邮件里点，改用预览或官方入口</span></div>
+      <div class="link"><span class="no">4</span><span class="txt"><strong>换通道核实</strong>：走独立通道确认，成本最低</span></div>
+    </div>
+    <div class="tip">前三个靠观察，第四个靠动作；换通道核实一旦执行，后面触发、诱导、收集、利用四步同时断掉。</div>
+  </div>
+</section>
+
+<section class="slide" data-narration="为什么换通道核实成本最低，比找破绽可靠？因为找破绽是在赌邮件写得够笨，而现在的AI能把邮件写得滴水不漏，错别字和排版这些破绽会过期。换通道核实不问邮件写得好不好，只问一件事：学校真的发过这封通知吗？你要做的是离开这封信，自己打开学校官网或统一身份认证入口，或者打电话给部门确认。关键要求只有一条：核实通道必须独立于这封邮件，绝不能用邮件里给的链接和电话。哪怕邮件写得毫无破绽，这一步照样能一次切断触发、诱导、收集、利用后面四步。">
+  <div class="slide-head"><span class="sec">专题 · 换通道</span><h3>不看写得好不好，只问真的假的</h3></div>
+  <div class="slide-body">
+    <div class="cols">
+      <div class="col"><div class="card"><strong>找破绽：靠邮件写得笨</strong><br>盯错别字、排版、语气，可AI能写得很像，破绽会过期，失效了你就没防线。</div></div>
+      <div class="col"><div class="card"><strong>换通道：靠独立确认</strong><br>离开这封信，自己进官网或打电话，问学校到底发没发，邮件写得再真也拦不住。</div></div>
+    </div>
+    <div class="formula formula-concl">核实通道必须独立于这封邮件，绝不用它给的链接和电话</div>
+    <div class="deep">破绽会过期，动作不会：样式和文案会变，但换通道这个动作长期有效，且一次切断后面多步。</div>
+  </div>
+</section>
+
+<section class="slide" data-narration="把换通道核实这个动作再拆细，让你拿到就能用，按空格逐步展开。第一步，先停，什么也别点、别填、别回，尤其在邮件里被催着立刻做的时候。第二步，离开这封信，另开一个标签页，自己输入学校官网地址或用书签进统一身份认证，绝不在邮件链接里操作。第三步，用第二个渠道交叉确认，比如打部门公开电话、问同学或辅导员，核对其真假。第四步，确认是假的就按流程上报信息技术中心，并保留原信头方便追溯。这四步里没有一步依赖你看出邮件写得笨不笨，所以才可靠。">
+  <div class="slide-head"><span class="sec">动作</span><h3>换通道核实的四步操作</h3></div>
+  <div class="slide-body">
+    <div class="step"><p><strong>① 先停</strong>：不点、不填、不回，被催立刻做时尤其要停。</p></div>
+    <div class="step"><p><strong>② 离开这封信</strong>：另开标签页，自己输官网地址或用书签进官方入口。</p></div>
+    <div class="step"><p><strong>③ 交叉确认</strong>：打公开电话、问辅导员或同学，走第二个渠道核对。</p></div>
+    <div class="step"><p><strong>④ 上报留证</strong>：确认是假的就报信息技术中心，保留原信头便于追溯。</p></div>
+    <p class="step-hint">按空格 / → 逐步展开四步操作</p>
+    <div class="tip">四步都不靠判断邮件写得笨不笨，所以比找破绽可靠；第 7 讲会把这套动作固化成标准流程。</div>
+  </div>
+</section>
+
+<section class="slide" data-narration="轮到你了。屏幕上这封演练邮件，请你自己判一遍：它在攻击链的哪一步，骗子在赌什么，你该在哪一步刹车。先暂停自己判一遍。判完了吗？好，对答案。它用信息技术部伪装身份，属第一步；二十四小时冻结制造触发，属第三步；系统验证按钮诱导动作，属第四步；真实域名指向演练平台，收集凭据，属第五步。你的刹车点最稳的是第四步不点链接，或者干脆换通道核实，一次断掉后面。如果你刚才先看的是有没有错别字，那正好说明找破绽这条路不牢靠。">
+  <div class="slide-head"><span class="sec">演练</span><h3>自己判一遍：它在哪一步，你在哪刹车</h3></div>
+  <div class="slide-body">
+    <div class="wire sm"><b>发件人：</b>信息技术部 · 真实地址 fake@example.com
+<b>主题：</b>您的邮箱账户存在异地登录风险
+<i>正文：</i>24 小时后将冻结，请点击系统验证。
+<i>真实链接：</i>phishsim.cacter.com/verify</div>
+    <div class="wire-cap">同一封演练邮件：先自己标出六步中它走到了哪几步，再说你会踩哪个刹车。</div>
+    <div class="pause"><div class="icon">停</div><div class="txt"><b>暂停演练</b><p>合上答案，自己写出它用到的步骤、骗子每步的赌注，以及你选的刹车点。</p></div></div>
+    <div class="step"><p>① 伪装身份加 24 小时冻结加系统验证：走到伪装、触发、诱导、收集四步。</p></div>
+    <div class="step"><p>② 最稳的刹车是<strong>不点链接并换通道核实</strong>：一次断掉后面触发、诱导、收集、利用。</p></div>
+    <p class="step-hint">按空格 / → 逐步揭示答案</p>
+  </div>
+</section>
+
+<section class="slide" data-narration="再看一个容易被忽略的事实：越往链的后段，止损的代价越大。在伪装和投递阶段，你只要多看一眼、慢一点，几乎零成本。到了触发和诱导，你要忍住不点，成本是一次克制。一旦走到收集，凭据已经交出去，就只能改密码，还得冻结账号、向学校报备、保留证据追溯，成本陡增。到了横向利用，你的账号可能已经骗到别人，损失往往追不回。图上把收集标成红色不可逆点，就是提醒你：防线要尽量往前放，越早刹车越省事。这就是为什么四个刹车点里，越靠前的观察越该养成习惯。">
+  <div class="slide-head"><span class="sec">专题 · 成本</span><h3>越往右，止损越贵</h3></div>
+  <div class="slide-body">
+    <div class="mmd mmd-sm">
+      <div class="mermaid">
+flowchart LR
+  A["伪装 投递"]:::low --> B["触发 诱导"]:::mid --> C["收集凭据"]:::high --> D["横向利用"]:::high
+  classDef low fill:#2f855a,color:#ffffff,stroke:#276749,stroke-width:2px
+  classDef mid fill:#d69e2e,color:#ffffff,stroke:#975a16,stroke-width:2px
+  classDef high fill:#c53030,color:#ffffff,stroke:#742a2a,stroke-width:3px
+      </div>
+    </div>
+    <div class="cap">绿：多一眼、慢一点，近零成本。黄：忍住不点，一次克制。红：改密、冻结、报备、追溯，代价陡增。</div>
+    <div class="deep">凭据一旦交出，后续只能补救、不能阻止；所以四个刹车点要尽量往前用，越早越省。</div>
+  </div>
+</section>
+
+<section class="slide" data-narration="把两条防线的有效期并排比一比，你会更清楚该把力气花在哪。识别破绽这条线，靠的是邮件写得笨：错别字、怪排版、错域名，这些看着好用，可AI一写好文案、骗子一换域名就全过期了，你背的清单跟着失效。阻断动作这条线，靠的是你稳定的操作：看发件人、慢读话术、不点链接、换通道核实，这些动作跟邮件写得好不好无关，长期有效。一张表看下来，破绽是别人给的会变，动作是你自己的不变。所以本讲反复强调：别把识别破绽当唯一防线，要把四个刹车动作练熟。">
+  <div class="slide-head"><span class="sec">对照</span><h3>识别破绽会过期，阻断动作不会</h3></div>
+  <div class="slide-body">
+    <table class="small">
+      <thead><tr><th>对比维度</th><th>识别破绽</th><th>阻断动作</th></tr></thead>
+      <tbody>
+        <tr><td class="l">靠什么</td><td class="l">邮件写得笨：错别字、怪排版、错域名</td><td class="l">你的固定操作：看、慢、不点、核实</td></tr>
+        <tr><td class="l">谁决定有效期</td><td class="l">骗子和AI，他们一改进就过期</td><td class="l">你自己，动作不随邮件样式变化</td></tr>
+        <tr><td class="l">遇到高仿邮件</td><td class="l">找不到破绽就失守</td><td class="l">换通道核实照样能挡住</td></tr>
+        <tr><td class="l">能切断几步</td><td class="l">最多识破一封，下次换个样又来</td><td class="l">一次刹车断掉后面多步</td></tr>
+      </tbody>
+    </table>
+    <div class="formula formula-concl">破绽是别人给的，会过期；动作是你自己的，不会</div>
+  </div>
+</section>
+
+<section class="slide" data-narration="扫三个最常见的雷。第一个，以为带陌就是钓鱼，其实陌只是陌生来信提示，正常外校学术邮件也带，看到它该做的是核实，不是直接下判决。第二个，以为邮件写得没错别字、有小锁就安全，其实AI能写好文案，小锁只证明传输加密，都不证明发件人是谁。第三个，以为凭据交出去还能靠删邮件挽回，其实密码一交，对方立刻拿去登录，垃圾箱删掉毫无用处，正确动作是先改密再报备。这三个误解有个共同点：都在拿一个会过期的表面特征当判决。记住链的思路，任何时候都回到这封信走到哪一步、我该在哪刹车。">
+  <div class="slide-head"><span class="sec">避坑</span><h3>三个把提示当判决、把表面当安全的误解</h3></div>
+  <div class="slide-body">
+    <div class="trap">❌ <strong>带陌就是钓鱼，见陌就删</strong><br>✅ 陌只是陌生来信提示，不是判决；正常外校来信也带，看到它要核实后再下结论。</div>
+    <div class="trap">❌ <strong>没错别字、带小锁，就说明是官方</strong><br>✅ AI能写没有错别的文案，HTTPS小锁只证明传输加密，都不证明发件人身份。</div>
+    <div class="trap">❌ <strong>凭据交出去后，删掉邮件就没事了</strong><br>✅ 密码一交对方立刻登录，删信无用；正确顺序是先改密、再冻结报备、留证追溯。</div>
+  </div>
+</section>
+
+<section class="slide" data-narration="这一讲和下一讲怎么分工，说清楚才不会重复用功。本讲画的是整条链的全景：六步的顺序、每步骗子的赌注、四个刹车处，以及换通道核实为什么成本最低。下一讲进入第一个检查点，专门看谁发的，教你怎么从显示名走到真实地址，认识近似域名和子域混淆，以及陌字标识的正确用法。本讲告诉你链上有四个刹车点，第3讲详细展开其中最靠前的一个。换句话说，本讲给地图，后面几讲逐个放大地图上的每一个路口。下一讲我们从发件人这一站开始，回答显示名、真实地址、回复地址到底哪个才算数。">
+  <div class="slide-head"><span class="sec">接口</span><h3>第 2 讲给地图，第 3 讲放大第一站</h3></div>
+  <div class="slide-body">
+    <table>
+      <thead><tr><th></th><th>第 2 讲</th><th>第 3 讲</th></tr></thead>
+      <tbody>
+        <tr><td class="l"><strong>粒度</strong></td><td class="l">整条链的全景与刹车点</td><td class="l">链上第一站：谁发的</td></tr>
+        <tr><td class="l"><strong>核心对象</strong></td><td class="l">六步、四刹车、换通道核实</td><td class="l">显示名、真实地址、陌字标识</td></tr>
+        <tr><td class="l"><strong>回答什么</strong></td><td class="l">骗子走到哪一步、我在哪刹车</td><td class="l">哪个地址才算发件人、陌能不能当判决</td></tr>
+      </tbody>
+    </table>
+    <div class="tip">钩子：本讲说第一步伪装要展开真实地址，第 3 讲就教你具体怎么看出近似域名与子域混淆。</div>
+  </div>
+</section>
+
+<section class="slide" data-narration="用三句话收束第2讲。解决什么：把一次上当从发件到得手拉成一条六步链，让你看清每一步骗子在赌什么、你能在哪一步刹车。核心机制：六个环节顺序相连，前一步是后一步的前提，链上有四个刹车处，其中换通道核实成本最低，因为它独立于这封邮件，一次切断后面多步。承上启下：第1讲给了三种情绪触发，本讲给它们排成链，第3讲开始逐个放大四个检查点。请记住两句话：破绽会过期，动作不会；越往链的后段，止损越贵。合上书也要能默出这六步。">
+  <div class="slide-head"><span class="sec">小结</span><h3>三句话讲完第 2 讲</h3></div>
+  <div class="slide-body">
+    <div class="chain">
+      <div class="link"><span class="no">1</span><span class="txt"><strong>解决什么</strong>：把从发件到得手拉成六步链，看清每步赌注与刹车处</span></div>
+      <div class="link"><span class="no">2</span><span class="txt"><strong>核心机制</strong>：四刹车处中换通道核实成本最低，一次切断后面多步</span></div>
+      <div class="link"><span class="no">3</span><span class="txt"><strong>承上启下</strong>：第1讲给情绪触发，本讲排成链，第3讲放大第一个检查点</span></div>
+    </div>
+    <div class="formula formula-concl">破绽会过期，动作不会　·　越往链后段，止损越贵</div>
+  </div>
+</section>
+
+<section class="slide slide-cover" data-narration="第2讲到这儿结束。给你留四项毕业挑战，合上书拿一张纸完成：第一，按顺序默出六步，并说出每一步骗子在赌什么；第二，在链上标出四个刹车处，指出哪一处成本最低；第三，解释为什么换通道核实能一次切断后面多步，且通道必须独立于这封邮件；第四，用两句话说明破绽会过期、动作不会，以及越往链后段止损越贵。全做出来，再点讲义底部的完成按钮，让复习提醒开始计时。下一讲，我们进入第一个检查点，看谁发的。">
+  <div class="kicker">第 2 讲 结束</div>
+  <h1>看清每一步，刹车在前头</h1>
+  <div class="sub">毕业挑战：合上书，拿一张纸</div>
+  <div class="divider"></div>
+  <div class="meta">
+    ☑ 默出六步并说出每步赌注　　☑ 标出四个刹车处并指出成本最低的一处<br>
+    ☑ 解释换通道核实为何一次断多步、通道须独立　　☑ 说明破绽会过期动作不会、后段止损更贵<br><br>
+    下一讲 · 第 3 讲 谁发的：发件人与陌字标识
+  </div>
+</section>
+
+  <!-- 页脚：brand 改为本章标题；总页数改 pagenum 初值 -->
+  <div id="footer">
+    <span class="brand">第2讲 攻击链六步 · 别急着点：校园钓鱼邮件识别 课件　<a class="to-lec" href="../phishing-guide/index.html">讲义首页 ↗</a><span class="ai-mark">内容由 AI 生成</span></span>
+    <span id="pagenum">1 / 1</span>
+  </div>
+
+  <!-- 导航 -->
+  <div class="nav">
+    <button id="prev" title="上一页 (←)">‹</button>
+    <button id="next" title="下一页 (→ / 空格)">›</button>
+  </div>
+  <div id="hint">← → 翻页 · 空格下一页 · 推导页逐步显示 · 点击左右半屏翻页</div>
+
+</div>
+
+<!-- mermaid 本地引用，保证离线可用；初始化参数全套课件统一，勿改 -->
+<script src="assets/mermaid.min.js"></script>
+<script>
+mermaid.initialize({
+  startOnLoad: false,   // 必须为 false：display:none 的隐藏页渲染会得到 0 宽高的退化 SVG，
+                        // 改为页面激活时懒渲染（见 renderMermaid）
+  theme: "base",
+  themeVariables: {
+    primaryColor: "#ebf8ff",
+    primaryBorderColor: "#2b6cb0",
+    primaryTextColor: "#1a365d",
+    lineColor: "#718096",
+    fontFamily: "-apple-system, PingFang SC, sans-serif",
+    fontSize: "15px"
+  },
+  flowchart: { curve: "linear", htmlLabels: false }
+});
+</script>
+<script>
+(function(){
+  const slides = Array.from(document.querySelectorAll('.slide'));
+  const total = slides.length;
+  let idx = 0;
+
+  const params = new URLSearchParams(location.search);
+  const startSlide = parseInt(params.get('slide'), 10);
+  if (params.get('autohide') === '1') document.body.classList.add('autohide');
+  if (!isNaN(startSlide) && startSlide >= 1 && startSlide <= total) idx = startSlide - 1;
+
+  const progress = document.getElementById('progress');
+  const pagenum = document.getElementById('pagenum');
+  const prevBtn = document.getElementById('prev');
+  const nextBtn = document.getElementById('next');
+
+  // 推导分步：每页记住已展开的步数；autohide（截图）模式下 CSS 强制全显
+  const stepState = new Map();
+  function stepsOf(i){ return Array.from(slides[i].querySelectorAll('.step')); }
+  function applySteps(){
+    stepsOf(idx).forEach((el, k)=> el.classList.toggle('on', k < (stepState.get(idx) || 0)));
+  }
+  // 前进一步：先展开本页下一步，全部展开后才翻页
+  function forward(){
+    const steps = stepsOf(idx);
+    const shown = stepState.get(idx) || 0;
+    if (shown < steps.length){ stepState.set(idx, shown + 1); applySteps(); return; }
+    go(idx + 1);
+  }
+  // 后退一步：先收起本页最后一步，收完才回上一页
+  function backward(){
+    const steps = stepsOf(idx);
+    const shown = stepState.get(idx) || 0;
+    if (shown > 0){ stepState.set(idx, shown - 1); applySteps(); return; }
+    go(idx - 1);
+  }
+
+  // mermaid 懒渲染：只在页面激活（有真实宽高）时渲染该页的图，渲染后打 data-done 防重复
+  function renderMermaid(slide){
+    if (typeof mermaid === 'undefined') return;
+    const nodes = Array.from(slide.querySelectorAll('.mermaid:not([data-done])'));
+    if (!nodes.length) return;
+    nodes.forEach(n => n.setAttribute('data-done', ''));
+    mermaid.run({ nodes }).catch(err => {
+      nodes.forEach(n => n.removeAttribute('data-done'));
+      console.error('mermaid 渲染失败：', err);
+    });
+  }
+
+  function render(){
+    slides.forEach((s,i)=> s.classList.toggle('active', i===idx));
+    progress.style.width = ((idx+1)/total*100) + '%';
+    pagenum.textContent = (idx+1) + ' / ' + total;
+    prevBtn.disabled = (idx===0);
+    nextBtn.disabled = (idx===total-1);
+    applySteps();
+    renderMermaid(slides[idx]);
+  }
+  function go(n){ idx = Math.max(0, Math.min(total-1, n)); render(); }
+
+  prevBtn.addEventListener('click', e=>{ e.stopPropagation(); backward(); });
+  nextBtn.addEventListener('click', e=>{ e.stopPropagation(); forward(); });
+
+  document.addEventListener('keydown', e=>{
+    if(e.key==='ArrowRight'||e.key===' '||e.key==='PageDown'){ e.preventDefault(); forward(); }
+    else if(e.key==='ArrowLeft'||e.key==='PageUp'){ e.preventDefault(); backward(); }
+    else if(e.key==='Home'){ stepState.set(idx, 0); go(0); }
+    else if(e.key==='End'){ go(total-1); }
+  });
+
+  document.getElementById('stage').addEventListener('click', e=>{
+    if(e.target.closest('.nav') || e.target.closest('a')) return;
+    const x = e.clientX;
+    if(x < window.innerWidth*0.5) backward(); else forward();
+  });
+
+  function fit(){
+    const s = Math.min(window.innerWidth/1280, window.innerHeight/720);
+    document.getElementById('stage').style.transform = 'translate(-50%,-50%) scale(' + s + ')';
+  }
+  window.addEventListener('resize', fit);
+  fit();
+  render();
+
+  // ── 录视频模式：?auto=1&durs=毫秒逗号串&gap=毫秒 ──
+  // 每页按旁白时长自动推进：先把本页 .step 逐条展开，全部展开后再翻下一页；
+  // 播放结束置 window.__recDone=true，并记录每页真实翻页时刻 __marks 供音画对齐。
+  // 时序：加 &armed=1 时不自动启动，等录制方调用 window.__arm() 后才开始计时
+  //（保证 screencast 帧时基与页面时基零偏移）。
+  (function(){
+    const qs = new URLSearchParams(location.search);
+    if (qs.get('auto') !== '1') return;
+    // 只加 recording（隐藏 UI），不加 autohide——autohide 会强制全显分步，
+    // 破坏「先自己判、再揭晓」的教学节奏；分步由下面按节奏逐条展开。
+    document.body.classList.add('recording');
+    const armed = qs.get('armed') === '1';
+
+    function startShow(){
+      const raw = (qs.get('durs') || '').split(',').map(Number);
+      const gapMs = Number(qs.get('gap') || 260);
+      const durs = slides.map((_, k) => (isFinite(raw[k]) && raw[k] > 0 ? raw[k] : 4000));
+      // 可选的逐页 step 展开时刻覆盖（演练页用），格式:
+      //   stepat=页索引:时刻1|时刻2|...;页索引:时刻1|...   （时刻为页内毫秒）
+      // 不传则完全走原来的均分逻辑，对其它讲零影响。
+      const stepAt = new Map();
+      const stepatRaw = qs.get('stepat') || '';
+      for (const seg of stepatRaw.split(';')){
+        if (!seg) continue;
+        const [pStr, timesStr] = seg.split(':');
+        const pIdx = Number(pStr);
+        if (!isFinite(pIdx) || !timesStr) continue;
+        const times = timesStr.split('|').map(Number).filter(x => isFinite(x));
+        if (times.length) stepAt.set(pIdx, times);
+      }
+      // 每页旁白时长按 .step 数量 +1 份均分（1 份给静态展示，1 份给每个分步）
+      // 若该页在 stepAt 中指定了时刻，则用指定值替换（演练页让答案卡在旁白念答案时出现）
+      const sched = [];   // [{page, tMs}] 顺序事件：展步 / 翻页
+      let acc = 0;
+      for (let p = 0; p < total; p++){
+        const steps = stepsOf(p).length;
+        const slice = durs[p] / (steps + 1);
+        const override = stepAt.get(p);
+        for (let sIdx = 0; sIdx < steps; sIdx++){
+          const at = (override && isFinite(override[sIdx])) ? override[sIdx] : slice * (sIdx + 1);
+          sched.push({ page: p, tMs: acc + at, kind: 'step' });
+        }
+        sched.push({ page: p, tMs: acc + durs[p], kind: 'flip' });
+        acc += durs[p] + (p < total - 1 ? gapMs : 0);
+      }
+      window.__t0epoch = Date.now();
+      window.__t0perf = performance.now();
+      window.__marks = { 0: performance.now() };
+      window.__sched = sched;  // 调试用：暴露展开调度表（对播放无影响）
+      for (const ev of sched){
+        setTimeout(() => {
+          if (ev.kind === 'step'){
+            const shown = stepState.get(ev.page) || 0;
+            if (shown < stepsOf(ev.page).length){ stepState.set(ev.page, shown + 1); if (idx === ev.page) applySteps(); }
+          } else {
+            go(ev.page + 1);
+            window.__marks[ev.page + 1] = performance.now();
+          }
+        }, ev.tMs);
+      }
+      setTimeout(() => { window.__recDone = true; window.__recTotalMs = acc; }, acc + 400);
+    }
+
+    if (armed) window.__arm = startShow; else startShow();
+  })();
+})();
+</script>
+</body>
+</html>

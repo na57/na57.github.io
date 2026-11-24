@@ -1,0 +1,832 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第5讲 HTTP 缓存 · HTTP 精通</title>
+<link rel="stylesheet" href="assets/style.css">
+<style>
+/* 本套专用：协议报文原文展示与 MDN 来源条 */
+.wire{background:var(--bg-deep);border:1px solid var(--line);border-left:4px solid var(--accent);border-radius:8px;padding:14px 18px;margin:14px 0;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:13.5px;line-height:1.78;white-space:pre-wrap;overflow-wrap:anywhere;color:var(--ink-soft);}
+.wire b{color:var(--accent);font-weight:700;}
+.wire i{color:var(--orange);font-style:normal;}
+.wire em{color:var(--ink-faint);font-style:normal;}
+.wire.sm{font-size:12.5px;}
+.wire-cap{font-size:13px;color:var(--ink-faint);margin:-8px 0 16px;}
+.mdn-src{background:var(--bg-deep);border:1px solid var(--line);border-left:4px solid var(--accent);border-radius:8px;padding:12px 18px;margin:16px 0 0;font-size:13px;line-height:1.8;color:var(--ink-soft);}
+.mdn-src strong{color:var(--accent);}
+.mdn-src a{color:var(--accent);text-decoration:none;border-bottom:1px dashed var(--line);}
+.mdn-src a:hover{border-bottom-style:solid;}
+.to-slide{font-size:13px;color:var(--accent);text-decoration:none;border:1px solid var(--line);border-radius:6px;padding:4px 11px;white-space:nowrap;}
+.to-slide:hover{background:var(--bg-deep);}
+</style>
+</head>
+<body>
+
+<nav class="topbar">
+  <div class="topbar-inner">
+    <span class="brand"><a href="index.html" style="color:inherit">← HTTP 精通 · 学习地图</a></span>
+    <span class="crumb">第②组 · 连接与缓存 / 第5讲</span>
+    <a class="to-slide" href="../http-guide-slides/05-HTTP%E7%BC%93%E5%AD%98-%E8%AF%BE%E4%BB%B6.html" target="_blank" rel="noopener noreferrer">配套课件 ↗</a>
+  </div>
+</nav>
+
+<div class="wrap">
+
+  <div class="lecture-head">
+    <span class="ch-label">GUIDE 05 · 连接与缓存</span>
+    <h1>HTTP 缓存</h1>
+    <p class="lead">第 4 讲减少了建连接的次数，本讲减少传输的字节——缓存是 HTTP 里最值钱也最容易配错的一套规则。</p>
+    <div class="mdn-src"><strong>本讲对应的 MDN 指南：</strong><a href="https://developer.mozilla.org/zh-CN/docs/Web/HTTP/Guides/Caching" target="_blank" rel="noopener">HTTP 缓存</a></div>
+  </div>
+
+  <!-- 本章定位 -->
+  <div class="position-bar">
+    <strong>本讲在主线上的位置：</strong>第 4 讲的连接复用：少建立连接 → <u>本讲：HTTP 缓存</u> → 第 6 讲用条件请求与范围请求把「不传」做到极致。<br>
+    第5讲回答主线上的第5个问题：<strong>一份响应能不能被复用，由谁说了算？为什么两个用户同一个 URL 会拿到不同的缓存副本？</strong>
+    <div class="map-inline">
+      <span class="node">第4讲 HTTP/1.x 的连接管理</span><span class="arrow">→</span>
+      <span class="node here">第5讲 HTTP 缓存</span><span class="arrow">→</span>
+      <span class="node">第6讲 条件请求与范围请求</span><span class="arrow">→</span>
+      <span class="node">第7–10讲 状态与安全</span><span class="arrow">→</span>
+      <span class="node">第11–12讲 中间层与分发</span>
+    </div>
+  </div>
+
+  <!-- 学习目标 -->
+  <div class="objectives">
+    <h4>🎯 学完本讲，合上书你应该能：</h4>
+    <ol>
+      <li>区分私有缓存与共享缓存，说明浏览器缓存与 CDN 缓存的决策差异</li>
+      <li>根据 Date、Age、max-age 手算响应何时过期，并写出当前是否新鲜的判定式</li>
+      <li>说出 no-cache、no-store、must-revalidate、immutable 各自的实际含义</li>
+      <li>解释 Vary 首部如何成为缓存键的一部分，并推演漏写 Vary 造成发错表示的过程</li>
+      <li>为静态资源与个性化接口分别给出一套可用的 Cache-Control 配置</li>
+    </ol>
+  </div>
+
+  <!-- 视频卡插槽：后面录制 B 站讲解时在此插入 <details class="video-card" id="video-card">…</details> -->
+  <!-- VIDEO_CARD_SLOT -->
+
+  <div class="lecture">
+
+    <!-- 推导主线图 -->
+    <div class="figure">
+      <div class="mermaid">
+flowchart LR
+  A["请求命中缓存键"]
+  B["查是否有存储副本"]
+  C["按年龄判定新鲜度"]
+  D["新鲜则直接返回"]
+  E["陈旧则再验证或重取"]
+  F["缓存键漏写导致错发"]
+  A --> B
+  B --> C
+  C --> D
+  C --> E
+  E --> F
+  classDef hot fill:#fbeedd,stroke:#c4651f,stroke-width:2.5px,color:#c4651f;
+  classDef danger fill:#fae9e7,stroke:#b03a2e,stroke-width:2.5px,color:#b03a2e;
+  class C hot;
+  class F danger;
+      </div>
+      <div class="caption">缓存决策链：先找键，再判新鲜度，新鲜直接返回、陈旧去再验证；红色节点是 Vary 配置错误时最典型的线上事故。</div>
+    </div>
+
+<!-- ============ 5.1 ============ -->
+    <h2><span class="sec-no">5.1</span>同一 URL 为何给出两种答案：缓存放在谁手里，决定谁能看到它</h2>
+
+    <p>第 4 讲让连接不必每次重建，省下的是握手的时间；本讲要省的是重复传输的字节。顺着主线往下走，连接复用回答的是「这条路要修几次」，而<span class="term">缓存</span>（Cache）回答的是「同一份东西要不要再送一遍」。但缓存一旦开始替服务器回答请求，就立刻撞上一个更要紧的问题：这份副本该放在谁手里？放对了地方，省下带宽又减轻源站；放错了地方，省下的字节会换来一次货真价实的信息泄露。</p>
+
+    <p>先看一个反例，它把「放错地方」的后果摆得很直白。某站内登录后返回一个带用户名的页面片段，源站把它发给了路径上的一台共享缓存：</p>
+
+    <div class="wire"><b>GET /dashboard HTTP/1.1</b>
+<b>Host:</b> app.example.com
+<b>Cookie:</b> session=alice-token
+
+<i>HTTP/1.1 200 OK</i>
+<i>Content-Type:</i> text/html; charset=utf-8
+<i>Set-Cookie:</i> session=alice-token; HttpOnly; Secure
+<i>Cache-Control:</i> max-age=600
+
+&lt;h1&gt;你好，Alice&lt;/h1&gt;</div>
+    <div class="wire-cap">危险配置：响应里带着 Alice 的个性化内容，却只写了 max-age，没有 private。共享缓存会把这份副本按 URL 存下来。</div>
+
+    <p>十分钟内，另一个用户 Bob 请求同一个 <code>GET /dashboard</code>。共享缓存发现 URL 相同、副本还新鲜，于是把 Alice 的「你好，Alice」原样递给了 Bob。这里没有黑客，没有注入，只有一条配错的 <code>Cache-Control</code>。MDN 把这件事说得很清楚：如果个性化内容被存进私有缓存以外的缓存，其他用户就可能取到它，从而造成无意的信息泄露。</p>
+
+    <p>要钉住「谁能看到副本」这件事，先得给缓存分类。MDN 依据缓存<strong>是否与特定客户端绑定</strong>，把 HTTP 缓存分成两大类。</p>
+
+    <p><strong>第一类，<span class="term">私有缓存</span>（Private Cache）。</strong>它绑定到特定客户端，典型就是<span class="term">浏览器缓存</span>（Browser Cache）：这份副本只为这一个用户服务，不会与其他人共享。正因为不共享，私有缓存<strong>可以存该用户的个性化响应</strong>。如果一份响应含个性化内容、且你只希望特定客户端保存它，就必须显式写出 <code>Cache-Control: private</code>。</p>
+
+    <p><strong>第二类，<span class="term">共享缓存</span>（Shared Cache）。</strong>它位于客户端和服务器之间，能存储可在用户之间共享的响应。MDN 又把它细分为两种：一是<span class="term">代理缓存</span>（Proxy Cache），由路径上的代理实现，用来减少网络流量，通常不由服务开发人员管理，只能靠恰当的 HTTP 首部去约束；二是<span class="term">托管缓存</span>（Managed Cache），由服务开发人员明确部署以降低源站负载、高效交付内容，例子包括反向代理、<span class="term">内容分发网络</span>（CDN, Content Delivery Network）以及 service worker 与 Cache API 的组合。</p>
+
+    <div class="figure">
+      <div class="mermaid">
+flowchart LR
+  A["浏览器私有缓存"] --> B["共享代理缓存"]
+  B --> C["CDN 边缘托管缓存"]
+  C --> D["源站"]
+  E["个性化响应只能进 A"] -.-> A
+  F["可共享静态资源可进 C"] -.-> C
+  classDef hot fill:#fbeedd,stroke:#c4651f,stroke-width:2.5px,color:#c4651f;
+  class A hot;
+      </div>
+      <div class="caption">图 5.1 缓存按「与客户端绑定与否」分层：越靠近用户的缓存越能安全地存个性化内容，越靠共享侧的缓存越要谨慎。</div>
+    </div>
+
+    <p><strong>浏览器缓存与 CDN 缓存的决策差异</strong>是本讲反复要用的判断。它们虽都叫缓存，但服务的目标不同，因而对同一条首部的反应也不同。浏览器缓存归单个用户私有，可以存带身份的响应；CDN 缓存归成千上万用户共享，一旦存了个性化内容就是事故。反过来，CDN 擅长的是那些「所有人拿到都一样」的静态资源，可以 aggressively 地缓存很久；浏览器则要在「省流量」和「看到最新版」之间替用户反复权衡。</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>维度</th><th>浏览器缓存（私有）</th><th>CDN / 代理缓存（共享）</th></tr>
+        <tr><td>服务对象</td><td>单一用户，副本不与他人共享</td><td>多个用户，副本可能被任意请求命中</td></tr>
+        <tr><td>能否存个性化响应</td><td>可以，且应显式标记 private</td><td>不可以，否则造成信息泄露</td></tr>
+        <tr><td>谁在控制</td><td>浏览器实现 + 响应首部</td><td>HTTP 首部 + 部署方的配置面板 / API</td></tr>
+        <tr><td>典型诉求</td><td>后退/前进即时返回、少下重复字节</td><td>降低源站负载、把内容放到离用户近处</td></tr>
+        <tr><td>能否主动清除</td><td>用户刷新、强制刷新、清历史</td><td>面板操作、API 调用、重启等（标准未定义显式删除）</td></tr>
+        <tr><td>对自定义首部的态度</td><td>基本只认标准 Cache-Control</td><td>可能用 Surrogate-Control、CDN-Cache-Control 等专属首部</td></tr>
+      </table>
+    </div>
+
+    <p>还有一个极易踩的坑必须在这里点破：<strong>cookie 的存在本身并不说明响应是私有的</strong>。MDN 明确讲，个性化内容通常由 cookie 控制，但「带了 cookie」与「是私有响应」是两件事。所以不能指望缓存看见 Set-Cookie 就自动帮你隔离；要靠你自己写 <code>private</code>。同理，想阻止别人复用个性化内容，正确做法是 <code>Cache-Control: private</code>，而<strong>不是</strong>去 <code>Vary</code> 里塞一个 Cookie。这个对比会在 5.4 节展开。</p>
+
+    <div class="box insight">
+      <span class="box-tag">✅ 判定规则</span>
+      <p>拿到一份响应，先只问一句：<strong>它是否因用户身份而不同？</strong>不同 → 它是个性化响应，只能进私有缓存，写 <code>private</code>；所有用户拿到都一样 → 可以进共享缓存，用 <code>max-age</code> 决定放多久。这个问题答错，后面所有新鲜度计算都白搭。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>「HTTPS 加密了，代理看不到响应，所以个性化内容不会被共享缓存存下来」——只对了一半。HTTPS 普及后，路径上的代理缓存往往只能隧道传输、确实无法缓存；但如果企业用 TLS 桥接代理（在终端装上组织 CA 证书、以中间人方式解密），代理就能看见内容并缓存它。更关键的是，CDN 这类托管缓存本来就能被服务方配置成读取特定首部。把安全性寄托在「别人看不见」上，不如自己写清楚 <code>private</code>。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front"><div class="q-tag">回忆 5.1-1</div><div class="q-text">私有缓存与共享缓存的分界是什么？为什么 cookie 不能当分界？</div><span class="tap">点击翻面 →</span></div>
+            <div class="flip-face flip-back"><div class="a-tag">参考答案</div>分界是「是否与特定客户端绑定、是否与他人共享」。私有缓存（浏览器）可存个性化响应；共享缓存（代理、CDN）存个性化响应会泄露。cookie 只是常见个性化手段， presence 本身不等于私有，必须由 <code>private</code> 指令声明。</div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front"><div class="q-tag">回忆 5.1-2</div><div class="q-text">浏览器缓存与 CDN 缓存的决策差异，用一句话各说一条。</div><span class="tap">点击翻面 →</span></div>
+            <div class="flip-face flip-back"><div class="a-tag">参考答案</div>浏览器缓存服务单用户、可存身份相关内容、看重后退/前进即时返回；CDN 服务多用户、只存可共享内容、看重降源站负载与就近交付，且可通过面板/API 主动清除（标准未定义显式删除）。</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 5.2 ============ -->
+    <h2><span class="sec-no">5.2</span>「能存」不等于「能直接用」：四条最容易混淆的 Cache-Control 指令</h2>
+
+    <p>上一节解决了副本放在哪里，接下来要解决副本放多久、以及用之前要不要再问一句。承上启下地说，类型判断决定「谁可以存」，而 <span class="term">Cache-Control</span>（Cache-Control）首部决定「存下来之后怎么用」。MDN 把这套首部里最常被搞混的四条指令——no-cache、no-store、must-revalidate、immutable——分在「验证」「不使用缓存」「避免重新验证」几个不同话题下讲；这里把它们摆到同一张判定表里，一次性钉死。</p>
+
+    <p>先看一条把四条的用法都串起来的响应。假设这是一份内容可能变化的主资源 HTML：</p>
+
+    <div class="wire"><i>HTTP/1.1 200 OK</i>
+<i>Content-Type:</i> text/html; charset=utf-8
+<i>Content-Length:</i> 1024
+<i>Date:</i> Tue, 22 Feb 2022 22:22:22 GMT
+<i>Last-Modified:</i> Tue, 22 Feb 2022 22:00:00 GMT
+<i>ETag:</i> "deadbeef"
+<b>Cache-Control:</b> no-cache
+
+&lt;!doctype html&gt;…</div>
+    <div class="wire-cap">no-cache 并不阻止存储：这份响应会被存进缓存，只是每次复用前都必须先向源站再验证。</div>
+
+    <p>逐条拆开这四条指令的准确含义：</p>
+
+    <p><strong>no-cache</strong>：MDN 的原话是「不会阻止响应的存储，而是阻止在没有重新验证的情况下重用响应」。也就是说它是「可存，但用之前必须验证」。配合 <code>Last-Modified</code> / <code>ETag</code>，资源更新了就返回 <code>200 OK</code>，没更新就返回 <code>304 Not Modified</code>。它并不省掉请求，只省掉主体字节。</p>
+
+    <p><strong>no-store</strong>：这条才是「禁止存到任何缓存里」。MDN 强调，它阻止的是<strong>存储</strong>，而且<strong>不会删除</strong>同一 URL 已经存过的旧响应。换句话说，把一条响应改成 no-store，并不能让之前存在缓存里的旧副本消失；要强制客户端在复用前先验证，得用 no-cache。</p>
+
+    <p><strong>must-revalidate</strong>：MDN 的解释是「一旦响应过期，就不得在没有重新验证的情况下重用它」。注意它管的是<strong>过期之后</strong>的行为——新鲜期内照常用缓存，一旦陈旧就必须验证，不能拿陈旧副本糊弄。它常与 <code>max-age=0</code> 搭配，<code>max-age=0, must-revalidate</code> 的语义与 no-cache 相同，但那是 HTTP/1.1 之前的旧实现不认识 no-cache 时的兼容写法；MDN 明确说，如今符合 HTTP/1.1 的服务器已广泛部署，没有理由再用这个组合，直接用 no-cache。</p>
+
+    <p><strong>immutable</strong>：这条是「内容永远不会变，因此不必再验证」。MDN 指出，做了缓存破坏（URL 里带版本号或散列）的资源内容恒定，但用户按下重新加载时，浏览器仍会发验证请求；加上 immutable 就能明确告诉缓存「不必验证」，从而消除重新加载期间那次无谓的请求。</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>指令</th><th>存不存</th><th>用之前要不要再验证</th><th>典型场景</th></tr>
+        <tr><td>no-cache</td><td>存（可进私有缓存，配合 private 才不进共享）</td><td>每次复用前都必须验证</td><td>主资源 HTML、频繁变化的接口</td></tr>
+        <tr><td>no-store</td><td>不存，任何缓存都不存</td><td>无从谈起——不存就谈不上复用；且不删除已存旧副本</td><td>高敏感数据、隐私内容</td></tr>
+        <tr><td>must-revalidate</td><td>存</td><td>新鲜期直接用；一旦过期，必须验证后才能用</td><td>有严格时效要求、不能接受陈旧副本的数据</td></tr>
+        <tr><td>immutable</td><td>存（通常配长 max-age 与 public）</td><td>新鲜期内不验证，重新加载也不验证</td><td>带内容散列、永不改变的静态 JS / CSS</td></tr>
+      </table>
+    </div>
+
+    <p>把这张表读成一句话：<strong>no-cache 管「用之前问」，no-store 管「根本别存」，must-revalidate 管「过期后别放行」，immutable 管「新鲜期别来问」</strong>。四条指令作用在「存储 / 验证」这条时间轴的不同点上，所以它们根本不是近义词。</p>
+
+    <p>这里还要顺手解决另一个高频问题：<code>Expires</code> 与 <code>max-age</code> 的优先级。<span class="term">Expires</span>（Expires）是 HTTP/1.0 时代的产物，用一个<strong>绝对的 GMT 时间点</strong>声明有效期；<span class="term">max-age</span>（max-age）是 HTTP/1.1 随 Cache-Control 引入的，用一个<strong>相对的秒数</strong>声明「从生成起能活多久」。MDN 给的理由很实在：绝对时间格式难解析、容易出现实现错误，还可能被人故意拨动系统时钟来诱发问题。因此规范定义，当两者同时出现时 <code>max-age</code> 优先。既然 HTTP/1.1 已被广泛使用，MDN 的结论是「无需特地提供 Expires」。</p>
+
+    <div class="wire"><i>HTTP/1.1 200 OK</i>
+<i>Date:</i> Tue, 22 Feb 2022 22:22:22 GMT
+<i>Expires:</i> Tue, 28 Feb 2022 22:22:22 GMT
+<b>Cache-Control:</b> max-age=604800
+
+&lt;!doctype html&gt;…</div>
+    <div class="wire-cap">两条都给出时以 max-age=604800（一周）为准；Expires 那一行被忽略。而且 22 日加一周正是 3 月 1 日附近，与 Expires 写的 28 日并不一致——以 max-age 计算才不会错。</div>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>把「存储」和「复用」拆成两个阶段，四条指令就各归其位：no-store 卡在<strong>存储阶段</strong>；no-cache、must-revalidate、immutable 都作用在<strong>复用阶段</strong>，只是分别要求「每次验」「过期才验」「永远别验」。MDN 还提醒，随意加 no-store 会让你丢掉浏览器的后退/前进缓存等一整套能力；想「总是最新」又不想丢这些能力，<code>no-cache</code> 配合 <code>private</code> 通常更合适。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>把 no-cache 读成「不缓存」——这是缓存领域最贵的一个误读。它<strong>存</strong>，只是<strong>用前验证</strong>；真正「不存」的是 no-store。另一个误区是以为 no-store 能当「撤销键」：它不会删除同一 URL 已存的旧响应，所以把出问题的响应改成 no-store 之后，缓存里那份旧的仍可能被复用。要强制每次回源验证，用 no-cache。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front"><div class="q-tag">回忆 5.2-1</div><div class="q-text">no-cache 与 no-store 的差别是什么？为什么 no-store 不是「撤销键」？</div><span class="tap">点击翻面 →</span></div>
+            <div class="flip-face flip-back"><div class="a-tag">参考答案</div>no-cache 存但用前必须验证；no-store 完全不存。no-store 只阻止本次响应被存储，不会删除同一 URL 先前已存的旧副本，所以不能靠它撤销旧缓存。要强制每次验证用 no-cache。</div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front"><div class="q-tag">回忆 5.2-2</div><div class="q-text">Expires 与 max-age 同时出现听谁的？为什么？</div><span class="tap">点击翻面 →</span></div>
+            <div class="flip-face flip-back"><div class="a-tag">参考答案</div>听 max-age。Expires 是绝对时间、格式难解析且易被系统时钟偏移利用；max-age 是相对秒数。规范定义 max-age 优先，HTTP/1.1 普及后无需再写 Expires。</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 5.3 ============ -->
+    <h2><span class="sec-no">5.3</span>新鲜度是一道算术题：用 Date、Age 与 max-age 手算响应是否过期</h2>
+
+    <p>上一节解决了「用之前问不问」，但如果不问，缓存凭什么判断这份副本还能不能用？承上启下地说，no-cache 把判断权交给了源站，而 max-age 把判断权交给了本地的一道算术题：算出这份响应已经「活」了多久，再和它允许活多久比一比。MDN 把存储的响应分成两种状态——<span class="term">新鲜</span>（Fresh）与<span class="term">过期</span>（Stale，也叫陈旧）：新鲜通常意味着仍有效、可复用，过期则意味着副本已经不新鲜了。</p>
+
+    <p>判断的标准叫<span class="term">存活时间</span>（Age）：响应自生成以来经过的时间，类似其他缓存机制里的 TTL。MDN 用 TTL 作类比，就是想让你把它想成一个不断增长的计数器。</p>
+
+    <p>看一条带短 max-age 的响应：</p>
+
+    <div class="wire"><i>HTTP/1.1 200 OK</i>
+<i>Content-Type:</i> text/html
+<i>Content-Length:</i> 1024
+<i>Date:</i> Tue, 22 Feb 2022 22:22:22 GMT
+<b>Cache-Control:</b> max-age=3600
+
+&lt;!doctype html&gt;…</div>
+    <div class="wire-cap">Date 指出响应生成时刻，max-age=3600 表示它可新鲜存活一小时。判断式：存活时间 &lt; 3600 秒 → 新鲜；≥ 3600 秒 → 过期。</div>
+
+    <p><strong>例①　给定 Date、Age 与 max-age，手算过期时刻与当前是否新鲜。</strong>下面这条响应由一个共享缓存转发给客户端，请完整判定它的新鲜度。</p>
+
+    <div class="wire"><i>HTTP/1.1 200 OK</i>
+<i>Content-Type:</i> text/html
+<i>Content-Length:</i> 1024
+<i>Date:</i> Tue, 22 Feb 2022 22:22:22 GMT
+<i>Cache-Control:</i> max-age=604800
+<b>Age:</b> 86400
+
+&lt;!doctype html&gt;…</div>
+    <div class="wire-cap">MDN 给出的经典例子：max-age=604800（一周），Age=86400（一天，由共享缓存告知已存活的时间）。</div>
+
+    <p>按 MDN 的口径逐步算，一步不跳：</p>
+
+    <ol>
+      <li><strong>读出两个时间量。</strong><code>Date: Tue, 22 Feb 2022 22:22:22 GMT</code> 是响应生成时刻；<code>max-age=604800</code> 秒 = 7 天 = 604800 ÷ 86400 = 7，确实是一周。</li>
+      <li><strong>求过期时刻（绝对时间）。</strong>过期时刻 = Date + max-age = 2022-02-22 22:22:22 + 7 天 = <strong>2022-03-01 22:22:22 GMT</strong>。注意 2 月只有 28 天，加 7 天要跨月，写成 2 月 29 日就错了。</li>
+      <li><strong>读出当前已存活时间。</strong>共享缓存用 <code>Age: 86400</code> 告诉客户端「这份副本已经在路上/在我这里存了一天」。客户端收到它时，至少已经活了 86400 秒。</li>
+      <li><strong>求剩余有效时间。</strong>MDN 给出关系式：剩余有效时间 = max-age − Age = 604800 − 86400 = <strong>518400 秒</strong>。换成天：518400 ÷ 86400 = <strong>6 天</strong>。也就是说客户端收到时，这份响应还能再当新鲜副本用整整 6 天。</li>
+      <li><strong>写全判定式。</strong>令 age 为当前存活时间，freshness_lifetime 为允许的新鲜寿命：
+        <div class="wire"><em>age &lt; freshness_lifetime  →  新鲜，可直接复用</em>
+<em>age ≥ freshness_lifetime  →  过期，需再验证或重取</em>
+<em>本例：86400 &lt; 604800  →  当前新鲜</em>
+<em>剩余 = 604800 − 86400 = 518400 秒 = 6 天</em></div>
+        <div class="wire-cap">新鲜度判定式：把「已活多久」与「能活多久」比大小；等号落在过期一侧。</div>
+      </li>
+      <li><strong>交叉验证。</strong>若客户端在整个 6 天里都不验证，第 6 天结束时 age = 86400 + 518400 = 604800，恰好等于 max-age，落在判定式下半支——此时响应转为过期，正好与第 2 步算出的 3 月 1 日 22:22:22 过期时刻吻合。两条路径互相印证，计算无误。</li>
+    </ol>
+
+    <p>这里有一个容易被忽略的细节：<code>Age</code> 是<strong>累计</strong>的。每经过一跳共享缓存，副本又多存了一段时间，Age 就该继续增长，而不是被重置。MDN 强调 Age 是「响应生成以来经过的时间」，源站生成时它是 0，之后每存一跳、每过一秒都在累加。共享缓存把响应交给下游时，用 Age 把这份「已经欠下的时间」传递下去，下游才能算出准确的剩余寿命。这也是为什么第 5.5 节的 RFC 9111 要给 Age 一个完整的校正公式——真实网络里，各节点时钟并不同步，光靠 Date 减时间会算错。</p>
+
+    <p>那么，如果一份响应既没有 <code>Cache-Control</code> 也没有 <code>Expires</code>，缓存是不是就「不缓存」了？答案是否定的，这就引出<span class="term">启发式缓存</span>（Heuristic Caching）。MDN 说得很直接：HTTP 旨在尽可能多地缓存，即使没有 Cache-Control，只要满足条件，响应也会被存储和重用。它举的例子是一份 <code>Last-Modified</code> 显示「最后一次更新在一年前」的 HTML——按经验法则，一年没变的内容接下来一段时间大概率也不变，于是客户端会存下它并在一段时间内复用，时长取决于具体实现，而规范建议约为「存储后时间的 10%」（本例约 0.1 年）。</p>
+
+    <p>启发式缓存是一种历史遗留的变通方案，诞生于 Cache-Control 尚未普及的年代。MDN 的结论因此很明确：<strong>原则上所有响应都应显式指定 Cache-Control</strong>。把新鲜度交给启发式规则，等于把自己的内容更新节奏交给了一个「猜」字。</p>
+
+    <div class="box insight">
+      <span class="box-tag">✅ 判定规则</span>
+      <p>手算新鲜度只走三步：① 过期时刻 = Date + max-age；② 当前 age 由 Age 首部读出（共享缓存逐跳累计）；③ 比大小，<code>age &lt; max-age</code> 新鲜，否则过期。若两者都没有，缓存会退回启发式缓存去「猜」，这正是要显式写 Cache-Control 的原因。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>「Age 是缓存自己存的时长，重新转发时从 0 开始」——错。Age 是响应自生成以来的总存活时间，逐跳累加并向下传递；把它重置会让下游以为响应很新鲜，从而超额复用。另一个错是把 <code>age = max-age</code> 也算作新鲜：判定式里等号落在过期一侧，恰好相等时响应已经不新鲜。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front"><div class="q-tag">回忆 5.3-1</div><div class="q-text">max-age=604800、Age=86400，剩余有效时间是多少？写出判定式。</div><span class="tap">点击翻面 →</span></div>
+            <div class="flip-face flip-back"><div class="a-tag">参考答案</div>剩余 = max-age − Age = 604800 − 86400 = 518400 秒 = 6 天。判定式：age &lt; freshness_lifetime 为新鲜，≥ 为过期；本例 86400 &lt; 604800，当前新鲜。</div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front"><div class="q-tag">回忆 5.3-2</div><div class="q-text">没有 Cache-Control 时缓存会怎么做？规范建议的启发式比例是多少？</div><span class="tap">点击翻面 →</span></div>
+            <div class="flip-face flip-back"><div class="a-tag">参考答案</div>会触发启发式缓存：满足条件（如 Last-Modified 很久以前）就存储并复用。规范建议约为「存储后时间的 10%」。MDN 建议所有响应都显式写 Cache-Control，不要交给启发式去猜。</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 5.4 ============ -->
+    <h2><span class="sec-no">5.4</span>缓存键不止是 URL：Vary 如何把请求首部编进钥匙，以及漏写它会怎样发错表示</h2>
+
+    <p>前面三节都默认「一个 URL 对应一份响应」。承上启下地说，新鲜度算得再准，如果缓存连「这是不是同一份东西」都判错了，算术就失去了意义。MDN 指出，缓存区分响应本质上基于 URL——不同的 URL 指向不同的响应体。但<span class="term">内容协商</span>（Content Negotiation）打破了这个前提：同一个 URL，服务器可能依据 <code>Accept</code>、<code>Accept-Language</code>、<code>Accept-Encoding</code> 这些请求首部返回不同表示（Representation）。于是问题变成：缓存凭什么知道「这个 URL 有好几个版本」？</p>
+
+    <p>答案是 <span class="term">Vary</span>（Vary）首部。MDN 的示例是语言：一份带 <code>Accept-Language: en</code> 缓存下来的英文内容，不该被复用于 <code>Accept-Language: ja</code> 的请求。做法是在响应里写出：</p>
+
+    <div class="wire"><i>HTTP/1.1 200 OK</i>
+<i>Content-Type:</i> text/html
+<i>Content-Language:</i> en
+<b>Vary:</b> Accept-Language
+<i>Cache-Control:</i> max-age=3600
+
+&lt;!doctype html&gt;…</div>
+    <div class="wire-cap">Vary: Accept-Language 让缓存按「URL + Accept-Language 的值」组合建键，而不是只用 URL。</div>
+
+    <p>MDN 的结论是：加上这一行，缓存就会基于「响应 URL 与 Accept-Language 请求首部的组合」来键控，而不只是基于 URL。换成本讲的说法，<span class="term">缓存键</span>（Cache Key）从「URL 一把钥匙」变成「URL + Vary 列出的请求首部值」这把组合钥匙。</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>没有 Vary（仅按 URL 建键）</th><th>有 Vary: Accept-Language（按组合建键）</th></tr>
+        <tr><td>/index.html → 一份响应体</td><td>/index.html + ja-JP → 日语响应体</td></tr>
+        <tr><td>英文请求与日文请求共用同一副本</td><td>/index.html + en-US → 英文响应体</td></tr>
+        <tr><td>后者会拿到前者的错误语言</td><td>每个语言各自命中自己的副本</td></tr>
+      </table>
+    </div>
+
+    <p><strong>例③　Vary: Accept-Encoding 参与缓存键的分步推演，以及漏写它的故障链。</strong>这是线上最高发的一类缓存事故，逐帧走一遍。</p>
+
+    <p><em>正确配置的情况：</em></p>
+
+    <ol>
+      <li><strong>请求 A 到达。</strong>客户端 A 发 <code>GET /app.js</code>，带 <code>Accept-Encoding: gzip, br</code>，表明它支持 br 压缩。共享缓存按 URL 查键，未命中，转发源站。</li>
+      <li><strong>源站协商并标注。</strong>源站看出 A 支持 br，返回 br 压缩后的 JS，并在响应里写明 <code>Content-Encoding: br</code> 与 <code>Vary: Accept-Encoding</code>，再配 <code>Cache-Control: max-age=3600</code>。</li>
+      <li><strong>缓存按组合键存储。</strong>因为 Vary 指定了 Accept-Encoding，缓存把键记为 <code>(/app.js, Accept-Encoding=gzip, br) → br 版本</code>。关键就在这一步：首部的<strong>值</strong>成了键的一部分。</li>
+      <li><strong>请求 B 到达。</strong>客户端 B 发同一个 <code>GET /app.js</code>，但它的 <code>Accept-Encoding: identity</code>，只认未压缩内容。缓存算出的键是 <code>(/app.js, Accept-Encoding=identity)</code>，与 A 的键<strong>不同</strong>，于是未命中，回源取回未压缩版本，单独存一份。A、B 各取所需，正确。</li>
+      <li><strong>后续命中。</strong>再来一个支持 br 的客户端 C，键与 A 相同，直接命中 br 副本，既快又省字节。</li>
+    </ol>
+
+    <p><em>漏写 Vary 的故障链：</em></p>
+
+    <ol>
+      <li><strong>源站图省事，只回了压缩内容，忘了写 Vary。</strong><code>Content-Encoding: br</code> 有，<code>Vary: Accept-Encoding</code> 没有。</li>
+      <li><strong>缓存退化为按 URL 建键。</strong>没有 Vary 指路，缓存只能把 <code>/app.js</code> 当成唯一键，于是把 br 版本记为 <code>/app.js → br 字节</code>。</li>
+      <li><strong>请求 B 命中了不属于它的副本。</strong>B 的请求 URL 同样是 <code>/app.js</code>，缓存认为键相同，直接把 br 字节发给一个声明只接受 identity 的客户端。</li>
+      <li><strong>客户端解码失败。</strong>B 按未压缩 JS 去解析 <code>Content-Encoding: br</code> 的字节流，得到一堆无法识别的字符，脚本语法错误，页面交互直接瘫痪——用户看到的是白屏或按钮全部失灵。</li>
+      <li><strong>定位极难。</strong>刷新、换网络、清缓存都可能「碰巧好用」，因为下一次命中的究竟是哪份副本取决于谁先请求。根因不在 JS，而在一个缺失的响应首部。</li>
+    </ol>
+
+    <p>MDN 对 <code>User-Agent</code> 还补了一条实用提醒：如果你基于用户代理做内容优化（例如响应式设计），可能想把 User-Agent 加进 Vary；但 User-Agent 变体极多，会大幅降低缓存命中率。因此如果可能，应改用<strong>特性检测</strong>而不是依据 User-Agent 来改变行为。至于个性化内容，MDN 的态度很坚决：想用 cookie 防止别人复用缓存内容，应该用 <code>Cache-Control: private</code>，<strong>而不是</strong>在 Vary 里指定 cookie。原因很清楚——private 直接禁止共享缓存存储；Vary: Cookie 只是把 cookie 值编进键，共享缓存照样会存下每个用户的副本，既浪费空间又留下泄露面。</p>
+
+    <div class="box insight">
+      <span class="box-tag">✅ 判定规则</span>
+      <p>只要一个 URL 会「看请求首部下菜碟」，响应就必须用 Vary 列出那些首部：按压缩协商就写 <code>Vary: Accept-Encoding</code>，按语言就写 <code>Vary: Accept-Language</code>。判据一句话：<strong>哪些请求首部改变了响应体，就把哪些写进 Vary</strong>。而「因用户身份不同而不同」不属于协商，属于个性化，用 private 而不是 Vary。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>「内容协商的请求会自动带 Vary，缓存不用我操心」——错。Vary 必须由<strong>源站响应</strong>显式声明，缓存不会替你猜。另一个错是把 <code>Vary: Cookie</code> 当成个性化内容的保护伞：它只会让缓存按 cookie 值分键存储，共享缓存里依旧躺着每个用户的私人副本。正确做法是 <code>private</code>。第三个坑是往 Vary 里塞 User-Agent：变体爆炸会让命中率暴跌，能用特性检测就别用 UA。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front"><div class="q-tag">回忆 5.4-1</div><div class="q-text">Vary 如何改变缓存键？为什么漏写 Vary: Accept-Encoding 会把 br 响应发给不支持的客户端？</div><span class="tap">点击翻面 →</span></div>
+            <div class="flip-face flip-back"><div class="a-tag">参考答案</div>Vary 把指定请求首部的值编进缓存键，键从「URL」变为「URL + 首部值」。漏写后缓存只按 URL 建键，br 版本与 identity 请求被视为同一键，于是把 br 字节发给只接受 identity 的客户端，导致解码失败。</div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front"><div class="q-tag">回忆 5.4-2</div><div class="q-text">个性化内容该用 Vary: Cookie 还是 private？为什么？</div><span class="tap">点击翻面 →</span></div>
+            <div class="flip-face flip-back"><div class="a-tag">参考答案</div>用 private。Vary: Cookie 只是把 cookie 值编进键，共享缓存仍会为每个用户存副本；private 直接禁止共享缓存存储个性化响应。User-Agent 也不宜进 Vary，变体太多会压低命中率，优先用特性检测。</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 5.5 延伸：规范怎么写 ============ -->
+    <h2><span class="sec-no">5.5</span>延伸：规范怎么写：MDN 给了结论，RFC 给出了算法与边界</h2>
+
+    <p>前面四节的所有结论都来自 MDN 中文《HTTP 缓存》指南，它已经把「怎么用」讲得很完整。但 MDN 是指南，刻意省略了不少规范性细节。本节按惯例做<b>延伸：规范怎么写</b>，把这些细节补齐——你会看到，MDN 的一句「剩余时间 = max-age − Age」，在规范里其实是一整套校正公式；MDN 没提的几条指令，规范里早有正式定义。</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>MDN 的说法</th><th>RFC 怎么写</th><th>为什么值得知道</th></tr>
+        <tr><td>剩余有效时间 = max-age − Age；Age 是响应生成以来经过的时间</td><td>RFC 9111 给出完整 current_age 算法：apparent_age = max(0, response_time − date_value)；corrected_age_value = age_value + response_delay；corrected_initial_age = max(apparent_age, corrected_age_value)；current_age = corrected_initial_age + resident_time</td><td>各节点时钟并不同步，简单减法会算错。排查「CDN 返回的 Age 忽大忽小」时，要看的正是这套校正式，尤其是 apparent_age 对负时钟偏差的兜底</td></tr>
+        <tr><td>Expires 与 max-age 同时出现时以 max-age 优先；HTTP/1.1 下无需再写 Expires</td><td>RFC 9111 定义共享缓存可用 s-maxage 覆盖 max-age 与 Expires，专门给共享缓存设定新鲜寿命</td><td>CDN 场景能靠 s-maxage 给边缘缓存单独定一个寿命，而不影响浏览器私有缓存的判断，这是 MDN 正文没展开的实用开关</td></tr>
+        <tr><td>no-cache 会强制验证；max-age=0 + must-revalidate 是旧兼容写法</td><td>RFC 9111 把 no-cache 定义为可带字段名参数，形如 no-cache="Set-Cookie"，表示只对列出的字段强制验证</td><td>能精细化控制：只让某些敏感字段必须回源校验，其余部分仍可复用，避免整份响应都失去缓存价值</td></tr>
+        <tr><td>immutable 表示内容永不改变，可防止重新加载时的验证</td><td>RFC 8246 将 immutable 独立成规范，明确响应在其新鲜期内不会变化，客户端不应发起条件再验证</td><td>把「谁承诺不变」写进标准，实现者据此安心跳过验证；配合带散列的 URL 才成立，否则内容真变了却声明 immutable 会造成长期陈旧</td></tr>
+        <tr><td>MDN 未展开「陈旧了又不想让用户等回源」该怎么优化</td><td>RFC 5861 定义两条扩展指令：stale-while-revalidate 允许在陈旧期间先返回旧副本、后台异步再验证；stale-if-error 允许在回源出错时于宽限期内继续返回旧副本</td><td>把「新鲜 / 过期」的二元判定变成带宽限的策略：弱网或源站抖动时用户体验不断档，是大型站点常用的韧性手段</td></tr>
+        <tr><td>MDN 未列出「这次请求到底有没有命中缓存」的诊断首部</td><td>RFC 9211 定义 Cache-Status 响应首部，用 hit、miss、fwd、stale、refreshing、revalidated、bypass 等参数描述缓存如何处理本次请求</td><td>线上排障不必再靠刷新碰运气，响应头直接告诉你命中、回源还是再验证，是缓存可观测性的基石</td></tr>
+        <tr><td>没有 Cache-Control 时可能触发启发式缓存，规范建议约 10%</td><td>RFC 9111 允许启发式过期，但要求它不得覆盖显式的 freshness 信息，且对含认证等特征的响应不应套用启发式</td><td>解释了「为什么带身份的响应必须显式写 no-cache / private」——否则缓存可能凭 Last-Modified 猜出一个新鲜期，把不该缓存的内容缓存下来</td></tr>
+      </table>
+    </div>
+
+    <p>表中还要点明一处版本沿革：<strong>RFC 9111 是现行的 HTTP 缓存规范，它取代了早期的 RFC 7234</strong>。MDN 在文首链接的就是 RFC 9111。你在旧资料里常看到的「RFC 7234 规定……」，如今都应改口为 RFC 9111。这也提醒我们，读缓存资料要先看它依据的是哪一版规范。</p>
+
+    <p>两条 RFC 扩展指令值得单独展开，因为它们弥补了 MDN 正文的空白。<code>stale-while-revalidate</code> 的思路是：响应刚过期的一小段宽限时间里，缓存可以先把旧副本发给用户（用户立刻看到内容），同时在后台发起再验证；验证完更新副本，下次就是新的。<code>stale-if-error</code> 的思路是：当回源请求失败（如 5xx 或网络错误）时，在宽限期内继续用旧副本顶上，宁可给旧内容也不给用户一个错误页。二者都带一个以秒为单位的宽限时长，都是「过期不等于立即不可用」这一判断的制度化。</p>
+
+    <p>最后，关于条件请求本身：本讲只把它作为「陈旧响应的下一步」引出来——当响应过期、缓存需要向源站确认内容是否变化时，会用到 <code>If-Modified-Since</code> / <code>If-None-Match</code> 这类条件请求，源站用 <code>304 Not Modified</code> 表示「没变，继续用你的副本」。这里你只要记住结论：条件请求让「再验证」只传首部、不传主体，把带宽省到极致。它的完整报文结构、ETag 与 Last-Modified 的选择、以及范围请求如何续传，都在第 6 讲展开，本讲不抢那部分内容。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>MDN 给的是「怎么做」，RFC 给的是「为什么这样做、边界在哪」。当你需要排查 Age 异常、给 CDN 单独设寿命、做弱网韧性或加缓存可观测性时，MDN 的指南会不够用，而 RFC 9111 / 8246 / 5861 / 9211 正是这些问题的答案所在。记住这条分界，就知道什么时候该从指南走向规范。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>「MDN 没写的指令就是不存在」——错。s-maxage、stale-while-revalidate、stale-if-error、Cache-Status 都是正式规范里的东西，只是 MDN 这篇指南没逐条展开。反过来也要警惕：给内容会变的资源错加 immutable，或给个性化响应错加 public，会让「承诺不变」「允许共享」这两个判断长期生效，酿成比不用缓存更糟的陈旧与泄露事故。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front"><div class="q-tag">回忆 5.5-1</div><div class="q-text">RFC 9111 的 current_age 算法比「max-age − Age」多了哪几步？为什么要做校正？</div><span class="tap">点击翻面 →</span></div>
+            <div class="flip-face flip-back"><div class="a-tag">参考答案</div>多出 apparent_age = max(0, response_time − date_value)、corrected_age_value = age_value + response_delay、取二者最大得 corrected_initial_age，再加 resident_time 得 current_age。因为节点时钟不同步、响应在链路上有延迟，简单减法会算错。</div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front"><div class="q-tag">回忆 5.5-2</div><div class="q-text">说出以下三条扩展：immutable、stale-while-revalidate、Cache-Status 各解决什么问题？现行缓存规范是哪一份？</div><span class="tap">点击翻面 →</span></div>
+            <div class="flip-face flip-back"><div class="a-tag">参考答案</div>immutable（RFC 8246）承诺新鲜期内内容不变、免于验证；stale-while-revalidate（RFC 5861）陈旧期先返回旧副本并后台再验证；Cache-Status（RFC 9211）报告本次请求命中/回源/再验证状态。现行缓存规范是 RFC 9111，取代 RFC 7234。</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===== 例④：两套完整首部组合 ===== -->
+    <h2><span class="sec-no">🧪</span>落地例④：为带散列的静态 JS 与登录后的个性化接口各配一套首部</h2>
+
+    <p>前面把所有零件都拆开讲过了，这里用一个完整的落地例把它们装起来。<strong>例④</strong>要为空分两类资源各写一套可直接抄用的响应首部，并逐条说明理由。这两套配置正好覆盖 MDN「常见的缓存模式」里的两个极端：一个追求「尽可能久地缓存」，一个追求「绝不外泄、总是最新」。</p>
+
+    <p><strong>场景一：带内容哈希的静态 JS。</strong>文件名里带内容散列，例如 <code>bundle.YsAIAAAA-QG4G6kCMAMBAAAAAAAoK.js</code>。内容一变，散列就变，URL 也随之改变——这就是 MDN 说的<span class="term">缓存破坏</span>（Cache Busting）。因为 URL 唯一对应一份永不变的内容，可以放心缓存很久。</p>
+
+    <div class="wire"><i>HTTP/1.1 200 OK</i>
+<i>Content-Type:</i> text/javascript; charset=utf-8
+<i>Content-Length:</i> 1024
+<i>Date:</i> Tue, 22 Feb 2022 20:20:20 GMT
+<i>Last-Modified:</i> Tue, 22 Feb 2022 20:20:20 GMT
+<i>ETag:</i> "YsAIAAAA-QG4G6kCMAMBAAAAAAAoK"
+<b>Cache-Control:</b> public, max-age=31536000, immutable
+
+/* bundle content */</div>
+    <div class="wire-cap">带散列的静态 JS 的完整响应首部组合：长 max-age + public + immutable，并附 ETag 与 Last-Modified 作为验证器。</div>
+
+    <p>逐条说明：</p>
+    <ul>
+      <li><code>max-age=31536000</code>：一年（31536000 秒）。内容永不改变，缓存越久越省带宽；MDN 还指出这个值正是 QPACK 预定义表里的常用值之一，走 HTTP/3 时能压到 1 个字节。</li>
+      <li><code>public</code>：明确允许共享缓存（CDN）存储。MDN 特别说明，只有在响应带 <code>Authorization</code> 首部、而你仍希望它被存储时才需要 public；否则只给 max-age 就会被共享缓存存下。这份静态 JS 按 URL 公开可取，加上 public 更稳妥。</li>
+      <li><code>immutable</code>：告诉缓存连重新加载都不必验证。因为内容随 URL 里的散列绑定、永不变化，省掉用户每次刷新时的那次条件请求。注意前提是「URL 一变内容就变」必须严格成立。</li>
+      <li><code>ETag</code> 与 <code>Last-Modified</code>：MDN 提醒别忘带验证器，它们是内容的散列与最后修改时间。虽然 immutable 让正常访问不验证，但保留验证器对缓存之外的生态（CMS、爬虫）与降级场景仍有价值；RFC 9110 也建议 200 响应尽量同时给出这两者。</li>
+      <li><code>Content-Type</code> 带 charset：JS 用 <code>text/javascript</code> 并声明 utf-8，避免编码猜测问题（呼应第 2 讲）。</li>
+    </ul>
+
+    <p><strong>场景二：登录后的个性化接口。</strong>例如 <code>GET /api/account</code>，返回当前用户的余额与资料，带 <code>Cookie</code> 或 <code>Authorization</code>。内容因用户身份而异，绝不能进共享缓存；含敏感数据，也不该落到磁盘缓存里长期保存。</p>
+
+    <div class="wire"><b>GET /api/account HTTP/1.1</b>
+<b>Host:</b> app.example.com
+<b>Cookie:</b> session=alice-token
+
+<i>HTTP/1.1 200 OK</i>
+<i>Content-Type:</i> application/json; charset=utf-8
+<i>Cache-Control:</i> no-store, private
+<i>Pragma:</i> no-cache
+<i>Vary:</i> Accept-Encoding
+
+{"balance": 12345}</div>
+    <div class="wire-cap">登录后的个性化接口：no-store 禁止任何缓存存储，private 兜底阻止共享缓存，Vary 只针对压缩协商而非身份。</div>
+
+    <p>逐条说明：</p>
+    <ul>
+      <li><code>no-store</code>：主指令，禁止响应被存入任何缓存——含敏感数据的接口不该在任何缓存里留副本。MDN 也承认实践里「不缓存」的理由之一是隐私，此时 no-store 才是对的选择。</li>
+      <li><code>private</code>：第二道防线。MDN 明确说，即使设置了 no-store，也必须设置 private，以确保个性化响应不会被共享缓存意外留存。它针对的是那些可能忽略 no-store 的缓存，以及浏览器自身的各类缓存分区。</li>
+      <li><code>Pragma: no-cache</code>：兼容 HTTP/1.0 时代旧实现的写法，现代 HTTP/1.1 缓存以 Cache-Control 为准；这里作为防御性的补充，呼应 MDN 提到的「大杂烩式标头」思路，但不用堆上 max-age=0 等一长串。</li>
+      <li><code>Vary: Accept-Encoding</code>：这条<strong>不是</strong>为了身份隔离，而是为了让 JSON 的 gzip / br 版本正确分键（呼应 5.4 节）。身份隔离交给 private，别写成 <code>Vary: Cookie</code>。</li>
+      <li>为什么不用 no-cache：no-cache 允许存储（只是用前验证），对余额这类敏感数据意味着副本仍会落盘；而 MDN 指出，若希望「总是最新」且数据敏感，no-store 更贴切。若数据没那么敏感、又想保留浏览器后退/前进的即时返回，可退而用 <code>no-cache, private</code> 并附 ETag——这正是 MDN 给「登录后个性化 HTML」的推荐组合。</li>
+    </ul>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>两套配置是同一套判断推向两个极端的结果：<strong>内容随 URL 变化且永不变 → 长 max-age + public + immutable（能存多久存多久）；内容随身份变化且敏感 → no-store + private（一点别存）</strong>。中间态（如主资源 HTML）才用 no-cache + ETag/Last-Modified，个性化时再叠加 private。先定「内容与什么绑定」，首部组合自然浮现。</p>
+    </div>
+
+    <!-- ===== 概念卡 ===== -->
+    <h2><span class="sec-no">🃏</span>概念卡：本章概念的一分钟画像</h2>
+    <p>翻面前先自问：这个概念我能用一句话讲清楚吗？</p>
+    <div class="flip-grid">
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front"><div class="q-tag">概念卡 1</div><div class="q-text">缓存（Cache）与两种类型</div><span class="tap">点击翻面 →</span></div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">存储响应并复用于后续请求的机制；按是否与客户端绑定分为私有缓存与共享缓存。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">少传字节、降低源站负载、让内容离用户更近。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">私有缓存是自家冰箱，共享缓存是公共食堂：后者不能放你的私人便当。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为 cookie 出现就等于私有；其实必须由 private 指令声明。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">判断任何缓存策略前先分类：浏览器（私有）还是 CDN / 代理（共享）。</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front"><div class="q-tag">概念卡 2</div><div class="q-text">Cache-Control 与优先级</div><span class="tap">点击翻面 →</span></div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">携带缓存指令的响应/请求首部；max-age 是相对秒数，优先于绝对时间的 Expires。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">让源站显式声明副本能存多久、怎么用，取代启发式猜测。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">Expires 是写明几点过期，max-age 是写上保质期几天——后者不怕对钟。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">把 no-cache 读成「不缓存」；它其实存，只是用前验证。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">所有响应都应显式写出，避免落入启发式缓存。</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front"><div class="q-tag">概念卡 3</div><div class="q-text">no-cache / no-store / must-revalidate</div><span class="tap">点击翻面 →</span></div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">no-cache：存但用前验证；no-store：完全不存；must-revalidate：过期后必须验证才可用。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">分别卡住「复用前」「存储」「过期后」三个不同时点。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">no-cache 是「用前问一声」，no-store 是「压根别记」，must-revalidate 是「过期别放行」。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为 no-store 能删除旧副本；它不删，且 max-age=0 + must-revalidate 只是 no-cache 的旧兼容写法。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">主资源用 no-cache，敏感数据用 no-store，严格要求时效用 must-revalidate。</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front"><div class="q-tag">概念卡 4</div><div class="q-text">immutable 与缓存破坏</div><span class="tap">点击翻面 →</span></div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">immutable 声明响应在新鲜期内永不改变；缓存破坏指内容变化时同步改变 URL。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">让带散列的静态资源可以长缓存且刷新时也不必验证。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">文件名刻着内容指纹：指纹没变就是同一份，难怪不用再问。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">给会变的资源加 immutable；一旦内容变而 URL 不变，用户被长期喂旧文件。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">带内容散列的 JS/CSS/图片，配长 max-age 与 public（RFC 8246）。</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front"><div class="q-tag">概念卡 5</div><div class="q-text">新鲜度、Age 与启发式缓存</div><span class="tap">点击翻面 →</span></div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">age 为响应生成以来经过的时间；age &lt; max-age 为新鲜，否则过期；无显式指令时可能走启发式缓存。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">用一道算术题决定副本能否直接复用。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">Age 是已经走过的保质期，max-age 是总保质期，剩多少一看便知。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">把 Age 重置或把相等算新鲜；Age 逐跳累计，相等即过期。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">手算缓存是否命中时；规范细节见 RFC 9111 的 current_age 校正算法。</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front"><div class="q-tag">概念卡 6</div><div class="q-text">Vary 与缓存键</div><span class="tap">点击翻面 →</span></div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">Vary 列出参与缓存键的请求首部，键从 URL 扩展为 URL + 这些首部的值。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">让同一 URL 下不同协商表示各存各的，避免发错版本。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">URL 是门牌号，Vary 是「按谁来、要什么格式」再配一把组合锁。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">用 Vary: Cookie 保护个性化内容，或往 Vary 塞 User-Agent 导致变体爆炸。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">响应随 Accept-Encoding / Accept-Language 等变化时；身份隔离改用 private。</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front"><div class="q-tag">概念卡 7</div><div class="q-text">再验证与条件请求（引出）</div><span class="tap">点击翻面 →</span></div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">过期响应不立即丢弃，而是用 If-Modified-Since / If-None-Match 条件请求向源站确认，可能得 304。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">让「用前验证」只传首部、不传主体，把带宽省到极致。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">问一句「变了没」，没变就回「没变」两个字，不用把整本书重寄。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">把 304 当错误码；它是再验证成功的信号，且无主体。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">本讲只作结论引出；完整报文、ETag 与范围请求第 6 讲展开。</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===== 分层习题 ===== -->
+    <h2><span class="sec-no">📝</span>分层习题</h2>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>有人说：「no-cache 就是不缓存，所以既安全又省带宽。」请指出这句话的两个错误，并说明 no-cache 与 no-store 各自的实际含义。</div>
+      <details><summary>提示</summary><p>把「存储」和「复用」两个阶段分开想，再问 no-cache 到底卡在哪一步。</p></details>
+      <details><summary>完整解答</summary><div class="ex-answer">错误一：no-cache 不是「不缓存」。MDN 明确说它<strong>不阻止存储</strong>，只阻止在没有重新验证的情况下重用响应，所以副本照样会存。错误二：它不省掉请求——每次复用前都要发验证请求，省的是主体字节而非请求本身。正解：<strong>no-cache = 可存，但用前必须验证</strong>；<strong>no-store = 完全不存到任何缓存</strong>，且不会删除同 URL 已存的旧副本。若要「一点别留」，该用 no-store；若想「总是最新又保留后退/前进缓存」，用 no-cache 更合适。</div></details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>共享缓存里出现了一份 Alice 的个性化页面，Bob 也取到了它。请回答：① 根因是什么指令缺失？② 为什么 <code>Vary: Cookie</code> 不是正确修法？③ 正确修法是什么？</div>
+      <details><summary>提示</summary><p>区分「按身份分键」与「禁止共享存储」两种思路，谁才能真正阻止泄露。</p></details>
+      <details><summary>完整解答</summary><div class="ex-answer">① 根因是缺少 <code>private</code>：个性化响应被存进了共享缓存，其他用户按相同 URL 命中后即泄露。MDN 说得很清楚，个性化内容只应存进私有缓存，必须显式指定 private；而 cookie 的存在本身不代表响应私有。② <code>Vary: Cookie</code> 只是把 cookie 值编进缓存键，共享缓存<strong>照样会为每个用户存一份副本</strong>，既占空间又留下泄露面，它没有「禁止共享存储」的语义。③ 正确修法是用 <code>Cache-Control: private</code>，直接禁止共享缓存存储该响应；若同时要求总是最新，用 <code>no-cache, private</code>。若数据敏感还要禁止一切存储，加 no-store。</div></details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>一份响应首部为 <code>Date: Tue, 22 Feb 2022 22:22:22 GMT</code>、<code>Cache-Control: max-age=604800</code>、<code>Age: 86400</code>。请手算：① 绝对过期时刻；② 客户端收到时剩余有效秒数与天数；③ 写出当前是否新鲜的判定式。要求逐步不跳。</div>
+      <details><summary>提示</summary><p>过期时刻用 Date 加 max-age；剩余用 max-age 减 Age；注意 2 月只有 28 天。</p></details>
+      <details><summary>完整解答</summary><div class="ex-answer">① max-age=604800 秒 = 604800÷86400 = 7 天。过期时刻 = Date + 7 天 = 2022-02-22 22:22:22 + 7 天。2 月只有 28 天：22 + 7 = 29 超出 28，跨月得 3 月 1 日（2022 非闰年），故过期时刻 = <strong>2022-03-01 22:22:22 GMT</strong>。② 剩余有效时间 = max-age − Age = 604800 − 86400 = <strong>518400 秒</strong>；518400 ÷ 86400 = <strong>6 天</strong>。③ 判定式：<code>age &lt; freshness_lifetime → 新鲜；age ≥ freshness_lifetime → 过期</code>。代入：86400 &lt; 604800 成立，故<strong>当前新鲜</strong>。校验：再过 518400 秒后 age = 86400 + 518400 = 604800，恰等于 max-age，落入过期分支，与①的 3 月 1 日 22:22:22 一致。注意相等时算过期，不能算新鲜。</div></details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>缓存中已有两条记录：键① <code>(/app.js, Accept-Encoding=gzip, br) → br 版本</code>，键② <code>(/app.js, Accept-Encoding=identity) → 未压缩版本</code>。源站声明了 <code>Vary: Accept-Encoding</code>。现有三个请求：甲 <code>Accept-Encoding: gzip, br</code>；乙 <code>Accept-Encoding: identity</code>；丙 <code>Accept-Encoding: br</code>（与甲的取值字符串不同）。请逐一判定命中哪条键、返回什么，并说明若源站漏写 Vary 会怎样。</div>
+      <details><summary>提示</summary><p>Vary 参与键的是请求首部的「值」，按值精确匹配；再想漏写时键会退化成什么。</p></details>
+      <details><summary>完整解答</summary><div class="ex-answer">Vary: Accept-Encoding 让键 = URL + 该首部的<strong>值</strong>。甲的值 <code>gzip, br</code> 与键①完全一致 → <strong>命中键①，返回 br 版本</strong>。乙的值 <code>identity</code> 与键②一致 → <strong>命中键②，返回未压缩版本</strong>。丙的值 <code>br</code> 与键①的 <code>gzip, br</code> 字符串<strong>不同</strong>，也不等于键② → <strong>两条都不命中</strong>，回源；源站按其支持 br 返回 br 版本，缓存新建键 <code>(/app.js, Accept-Encoding=br)</code>。这说明 Vary 按值的精确字符串匹配，变体越多键越多、命中率越低。若源站漏写 Vary，缓存退化为仅按 <code>/app.js</code> 建键，三条请求全被视为同一个键：谁先请求就把谁的版本存成唯一副本，随后 identity 客户端可能收到 br 字节，解码失败、脚本瘫痪——这就是 5.4 节的故障链。</div></details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l3">L3 建模应用</span>一个站点有三类资源：① 文件名带内容散列的 JS/CSS；② 全站共用的主资源 HTML；③ 登录后的账户接口（返回余额，敏感）。请为三者各给出一套响应首部组合，说明每条指令的理由，并指出哪类该进 CDN、哪类绝不能进共享缓存。</div>
+      <details><summary>提示</summary><p>先问「内容与什么绑定、会不会变、是否因身份而异」，再决定存不存、存多久、验不验。</p></details>
+      <details><summary>完整解答</summary><div class="ex-answer"><strong>① 带散列的静态资源</strong>：<code>Cache-Control: public, max-age=31536000, immutable</code>，并附 ETag、Last-Modified、带 charset 的 Content-Type。理由：URL 随内容散列变化、内容永不改变，故长 max-age 缓存一年；public 允许 CDN 存储；immutable 免掉刷新验证。<strong>最适合进 CDN</strong>，尽快把字节推到边缘。<br><strong>② 主资源 HTML</strong>：<code>Cache-Control: no-cache</code>，附 ETag 与 Last-Modified；若 HTML 因登录而个性化，改为 <code>no-cache, private</code>。理由：URL 不能做缓存破坏，必须每次验证以免用户看到旧版；no-cache 保证回源确认，ETag/Last-Modified 让未变更时返回 304 省主体；private 阻止个性化 HTML 进共享缓存。主资源通常由浏览器私有缓存持有，CDN 若要缓存需配合主动清除。<br><strong>③ 账户接口</strong>：<code>Cache-Control: no-store, private</code>，可加 <code>Pragma: no-cache</code>；<code>Vary: Accept-Encoding</code> 仅用于压缩协商。理由：内容随身份变化且敏感，no-store 禁止任何缓存留存，private 兜底阻止共享缓存意外保存，绝不进 CDN 或任何共享缓存；Vary 不为身份隔离，只保证压缩版本分键正确。<br>三者串起同一套判断：<strong>先看内容绑定什么，再定首部</strong>——随 URL 变且不变→久存；随版本变→验证；随身份变且敏感→别存。</div></details>
+    </div>
+
+    <!-- ===== 自测 ===== -->
+    <h2><span class="sec-no">✍️</span>本章自测</h2>
+    <p class="quiz-hint">点击选项判分，答错会给出原因。</p>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 1</div>
+      <div class="q-stem">同一 URL、max-age=604800、Age=86400，客户端收到时还能把副本当新鲜用多久？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 86400 秒（一天）——Age 就是剩余寿命</li>
+        <li data-opt="b">B. 518400 秒（六天）——max-age 减 Age</li>
+        <li data-opt="c">C. 604800 秒（一周）——Age 不影响新鲜度</li>
+        <li data-opt="d">D. 0 秒——Age 非零就立即过期</li>
+      </ul>
+      <div class="quiz-explain">解析：B 对。剩余有效时间 = max-age − Age = 604800 − 86400 = 518400 秒 = 6 天。A 把 Age（已存活时间）误当剩余；C 忽略了 Age 已消耗掉一天；D 错在只有 age ≥ max-age 才过期，Age=86400 远小于 604800，仍新鲜。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="c">
+      <div class="q-no">自测 2</div>
+      <div class="q-stem">关于 no-cache 与 no-store，哪一句正确？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. no-cache 禁止存储，no-store 允许存储但用前验证</li>
+        <li data-opt="b">B. 二者都完全禁止存储，只是用词不同</li>
+        <li data-opt="c">C. no-cache 可存但每次复用前必须验证；no-store 完全不存</li>
+        <li data-opt="d">D. no-store 会删除该 URL 已存的所有旧副本</li>
+      </ul>
+      <div class="quiz-explain">解析：C 对。A 把两者含义对调了；B 错在 no-cache 并不禁止存储；D 错在 no-store 只阻止本次响应被存储，<strong>不会删除</strong>同 URL 已存的旧副本——所以它不是「撤销键」。MDN 反复强调 no-cache 是「存但用前验证」。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="d">
+      <div class="q-no">自测 3</div>
+      <div class="q-stem">源站对同一 URL 按 Accept-Encoding 返回 gzip 或 br 版本，却漏写了 Vary。最可能发生什么？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 缓存自动为每种编码分别建键，一切正常</li>
+        <li data-opt="b">B. 缓存会拒绝存储该响应</li>
+        <li data-opt="c">C. 浏览器会自动解压所有编码，无影响</li>
+        <li data-opt="d">D. 缓存只按 URL 建键，可能把 br 字节发给只接受 identity 的客户端，导致解码失败</li>
+      </ul>
+      <div class="quiz-explain">解析：D 对。Vary 必须由源站显式声明，缓存不会替你猜（A 错）。没有 Vary 不会导致拒绝存储（B 错）。浏览器只能按自己声明支持的编码解码，收到未声明的 br 字节会失败（C 错）。这正是 5.4 节的故障链。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="a">
+      <div class="q-no">自测 4</div>
+      <div class="q-stem">想阻止个性化响应进入共享缓存，正确做法是？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 使用 Cache-Control: private</li>
+        <li data-opt="b">B. 使用 Vary: Cookie，把每个用户分开</li>
+        <li data-opt="c">C. 只要响应里带 Set-Cookie，缓存就会自动私有化</li>
+        <li data-opt="d">D. 使用 Cache-Control: public</li>
+      </ul>
+      <div class="quiz-explain">解析：A 对。private 直接禁止共享缓存存储个性化响应。B 错在 Vary: Cookie 只是按 cookie 值分键，共享缓存仍会存每个用户的副本，不去泄露的根源。C 错在 MDN 明确说 cookie 的存在不等于响应私有。D 恰好相反，public 允许共享缓存存储，包括带 Authorization 时。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="c">
+      <div class="q-no">自测 5</div>
+      <div class="q-stem">下列关于规范的说法，哪一句正确？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 现行 HTTP 缓存规范是 RFC 7234，RFC 9111 已废弃</li>
+        <li data-opt="b">B. MDN 没写的指令（如 s-maxage、stale-if-error）都不存在</li>
+        <li data-opt="c">C. RFC 9111 取代 RFC 7234；stale-while-revalidate 与 stale-if-error 来自 RFC 5861</li>
+        <li data-opt="d">D. immutable 要求每次重新加载都必须再验证</li>
+      </ul>
+      <div class="quiz-explain">解析：C 对。A 说反了，现行规范是 RFC 9111，它取代了 RFC 7234。B 错在这些指令是正式规范内容，只是 MDN 这篇指南未逐条展开。D 恰好相反，immutable（RFC 8246）的作用正是<strong>免除</strong>重新加载时的验证。</div>
+    </div>
+
+    <!-- ===== 复述 ===== -->
+    <div class="retell">
+      <h3>🗣️ 用自己的话，三句话讲完本章</h3>
+      <p>对着空气（或室友）说出这三句。说卡壳的那句，回去重读对应小节。</p>
+      <details><summary>句1：这章解决什么问题？——</summary><div class="retell-answer">参考答案：决定一份响应能不能被复用、能存多久、存在谁那里——在少传字节、减轻源站的同时，不让个性化内容泄露或把错误的表示发给客户端。</div></details>
+      <details><summary>句2：核心机制是什么？——</summary><div class="retell-answer">参考答案：先按私有/共享决定「谁可存」，再用 Cache-Control（max-age、no-cache、no-store、must-revalidate、immutable）与 Expires 决定「存多久、验不验」，用 Date/Age 手算新鲜度，用 Vary 把请求首部编进缓存键。</div></details>
+      <details><summary>句3：它和前后章怎么分工？——</summary><div class="retell-answer">参考答案：第 4 讲少建连接、本讲少传字节、第 6 讲用条件请求把「不传主体」做到极致；本讲只引出条件请求作陈旧响应的下一步，其完整报文与范围请求留给第 6 讲。</div></details>
+    </div>
+
+    <div class="review-plan">
+      <h3>🔁 间隔复习计划</h3>
+      <p>回忆本身比重读有效 10 倍。到点只做一件事：翻卡 + 重做标记题。</p>
+      <table>
+        <tr><th>时间点</th><th>复习内容</th><th>预计用时</th></tr>
+        <tr><td>第 1 天</td><td>概念卡 1–4 + 回忆 5.1-1、5.2-1、5.3-1、5.4-1 各一张</td><td>10 分钟</td></tr>
+        <tr><td>第 3 天</td><td>重做自测 2、3 + 翻概念卡 3、6；默画例③漏写 Vary 的故障链</td><td>8 分钟</td></tr>
+        <tr><td>第 7 天</td><td>L2 两题（Age 手算、Vary 命中判定）+ 三句话复述 + 概念卡 5、7</td><td>10 分钟</td></tr>
+        <tr><td>第 15 天</td><td>合上书挑战：闭卷写出两套首部组合与「延伸：规范怎么写」表格；能全过就毕业</td><td>15 分钟</td></tr>
+      </table>
+    </div>
+
+    <div class="final-challenge">
+      <h3>📕 合上书挑战</h3>
+      <p class="fc-sub">现在关掉这个页面，拿一张纸，凭记忆完成以下任务。全部做完再回来核对——这是本章真正的毕业考试。</p>
+      <ol id="challenge-list">
+        <li><span class="fc-check"></span>画出私有缓存与共享缓存的分界，各举一例，并写出「cookie 不等于私有」的理由</li>
+        <li><span class="fc-check"></span>用一张四列表写出 no-cache / no-store / must-revalidate / immutable 的「存不存 / 用不用验证 / 典型场景」</li>
+        <li><span class="fc-check"></span>给定 Date、Age、max-age，手算过期时刻与剩余寿命，写出 age 与 freshness_lifetime 的判定式</li>
+        <li><span class="fc-check"></span>画出 Vary: Accept-Encoding 参与缓存键的三步推演，并写出漏写 Vary 的五环故障链</li>
+        <li><span class="fc-check"></span>闭卷写出「带散列静态 JS」与「登录后个性化接口」两套完整响应首部，并逐条说明理由</li>
+        <li><span class="fc-check"></span>列出「延伸：规范怎么写」至少三条：RFC 9111 取代 7234、RFC 8246、RFC 5861、RFC 9211 各管什么</li>
+        <li><span class="fc-check"></span>一句话回答本讲主线问题：一份响应能不能被复用、两个用户为何拿到不同副本，究竟由谁说了算？——</li>
+      </ol>
+    </div>
+
+    <div class="complete-zone">
+      <button class="btn-complete" id="btn-complete" onclick="markDone()">✓ 我已完成本讲（含合上书挑战）</button>
+    </div>
+
+    <div class="chapter-nav">
+      <a href="chapter-04.html"><span class="nav-dir">← 上一讲</span>第4讲 HTTP/1.x 的连接管理</a>
+      <a href="chapter-06.html" class="next"><span class="nav-dir">下一讲 →</span>第6讲 条件请求与范围请求</a>
+    </div>
+
+  </div>
+</div>
+
+<footer class="footer">
+  <div class="wrap">第5讲 HTTP 缓存 · HTTP 精通 · 依据 MDN Web Docs《HTTP 指南》整理，延伸板块对照 RFC 9110 系列 · 学习进度保存在本机浏览器中</div>
+</footer>
+
+<script src="assets/mermaid.min.js"></script>
+<script>
+mermaid.initialize({
+  startOnLoad: true,
+  theme: "base",
+  themeVariables: {
+    primaryColor: "#e3edf7",
+    primaryBorderColor: "#1d5f9e",
+    primaryTextColor: "#1d5f9e",
+    lineColor: "#5c554b",
+    secondaryColor: "#fbeedd",
+    tertiaryColor: "#f5f1e8",
+    fontFamily: "-apple-system, PingFang SC, sans-serif",
+    fontSize: "14px"
+  },
+  flowchart: { curve: "linear", htmlLabels: false }
+});
+</script>
+<script>
+document.querySelectorAll(".quiz-block").forEach(block => {
+  const answer = block.dataset.answer;
+  const explain = block.querySelector(".quiz-explain");
+  block.querySelectorAll(".quiz-opts li").forEach(li => {
+    li.addEventListener("click", () => {
+      const opts = block.querySelectorAll(".quiz-opts li");
+      opts.forEach(o => o.classList.add("disabled"));
+      if (li.dataset.opt === answer) {
+        li.classList.add("correct");
+      } else {
+        li.classList.add("wrong");
+        block.querySelector(`[data-opt="${answer}"]`).classList.add("correct");
+      }
+      explain.classList.add("show");
+    });
+  });
+});
+
+document.querySelectorAll("#challenge-list li").forEach(li => {
+  li.addEventListener("click", () => li.classList.toggle("checked"));
+});
+
+const KEY = "http_guide_progress_v1";
+function loadProgress() {
+  try { return JSON.parse(localStorage.getItem(KEY)) || {}; } catch (e) { return {}; }
+}
+const progress = loadProgress();
+const btn = document.getElementById("btn-complete");
+if (progress[5] && progress[5].done) {
+  btn.textContent = "✓ 已完成 · 再次点击重置";
+  btn.classList.add("done");
+}
+function markDone() {
+  const p = loadProgress();
+  if (p[5] && p[5].done) {
+    delete p[5];
+    btn.textContent = "✓ 我已完成本讲（含合上书挑战）";
+    btn.classList.remove("done");
+  } else {
+    p[5] = { done: true, completedAt: Date.now(), reviewsDone: 0 };
+    btn.textContent = "✓ 已完成 · 复习提醒已开启";
+    btn.classList.add("done");
+  }
+  localStorage.setItem(KEY, JSON.stringify(p));
+}
+</script>
+
+</body>
+</html>

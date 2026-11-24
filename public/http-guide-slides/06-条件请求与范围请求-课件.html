@@ -1,0 +1,692 @@
+<!DOCTYPE html>
+<!--
+  ======================================================================
+  HTTP 精通 · 课件外壳（deck-shell.html）
+  由 build-slides.mjs 把 slides/NN.html 注入幻灯片区域，
+  输出 public/http-guide-slides/NN-xxx-课件.html。
+  骨架来自站内通用 1280×720 课件模板；本套额外增加 .wire 协议报文块。
+  每页必须写 data-narration（180–280 字口语稿，禁半角双引号、禁换行、禁小于号）。
+  ======================================================================
+-->
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第6讲 条件请求与范围请求 · HTTP 精通 课件</title>
+<script>
+window.MathJax = {
+  tex: {
+    inlineMath: [['$', '$'], ['\\(', '\\)']],
+    displayMath: [['$$', '$$'], ['\\[', '\\]']],
+    processEscapes: true,
+    tags: 'none'
+  },
+  svg: { fontCache: 'global', scale: 1.05 },
+  options: { skipHtmlTags: ['script','noscript','style','textarea','pre','code'] }
+};
+</script>
+<!-- MathJax 本地引用（tex-svg 单文件全量组件，约2MB，自带字体数据），file:// 与断网均可用 -->
+<script src="assets/tex-svg.js" async></script>
+<style>
+  :root{
+    --primary:#1a365d; --accent:#2b6cb0; --accent-light:#ebf8ff; --accent-border:#bee3f8;
+    --text:#2d3748; --muted:#718096; --border:#e2e8f0; --bg-light:#f7fafc;
+    --success:#38a169; --danger:#e53e3e; --warning:#dd6b20; --warn-bg:#fffaf0;
+  }
+  *{margin:0;padding:0;box-sizing:border-box;}
+  html,body{width:100%;height:100%;overflow:hidden;background:#0f172a;}
+  body{
+    font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Hiragino Sans GB","Microsoft YaHei","WenQuanYi Micro Hei",sans-serif;
+    color:var(--text);
+  }
+  #stage{
+    position:absolute; left:50%; top:50%;
+    width:1280px; height:720px;
+    transform:translate(-50%,-50%) scale(1);
+    transform-origin:center center;
+    background:#ffffff;
+    box-shadow:0 0 40px rgba(0,0,0,.4);
+    overflow:hidden;
+  }
+  .slide{
+    position:absolute; inset:0;
+    padding:36px 60px 52px;
+    display:none;
+    flex-direction:column;
+    background:#ffffff;
+    opacity:0;
+    transition:opacity .35s ease;
+  }
+  .slide.active{ display:flex; opacity:1; }
+
+  #progress{ position:absolute; top:0; left:0; height:6px; background:var(--accent); width:0; z-index:50; transition:width .35s; }
+
+  /* 封面 / 结束页 */
+  .slide-cover{ justify-content:center; align-items:center; text-align:center; }
+  .slide-cover{ background:linear-gradient(135deg,#1a365d 0%,#2b6cb0 100%); color:#fff; }
+  .slide-cover .kicker{ font-size:22px; letter-spacing:6px; opacity:.85; margin-bottom:18px;}
+  .slide-cover h1{ font-size:64px; font-weight:800; line-height:1.2; margin-bottom:22px; letter-spacing:2px;}
+  .slide-cover .sub{ font-size:26px; opacity:.92; margin-bottom:36px;}
+  .slide-cover .meta{ font-size:19px; opacity:.85; line-height:2;}
+  .slide-cover .divider{ width:160px;height:5px;background:#fff;opacity:.6;margin:0 auto 30px;border-radius:3px;}
+  .slide-cover .question{ font-size:24px; background:rgba(255,255,255,.12); border:1px solid rgba(255,255,255,.35); border-radius:12px; padding:12px 28px; margin-bottom:30px;}
+
+  /* 页头：结论式标题 */
+  .slide-head{ display:flex; align-items:baseline; gap:16px; border-bottom:3px solid var(--accent); padding-bottom:9px; margin-bottom:12px;}
+  .slide-head .sec{ font-size:17px; color:var(--accent); font-weight:700; background:var(--accent-light); padding:3px 11px; border-radius:6px; white-space:nowrap;}
+  .slide-head h3{ font-size:29px; color:var(--primary); font-weight:700;}
+  .slide-body{ flex:1; display:flex; flex-direction:column; justify-content:center; min-height:0; }
+
+  p{ font-size:21px; line-height:1.65; margin-bottom:8px;}
+  .lead{ font-size:23px; color:#374151; line-height:1.75;}
+  ul,ol{ margin:0 0 8px 26px; font-size:21px; line-height:1.7;}
+  li{ margin-bottom:5px;}
+  strong{ color:var(--primary); }
+
+  /* 公式块 */
+  .formula{ background:var(--accent-light); border-left:5px solid var(--accent); border-radius:0 10px 10px 0; padding:9px 22px; margin:9px 0; text-align:center; font-size:23px;}
+  .formula-concl{ background:#fffaf0; border-left:5px solid var(--warning);}
+  .MathJax{ font-size:1.05em !important; }
+  mjx-container[display="true"]{ margin:6px 0 !important; }
+
+  /* 表格 */
+  table{ width:100%; border-collapse:collapse; margin:10px 0; font-size:20px;}
+  th{ background:var(--accent); color:#fff; padding:8px 12px; text-align:center; font-weight:600;}
+  td{ padding:7px 12px; border:1px solid var(--border); text-align:center; vertical-align:middle;}
+  tr:nth-child(even) td{ background:var(--bg-light);}
+  td.l{ text-align:left; }
+  table.small{ font-size:18px; }
+  table.small td, table.small th{ padding:6px 10px; }
+
+  /* 组件 */
+  .card{ background:var(--accent-light); border:1px solid var(--accent-border); border-radius:12px; padding:12px 20px; margin:10px 0;}
+  .tip{ background:#ebf8ff; border-left:5px solid var(--accent); border-radius:0 10px 10px 0; padding:10px 20px; margin:10px 0; font-size:20px; color:#2c5282;}
+  .deep{ background:#f0fff4; border-left:5px solid var(--success); border-radius:0 10px 10px 0; padding:10px 20px; margin:10px 0; font-size:20px; color:#22543d;}
+  .warn{ background:var(--warn-bg); border-left:5px solid var(--warning); border-radius:0 10px 10px 0; padding:10px 20px; margin:10px 0; font-size:20px; color:#744210;}
+  .trap{ background:#fef2f2; border-left:5px solid var(--danger); border-radius:0 10px 10px 0; padding:10px 20px; margin:10px 0; font-size:20px; color:#7f1d1d;}
+
+  .pause{
+    background:var(--warn-bg); border:2px dashed var(--warning); border-radius:14px;
+    padding:10px 22px; margin:10px 0; display:flex; align-items:center; gap:16px;
+  }
+  .pause .icon{ font-size:36px; line-height:1; }
+  .pause .txt b{ color:var(--warning); font-size:21px; }
+  .pause .txt p{ font-size:18px; color:#744210; margin:3px 0 0; }
+
+  .cols{ display:flex; gap:28px; align-items:stretch; }
+  .col{ flex:1; min-width:0; }
+
+  /* 推导分步：仅互动模式隐藏，截图(autohide)模式全部可见——此规则不可删 */
+  .step{ opacity:0; transform:translateY(8px); transition:opacity .3s ease, transform .3s ease; }
+  .step.on{ opacity:1; transform:none; }
+  body.autohide .step{ opacity:1 !important; transform:none !important; }
+  .step-hint{ font-size:14px; color:var(--muted); margin-top:4px;}
+  body.autohide .step-hint{ display:none; }
+
+  /* HTTP 精通课件专用：协议报文原文块 */
+  .wire{background:#0f172a;color:#e2e8f0;border-radius:10px;padding:12px 18px;margin:8px 0;
+    font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:17px;line-height:1.55;
+    white-space:pre-wrap;overflow-wrap:anywhere;}
+  .wire b{color:#7dd3fc;font-weight:700;}
+  .wire i{color:#fde68a;font-style:normal;}
+  .wire em{color:#86efac;font-style:normal;}
+  .wire.sm{font-size:15px;line-height:1.45;}
+  .wire-cap{font-size:15px;color:var(--muted);margin:0 0 8px;}
+  .to-lec{color:#bee3f8;text-decoration:none;font-size:15px;margin-left:12px;}
+  .to-lec:hover{text-decoration:underline;}
+  .badge{display:inline-block;background:var(--accent-light);color:var(--accent);border:1px solid var(--accent-border);
+    border-radius:6px;padding:2px 10px;font-size:17px;font-weight:700;margin-right:8px;}
+
+  /* 因果链 */
+  .chain{ margin:6px 0; }
+  .chain .link{ display:flex; align-items:center; gap:14px; margin:6px 0;}
+  .chain .no{ width:34px; height:34px; border-radius:50%; background:var(--accent); color:#fff; font-size:18px; font-weight:700; display:flex; align-items:center; justify-content:center; flex-shrink:0;}
+  .chain .txt{ font-size:21px; line-height:1.5;}
+  .chain .txt strong{ color:var(--primary); }
+
+  /* mermaid 容器：高度封顶，防止溢出 720px 舞台 */
+  .mmd{ background:var(--bg-light); border:1px solid var(--border); border-radius:12px; padding:10px 14px; display:flex; justify-content:center; align-items:center; margin:8px 0;}
+  .mmd .mermaid{ display:flex; justify-content:center; width:100%; visibility:hidden; }
+  .mmd .mermaid[data-done]{ visibility:visible; }
+  .mmd .mermaid svg{ max-width:100%; height:auto; max-height:230px; }
+  .mmd.mmd-tall .mermaid svg{ max-height:330px; }
+  .mmd.mmd-sm svg{ max-height:150px; }
+  .mmd-row{ display:flex; gap:18px; }
+  .mmd-row .mmd{ flex:1; flex-direction:column; }
+  .mmd .cap{ font-size:17px; color:var(--muted); margin-top:6px; text-align:center;}
+  .mmd .cap b{ color:var(--text); }
+
+  #footer{ position:absolute; bottom:0; left:0; right:0; height:40px; display:flex; align-items:center; justify-content:space-between; padding:0 30px; font-size:15px; color:#94a3b8; background:rgba(247,250,252,.85); border-top:1px solid var(--border); z-index:40;}
+  #footer .brand{ font-weight:600; color:var(--accent); }
+
+  .nav{ position:absolute; bottom:48px; right:40px; display:flex; gap:12px; z-index:45;}
+  .nav button{ width:54px; height:54px; border-radius:50%; border:none; background:var(--accent); color:#fff; font-size:24px; cursor:pointer; box-shadow:0 3px 10px rgba(43,108,176,.4); display:flex; align-items:center; justify-content:center;}
+  .nav button:hover{ background:var(--primary); }
+  .nav button:disabled{ background:#cbd5d0; cursor:default; box-shadow:none;}
+
+  #hint{ position:absolute; bottom:48px; left:40px; font-size:14px; color:#94a3b8; z-index:45;}
+
+  body.autohide #progress, body.autohide #footer, body.autohide .nav, body.autohide #hint{ display:none !important; }
+</style>
+</head>
+<body>
+<div id="stage">
+
+  <div id="progress"></div>
+
+<!-- 第 6 讲：条件请求与范围请求 -->
+<section class="slide slide-cover active" data-narration="第 5 讲把缓存的新鲜度算到了秒，留下一句话：副本一旦陈旧，就得去服务器问一声变了没有。可要是每问一次都把整份资源传回来，缓存就白做了。本讲就交给你两把武器：一把用一小段信息确认资源没变，让服务器只回一个没有主体的 304；另一把让客户端只取回大文件里的某一段，靠 206 支持拖进度条和断点续传。本讲要回答的问题是：怎样用一次轻量请求确认资源没变，或者只取回文件的某一段。学完你应该能默写条件请求得到 304 的完整报文，会用 If-Match 挡住并发覆盖，并且手算多段范围请求的每一段字节数与完整报文。对应的 MDN 原文是条件请求和范围请求两篇。先看这一讲挂在十二讲主线的哪个位置。">
+  <div class="kicker">第 6 讲 · 第②组 连接与缓存</div>
+  <h1>条件请求与范围请求</h1>
+  <div class="sub">只确认有没有变，只取回需要的那一段</div>
+  <div class="question">怎样用一次轻量请求确认资源没变，或者只取回文件的某一段？</div>
+  <div class="meta">
+    配套讲义：HTTP 精通 第 6 讲 · 依据 MDN《条件请求》《范围请求》<br>
+    承接第 5 讲的缓存与新鲜度 · 下一讲转向 cookie 如何记住用户<br>
+    ← → 翻页 · 推导页按空格逐步显示
+  </div>
+</section>
+
+<section class="slide" data-narration="看这一讲在十二讲主线上的位置。第②组叫连接与缓存，三讲其实在解同一道性能优化题：第 4 讲减少建连接的次数，第 5 讲减少传输的字节，本讲把少传字节推到极致。图上高亮的是第 6 讲，它上接第 5 讲的缓存新鲜度——第 5 讲算出副本什么时候陈旧，本讲给出陈旧之后拿什么去问；下接第 7 讲，从这一讲往后，主线离开传输优化，进入状态与安全那一组，去解决无状态协议怎么记住用户。本讲不新增任何连接机制，它只是给已经缓存下来的副本补上一套再验证与只取一段的规则。把坐标定清楚，接下来这张主线因果链就是本讲的目录。">
+  <div class="slide-head"><span class="sec">定位</span><h3>第 6 讲是「陈旧之后拿什么去问」的答案</h3></div>
+  <div class="slide-body">
+    <div class="mmd mmd-sm">
+      <div class="mermaid">
+flowchart LR
+  A["第1到3讲 基础与表示"] --> B["第4到6讲 连接与缓存"] --> C["第7到10讲 状态与安全"] --> D["第11到12讲 中间层与重定向"]
+  B --> B5["第5讲 缓存与新鲜度"]
+  B5 --> B6["第6讲 条件与范围请求"]:::here
+  B6 --> C7["第7讲 cookie 记住用户"]
+  classDef here fill:#2b6cb0,color:#ffffff,stroke:#1a365d,stroke-width:3px
+      </div>
+    </div>
+    <p style="text-align:center;">第②组收尾：少建连接、少传字节之后，把「不传」做到极致。</p>
+    <div class="tip">本讲对应的 MDN 原文：Conditional requests / Range requests。</div>
+  </div>
+</section>
+
+<section class="slide" data-narration="本讲的主线是一条五环因果链。第一环，缓存副本已经陈旧，这是第 5 讲算到秒的结论。第二环，客户端不直接重下，而是把缓存里存着的验证器带上，发一次条件请求。第三环，服务器比对发现资源没变，就回一个 304，而且没有主体，整份资源的传输全省了。第四环是必须留意的分支，如果资源确实变了，那就不能偷懒，得回 200 加一份新主体。第五环换到另一半问题，客户端用 Range 只取文件的一段，服务器回 206 部分内容。这条链的核心，是用验证器把要不要重传整份资源变成一个能判定的是非题：304 省主体，206 省字节。那到底是什么样的麻烦逼出了这套机制，下一页用两个具体场景说清楚。">
+  <div class="slide-head"><span class="sec">主线</span><h3>用验证器把「要不要重传」变成可判定问题</h3></div>
+  <div class="slide-body">
+    <div class="chain">
+      <div class="link"><span class="no">1</span><span class="txt"><strong>缓存副本已陈旧</strong>：第 5 讲算到这一步</span></div>
+      <div class="link"><span class="no">2</span><span class="txt"><strong>带上验证器发条件请求</strong>：ETag 与 Last-Modified</span></div>
+      <div class="link"><span class="no">3</span><span class="txt"><strong>资源未变返回 304</strong>：无主体，省下整份传输</span></div>
+      <div class="link"><span class="no">4</span><span class="txt"><strong>资源变了返回新主体</strong>：200 加新版本，必须回传</span></div>
+      <div class="link"><span class="no">5</span><span class="txt"><strong>Range 只取一段</strong>：成功返回 206 部分内容</span></div>
+    </div>
+    <div class="tip">304 省主体、206 省字节；「资源确已变化」那一支是必须回传新主体的分支。</div>
+  </div>
+</section>
+
+<section class="slide" data-narration="先看两个具体麻烦，逼出本讲为什么要存在。第一个是缓存再验证：一个十兆文件，客户端存了副本，一分钟后陈旧，只想问服务器一句变了没有。最笨的办法是把整份文件重新下下来逐字节比对，为了回答一个是非题，先花掉十兆带宽。第二个是断点续传：已经下了八兆，中途断线，重连时要确认前面这八兆还是同一个版本，否则拼出来的文件是两份不同版本的缝合怪，看着完整其实是坏的。这两个麻烦有同一个形状：都需要一小段信息代表资源的某个版本，让客户端能用它问一句是不是同一版。逐字节比对不可取，是因为它把回答问题的成本和资源大小绑死了。下一页给这个短值一个正式名字和分类。">
+  <div class="slide-head"><span class="sec">动机</span><h3>两个麻烦，同一个形状：要一段「版本指纹」</h3></div>
+  <div class="slide-body">
+    <div class="cols">
+      <div class="col"><div class="card">📦 <strong>缓存再验证</strong><br>一个 10 MB 文件，副本陈旧，只想问一句变了没有。逐字节下载比对，为回答一个是非题先花掉 10 MB 带宽。</div></div>
+      <div class="col"><div class="card">⏯ <strong>断点续传与拖进度条</strong><br>下到 8 MB 断线，重连要确认前 8 MB 还是同一版本，否则拼出的是两份版本的缝合怪。</div></div>
+    </div>
+    <div class="tip">💡 两件事都要问「你手上这份和我缓存的那份是不是同一个版本」，成本必须与资源大小解耦。</div>
+    <div class="deep">解法：服务器在返回资源时附一个描述版本的短值，客户端以后只拿短值比对；成本因此与资源大小解耦。下一页给它一个正式名字。</div>
+  </div>
+</section>
+
+<section class="slide" data-narration="给这个短值一个正式名字，叫验证器，英文 Validator。MDN 把它分成两类。第一类是实体标签 ETag，一个不透明的字符串，唯一指代某一个版本，比如 67a4-19f2c；规范并不规定生成算法，散列、序号、版本号都行，别当成一定是 MD5。第二类是最后修改时间 Last-Modified，一个时间戳，通常只有秒级精度，一秒内的多次修改分不出来。比较版本还有强弱的分别：强验证要求逐字节相同，用在续传、字节合并和并发写；弱验证只要语义等价，用在缓存刷新。落到 ETag 上，带 W/ 斜杠前缀的是弱验证器，不带的是强验证器。极易混的一点是：验证类型和验证器类型是两回事，彼此独立。名字和分类立住了，下一页看一组真实报文，验证器到底放在哪儿。">
+  <div class="slide-head"><span class="sec">定义</span><h3>验证器（Validator）：两类版本指纹，两种严格度</h3></div>
+  <div class="slide-body">
+    <div class="cols">
+      <div class="col"><div class="card">🏷 <strong>实体标签</strong>（ETag, Entity Tag）<br>不透明字符串，唯一指代一个版本，如 "67a4-19f2c"。规范不规定算法，散列、序号、版本号都合法。</div></div>
+      <div class="col"><div class="card">🕒 <strong>最后修改时间</strong>（Last-Modified）<br>资源上次改动的时间戳，如 Mon, 16 Nov 2026 00:00:00 GMT。通常只有秒级精度，一秒内多次改动分辨不出。</div></div>
+    </div>
+    <div class="formula formula-concl">条件请求（Conditional Requests）：结果随验证器比较而变化</div>
+    <div class="deep"><strong>强验证</strong>（Strong Validation）逐字节相同，<strong>弱验证</strong>（Weak Validation）语义等价即可；二者与验证器类型相互独立，带 W/ 前缀的 ETag 是弱验证器。续传、合并、并发写必须用强验证器。</div>
+  </div>
+</section>
+
+<section class="slide" data-narration="来看第一组真实报文。上半段是资源首次到达的 200：状态行之后，内容类型说明是纯文本，长度是 12，关键是最后三行——最后修改时间给出时间戳，ETag 给出版本字符串 67a4-19f2c，缓存指令的 max-age 等于 60 秒。客户端把这份主体连同这些首部一起存进缓存。六十秒后副本陈旧，就轮到下半段这条条件请求：把缓存的 ETag 放进 If-None-Match，把最后修改时间放进 If-Modified-Since，两个首部一起发回服务器，空行之后没有主体。请注意它只是去问一句，并没有请求重传整份文件。服务器收到会怎么答，下一页把 304 的完整响应摆出来，并交代两个首部并存时到底听谁的。">
+  <div class="slide-head"><span class="sec">例子 · 报文 ①</span><h3>验证器先随 200 下发，陈旧时再被带回</h3></div>
+  <div class="slide-body">
+    <div class="wire sm"><b>HTTP/1.1 200 OK</b>
+<i>Date</i>: Mon, 16 Nov 2026 00:30:00 GMT
+<i>Content-Type</i>: text/plain; charset=utf-8
+<i>Content-Length</i>: 12
+<i>Last-Modified</i>: Mon, 16 Nov 2026 00:00:00 GMT
+<i>ETag</i>: "67a4-19f2c"
+<i>Cache-Control</i>: max-age=60
+
+<em>HTTP 条件请求</em></div>
+    <div class="wire-cap">首次 200：服务器把 Last-Modified 与 ETag 两种验证器连同主体一起给出，客户端随副本缓存下来。蓝色标起始行、黄色标首部名、绿色是主体。</div>
+    <div class="wire sm"><b>GET /doc.txt HTTP/1.1</b>
+<i>Host</i>: example.com
+<i>If-None-Match</i>: "67a4-19f2c"
+<i>If-Modified-Since</i>: Mon, 16 Nov 2026 00:00:00 GMT
+
+<em>（空行：本请求无主体）</em></div>
+    <div class="wire-cap">副本陈旧后的条件请求：把缓存的 ETag 放进 If-None-Match、把 Last-Modified 放进 If-Modified-Since，两个首部一起发回服务器。</div>
+  </div>
+</section>
+
+<section class="slide" data-narration="服务器比对发现版本没变，回了这条 304 Not Modified。整段读下来：状态行、日期、ETag、缓存指令，然后空行，空行之后一个字节主体都没有。这正是 304 最关键的地方——它是没有主体的成功响应，你看到的页面没变，其实是本地缓存加上服务器一句没变拼出来的，这次往返只花几百字节首部。这里有个反直觉的点：对 If-None-Match 来说，匹配成功意味着服务器版本和带来的不一样，也就是资源变了，该回 200；反过来 ETag 相同才是匹配失败，说明没变，回 304。再补一条规矩：两个首部都带上很常见，规范得给确定裁断——If-None-Match 优先，它一存在 If-Modified-Since 就被忽略，结论冲突时以 ETag 为准，照样回 304。下一页用一张表和一张分流图把判定钉死。">
+  <div class="slide-head"><span class="sec">例子 · 报文 ①（续）</span><h3>304 没有主体，且以 ETag 为准</h3></div>
+  <div class="slide-body">
+    <div class="wire sm"><b>HTTP/1.1 304 Not Modified</b>
+<i>Date</i>: Mon, 16 Nov 2026 00:31:00 GMT
+<i>ETag</i>: "67a4-19f2c"
+<i>Cache-Control</i>: max-age=60
+
+<em>（空行之后没有任何主体——这是 304 的关键）</em></div>
+    <div class="wire-cap">服务器比对发现版本没变，只回状态行与几行首部，空行后一个字节主体都没有；这一往返只花几百字节首部，省下整份资源。</div>
+    <table class="small">
+      <thead><tr><th>两个首部并存</th><th>裁决</th></tr></thead>
+      <tbody>
+        <tr><td class="l">If-None-Match 与 If-Modified-Since 都带上</td><td class="l">RFC 9110 规定 If-None-Match 优先</td></tr>
+        <tr><td class="l">ETag 说没变、日期说变了，结论冲突</td><td class="l">忽略 If-Modified-Since，以 ETag 为准，返回 304</td></tr>
+      </tbody>
+    </table>
+    <div class="tip">口诀：ETag 说了算，日期靠边站；304 里找不到新内容，新内容只出现在 200 里。</div>
+  </div>
+</section>
+
+<section class="slide" data-narration="把刚才两条报文连起来看，就得到一张确定的判定表。版本没变时，服务器的 ETag 和带来的值相同，对 If-None-Match 来说是匹配失败，回 304，没有主体，客户端刷新一下缓存元信息就继续用本地副本。版本变了时，ETag 不同，匹配成功，回 200 并带上新主体，客户端拿新版本替换旧副本。下面这张分流图说的是同一件事：副本陈旧后带验证器去问，服务器只做一个判断，资源是否变化，未变走 304 无主体，已变走 200 加新主体。MDN 讲得很直白，尽管这次往返也要耗点资源，但比把整个资源再传一遍高效得多。到这里主线问题的前半段答完了。可同一套验证器还能反过来用：不为了别传重复的，而是为了别覆盖别人的，下一页进入乐观锁。">
+  <div class="slide-head"><span class="sec">专题 · 判定</span><h3>版本变没变，分流成两条确定的支路</h3></div>
+  <div class="slide-body">
+    <table class="small">
+      <thead><tr><th>服务器比对结果</th><th>对 If-None-Match 而言</th><th>状态码</th><th>有无主体</th></tr></thead>
+      <tbody>
+        <tr><td class="l">版本没变</td><td class="l">ETag 相同 → 匹配失败</td><td class="l">304 Not Modified</td><td class="l">无</td></tr>
+        <tr><td class="l">版本变了</td><td class="l">ETag 不同 → 匹配成功</td><td class="l">200 OK</td><td class="l">有新主体</td></tr>
+      </tbody>
+    </table>
+    <div class="mmd mmd-sm">
+      <div class="mermaid">
+flowchart LR
+  A["副本已陈旧"] --> B["带上验证器发起请求"]
+  B --> C{"资源是否变化"}
+  C -->|未变| D["返回 304 且无主体"]
+  C -->|已变| E["返回 200 与新主体"]
+      </div>
+    </div>
+    <div class="tip">缓存拿 304 只刷新元信息、继续复用本地副本；拿到 200 才用新版本替换缓存。</div>
+  </div>
+</section>
+
+<section class="slide" data-narration="同一套验证器反过来用，就能挡住另一类事故。设想一份文档，客户端 A 和 B 几乎同时把它读到本地编辑，A 改完提交，B 随后也提交，可 B 的修改基于改动前的版本，对 A 的改动一无所知，于是 A 刚写进去的内容被整份覆盖，最后留下谁取决于谁手快。这叫竞态条件，结果不可预测也难复现。乐观锁的思路很干脆：允许所有人拿副本去改，但只让基于最新版本的那次提交成功。看报文。时刻 t1，A 读 /doc/42 拿到 ETag v1；时刻 t2，B 也读，同样拿到 v1，两人谁都不知道对方在编辑。时刻 t3，A 改完提交，PUT 里带上 If-Match 并附上读到的 v1，服务器一看当前正是 v1，条件满足，写入成功升到 v2，响应回传新的 ETag v2。那 B 随后提交会怎样，下一页见分晓。">
+  <div class="slide-head"><span class="sec">例子 · 报文 ②</span><h3>乐观锁（Optimistic Locking）：只让最新那次提交成功</h3></div>
+  <div class="slide-body">
+    <div class="wire sm"><em>时刻 t1：客户端 A 读取</em>
+<b>GET /doc/42 HTTP/1.1</b>
+<i>Host</i>: wiki.example
+
+<b>HTTP/1.1 200 OK</b>
+<i>ETag</i>: "v1"
+
+<em>时刻 t2：客户端 B 也读取，拿到同一版本</em>
+<b>GET /doc/42 HTTP/1.1</b>
+<i>Host</i>: wiki.example
+
+<b>HTTP/1.1 200 OK</b>
+<i>ETag</i>: "v1"</div>
+    <div class="wire-cap">t1、t2 两次读取都拿到 ETag v1，此刻谁都不知道对方也在编辑；这种后提交覆盖先提交的隐患叫<strong>竞态条件</strong>（Race Condition）。</div>
+    <div class="wire sm"><em>时刻 t3：A 改完提交，带上它读到的版本作为前提条件</em>
+<b>PUT /doc/42 HTTP/1.1</b>
+<i>Host</i>: wiki.example
+<i>If-Match</i>: "v1"
+<i>Content-Length</i>: 20
+
+<em>A 的修改内容……</em>
+
+<b>HTTP/1.1 200 OK</b>
+<i>ETag</i>: "v2"</div>
+    <div class="wire-cap">t3：A 提交时带 If-Match 并附上版本 v1。服务器发现当前正是 v1，条件满足，写入成功升到 v2，并回传新 ETag v2。</div>
+  </div>
+</section>
+
+<section class="slide" data-narration="看时刻 t4。B 也改完提交，可它手上的版本还是早先那份 v1，PUT 里 If-Match 照旧带 v1。服务器一比对，当前已经是 A 写进去的 v2，条件不满足，于是回 412 Precondition Failed，主体长度是 0，一个字节都不给。四个时刻列成表就一目了然：t1、t2 两人都读到 v1；t3 A 带 v1 提交，当前正是 v1，写入成功升到 v2；t4 B 还带 v1，当前已是 v2，不匹配被拒。A 的改动因此没被静默覆盖，这正是乐观锁要的结果。收到 412 之后有两条路：让用户基于最新版本重新编辑，或者把两版差异摆出来让他自己挑。关键不在服务器帮忙合并，而在过期提交的失败是显式可见的；它并没有真的加锁，所有客户端照样自由读取。下一页把五个条件首部的优先级一次排清楚。">
+  <div class="slide-head"><span class="sec">例子 · 报文 ②（续）</span><h3>B 仍带 v1，得到 412，A 的改动没被覆盖</h3></div>
+  <div class="slide-body">
+    <div class="wire sm"><em>时刻 t4：B 也改完提交，但它手上仍是早先那份 v1</em>
+<b>PUT /doc/42 HTTP/1.1</b>
+<i>Host</i>: wiki.example
+<i>If-Match</i>: "v1"
+<i>Content-Length</i>: 20
+
+<em>B 的修改内容……</em>
+
+<b>HTTP/1.1 412 Precondition Failed</b>
+<i>Content-Length</i>: 0</div>
+    <div class="wire-cap">t4：B 的 If-Match 仍是 v1，与服务器当前版本 v2 不符，条件不满足，服务器拒绝写入并返回 412，主体长度为 0。</div>
+    <table class="small">
+      <thead><tr><th>时刻</th><th>动作</th><th>携带版本</th><th>服务器当前</th><th>结果</th></tr></thead>
+      <tbody>
+        <tr><td>t1</td><td class="l">A 读取</td><td class="l">无</td><td>v1</td><td class="l">200，得到 ETag v1</td></tr>
+        <tr><td>t2</td><td class="l">B 读取</td><td class="l">无</td><td>v1</td><td class="l">200，得到 ETag v1</td></tr>
+        <tr><td>t3</td><td class="l">A 提交</td><td class="l">If-Match v1</td><td>v1</td><td class="l">匹配，升为 v2</td></tr>
+        <tr><td>t4</td><td class="l">B 提交</td><td class="l">If-Match v1</td><td>v2</td><td class="l">不匹配，返回 412</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section class="slide" data-narration="把一个请求里同时冒出好几个条件首部的情况收成一张表。RFC 9110 给了确定的评估顺序，先算前面的，满足条件才往下走。第一步 If-Match，它在就忽略写日期首部；第二步才轮到写日期首部；第三步 If-None-Match，它在就忽略读日期首部；第四步读日期首部；第五步 If-Range 与 Range 配合，最后评估。不满足时各有归处：前两步是写门槛，一律 412；中间两步是读捷径，对安全的 GET、HEAD 回 304，对 PUT 这类非安全方法回 412；第五步不匹配就忽略 Range，直接回 200 加完整资源。规律很齐：每组里 ETag 首部都压过对应的日期首部，判定因此确定一致。条件请求这一半收工，下一页转到另一半：只取回文件的一段。">
+  <div class="slide-head"><span class="sec">专题 · 判定表</span><h3>五个条件首部，一个确定的评估顺序</h3></div>
+  <div class="slide-body">
+    <table class="small">
+      <thead><tr><th>顺序</th><th>首部</th><th>被忽略的条件</th><th>条件不满足时的结果</th></tr></thead>
+      <tbody>
+        <tr><td>1</td><td class="l">If-Match</td><td class="l">若存在，忽略 If-Unmodified-Since</td><td class="l">412 Precondition Failed</td></tr>
+        <tr><td>2</td><td class="l">If-Unmodified-Since</td><td class="l">仅当无 If-Match 时评估</td><td class="l">412 Precondition Failed</td></tr>
+        <tr><td>3</td><td class="l">If-None-Match</td><td class="l">若存在，忽略 If-Modified-Since</td><td class="l">GET/HEAD → 304；其他方法 → 412</td></tr>
+        <tr><td>4</td><td class="l">If-Modified-Since</td><td class="l">仅当无 If-None-Match 时评估</td><td class="l">GET/HEAD → 304；其他方法 → 412</td></tr>
+        <tr><td>5</td><td class="l">If-Range</td><td class="l">与 Range 配合，最后评估</td><td class="l">不匹配则忽略 Range，返回 200 完整资源</td></tr>
+      </tbody>
+    </table>
+    <div class="deep">顺序 1、2 是写门槛，3、4 是读捷径，每组里 ETag 首部都压过对应日期首部。还有一处要停一下：If-None-Match 与 If-Modified-Since 条件不满足时返回什么取决于方法——安全的 GET、HEAD 回 304 省传输，PUT 等非安全方法回 412 拒绝写；If-Range 不匹配则忽略 Range 直接回 200 完整资源。</div>
+  </div>
+</section>
+
+<section class="slide" data-narration="条件请求解决要不要传整份，还有个问题没答：能不能只传其中一段。播放器拖进度条、下载器断点续传、工具只取大文件一段，都靠范围请求。先看能力探测：客户端发一个 HEAD，只取首部不取主体，服务器用 Accept-Ranges 等于 bytes 声明支持字节范围，并给出完整资源一万字节，这是后面算端点的基准。再看单段请求：要 0 到 1023 这一段，服务器回 206 Partial Content，长度变成 1024，是这一段自己的大小；内容范围写成 0 到 1023 斜杠 10000，说明这段在完整资源里的位置，分母永远是总长。最容易差一的是端点从零开始、又是闭区间，所以 0 到 1023 实际含 1024 个字节。单段好算，下一页来一次多段手算。">
+  <div class="slide-head"><span class="sec">例子 · 报文 ③</span><h3>先探测能力，再用 Range 取回一段</h3></div>
+  <div class="slide-body">
+    <div class="wire sm"><b>HEAD /video/sample.mp4 HTTP/1.1</b>
+<i>Host</i>: media.example
+
+<b>HTTP/1.1 200 OK</b>
+<i>Accept-Ranges</i>: bytes
+<i>Content-Length</i>: 10000
+<i>Content-Type</i>: video/mp4</div>
+    <div class="wire-cap"><strong>范围请求</strong>（Range Requests）先做能力探测：HEAD 只取首部不取主体；Accept-Ranges: bytes 声明支持字节范围，Content-Length: 10000 给出完整资源长度，是后面算端点的基准。</div>
+    <div class="wire sm"><b>GET /video/sample.mp4 HTTP/1.1</b>
+<i>Host</i>: media.example
+<i>Range</i>: bytes=0-1023
+
+<b>HTTP/1.1 206 Partial Content</b>
+<i>Content-Length</i>: 1024
+<i>Content-Range</i>: bytes 0-1023/10000
+<i>Content-Type</i>: video/mp4
+
+<em>（空行后是 1024 字节的部分数据）</em></div>
+    <div class="wire-cap">206 只回一段：Content-Length 是这一段的大小；<strong>内容范围</strong>（Content-Range）用 bytes 起始-结束/总长 说明这段在完整资源里的位置，分母永远是总长。</div>
+  </div>
+</section>
+
+<section class="slide" data-narration="现在做本讲计算量最大的一次手算，也是第四个例子。题目给定：文件总长 1000 字节，请求两段，分别是 0 到 9、以及 990 到 999。第一步逐段算端点，公式是字节数等于末字节减首字节再加一。第一段，9 减 0 加 1 等于 10 字节，内容范围写成 0 到 9 斜杠 1000。第二段，999 减 990 加 1 也等于 10 字节，内容范围写成 990 到 999 斜杠 1000。第二步确认分母：两段都写完整资源长度 1000，而不是本段长度 10，这是内容范围的硬性格式，分母永远是整个资源的长度，别顺手写成段长。端点差一和分母写错，是多段手算里最高发的两个错。数字算对了，下一页把这条 206 的完整报文一行行写出来，再把这个 178 逐项手算清楚。">
+  <div class="slide-head"><span class="sec">专题 · 手算 ①</span><h3>逐段算字节数，分母永远写总长</h3></div>
+  <div class="slide-body">
+    <p class="lead">文件总长 <strong>1000</strong> 字节，请求 <strong>bytes=0-9,990-999</strong> 两段。</p>
+    <table class="small">
+      <thead><tr><th>段</th><th>请求范围</th><th>首字节</th><th>末字节</th><th>字节数（末−首+1）</th><th>Content-Range</th></tr></thead>
+      <tbody>
+        <tr><td>第 1 段</td><td class="l">bytes=0-9</td><td>0</td><td>9</td><td class="l">9 − 0 + 1 = 10</td><td class="l">bytes 0-9/1000</td></tr>
+        <tr><td>第 2 段</td><td class="l">bytes=990-999</td><td>990</td><td>999</td><td class="l">999 − 990 + 1 = 10</td><td class="l">bytes 990-999/1000</td></tr>
+      </tbody>
+    </table>
+    <div class="formula formula-concl">字节数 = 末字节 − 首字节 + 1 · Content-Range 分母是 1000 不是 10</div>
+    <div class="deep">两段都是 10 字节。第二段从 990 到 999 含 999 − 990 + 1 = 10 个字节；分母 1000 是完整资源总长，是 Content-Range 的硬性格式。</div>
+  </div>
+</section>
+
+<section class="slide" data-narration="把这条 206 的完整报文一行行摆出来。状态行是 206 部分内容，顶层把内容类型标成多段字节范围，带一个边界串 abc123，长度写 178。空行之后进入主体，先用一行 --abc123 起第一段，这段自己带内容类型和内容范围，内容范围写成 0 到 9 斜杠 1000，空行后是十字节数据 0123456789。接着又一行 --abc123 起第二段，内容范围写成 990 到 999 斜杠 1000，数据是 ABCDEFGHIJ。最后用 --abc123-- 收尾，结束边界在边界串两侧各加两个连字符。请留意每段都带自己的内容类型与内容范围，顶层那个多段类型只负责把几段包起来。报文形状清楚了，可 178 这个数怎么来的，下一页逐项手算给你看，一行都不跳。">
+  <div class="slide-head"><span class="sec">例子 · 报文 ④</span><h3>完整 multipart/byteranges 响应</h3></div>
+  <div class="slide-body">
+    <div class="wire sm"><b>HTTP/1.1 206 Partial Content</b>
+<i>Date</i>: Mon, 16 Nov 2026 00:40:00 GMT
+<i>Content-Type</i>: multipart/byteranges; boundary=abc123
+<i>Content-Length</i>: 178
+
+<em>--abc123</em>
+<i>Content-Type</i>: text/plain
+<i>Content-Range</i>: bytes 0-9/1000
+
+<em>0123456789</em>
+<em>--abc123</em>
+<i>Content-Type</i>: text/plain
+<i>Content-Range</i>: bytes 990-999/1000
+
+<em>ABCDEFGHIJ</em>
+<em>--abc123--</em></div>
+    <div class="wire-cap">多段 206 的完整报文：顶层 Content-Type 是 multipart/byteranges 并给出 boundary；每段各带 Content-Type 与 Content-Range；最后的边界串两侧各加两个连字符表示结束。</div>
+  </div>
+</section>
+
+<section class="slide" data-narration="一百七十八不是估的，是一行行加出来的。先约定每行以 CRLF 回车换行结尾，记 2 字节。第一段：边界行 --abc123 八个字符加二得十；内容类型那行二十四加二得二十六；内容范围写成 0 到 9 斜杠 1000，二十九加二得三十一；空行只有回车换行记二；数据 0123456789 十个字符加二得十二，第一段合计八十一。第二段结构一样，但内容范围写成 990 到 999 斜杠 1000，字符数变成三十三加二得三十五，所以第二段合计八十五。最后结束边界 --abc123-- 十个字符加二得十二。八十一加八十五再加十二，正好一百七十八。三件事钉死了：每段字节数按末减首加一算，内容范围分母是总长一千，多段响应的长度是边界行、每段首部、每段数据和所有回车换行之和。下一页把全讲的判定规则收成一条解题路径。">
+  <div class="slide-head"><span class="sec">专题 · 手算 ②</span><h3>Content-Length 178，逐项加出来</h3></div>
+  <div class="slide-body">
+    <p class="lead">约定每行以 CRLF（回车换行，2 字节）结尾，等号右边是逐项字节数。</p>
+    <table class="small">
+      <thead><tr><th>组成</th><th>字符数</th><th>+ CRLF</th><th>小计</th></tr></thead>
+      <tbody>
+        <tr><td class="l">--abc123</td><td>8</td><td>+2</td><td>10</td></tr>
+        <tr><td class="l">Content-Type: text/plain</td><td>24</td><td>+2</td><td>26</td></tr>
+        <tr><td class="l">Content-Range: bytes 0-9/1000</td><td>29</td><td>+2</td><td>31</td></tr>
+        <tr><td class="l">空行</td><td>0</td><td>+2</td><td>2</td></tr>
+        <tr><td class="l">0123456789 第 1 段数据</td><td>10</td><td>+2</td><td>12</td></tr>
+        <tr><td class="l"><strong>第 1 段合计</strong></td><td>—</td><td>—</td><td><strong>81</strong></td></tr>
+        <tr><td class="l">--abc123</td><td>8</td><td>+2</td><td>10</td></tr>
+        <tr><td class="l">Content-Type: text/plain</td><td>24</td><td>+2</td><td>26</td></tr>
+        <tr><td class="l">Content-Range: bytes 990-999/1000</td><td>33</td><td>+2</td><td>35</td></tr>
+        <tr><td class="l">空行</td><td>0</td><td>+2</td><td>2</td></tr>
+        <tr><td class="l">ABCDEFGHIJ 第 2 段数据</td><td>10</td><td>+2</td><td>12</td></tr>
+        <tr><td class="l"><strong>第 2 段合计</strong></td><td>—</td><td>—</td><td><strong>85</strong></td></tr>
+        <tr><td class="l">--abc123-- 结束边界</td><td>10</td><td>+2</td><td>12</td></tr>
+        <tr><td class="l"><strong>总计</strong></td><td>—</td><td>—</td><td><strong>81 + 85 + 12 = 178</strong></td></tr>
+      </tbody>
+    </table>
+    <div class="formula formula-concl">178 = 边界行 + 每段首部 + 每段数据 + 各 CRLF 之和</div>
+  </div>
+</section>
+
+<section class="slide" data-narration="到这儿四个例子都拆完了，把它们串成一条拿到请求就能走的解题路径，按空格一步步展开。第一步，先判断是不是写操作。只要带 If-Match，就拿它先比 ETag，版本不符当场 412 结束，后面的读捷径不用看，因为写门槛永远排在最前。第二步，按优先级挑该看的首部。If-None-Match 一旦存在，If-Modified-Since 就被忽略，只认 ETag 这一条链路。第三步，比对定状态码：版本没变回 304 无主体，变了回 200 加新主体；非安全方法条件不满足就回 412。第四步，请求里若还带 Range，就按末减首加一算每段字节数，内容范围分母写总长，再按 206、416、200 三分流。四步走完，任何一条条件或范围请求都能判。下一页给一道题，请你自己走一遍。">
+  <div class="slide-head"><span class="sec">推导</span><h3>拿到一条请求，四步判出结果</h3></div>
+  <div class="slide-body">
+    <div class="step"><p><strong>① 先看是不是写操作</strong>：带 If-Match 就先比 ETag，版本不符当场 412，后面不必再看。</p></div>
+    <div class="step"><p><strong>② 按优先级挑该看的首部</strong>：If-None-Match 存在就忽略 If-Modified-Since，只认 ETag 那条链路。</p></div>
+    <div class="step"><p><strong>③ 比对定状态码</strong>：版本没变回 304 无主体，变了回 200 新主体；非安全方法失败则 412。</p></div>
+    <div class="step"><div class="formula formula-concl">④ 带 Range 时按「末−首+1」算段长、分母写总长，206 / 416 / 200 三分流</div></div>
+    <p class="step-hint">按空格 / → 逐步展开推导</p>
+  </div>
+</section>
+
+<section class="slide" data-narration="轮到你了。屏幕上给一条请求：对总长 1000 字节的文件要两段，bytes 等于 0 到 9，以及 990 到 999。请你自己推三件事：每段各多少字节、两条内容范围怎么写、整条多段响应的长度是多少。这三步都请落在纸上，别急着往下看。先暂停视频自己推一遍。推出来了吗？好，对答案。两段都按末减首加一，各是 10 字节，内容范围分别写 0 到 9 斜杠 1000、990 到 999 斜杠 1000，分母都是总长。响应是 206，顶层标成多段字节范围并带边界串，每段各带内容类型与内容范围。把边界行、每段首部、十字节数据、空行和每行结尾的 CRLF 全加起来，得到 178。要是把分母写成 10，或者漏了某个 CRLF，回看上一页那张逐项表。下一页把 MDN 的说法和 RFC 的条文摆在一起。">
+  <div class="slide-head"><span class="sec">演练</span><h3>手算两段 Range，自己把 178 加出来</h3></div>
+  <div class="slide-body">
+    <div class="wire sm"><b>GET /docs/report.txt HTTP/1.1</b>
+<i>Host</i>: docs.example
+<i>Range</i>: bytes=0-9,990-999
+
+<em>已知：资源总长 1000 字节</em></div>
+    <div class="step"><p>① 两段各 <strong>10 字节</strong>：9 − 0 + 1、999 − 990 + 1；Content-Range 为 bytes 0-9/1000 与 bytes 990-999/1000。</p></div>
+    <div class="step"><p>② 响应是 <strong>206</strong>，顶层 Content-Type 为 multipart/byteranges 带 boundary，每段各带 Content-Type 与 Content-Range。</p></div>
+    <div class="step"><p>③ 边界行 + 每段首部 + 十字节数据 + 空行 + 各 CRLF 相加，<strong>Content-Length 为 178</strong>。</p></div>
+    <div class="pause"><div class="icon">✍️</div><div class="txt"><b>暂停推导</b><p>合上答案，自己数出两段字节数、两条 Content-Range，并把 178 逐项加出来。</p></div></div>
+    <p class="step-hint">按空格 / → 逐步揭示答案</p>
+  </div>
+</section>
+
+<section class="slide" data-narration="把 MDN 的工程口径和 RFC 的规范口径对一次。第一行，条件请求结果随验证器比较而变，规范第 8 节定义条件请求、第 13 节规定评估顺序。第二行，验证器分强弱，第 8 节明确强验证器逐字节相同、弱验证器用 W/ 前缀，这是续传与合并必须用强 ETag 的依据。第三行，ETag 只是不透明字符串，规范不规定算法，别当成固定的 MD5。第四行，读首部并存以 ETag 为准，对应第 13 节 MUST 级的优先顺序。第五行，Range 成功回 206、越界回 416、不支持回 200，多段用 multipart/byteranges，都在第 14 节。RFC 里必须、应当、可以这些措辞有严格区别，MDN 一句以 ETag 为准，落到规范就是必须照做的顺序。平时查 MDN 更快，下一页扫三个雷区。">
+  <div class="slide-head"><span class="sec">规范对照</span><h3>MDN 的说法 → RFC 怎么写 → 为什么值得知道</h3></div>
+  <div class="slide-body">
+    <table class="small">
+      <thead><tr><th>MDN 的说法</th><th>RFC 怎么写</th><th>为什么值得知道</th></tr></thead>
+      <tbody>
+        <tr><td class="l">条件请求结果随验证器比较而变</td><td class="l">RFC 9110 第 8 节定义条件请求；第 13 节给前置条件评估顺序</td><td class="l">实现服务器必须照顺序评估，否则同一请求结论会漂</td></tr>
+        <tr><td class="l">验证器分强弱，ETag 用 W/ 前缀标弱</td><td class="l">RFC 9110 第 8 节：强验证器逐字节相同，弱验证器语义等价</td><td class="l">续传与字节合并必须强验证器，这是规范依据</td></tr>
+        <tr><td class="l">ETag 可以是资源散列值</td><td class="l">RFC 9110 第 8 节只要求不透明字符串、双引号包裹，不规定算法</td><td class="l">别当固定算法，散列、序号、版本号都合法</td></tr>
+        <tr><td class="l">两个读首部并存时以 ETag 为准</td><td class="l">RFC 9110 第 13 节：If-Match 到 If-Range 的 MUST 级优先顺序</td><td class="l">保证带多首部的请求在任何服务器上判定一致</td></tr>
+        <tr><td class="l">Range 成功 206、越界 416、不支持 200；多段用 multipart/byteranges</td><td class="l">RFC 9110 第 14 节定义 Range、Content-Range 与 multipart 媒体类型</td><td class="l">416 必须用 bytes 星号斜杠总长告知可用长度，便于重试</td></tr>
+      </tbody>
+    </table>
+    <div class="deep">延伸板块每讲一次：MDN 管怎么做，RFC 管为什么；RFC 里 MUST、SHOULD、MAY 有严格区别，查规范先认准现行 RFC 9110。</div>
+  </div>
+</section>
+
+<section class="slide" data-narration="扫三个最高发的雷。第一个，以为 304 里带着更新后的资源。错，304 没有主体，页面没变是本地缓存加服务器一句没变拼出来的，想找新内容只能去 200 里找。第二个，以为 If-None-Match 匹配成功说明资源没变。这个最拧：匹配成功指服务器 ETag 和带来的值都不相同，也就是资源变了，该回 200 加新主体；反过来 ETag 相同才是匹配失败，说明没变，回 304。第三个，以为带了 Range 就一定拿到 206。错，服务器完全可以忽略 Range 回 200 整份，必须检查状态码；范围完全越界回 416 并带 bytes 星号斜杠总长；后缀写法 bytes 等于负 500，指最后 500 字节，不是从第 500 开始。端点按末减首加一算清就不会差一。雷区排完，下一页说本讲与第 7 讲的分工。">
+  <div class="slide-head"><span class="sec">避坑</span><h3>三个把概念拧反的误解</h3></div>
+  <div class="slide-body">
+    <div class="trap">❌ <strong>304 里带着更新后的资源</strong><br>✅ 304 无主体，它是本地缓存加服务器一句「没变」拼出来的；新内容只出现在 200 里。</div>
+    <div class="trap">❌ <strong>If-None-Match 匹配成功说明资源没变</strong><br>✅ 恰好相反：匹配成功指 ETag 不同、资源变了，该回 200；ETag 相同是匹配失败，回 304。</div>
+    <div class="trap">❌ <strong>带 Range 就一定拿到 206</strong><br>✅ 服务器可忽略 Range 回 200 整份；范围完全越界回 416 并带 bytes */总长；bytes=-500 是取最后 500 字节的后缀写法，不是从第 500 开始。</div>
+  </div>
+</section>
+
+<section class="slide" data-narration="这一讲和下一讲怎么分工，说清楚才不会重复用功。本讲待在第②组连接与缓存的末尾，只解一件事——少传字节：陈旧了用验证器再验证回 304，只取一段用 Range 回 206，核心对象是验证器、条件首部、304、206 和内容范围。第 7 讲换一条主线，正式进入第③组状态与安全，回答第 1 讲埋下的那笔账：无状态协议怎么记住一个用户，核心对象变成 Set-Cookie 与 Cookie，以及 Domain、Path、SameSite 这些属性。本讲讲完，传输优化这条线就收尾了；不管缓存再验证还是条件写，都默认服务器不必记住上一次请求，这个前提一撤，就得靠 cookie 把状态补回来。钩子先埋着：下一讲服务器会把一小段状态交给浏览器，此后同源请求自动带回。先用三句话把本讲收掉。">
+  <div class="slide-head"><span class="sec">接口</span><h3>第 6 讲收尾传输优化，第 7 讲转向记住用户</h3></div>
+  <div class="slide-body">
+    <table>
+      <thead><tr><th></th><th>第 6 讲</th><th>第 7 讲</th></tr></thead>
+      <tbody>
+        <tr><td class="l"><strong>解决的问题</strong></td><td class="l">少传字节：再验证与只取一段</td><td class="l">无状态协议怎么记住一个用户</td></tr>
+        <tr><td class="l"><strong>核心对象</strong></td><td class="l">验证器、条件首部、304、206、Range</td><td class="l">Set-Cookie 与 Cookie、Domain、Path、SameSite</td></tr>
+        <tr><td class="l"><strong>所在主线</strong></td><td class="l">第②组连接与缓存的收尾</td><td class="l">第③组状态与安全的开端</td></tr>
+        <tr><td class="l"><strong>留下的账</strong></td><td class="l">无状态留下的状态难题</td><td class="l">cookie 的属性作用域与安全边界</td></tr>
+      </tbody>
+    </table>
+    <div class="tip">钩子：本讲把「不传」做到了极致，下一讲换一条主线——服务器用 Set-Cookie 把一小段状态交给浏览器，此后每次同源请求自动带回。</div>
+  </div>
+</section>
+
+<section class="slide" data-narration="用三句话收束第 6 讲。解决什么：回答封面那两个问题——用一次轻量请求确认资源没变，靠 ETag 比对加 304 无主体；只取回文件的一段，靠 Range 加 206，支撑拖进度条和断点续传。核心机制：用验证器把版本是否相同变成一小段短值的比较，条件首部按确定的优先级判定，304 省主体、412 挡覆盖、206 省字节，范围请求再按字节端点寻址、分母写总长。承上启下：本讲接的是第 5 讲算出的副本陈旧，给出的正是再验证与只取一段的武器；无状态留下的状态难题，要等第 7 讲用 cookie 才真正开还。记住这句口诀，比较验证器比传输资源便宜得多，整套条件请求都立在这个不等式上。合上书能默写 304 流程、乐观锁时序和多段报文，这一讲才算过。最后一页给你留四项毕业挑战。">
+  <div class="slide-head"><span class="sec">小结</span><h3>三句话讲完第 6 讲</h3></div>
+  <div class="slide-body">
+    <div class="chain">
+      <div class="link"><span class="no">1</span><span class="txt"><strong>解决什么</strong>：用一次轻量请求确认没变（304），或只取回一段（206）</span></div>
+      <div class="link"><span class="no">2</span><span class="txt"><strong>核心机制</strong>：验证器作版本指纹，条件首部按优先级判定，Range 按字节寻址</span></div>
+      <div class="link"><span class="no">3</span><span class="txt"><strong>承上启下</strong>：接第 5 讲的陈旧，把状态难题交给第 7 讲</span></div>
+    </div>
+    <div class="formula formula-concl">比较验证器比传输资源便宜得多 —— 合上书也要能默写</div>
+  </div>
+</section>
+
+<section class="slide slide-cover" data-narration="第 6 讲到这儿结束，给你留四项毕业挑战，合上书拿一张纸完成。第一，默写 If-None-Match 触发 304 的请求与响应报文，说清 304 为什么没有主体，以及两首部并存时以谁为准。第二，用 t1 到 t4 把两客户端并发 PUT 推一遍，每步带什么首部、返回什么、412 出现在哪一步、被拒之后怎么办。第三，默写五个条件首部的评估优先级，说清条件不满足时 GET 回 304、写方法回 412、If-Range 不匹配回 200 全量。第四，手算总长 1000、请求 0 到 9 和 990 到 999 两段，写出每段字节数、两条内容范围，以及长度为什么是 178。四项全做出来，这一讲就毕业了。下一讲是第 7 讲 Cookie：给无状态协议加上记忆，我们离开传输优化，进入状态与安全那一组。">
+  <div class="kicker">第 6 讲 结束</div>
+  <h1>少传，甚至不传</h1>
+  <div class="sub">毕业挑战：合上书，拿一张纸</div>
+  <div class="divider"></div>
+  <div class="meta">
+    ☑ 默写 If-None-Match 触发 304 的请求与响应，说明两首部并存时听谁的<br>
+    ☑ 用 t1 到 t4 推演两客户端并发 PUT，标出 412 出现在哪一步<br>
+    ☑ 默写五个条件首部的评估优先级，区分 304、412 与 200 全量<br>
+    ☑ 手算总长 1000 的多段 Range：每段字节数、Content-Range 与 Content-Length 178<br><br>
+    下一讲 · 第 7 讲 Cookie：给无状态协议加上记忆
+  </div>
+</section>
+
+  <!-- 页脚：brand 改为本章标题；总页数改 pagenum 初值 -->
+  <div id="footer">
+    <span class="brand">第6讲 条件请求与范围请求 · HTTP 精通 课件　<a class="to-lec" href="../http-guide/index.html">讲义首页 ↗</a></span>
+    <span id="pagenum">1 / 1</span>
+  </div>
+
+  <!-- 导航 -->
+  <div class="nav">
+    <button id="prev" title="上一页 (←)">‹</button>
+    <button id="next" title="下一页 (→ / 空格)">›</button>
+  </div>
+  <div id="hint">← → 翻页 · 空格下一页 · 推导页逐步显示 · 点击左右半屏翻页</div>
+
+</div>
+
+<!-- mermaid 本地引用，保证离线可用；初始化参数全套课件统一，勿改 -->
+<script src="assets/mermaid.min.js"></script>
+<script>
+mermaid.initialize({
+  startOnLoad: false,   // 必须为 false：display:none 的隐藏页渲染会得到 0 宽高的退化 SVG，
+                        // 改为页面激活时懒渲染（见 renderMermaid）
+  theme: "base",
+  themeVariables: {
+    primaryColor: "#ebf8ff",
+    primaryBorderColor: "#2b6cb0",
+    primaryTextColor: "#1a365d",
+    lineColor: "#718096",
+    fontFamily: "-apple-system, PingFang SC, sans-serif",
+    fontSize: "15px"
+  },
+  flowchart: { curve: "linear", htmlLabels: false }
+});
+</script>
+<script>
+(function(){
+  const slides = Array.from(document.querySelectorAll('.slide'));
+  const total = slides.length;
+  let idx = 0;
+
+  const params = new URLSearchParams(location.search);
+  const startSlide = parseInt(params.get('slide'), 10);
+  if (params.get('autohide') === '1') document.body.classList.add('autohide');
+  if (!isNaN(startSlide) && startSlide >= 1 && startSlide <= total) idx = startSlide - 1;
+
+  const progress = document.getElementById('progress');
+  const pagenum = document.getElementById('pagenum');
+  const prevBtn = document.getElementById('prev');
+  const nextBtn = document.getElementById('next');
+
+  // 推导分步：每页记住已展开的步数；autohide（截图）模式下 CSS 强制全显
+  const stepState = new Map();
+  function stepsOf(i){ return Array.from(slides[i].querySelectorAll('.step')); }
+  function applySteps(){
+    stepsOf(idx).forEach((el, k)=> el.classList.toggle('on', k < (stepState.get(idx) || 0)));
+  }
+  // 前进一步：先展开本页下一步，全部展开后才翻页
+  function forward(){
+    const steps = stepsOf(idx);
+    const shown = stepState.get(idx) || 0;
+    if (shown < steps.length){ stepState.set(idx, shown + 1); applySteps(); return; }
+    go(idx + 1);
+  }
+  // 后退一步：先收起本页最后一步，收完才回上一页
+  function backward(){
+    const steps = stepsOf(idx);
+    const shown = stepState.get(idx) || 0;
+    if (shown > 0){ stepState.set(idx, shown - 1); applySteps(); return; }
+    go(idx - 1);
+  }
+
+  // mermaid 懒渲染：只在页面激活（有真实宽高）时渲染该页的图，渲染后打 data-done 防重复
+  function renderMermaid(slide){
+    if (typeof mermaid === 'undefined') return;
+    const nodes = Array.from(slide.querySelectorAll('.mermaid:not([data-done])'));
+    if (!nodes.length) return;
+    nodes.forEach(n => n.setAttribute('data-done', ''));
+    mermaid.run({ nodes }).catch(err => {
+      nodes.forEach(n => n.removeAttribute('data-done'));
+      console.error('mermaid 渲染失败：', err);
+    });
+  }
+
+  function render(){
+    slides.forEach((s,i)=> s.classList.toggle('active', i===idx));
+    progress.style.width = ((idx+1)/total*100) + '%';
+    pagenum.textContent = (idx+1) + ' / ' + total;
+    prevBtn.disabled = (idx===0);
+    nextBtn.disabled = (idx===total-1);
+    applySteps();
+    renderMermaid(slides[idx]);
+  }
+  function go(n){ idx = Math.max(0, Math.min(total-1, n)); render(); }
+
+  prevBtn.addEventListener('click', e=>{ e.stopPropagation(); backward(); });
+  nextBtn.addEventListener('click', e=>{ e.stopPropagation(); forward(); });
+
+  document.addEventListener('keydown', e=>{
+    if(e.key==='ArrowRight'||e.key===' '||e.key==='PageDown'){ e.preventDefault(); forward(); }
+    else if(e.key==='ArrowLeft'||e.key==='PageUp'){ e.preventDefault(); backward(); }
+    else if(e.key==='Home'){ stepState.set(idx, 0); go(0); }
+    else if(e.key==='End'){ go(total-1); }
+  });
+
+  document.getElementById('stage').addEventListener('click', e=>{
+    if(e.target.closest('.nav') || e.target.closest('a')) return;
+    const x = e.clientX;
+    if(x < window.innerWidth*0.5) backward(); else forward();
+  });
+
+  function fit(){
+    const s = Math.min(window.innerWidth/1280, window.innerHeight/720);
+    document.getElementById('stage').style.transform = 'translate(-50%,-50%) scale(' + s + ')';
+  }
+  window.addEventListener('resize', fit);
+  fit();
+  render();
+})();
+</script>
+</body>
+</html>

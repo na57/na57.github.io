@@ -1,0 +1,849 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第10讲 CSP、权限策略与 Fetch 元数据 · HTTP 精通</title>
+<link rel="stylesheet" href="assets/style.css">
+<style>
+/* 本套专用：协议报文原文展示与 MDN 来源条 */
+.wire{background:var(--bg-deep);border:1px solid var(--line);border-left:4px solid var(--accent);border-radius:8px;padding:14px 18px;margin:14px 0;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:13.5px;line-height:1.78;white-space:pre-wrap;overflow-wrap:anywhere;color:var(--ink-soft);}
+.wire b{color:var(--accent);font-weight:700;}
+.wire i{color:var(--orange);font-style:normal;}
+.wire em{color:var(--ink-faint);font-style:normal;}
+.wire.sm{font-size:12.5px;}
+.wire-cap{font-size:13px;color:var(--ink-faint);margin:-8px 0 16px;}
+.mdn-src{background:var(--bg-deep);border:1px solid var(--line);border-left:4px solid var(--accent);border-radius:8px;padding:12px 18px;margin:16px 0 0;font-size:13px;line-height:1.8;color:var(--ink-soft);}
+.mdn-src strong{color:var(--accent);}
+.mdn-src a{color:var(--accent);text-decoration:none;border-bottom:1px dashed var(--line);}
+.mdn-src a:hover{border-bottom-style:solid;}
+.to-slide{font-size:13px;color:var(--accent);text-decoration:none;border:1px solid var(--line);border-radius:6px;padding:4px 11px;white-space:nowrap;}
+.to-slide:hover{background:var(--bg-deep);}
+</style>
+</head>
+<body>
+
+<nav class="topbar">
+  <div class="topbar-inner">
+    <span class="brand"><a href="index.html" style="color:inherit">← HTTP 精通 · 学习地图</a></span>
+    <span class="crumb">第③组 · 状态与安全 / 第10讲</span>
+    <a class="to-slide" href="../http-guide-slides/10-CSP%E6%9D%83%E9%99%90%E7%AD%96%E7%95%A5%E4%B8%8EFetch%E5%85%83%E6%95%B0%E6%8D%AE-%E8%AF%BE%E4%BB%B6.html" target="_blank" rel="noopener noreferrer">配套课件 ↗</a>
+  </div>
+</nav>
+
+<div class="wrap">
+
+  <div class="lecture-head">
+    <span class="ch-label">GUIDE 10 · 状态与安全</span>
+    <h1>CSP、权限策略与 Fetch 元数据</h1>
+    <p class="lead">前面几讲讲服务器如何识别与授权用户，本讲转向另一个问题：浏览器加载了这个页面之后，允许它做什么。</p>
+    <div class="mdn-src"><strong>本讲对应的 MDN 指南：</strong><a href="https://developer.mozilla.org/zh-CN/docs/Web/HTTP/Guides/CSP" target="_blank" rel="noopener">内容安全策略 CSP</a> · <a href="https://developer.mozilla.org/zh-CN/docs/Web/HTTP/Guides/Permissions_Policy" target="_blank" rel="noopener">权限策略</a> · <a href="https://developer.mozilla.org/zh-CN/docs/Web/HTTP/Guides/Fetch_metadata" target="_blank" rel="noopener">Fetch 元数据</a></div>
+  </div>
+
+  <!-- 本章定位 -->
+  <div class="position-bar">
+    <strong>本讲在主线上的位置：</strong>第 9 讲的跨源边界 → <u>本讲：CSP、权限策略与 Fetch 元数据</u> → 第 11 讲进入代理与隧道。<br>
+    第10讲回答主线上的第10个问题：<strong>服务器如何用响应首部约束页面能加载什么、能用什么 API、并让请求自证来源？</strong>
+    <div class="map-inline">
+      <span class="node">第9讲 跨源资源共享 CORS</span><span class="arrow">→</span>
+      <span class="node here">第10讲 CSP、权限策略与 Fetch 元数据</span><span class="arrow">→</span>
+      <span class="node">第11讲 代理、隧道与协议升级</span><span class="arrow">→</span>
+      <span class="node">第11–12讲 中间层与分发</span>
+    </div>
+  </div>
+
+  <!-- 学习目标 -->
+  <div class="objectives">
+    <h4>🎯 学完本讲，合上书你应该能：</h4>
+    <ol>
+      <li>用 CSP 指令限制脚本与资源来源</li>
+      <li>解释 nonce 与 hash 如何替代不安全的 unsafe-inline</li>
+      <li>读懂并处理 CSP 违规报告</li>
+      <li>用权限策略限制第三方 iframe 的能力</li>
+      <li>用 Fetch 元数据首部做请求来源判定</li>
+    </ol>
+  </div>
+
+  <!-- 视频卡插槽：后面录制 B 站讲解时在此插入 <details class="video-card" id="video-card">…</details> -->
+  <!-- VIDEO_CARD_SLOT -->
+
+  <div class="lecture">
+
+    <!-- 推导主线图 -->
+    <div class="figure">
+      <div class="mermaid">
+flowchart LR
+  A["服务器下发策略首部"]
+  B["浏览器解析 CSP 指令"]
+  C["拦截违规的资源加载"]
+  D["权限策略限制 API"]
+  E["Fetch 元数据说明来源"]
+  F["配置过严导致页面失效"]
+  A --> B
+  B --> C
+  A --> D
+  A --> E
+  B --> F
+  classDef hot fill:#fbeedd,stroke:#c4651f,stroke-width:2.5px,color:#c4651f;
+  classDef danger fill:#fae9e7,stroke:#b03a2e,stroke-width:2.5px,color:#b03a2e;
+  class C hot;
+  class F danger;
+      </div>
+      <div class="caption">浏览器侧策略的主线：服务器用首部把安全边界写进页面；红色节点提醒策略过严会先把自己拦在门外。</div>
+    </div>
+
+<!-- ============ 10.1 ============ -->
+    <h2><span class="sec-no">10.1</span>CSP 给页面立一份「能加载什么」的白名单，_inline_ 脚本是头号目标</h2>
+
+    <p>前面两讲讲的是服务器如何识别与授权用户：认证确认「你是谁」，CORS 划出「哪个源能读我的响应」。本讲转向一个正交的问题——<strong>浏览器把这个页面加载进来之后，允许它做什么</strong>。先看一个最朴素的攻击现场。</p>
+
+    <p>假设你经营一个博客，评论区允许访客留 HTML 片段。你对输入做了过滤，但百密一疏，攻击者还是塞进了这样一段内容：</p>
+
+    <div class="wire"><b>&lt;script src="https://evil.example.com/hacker.js"&gt;</b><b>&lt;/script&gt;</b>
+<b>&lt;script&gt;</b>console.log("你已被入侵！")<b>&lt;/script&gt;</b>
+<b>&lt;img</b> onmouseover="console.log('你已被入侵！')" src="thumb.jpg" alt="" <b>/&gt;</b></div>
+    <div class="wire-cap">注入的恶意代码可能伪装成三种模样：外链脚本、内联脚本、内联事件处理器。过滤一旦漏掉任意一种，代码就会在站点的上下文里执行，拿到用户的 cookie 与权限。</div>
+
+    <p>这类攻击叫<span class="term">跨站脚本攻击</span>（Cross-site scripting，XSS）：攻击者能在目标网站的上下文里执行自己的代码，而这段代码能做网站自身代码能做的任何事——改动页面内容、读写本地存储、带着用户凭据发请求。网站当然应当在把输入放进页面<strong>之前</strong>净化它；但净化是容易出错的第一道防线，于是需要第二道：即使恶意代码混进来了，也让它<strong>跑不起来</strong>。</p>
+
+    <p>MDN 给<span class="term">内容安全策略</span>（Content Security Policy，CSP）的定义是：一项有助于防范或降低特定类型安全威胁风险的特性，由网站向浏览器发出的一系列<span class="term">指令</span>（directive）组成，这些指令要求浏览器对构成该站点的代码被允许执行的操作施加限制。它的主要用途是控制文档允许加载哪些资源，尤其是 JavaScript，以此防御 XSS；此外还能防点击劫持、升级不安全请求、强制可信类型。这几类用途互不依赖，你只想加点击劫持防护，就只写对应的那条指令。</p>
+
+    <p>CSP 通过 <code>Content-Security-Policy</code> <strong>响应首部</strong>送达浏览器，MDN 强调它应设置在所有请求的所有响应上，而不只是主文档。也可以用 <code>&lt;meta&gt;</code> 元素的 <code>http-equiv</code> 属性指定，这对纯静态、客户端渲染的单页应用有用，但<strong>并非所有 CSP 特性都支持</strong>。策略由分号分隔的若干指令组成，每条指令是「指令名 + 空格 + 值」，不同指令的语法不同：</p>
+
+    <div class="wire"><i>HTTP/1.1 200 OK</i>
+<i>Content-Type:</i> text/html; charset=utf-8
+<i>Content-Security-Policy:</i> default-src 'self'; img-src 'self' example.com
+
+<em>（主文档的响应里，两条指令用分号隔开）</em></div>
+    <div class="wire-cap">一条最小 CSP：<b>default-src 'self'</b> 让所有资源默认只能同源；<b>img-src 'self' example.com</b> 单独给图片开口子，允许同源与 example.com。</div>
+
+    <p>这句例子里的 <code>default-src</code> 是全场最重要的一条<span class="term"> Fetch 指令</span>（fetch directive）：它为所有<strong>没有显式列出指令</strong>的资源类型设置后备策略。MDN 列出 <code>script-src</code>（JavaScript）、<code>style-src</code>（CSS）、<code>img-src</code>（图片）、<code>connect-src</code>（fetch / XHR / WebSocket 等连接）、<code>font-src</code>、<code>media-src</code> 等等；一旦某类资源有专门指令，就用专门指令，否则回落到 <code>default-src</code>。每条 Fetch 指令的值要么是关键字 <code>'none'</code>，要么是一个或多个空格分隔的<span class="term">源表达式</span>（source expression）——列出多个时，任一表达式允许，该资源就被允许。</p>
+
+    <p>源表达式的写法决定策略的强弱，MDN 给出的主要形式有：关键字 <code>'self'</code>（与文档同源）与 <code>'none'</code>（全部拒绝）；主机名如 <code>example.com</code>、带通配符的 <code>*.example.org</code>；方案如 <code>https:</code>；以及用于内联代码的 <code>'nonce-…'</code> 与 <code>'sha256-…'</code>。还有两个「后门」关键字 <code>'unsafe-inline'</code> 与 <code>'unsafe-eval'</code>，后面会讲为什么应当避开它们。</p>
+
+    <p>现在把例子放大到一条<strong>完整</strong>的响应首部，逐指令拆解——这是本节要交的第一个完整手算。</p>
+
+    <div class="wire"><i>HTTP/1.1 200 OK</i>
+<i>Content-Type:</i> text/html; charset=utf-8
+<i>Content-Security-Policy:</i> default-src 'self';
+<i>                            script-src</i> 'self' 'nonce-416d1177-4d12-4e3b-b7c9-f6c409789fb8';
+<i>                            style-src</i> 'self';
+<i>                            img-src</i> 'self' example.com;
+<i>                            connect-src</i> 'self';
+<i>                            report-uri</i> /csp-report
+
+<em>（为便于阅读折成了多行；真实首部是一行，指令间用分号分隔）</em></div>
+    <div class="wire-cap">一条带 nonce 与上报端点的完整 CSP。前五条是 Fetch 指令，最后一条 <b>report-uri</b> 负责把违规报告送回 <b>/csp-report</b>。</div>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>指令</th><th>允许的来源</th><th>逐条解读</th></tr>
+        <tr><td><code>default-src 'self'</code></td><td>仅同源</td><td>兜底。凡没单独列指令的资源类型（字体、media、object 等）都只准同源。</td></tr>
+        <tr><td><code>script-src 'self' 'nonce-416d…'</code></td><td>同源脚本，或带匹配 nonce 的脚本标签</td><td>覆盖 default-src 对脚本的后备；nonce 让服务器认可的特定内联脚本得以执行。</td></tr>
+        <tr><td><code>style-src 'self'</code></td><td>仅同源样式表</td><td>样式单独指定，因此不继承 default-src，也不继承 script-src 的 nonce。</td></tr>
+        <tr><td><code>img-src 'self' example.com</code></td><td>同源图片 + example.com 的图片</td><td>给图片开了一个外部域名的口子；其余资源类型不受影响。</td></tr>
+        <tr><td><code>connect-src 'self'</code></td><td>仅同源连接</td><td>限制 fetch / XHR / WebSocket / EventSource 的目标，阻止数据外传到恶意域名。</td></tr>
+        <tr><td><code>report-uri /csp-report</code></td><td>不适用（上报指令）</td><td>发生违规时，浏览器把报告 POST 到本站的 /csp-report；它不参与放行判定。</td></tr>
+      </table>
+    </div>
+
+    <p>现在推演那条内联脚本的命运。页面里有这样一段：</p>
+
+    <div class="wire"><b>&lt;script&gt;</b>console.log("你好，来自内联脚本")<b>&lt;/script&gt;</b></div>
+    <div class="wire-cap">没有任何属性的内联脚本。在含 script-src 的 CSP 下，它默认不被允许执行。</div>
+
+    <p><strong>第一步，直接执行：被拦截。</strong>策略里有 <code>script-src</code>，而内联脚本既不同源加载、又不带 nonce 或散列，MDN 明确说：只要 CSP 含 <code>default-src</code> 或 <code>script-src</code>，内联 JavaScript 默认不被允许执行。浏览器拒绝运行它，并按 <code>report-uri</code> 生成一条违规报告。内联事件处理器（如 <code>onmouseover</code>）与 <code>javascript:</code> URL 同样在拦截之列。</p>
+
+    <p><strong>第二步，加 nonce：放行。</strong>服务器为每个响应生成一个不可预测的随机值，既写进首部的 <code>script-src</code>，又作为 <code>nonce</code> 属性写到它信任的脚本标签上：</p>
+
+    <div class="wire"><i>Content-Security-Policy:</i> script-src 'self' 'nonce-416d1177-4d12-4e3b-b7c9-f6c409789fb8'
+<b>&lt;script nonce="416d1177-4d12-4e3b-b7c9-f6c409789fb8"&gt;</b>
+  console.log("你好，来自内联脚本")
+<b>&lt;/script&gt;</b></div>
+    <div class="wire-cap">浏览器比较首部里的 nonce 与标签的 nonce 属性，两者一致才加载。攻击者不知道本次响应的随机值，注入的脚本无法伪造这个属性。</div>
+
+    <p>这里藏着一个硬约束：MDN 指出，攻击者必须无法猜出 nonce，因此<strong>每个 HTTP 响应的 nonce 都必须不同、且不可预测</strong>。服务器因此不能提供静态 HTML，必须用模板引擎在每次响应里插入新值；而且要用模板机制<strong>只给自己的脚本标签</strong>插入 nonce，否则可能手滑把 nonce 也塞进攻击者注入的标签里。nonce 只对带 <code>nonce</code> 属性的元素生效，也就是只有 <code>&lt;script&gt;</code> 与 <code>&lt;style&gt;</code>。</p>
+
+    <p><strong>第三步，改用散列：同样放行。</strong>散列（hash）路线的做法是：用 SHA-256 / SHA-384 / SHA-512 之一计算脚本内容的散列，做 Base64 编码，再加算法前缀 <code>sha256-</code> 等，放进 <code>script-src</code>：</p>
+
+    <div class="wire"><i>Content-Security-Policy:</i> script-src 'sha256-H/eahVJiG1zBXPQyXX0V6oaxkfiBdmanvfG9eZWSuEc='
+<b>&lt;script&gt;</b>console.log("你好！")<b>&lt;/script&gt;</b></div>
+    <div class="wire-cap">浏览器对脚本内容重新计算散列并与首部比对，一致则加载。与 nonce 不同，内容不变则散列不变，所以 CSP 与页面都可以是静态的——更适合静态站点。</div>
+
+    <p>代价是：脚本内容哪怕改一个字符，都必须重算并重填散列；而外部脚本要启用散列校验，标签上还得带 <code>integrity</code> 属性。MDN 由此给出选择建议——能动态生成响应（含内容）时用 nonce 更易维护，否则用散列。把这套判定画成流程图更直观：</p>
+
+    <div class="figure"><div class="mermaid">flowchart LR
+  A["浏览器准备执行一段脚本"] --> B{"策略里有 script-src 或 default-src 吗"}
+  B -->|没有| Z["脚本正常执行"]
+  B -->|有| C{"脚本是外部同源或带合法 nonce 或匹配 hash 吗"}
+  C -->|是| Z
+  C -->|否| D["浏览器拦截脚本并生成违规报告"]</div><div class="caption">图 10.1 CSP 对一段脚本的判定流程：nonce 与 hash 是让内联脚本通过的两种合法凭据。</div></div>
+
+    <div class="box insight">
+      <span class="box-tag">✅ 判定规则</span>
+      <p>判断一段脚本能不能跑，按三步走：① 有没有针对脚本的指令（<code>script-src</code> 或兜底的 <code>default-src</code>）？没有就放行。② 有，则看它是不是同源外部脚本、或带匹配 nonce、或内容散列匹配？满足任一即放行。③ 都不满足就拦截。记住 CSP 是<strong>纵深防御</strong>：MDN 反复强调它不能替代输入净化，正确姿势是「净化 + CSP」双管齐下。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>「嫌麻烦，加个 <code>'unsafe-inline'</code> 放行内联脚本算了」——MDN 明确建议避免，因为它会破坏设置 CSP 的大部分意义，而内联 JavaScript 正是最常见的 XSS 向量。还要注意两条容易踩的细节：其一，指令里一旦出现 nonce 或散列，浏览器会<strong>忽略</strong> <code>'unsafe-inline'</code>；其二，<code>'none'</code> 不能与任何其他源表达式组合，旁边若还写了别的表达式，那些表达式会被直接忽略。把 <code>'none'</code> 和 <code>'self'</code> 写在一起的指令，实际效果只有 <code>'none'</code>。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front"><div class="q-tag">回忆 10.1-1</div><div class="q-text">CSP 靠什么首部下发？default-src 与其它 Fetch 指令是什么关系？</div><span class="tap">点击翻面 →</span></div>
+            <div class="flip-face flip-back"><div class="a-tag">参考答案</div>主要靠 Content-Security-Policy 响应首部，也可用 meta http-equiv 但功能不全。default-src 是其它未显式列出的 Fetch 指令的后备；脚本、样式、图片、连接等一旦有自己的指令，就覆盖 default-src 对那一类的规定。</div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front"><div class="q-tag">回忆 10.1-2</div><div class="q-text">一段内联脚本默认被 CSP 拦截，写出让它放行的两种合法做法，并说明各自前提。</div><span class="tap">点击翻面 →</span></div>
+            <div class="flip-face flip-back"><div class="a-tag">参考答案</div>① nonce：服务器为每个响应生成不可预测的随机值，写进 script-src 的 'nonce-值'，并在受信任 script 标签上加同名 nonce 属性；需动态生成页面。② 散列：计算脚本内容 SHA-256/384/512 并 Base64，加 sha256- 等前缀放进 script-src；外部脚本还要 integrity 属性；内容改动就要重算。</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 10.2 ============ -->
+    <h2><span class="sec-no">10.2</span>先把 CSP 调成「只报告不拦截」，再读懂它寄回来的违规单</h2>
+
+    <p>上一节给页面立了白名单，但一份配错的 CSP 会先把自己的脚本、样式全挡在门外——线上直接开启等于自断手脚。这一节回答：怎样在<strong>不影响真实用户</strong>的前提下试出一份正确的策略，以及违规发生之后服务器能拿到什么。</p>
+
+    <p>MDN 给的部署办法是<strong>仅报告模式</strong>：用 <code>Content-Security-Policy-Report-Only</code> 首部下发策略，此时策略不被强制执行，但任何违规都会被送到策略里指定的报告端点。它还能与 <code>Content-Security-Policy</code> 同时出现在同一响应里——前者生成报告但不拦截，后者照常拦截：</p>
+
+    <div class="wire"><i>Content-Security-Policy:</i> default-src 'self'; script-src 'self'; report-to csp-endpoint
+<i>Content-Security-Policy-Report-Only:</i> default-src 'self'; script-src 'self' 'nonce-abc123'; report-to csp-endpoint</div>
+    <div class="wire-cap">两条策略并存：正式的 CSP 强制执行现有规则，Report-Only 里则是准备上线的 stricter 版本，先收集一段时间报告再决定要不要转正。注意仅报告策略不能通过 meta 元素送达。</div>
+
+    <p>于是部署流程变成四步：先用 Report-Only 挂上候选策略 → 收集报告找出会误伤自己的规则 → 修正策略直到报告干净 → 把策略搬到正式的 <code>Content-Security-Policy</code> 上执行。整个过程用户毫无感知。</p>
+
+    <p>那么报告到底长什么样？这里有两代格式，MDN 都写了，而它们正是本节第二个完整例子。先看<strong>老一代</strong>——由 <code>report-uri</code> 指令触发、以 <code>application/csp-report</code> 类型 POST 的 JSON：</p>
+
+    <div class="wire"><i>POST /csp-report HTTP/1.1</i>
+<i>Host:</i> example.com
+<i>Content-Type:</i> application/csp-report
+
+{
+  "csp-report": {
+    "document-uri": "https://example.com/post/1",
+    "referrer": "https://www.google.com/",
+    "violated-directive": "script-src 'nonce-416d1177-4d12-4e3b-b7c9-f6c409789fb8'",
+    "effective-directive": "script-src-elem",
+    "original-policy": "default-src 'self'; script-src 'nonce-416d1177-4d12-4e3b-b7c9-f6c409789fb8'; report-uri /csp-report",
+    "blocked-uri": "inline",
+    "status-code": 200,
+    "script-sample": "console.log(\"你已被入侵\")"
+  }
+}</div>
+    <div class="wire-cap">一条由 report-uri 上报的违规报告。浏览器把「在哪一页、违反了哪条指令、被拦的是什么、策略原文是什么」打包成 JSON 发回服务器。</div>
+
+    <p>逐字段解释这份报告：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>字段</th><th>含义</th><th>在这条报告里的读法</th></tr>
+        <tr><td><code>document-uri</code></td><td>发生违规的文档地址</td><td>https://example.com/post/1，定位到具体页面。</td></tr>
+        <tr><td><code>referrer</code></td><td>该文档的来源页</td><td>来自 Google 搜索，可判断流量入口。</td></tr>
+        <tr><td><code>violated-directive</code></td><td>被违反的指令及其值</td><td>script-src 带 nonce 的那条，说明脚本没带对凭据。</td></tr>
+        <tr><td><code>effective-directive</code></td><td>实际生效、真正拦下资源的指令</td><td>script-src-elem，是 script-src 在元素场景下的具体化。</td></tr>
+        <tr><td><code>original-policy</code></td><td>触发违规时页面的完整策略原文</td><td>便于复核当时到底下发了什么，避免版本错位。</td></tr>
+        <tr><td><code>blocked-uri</code></td><td>被拦截资源的地址</td><td>值为 inline，表示是内联脚本而非外链。</td></tr>
+        <tr><td><code>status-code</code></td><td>被保护文档响应的状态码</td><td>200，说明是正常页面。</td></tr>
+        <tr><td><code>script-sample</code></td><td>被拦截代码的前若干字符</td><td>给出片段内容，帮助判断是自有代码还是注入内容。</td></tr>
+      </table>
+    </div>
+
+    <p><strong>新一代</strong>报告走的是 <span class="term">报告 API</span>（Reporting API）：服务器先用 <code>Reporting-Endpoints</code> 首部声明端点，再用 CSP 的 <code>report-to</code> 指令把某个端点指定为报告目标：</p>
+
+    <div class="wire"><i>Reporting-Endpoints:</i> csp-endpoint="https://example.com/csp-reports"
+<i>Content-Security-Policy:</i> default-src 'self'; report-to csp-endpoint</div>
+    <div class="wire-cap">report-to 不直接写 URL，而是引用一个在 Reporting-Endpoints 里预先命名好的端点；这样多类报告可以共用同一套端点声明。</div>
+
+    <div class="wire"><i>POST /csp-reports HTTP/1.1</i>
+<i>Content-Type:</i> application/reports+json
+
+{
+  "age": 53531,
+  "body": {
+    "blockedURL": "inline",
+    "columnNumber": 39,
+    "disposition": "enforce",
+    "documentURL": "https://example.com/csp-report",
+    "effectiveDirective": "script-src-elem",
+    "lineNumber": 121,
+    "originalPolicy": "default-src 'self'; report-to csp-endpoint",
+    "referrer": "https://www.google.com/",
+    "sample": "console.log(\"lo\")",
+    "sourceFile": "https://example.com/csp-report",
+    "statusCode": 200
+  },
+  "type": "csp-violation",
+  "url": "https://example.com/csp-report",
+  "user_agent": "Mozilla/5.0 …"
+}</div>
+    <div class="wire-cap">report-to 上报的 CSPViolationReport：外层是带 type、url、age、user_agent 的信封，真正的违规详情装在 body 里，字段名也换成了驼峰式。</div>
+
+    <p>两代机制的区别是本节的第二个完整例子，归纳成表：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>对比维度</th><th>report-uri（老）</th><th>report-to（新，推荐）</th></tr>
+        <tr><td>端点怎么写</td><td>指令值直接是 URL：<code>report-uri /csp-report</code></td><td>先声明 <code>Reporting-Endpoints</code> 命名端点，指令引用名字：<code>report-to csp-endpoint</code></td></tr>
+        <tr><td>Content-Type</td><td><code>application/csp-report</code></td><td><code>application/reports+json</code></td></tr>
+        <tr><td>JSON 结构</td><td>单个对象，包在 <code>csp-report</code> 键下，字段连字符命名</td><td>信封结构，含 <code>type</code>（值为 csp-violation）、<code>url</code>、<code>age</code>、<code>user_agent</code>，详情在 <code>body</code> 里驼峰命名</td></tr>
+        <tr><td>状态</td><td>MDN 标注为<strong>已弃用</strong></td><td>MDN 推荐的报告方式，基于报告 API</td></tr>
+        <tr><td>迁移建议</td><td colspan="2">在<strong>所有浏览器都支持 report-to 之前，应同时声明两者</strong>，以覆盖不同版本。</td></tr>
+      </table>
+    </div>
+
+    <p>除了上报，MDN 还介绍了<strong>严格 CSP</strong>与 <code>strict-dynamic</code>：当页面用第三方脚本、而第三方脚本又会动态创建别的脚本时，那些新脚本不会带上你分配的 nonce 或散列，于是被拦。给 <code>script-src</code> 加上 <code>'strict-dynamic'</code> 后，带 nonce 或散列的脚本获得的信任会传递给它加载的后续脚本。它让基于 nonce / 散列的策略在第三方脚本场景下可用，代价是安全性下降——如果你引入的脚本基于不可信输入创建 <code>&lt;script&gt;</code>，CSP 就保护不到那些新元素。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>违规报告不只是「谁违规了」的日志，它是 CSP 的<strong>反馈回路</strong>：Report-Only 让策略先在影子模式里跑，报告告诉你哪条规则会误伤自己，修好后再转正。没有这条回路，写 CSP 就只能靠猜——而一份误伤自己的严格策略，比没有 CSP 更糟，因为页面会直接坏掉。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>「写了 <code>report-to</code> 就该收到报告」——错。report-to 引用的端点必须先用 <code>Reporting-Endpoints</code> 首部声明，否则报告无处可发；迁移期还要注意 report-to 与 report-uri 的 JSON 格式、Content-Type 都不同，接收端得两种都能解析。另外 <code>script-sample</code> 可能包含页面里的代码片段，若日志对外可见，注意别把敏感信息一起泄露出去。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front"><div class="q-tag">回忆 10.2-1</div><div class="q-text">如何在不影响用户的前提下试出一份 CSP？Report-Only 与正式首部并存时各起什么作用？</div><span class="tap">点击翻面 →</span></div>
+            <div class="flip-face flip-back"><div class="a-tag">参考答案</div>用 Content-Security-Policy-Report-Only 下发候选策略：不拦截、只上报。与正式 CSP 并存时，正式 CSP 照常拦截，Report-Only 只生成报告。流程是影子运行、按报告修正、再转正；注意仅报告策略不能用 meta 送达。</div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front"><div class="q-tag">回忆 10.2-2</div><div class="q-text">report-uri 与 report-to 在端点声明、Content-Type、JSON 结构上有何区别？迁移期怎么办？</div><span class="tap">点击翻面 →</span></div>
+            <div class="flip-face flip-back"><div class="a-tag">参考答案</div>report-uri 直接写 URL、类型为 application/csp-report、单个 csp-report 对象连字符字段、已弃用；report-to 要先用 Reporting-Endpoints 命名端点再引用、类型为 application/reports+json、带 type/url/age/user_agent 信封且 body 内驼峰字段。迁移期两者同时声明。</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 10.3 ============ -->
+    <h2><span class="sec-no">10.3</span>权限策略：CSP 管能加载什么，它管能调用什么能力</h2>
+
+    <p>前两节的 CSP 管住的是「页面能加载什么资源」。但页面加载进来之后还有另一个维度：它（以及它嵌入的第三方 iframe）能不能调用摄像头、麦克风、全屏、地理定位这些能力？这正是<span class="term">权限策略</span>（Permissions Policy）要回答的问题。</p>
+
+    <p>设想一个页面嵌了广告网络的 iframe。就算 CSP 限制了它加载什么，这个 iframe 仍可能试图读取用户的地理位置。权限策略提供的机制，是让站点明确声明哪些特性可以或不可以在网站上使用——它定义一组策略，限制网站代码能访问哪些 API，或修改浏览器对某些特性的默认行为。MDN 说它和 CSP 很像，但<strong>控制的是特性而非安全行为</strong>。典型用途包括：改变自动播放默认行为、限制相机麦克风等敏感设备、允许 iframe 使用全屏 API、以及在项目不可见时停止脚本以省性能。</p>
+
+    <p>一个重要的历史注脚：权限策略曾叫<span class="term">特性策略</span>（Feature Policy），名字改了，<strong>HTTP 首部的语法也跟着变了</strong>，但 <code>&lt;iframe allow="…"&gt;</code> 属性的语法保持不变。旧文章里的写法今天多半对不上，查资料要留意。</p>
+
+    <p>还要分清它与<span class="term">权限 API</span>（Permissions API）的分工：权限策略让<strong>服务器</strong>设定某特性能否在某个文档或其 iframe 里使用（这些叫策略控制的特性）；权限 API 则依据<strong>用户</strong>授予的权限把关。两者识别特性的字符串一致，例如 <code>geolocation</code> 同时指地理定位。一般来说，当权限策略拦下某强大特性时，用户<strong>根本不会被弹出询问</strong>，权限 API 的 <code>query()</code> 会直接返回 <code>denied</code>——策略挡在了征求用户意见之前。</p>
+
+    <p>策略由两部分组成：<strong>指令</strong>确定要控制的特性名（camera、microphone、geolocation、fullscreen、payment 等），<strong>允许列表</strong>规定这条特性对哪些源生效。允许列表的取值是本节要记牢的核心：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>允许列表取值</th><th>含义</th><th>能否与其它值组合</th></tr>
+        <tr><td><code>*</code></td><td>本文档及所有嵌套 iframe 都可用，无论什么源</td><td>只能单独使用</td></tr>
+        <tr><td><code>()</code>（空）</td><td>顶层与所有嵌套环境都禁用；等价于 iframe 的 <code>'none'</code></td><td>只能单独使用</td></tr>
+        <tr><td><code>self</code></td><td>仅本文档与同源 iframe 可用；跨源 iframe 不可，是 <code>https://你的域名</code> 的简写</td><td>可与一个或多个源组合</td></tr>
+        <tr><td><code>src</code></td><td>只要 iframe 里加载的文档与它 src 同源即可用；只用于 iframe 的 allow，且是它的默认值</td><td>可与一个或多个源组合</td></tr>
+        <tr><td><code>"&lt;origin&gt;"</code></td><td>允许特定的源，如 <code>"https://a.example.com"</code>；源之间用空格隔开</td><td>可与 self / src 组合</td></tr>
+      </table>
+    </div>
+
+    <p>头语法是 <code>Permissions-Policy: &lt;directive&gt;=&lt;allowlist&gt;</code>；多个特性可写在一个头里用逗号分隔，也可各发一个头，两者等价：</p>
+
+    <div class="wire"><i>Permissions-Policy:</i> picture-in-picture=(), geolocation=(self "https://example.com"), camera=*
+
+<em>等价于下面三个头分别发送：</em>
+<i>Permissions-Policy:</i> picture-in-picture=()
+<i>Permissions-Policy:</i> geolocation=(self https://example.com)
+<i>Permissions-Policy:</i> camera=*</div>
+    <div class="wire-cap">允许列表写在圆括号里；* 与 () 独占括号，self 和具体源可以并列。还支持通配符源如 "https://*.example.com"，但它不匹配 "https://example.com" 本身。</div>
+
+    <p>iframe 一侧则用 <code>allow</code> 属性，语法沿用旧特性策略的样子（关键字带引号），多个特性用分号分隔：</p>
+
+    <div class="wire"><b>&lt;iframe</b> src="https://partner.example"
+        allow="fullscreen *; geolocation 'self' https://a.example.com"<b>&gt;&lt;/iframe&gt;</b></div>
+    <div class="wire-cap">iframe 的 allow 里，'self' 与 'none' 带单引号、源不加引号——这与响应首部里 self 不加引号、空列表写成 () 的写法不同，别混用。</div>
+
+    <p>最关键的是<strong>继承规则</strong>，它决定了第三方 iframe 到底能不能用某项能力。MDN 说：所有 iframe 都继承父页的策略；若 iframe 有 allow 属性、父页又有 Permissions-Policy 首部，则<strong>两者合并，取最严格的子集</strong>。一个特想要在 iframe 里启用，它的源必须<strong>同时</strong>出现在父页的允许列表和 allow 的允许列表里。而且「禁用是单向的」：子框架被父框架禁用的特性，它自己不能重新启用，它的后代也不能。</p>
+
+    <p>下面给出本节的完整判定表——给定一条父页策略和一个第三方 iframe 的 allow 属性，逐项判断三项能力是否可用。</p>
+
+    <div class="wire"><i>Permissions-Policy:</i> camera=(self),
+<i>                    fullscreen=(self "https://partner.example"),
+<i>                    geolocation=()
+
+<b>&lt;iframe</b> src="https://partner.example"
+        allow="camera *; fullscreen *; geolocation 'self'"<b>&gt;&lt;/iframe&gt;</b></div>
+    <div class="wire-cap">场景：父页对摄像头只放行同源、对全屏放行同源与 partner.example、对地理定位全局禁用；iframe 来自 partner.example，allow 里三项都想要。</div>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>特性</th><th>父页首部允许列表</th><th>iframe allow 属性</th><th>iframe 源 partner.example 是否在两者交集中</th><th>判定</th></tr>
+        <tr><td>摄像头 camera</td><td><code>(self)</code> 仅同源</td><td><code>*</code> 任意源</td><td>否——父页只给 self，partner.example 是跨源，不在父页列表</td><td><strong>不可用</strong>。allow 再宽也越不过父页这道更严的关卡</td></tr>
+        <tr><td>全屏 fullscreen</td><td><code>(self "https://partner.example")</code></td><td><code>*</code> 任意源</td><td>是——父页显式列出 partner.example，<code>*</code> 也覆盖它</td><td><strong>可用</strong>。交集含该源，且未被任何一方禁用</td></tr>
+        <tr><td>地理定位 geolocation</td><td><code>()</code> 空列表，全局禁用</td><td><code>'self'</code>（指 iframe 自己的源）</td><td>否——父页空列表意味着谁都不给</td><td><strong>不可用</strong>。禁用是单向的，子框架无法重新开启</td></tr>
+      </table>
+    </div>
+
+    <p>三条判定各有侧重：摄像头演示了「allow 不能放大父页未授予的权限」；全屏演示了「两边都放行才可用」；地理定位演示了「一旦父页用 <code>()</code> 关掉，allow 无力回天」。记住一句话：<strong>最终权限 = 父页允许列表 ∩ iframe allow，且任一方的显式禁用不可被覆盖</strong>。</p>
+
+    <div class="box insight">
+      <span class="box-tag">✅ 判定规则</span>
+      <p>MDN 建议的做法是：在 HTTP 首部里给出<strong>最广泛的可接受支持</strong>，再在每个具体 iframe 的 allow 里<strong>收窄</strong>到它真正需要的子集。这样一个第三方框架想越权也做不到。判断某 iframe 能否用某特性，就问两点——它的源在不在父页列表里？在不在 allow 里？两个都是「在」才可用。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>把头语法和 iframe 语法混用：头里写 <code>(self)</code>、<code>()</code>（self 不带引号、空列表是括号），iframe allow 里写 <code>'self'</code>、<code>'none'</code>（带引号）——照抄错的那一套会静默失效。还有两个坑：<code>src</code> 只在 iframe allow 里有效，响应首部里没有这个值；若 iframe 之后导航到另一个源，策略默认<strong>不会</strong>跟过去，除非你在 allow 里把导航目标的源也列出来。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front"><div class="q-tag">回忆 10.3-1</div><div class="q-text">权限策略与 CSP、与权限 API 分别是什么分工？允许列表有哪些取值，哪两个只能单独用？</div><span class="tap">点击翻面 →</span></div>
+            <div class="flip-face flip-back"><div class="a-tag">参考答案</div>与 CSP：CSP 管资源加载，权限策略管特性能否使用。与权限 API：策略由服务器设定特性能否用在某文档，权限 API 依用户授予把关，策略拦截时用户根本不会被询问。允许列表取值 *、()、self、src、"origin"；* 与 () 只能单独用。</div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front"><div class="q-tag">回忆 10.3-2</div><div class="q-text">父页有 Permissions-Policy、iframe 又有 allow 时，某特性可用的判定规则是什么？为什么 allow 写 * 也不能给跨源 iframe 争取到摄像头？</div><span class="tap">点击翻面 →</span></div>
+            <div class="flip-face flip-back"><div class="a-tag">参考答案</div>两者取最严格子集：iframe 的源必须同时在父页允许列表与 allow 列表里，且任一方显式禁用都不可覆盖。摄像头若父页写 camera=(self)，跨源 iframe 不在父页列表，allow 写 * 也无法放大父页没给的权限；禁用是单向的，子框架不能重新启用。</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 10.4 ============ -->
+    <h2><span class="sec-no">10.4</span>Fetch 元数据让请求自证来源，服务器据此挡下 CSRF</h2>
+
+    <p>前三节的策略都是「服务器 → 浏览器」方向：用响应首部约束页面能加载什么、能用什么 API。Fetch 元数据反过来，是「浏览器 → 服务器」方向——请求自带一组上下文首部，让服务器看懂这个请求是从哪来、要干什么。先看它要解决的问题。</p>
+
+    <p>假设用户在银行站点处于登录状态，攻击者诱导他打开一个恶意页面，页面里藏着一个自动提交的表单：请求把用户的钱转到攻击者账户。因为请求从用户浏览器发出，银行站点种下的 cookie 会被<strong>自动带上</strong>，服务器看到的是「一个带合法身份的请求」，很难分辨这是用户本意还是偷偷发的。这就是<span class="term">跨站请求伪造</span>（Cross-site request forgery，CSRF）。MDN 把这类攻击统称为<strong>跨源攻击</strong>——因为「来源」比「站点」约束更强，攻击者的子域名也能发起跨源但同站的攻击，所以用跨源这个词更严谨。</p>
+
+    <p><span class="term">Fetch 元数据</span>（Fetch metadata）就是一组向服务器提供「发起请求的相关上下文」的 HTTP 请求首部。规范定义了四种，它们都带 <code>Sec-</code> 前缀，属于<strong>禁止修改的请求首部</strong>（forbidden request header）——前端 JavaScript <strong>不能设置或修改</strong>。这一点是它能作为安全判据的根本：攻击者再狡猾，也没法用脚本把 <code>Sec-Fetch-Site</code> 从 cross-site 改成 same-origin。</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>首部</th><th>回答的问题</th><th>主要取值</th></tr>
+        <tr><td><code>Sec-Fetch-Site</code></td><td>请求方与被请求资源是什么关系</td><td><code>cross-site</code> / <code>same-site</code> / <code>same-origin</code> / <code>none</code></td></tr>
+        <tr><td><code>Sec-Fetch-Mode</code></td><td>请求以什么模式发起</td><td><code>navigate</code> / <code>no-cors</code> / <code>cors</code> / <code>same-origin</code> / <code>websocket</code></td></tr>
+        <tr><td><code>Sec-Fetch-Dest</code></td><td>返回的资源将用在哪里</td><td><code>document</code> / <code>image</code> / <code>script</code> / <code>style</code> / <code>iframe</code> / <code>font</code> / <code>empty</code> 等</td></tr>
+        <tr><td><code>Sec-Fetch-User</code></td><td>是否由用户行为触发</td><td>用户触发时取值恒为 <code>?1</code>，否则不携带</td></tr>
+      </table>
+    </div>
+
+    <p>逐个拆开。<code>Sec-Fetch-Site</code> 判定「请求方来自哪」，MDN 用 <code>https://books.example.org/authors</code> 页面里点链接的例子说明：目标 <code>https://books.example.org/titles</code> 是 <code>same-origin</code>（同源）；目标 <code>https://login.example.org/</code> 是 <code>same-site</code>（不同源但同一站点，都是 example.org 的子域）；目标 <code>https://books.example.com/titles</code> 是 <code>cross-site</code>（不同站点）。地址栏输入或点书签这类「没有站点作为请求方」的情况取值 <code>none</code>，规范称为用户直接发起的请求。</p>
+
+    <p><code>Sec-Fetch-Mode</code> 中，<code>navigate</code> 表示文档间导航；<code>no-cors</code> 允许跨域请求即使服务端没给 CORS 首部也发出去，但响应对 JS 是不透明的——这是加载图片、字体、脚本等子资源的默认模式，也解释了为什么你不配 CORS，别的站点也能引用你的图片；<code>cors</code> 是 fetch() 跨域读取 JSON 时常用，服务端必须给合适的 CORS 首部；<code>same-origin</code> 只接受同源请求。<code>Sec-Fetch-Dest</code> 说目标用途：<code>document</code> 是顶层导航加载的新文档，<code>image</code> 是给 <code>&lt;img&gt;</code>、CSS background-image 等用的图片，<code>empty</code> 常见于 fetch() 发起、未明确指定目标的请求。</p>
+
+    <p>服务器拿这四个首部做什么？MDN 介绍了一类常见做法叫<span class="term">资源隔离策略</span>（resource isolation policy）：只放行同源请求、来自其他源的顶层导航请求（否则别人就没法从外部链接跳进你的网站了）、以及专门为跨源设计的特定端点。下面的完整判定表给出几种典型请求的具体取值组合与判定——这是本节的手算。</p>
+
+    <div class="wire"><b>GET /home HTTP/1.1</b>
+<b>Sec-Fetch-Site:</b> none
+<b>Sec-Fetch-Mode:</b> navigate
+<b>Sec-Fetch-Dest:</b> document
+<b>Sec-Fetch-User:</b> ?1
+
+<em>用户在地址栏敲入网址，浏览器自动附加这些首部</em></div>
+    <div class="wire-cap">用户直接发起的导航：site=none、mode=navigate、dest=document、user=?1。四个首部都由浏览器自动加上，JS 无法伪造。</div>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>场景</th><th>Site</th><th>Mode</th><th>Dest</th><th>User</th><th>判定与理由</th></tr>
+        <tr><td>地址栏输入银行网址</td><td><code>none</code></td><td><code>navigate</code></td><td><code>document</code></td><td><code>?1</code></td><td><strong>导航</strong>，用户直接发起。放行：这正是用户主动上门。</td></tr>
+        <tr><td>从 evil.example.com 点链接进入银行</td><td><code>cross-site</code></td><td><code>navigate</code></td><td><code>document</code></td><td><code>?1</code></td><td><strong>跨站顶层导航</strong>，GET。放行：要让外部链接能跳进来；Mode 是 navigate 且方法 GET。</td></tr>
+        <tr><td>页面加载自家 <code>&lt;img src="/logo.png"&gt;</code></td><td><code>same-origin</code></td><td><code>no-cors</code></td><td><code>image</code></td><td>无</td><td><strong>同源图片子资源</strong>。放行：同源且 dest=image，是正常页面组装。</td></tr>
+        <tr><td>evil 页面自动 <code>fetch("https://bank/transfer", {method:"POST"})</code></td><td><code>cross-site</code></td><td><code>cors</code></td><td><code>empty</code></td><td>无</td><td><strong>CSRF 写操作</strong>。拒绝：跨站、非导航、dest=empty，且无用户触发。</td></tr>
+        <tr><td>evil 页面自动提交表单 POST 到银行</td><td><code>cross-site</code></td><td><code>no-cors</code></td><td><code>document</code></td><td>无</td><td><strong>跨站表单提交</strong>。拒绝：虽 dest=document，但 Mode 非 navigate、无 ?1，是偷偷发的写操作。</td></tr>
+      </table>
+    </div>
+
+    <p>看清最后两行为什么能挡 CSRF 了。判据是：对<strong>有副作用</strong>的请求（转账、改资料这类 POST），要求 <code>Sec-Fetch-Site</code> 为 <code>same-origin</code>（信任子域时放宽到 <code>same-site</code>）；跨站的 <code>navigate</code> + GET 可以放行，让人能从外站点进来，但跨站的 POST、或 <code>cors</code>/<code>no-cors</code> 模式、或 <code>dest=empty</code> 的脚本请求一律拒绝。攻击者无法伪造这些首部，所以跨站请求会被忠实标记为 cross-site，无处遁形。</p>
+
+    <p>MDN 给出的资源隔离示例逻辑可以浓缩成三步：先看 <code>Sec-Fetch-Site</code> 是否 <code>same-origin</code> 或 <code>none</code>，是则放行（同源请求、用户直接发起）；否则看是否 <code>Sec-Fetch-Mode == navigate</code> 且方法为 GET，是则放行（跨站导航）；其余一律拒绝，返回 403。服务器还应在响应里带上 <code>Vary: sec-fetch-site, sec-fetch-mode</code>，保证缓存只把这些首部取值相同的请求混为一谈——否则缓存可能把发给导航请求的响应错误地服务给别的上下文。</p>
+
+    <div class="box insight">
+      <span class="box-tag">✅ 判定规则</span>
+      <p>Fetch 元数据与 CORS / Origin 是互补关系：<code>Origin</code> 只在跨源请求里出现，而 <code>Sec-Fetch-*</code> 连同源请求也带，且额外说明「是导航还是子资源、目标是什么、是否用户触发」。因此它能做出比 CORS 更细的策略。记住核心分工：CORS 决定「JS 能不能读响应」，Fetch 元数据帮助服务器决定「这个请求该不该受理」。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>「有了 Sec-Fetch-* 就不用做 CSRF 防护了」——错。这些首部只有支持的浏览器才发送；面对缺首部的请求，应当按<strong>不可信</strong>处理或回退到 CSRF token 等传统手段，而不是默认放行。另外别忘 <code>Vary</code>：如果响应会随 Fetch 元数据首部变化，却没在 Vary 里声明，共享缓存可能串味。最后，MDN 强调即使拒绝跨站请求，也要放行跨站导航，否则外部链接全都进不来——「拒绝一切跨源」是过度防御。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front"><div class="q-tag">回忆 10.4-1</div><div class="q-text">四种 Sec-Fetch-* 首部各回答什么问题？为什么说它们能作为安全判据？</div><span class="tap">点击翻面 →</span></div>
+            <div class="flip-face flip-back"><div class="a-tag">参考答案</div>Site：请求方与资源的关系 cross-site/same-site/same-origin/none；Mode：navigate/no-cors/cors/same-origin/websocket；Dest：资源用途 document/image/script/empty 等；User：用户触发取值 ?1。它们都带 Sec- 前缀，是禁止修改的请求首部，JS 无法伪造，由浏览器按真实上下文自动附加。</div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front"><div class="q-tag">回忆 10.4-2</div><div class="q-text">资源隔离策略如何放行正常请求、挡下跨站 POST 的 CSRF？为什么不能拒绝全部跨源请求？</div><span class="tap">点击翻面 →</span></div>
+            <div class="flip-face flip-back"><div class="a-tag">参考答案</div>放行 site=same-origin 或 none，以及 mode=navigate 且 GET 的跨站导航；拒绝其余（跨站的 POST、cors/no-cors 脚本请求）。因为攻击者无法伪造 Sec-Fetch-Site，跨站写操作会被标记 cross-site 而遭拒。不能拒绝全部跨源：否则外部链接无法导航进你的网站；缺首部的老浏览器要按不可信处理并配合 token，响应还要带 Vary。</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 10.5 ============ -->
+    <h2><span class="sec-no">10.5</span>延伸：规范怎么写：这三套策略分属 IETF 与 W3C，普通首部规则归 RFC 9110</h2>
+
+    <p>前面四节按 MDN 的工程口径讲清了 CSP、权限策略与 Fetch 元数据。当你需要实现服务器、判定边界行为或核对某个字段的合法性时，就得去看规范。这里有个容易被忽略的事实：<strong>这三套策略并非 IETF 的 RFC</strong>，而是 W3C 的浏览器安全规范；它们只在「首部怎么传输」这一层复用 RFC 9110 的通用规则。把规范体系理顺，是本节的收束。</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>MDN 的说法</th><th>RFC 怎么写</th><th>为什么值得知道</th></tr>
+        <tr><td>CSP 由 Content-Security-Policy 响应首部下发，是一串分号分隔的指令</td><td>CSP 的规范是 W3C 的 CSP Level 3，不是 IETF RFC；RFC 9110 只规定字段的通用语法与大小写、重复字段合并等规则，并未定义 CSP 诸指令的语义</td><td>查 CSP 指令的准确语义要去 w3.org/TR/CSP3，而不是找某个 RFC 编号；首部的「传输格式」与「安全语义」分属两套规范</td></tr>
+        <tr><td>nonce 每个响应都要不同且不可预测；散列用 sha256- 等前缀</td><td>CSP3 把 nonce source 与 hash source 定义为正式语法，要求 nonce 具密码学强度的随机性；strict-dynamic 的信任传递也定义在 CSP3</td><td>「不可预测」是规范级要求而非建议；自己用递增计数器当 nonce 直接违背规范，攻击者能猜中</td></tr>
+        <tr><td>report-to 配合 Reporting-Endpoints，用 application/reports+json；report-uri 已弃用</td><td>report-to 与端点分组由 W3C 报告 API 规范定义；report-uri 是 CSP Level 2 的老机制，CSP3 中标记为 deprecated</td><td>报告格式分两代：新格式是带 type/url/age/body 的信封，老格式是单个 csp-report 对象；迁移期接收端要两种都解析</td></tr>
+        <tr><td>权限策略允许列表有 *、()、self、src、"origin" 几种取值</td><td>规范是 W3C 的 Permissions Policy（webappsec-permissions-policy），以 ABNF 定义 allowlist；头语法与 iframe allow 语法不同是历史遗留——allow 沿用被取代的 Feature Policy 语法</td><td>src 只存在于 iframe allow、头里没有；每条指令的默认允许列表分别在规范里写明，不能想当然</td></tr>
+        <tr><td>Sec-Fetch-* 是禁止修改的请求首部，由浏览器自动附加</td><td>规范是 W3C 的 Fetch Metadata Request Headers，定义四首部及取值算法；「禁止修改」由 Fetch 规范的 forbidden request header 列表保证，浏览器根据导航或子资源场景计算取值</td><td>这些值服务器只能读不能写；配合 Vary 使用是 RFC 9110 §12.5.5 的通用缓存机制，而不是 Fetch 元数据规范另造的规则</td></tr>
+        <tr><td>这些策略都由首部下发或请求首部携带，字段写法看着和普通首部一样</td><td>RFC 9110 §5 定义所有字段的通用规则——字段名大小写不敏感、同名字段可合并、值用 ABNF 描述；各安全首部复用这套框架，另在各自规范里定义取值与语义</td><td>看到 Sec- 前缀就知道属于浏览器保留、不可脚本伪造的一类；判断一个字段「怎么写」看 RFC 9110，「写什么含义」看对应 W3C 规范</td></tr>
+      </table>
+    </div>
+
+    <p>这张表要传达的是一条判断原则：<strong>把「字段怎么在网上传输」和「字段对浏览器意味着什么」分开看</strong>。前者是 RFC 9110 的通用首部框架，后者分属 CSP Level 3、Permissions Policy、Fetch Metadata 三份 W3C 规范。MDN 把两者揉成开发者视角的连续叙述，读起来顺畅，但当 MDN 说「通常」「建议」而你需要确定的对错时，就得回到相应规范找规范性措辞。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>本讲三条策略其实构成一套完整的浏览器侧防线，方向却不同：<strong>CSP 与权限策略是服务器下发给浏览器的约束</strong>（一个管资源、一个管能力），<strong>Fetch 元数据是浏览器回给服务器的线索</strong>（让请求自证来源）。它们都借 HTTP 首部这个通用载体，但语义各自独立——认清「传输归 RFC 9110、语义归 W3C 规范」这个二分，你就不会再把 CSP 当成某个 RFC 编号，也不会误以为 Sec-Fetch-* 能被前端改写。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>别把这三套策略当成 IETF RFC 去搜索——它们是 W3C 规范，用 RFC 编号查不到正确条文。反过来也别以为「符合 RFC 9110 字段语法」就等于「CSP 配置正确」：语法合法但语义写错的策略照样形同虚设。还有一点贯穿三节：这些首部只在支持它们的浏览器里生效，配置时必须有缺首部时的回退方案，绝不能默认「浏览器一定会带上」。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front"><div class="q-tag">回忆 10.5-1</div><div class="q-text">CSP、权限策略、Fetch 元数据各由哪套规范定义？RFC 9110 在其中管什么？</div><span class="tap">点击翻面 →</span></div>
+            <div class="flip-face flip-back"><div class="a-tag">参考答案</div>三者都是 W3C 规范：CSP Level 3、Permissions Policy、Fetch Metadata Request Headers，不是 IETF RFC。RFC 9110 §5 只管字段的通用语法——大小写不敏感、同名字段合并、ABNF 描述；缓存相关的 Vary 在 §12.5.5。语义归各自的 W3C 规范。</div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front"><div class="q-tag">回忆 10.5-2</div><div class="q-text">为什么说「传输格式」与「安全语义」要分开看？这对排查 CSP 或 Sec-Fetch-* 问题有什么实际意义？</div><span class="tap">点击翻面 →</span></div>
+            <div class="flip-face flip-back"><div class="a-tag">参考答案</div>首部怎么编码、合并、缓存由 RFC 9110 统一规定，但指令或取值到底意味着什么由 W3C 各规范定义。排查时先确认字段语法合法（传输层），再核对指令语义与浏览器支持（语义层）；MDN 说「建议」而你要确定对错时，回相应规范找 MUST/SHOULD，并记得为不支持的浏览器准备回退。</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===== 概念卡 ===== -->
+    <h2><span class="sec-no">🃏</span>概念卡：本讲概念的一分钟画像</h2>
+    <p>翻面前先自问：这个概念我能用一句话讲清楚吗？</p>
+    <div class="flip-grid">
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front"><div class="q-tag">概念卡 1</div><div class="q-text">内容安全策略 CSP（Content Security Policy）</div><span class="tap">点击翻面 →</span></div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">由响应首部下发的一组指令，限制文档能加载与执行哪些资源，主要用于纵深防御 XSS。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">输入净化一旦失守，仍能阻止注入的脚本、事件处理器、javascript: URL 运行。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">给页面一份访客名单，不在名单上的资源一律不许进门。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为 CSP 能替代净化；它只是第二道防线，且不能通过 meta 用全部特性。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">任何承载用户内容、引入第三方脚本的站点；部署先用 Report-Only 试运行。</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front"><div class="q-tag">概念卡 2</div><div class="q-text">Fetch 指令与 default-src（Fetch Directive / default-src）</div><span class="tap">点击翻面 →</span></div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">按资源类型限制来源的指令；default-src 是所有未单列类型的后备策略。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">对脚本、样式、图片、连接等分别设定松紧，实现最小权限。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">default-src 是默认规矩，各类资源的专门指令是特批条款，特批盖过默认。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为 script-src 的 nonce 会传给 style-src；指令之间彼此独立。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">写第一条 CSP 时先定 default-src，再按需用更具体的指令覆盖。</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front"><div class="q-tag">概念卡 3</div><div class="q-text">nonce 与散列（Nonce / Hash）</div><span class="tap">点击翻面 →</span></div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">让特定内联脚本通过的两种凭据：随机一次性值写在标签 nonce 属性上，或脚本内容的 Base64 散列写进指令。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">在不放开 unsafe-inline 的前提下，允许可信的内联脚本执行。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">nonce 是一次性口令，每次换；hash 是内容指纹，内容不变就不变。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为 nonce 可以固定或预测；必须每次响应随机且给攻击者猜不到。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">能动态生成页面用 nonce；静态页面用 hash，外部脚本记得加 integrity。</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front"><div class="q-tag">概念卡 4</div><div class="q-text">report-to 与 report-uri（Reporting Endpoints）</div><span class="tap">点击翻面 →</span></div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">CSP 违规上报的两种机制：report-to 引用 Reporting-Endpoints 声明的端点，report-uri 直接写 URL 且已弃用。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">把线上违规收集回来，配合 Report-Only 形成部署的反馈回路。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">策略是刹车，报告是仪表盘；没仪表盘就只能猜哪里会撞墙。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为两代格式一样；Content-Type 与 JSON 结构都不同，迁移期要都收。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">上线 CSP 前先 Report-Only + 报告；正式策略与报告端点同时配置。</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front"><div class="q-tag">概念卡 5</div><div class="q-text">权限策略 Permissions-Policy</div><span class="tap">点击翻面 →</span></div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">用首部与 iframe allow 声明哪些源可用哪些浏览器特性，曾名 Feature Policy。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">限制第三方内容与自家代码调用摄像头、地理定位、全屏等敏感或强大能力。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">CSP 管能拿什么资源，权限策略管能按哪些按钮。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">把它和权限 API 混为一谈；策略拦截时用户不会被询问，query() 直接 denied。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">嵌入第三方 iframe、或要收紧敏感设备访问时；头给宽范围，allow 逐帧收窄。</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front"><div class="q-tag">概念卡 6</div><div class="q-text">允许列表与继承（Allowlist / Inheritance）</div><span class="tap">点击翻面 →</span></div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">允许列表用 *、()、self、src、具体源表示范围；iframe 权限取父页与 allow 的最严格子集。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">让父页能约束第三方框架，即使框架自己写了 allow 也不能越权。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">两把锁串联，哪把更紧就按哪把；关掉的门不能从里面再打开。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">把头语法 (self) 与 iframe 语法 'self' 混用；src 只在 allow 里有效。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">判断某 iframe 能否用某能力时，逐项查它是否在父页与 allow 两边都在列表里。</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front"><div class="q-tag">概念卡 7</div><div class="q-text">Fetch 元数据（Sec-Fetch-* / Fetch Metadata）</div><span class="tap">点击翻面 →</span></div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">浏览器自动附加、JS 不可伪造的一组请求首部，说明来源关系、模式、目标与是否用户触发。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">让服务器区分导航、子资源与跨站写操作，构建资源隔离策略挡 CSRF 与 XS-Leaks。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">请求自带身份证，写明「我从哪来、要干什么、是不是你点的」。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为它替代 CSRF token；缺首部的老浏览器要按不可信处理并配合 Vary。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">服务端入口做资源隔离：放行同源与跨站 GET 导航，拒绝跨站写操作。</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===== 分层习题 ===== -->
+    <h2><span class="sec-no">✍️</span>分层习题：先自己写，再点开核对</h2>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>判断下列说法的正误并说明理由：①「CSP 只要设置了就能替代输入净化，不用再做 XSS 过滤」；②「权限策略和权限 API 是一回事，都是问用户要权限」；③「Sec-Fetch-Site 可以用 fetch() 的 headers 手动设置成 same-origin 来绕过检查」。</div>
+      <details><summary>提示</summary><p>逐句定位被混淆的概念：纵深防御 vs 替代、策略控制 vs 用户授权、禁止修改首部 vs 普通首部。</p></details>
+      <details><summary>完整解答</summary><div class="ex-answer">① 错。MDN 明确 CSP 是纵深防御，不能替代净化；正确做法是净化输入<strong>并且</strong>设置 CSP，净化失败时 CSP 才作为第二道防线兜底。② 错。权限策略由服务器设定某特性能否用在特定文档或 iframe，是策略控制的特性；权限 API 依据用户授予的权限把关。二者识别字符串一致但职责不同，且策略拦截时用户根本不会被询问，query() 返回 denied。③ 错。Sec-Fetch-* 带 Sec- 前缀，属于禁止修改的请求首部，前端代码不能设置或修改，由浏览器按真实上下文自动附加；正是这一点让它能作为服务器的安全判据。</div></details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>有人说：「我给 script-src 加了 nonce，所以页面里所有内联脚本、内联事件处理器、eval() 都能用了。」这句话有几处错？分别说明 CSP 对这些情形的真实处理。</div>
+      <details><summary>提示</summary><p>把「内联 script 标签」「内联事件处理器」「javascript: URL」「eval()」分开，逐项对照 nonce 与 unsafe-inline / unsafe-eval 的规则。</p></details>
+      <details><summary>完整解答</summary><div class="ex-answer">三处都错。第一，nonce 只放行<strong>带匹配 nonce 属性的 &lt;script&gt; 标签</strong>，不是所有内联脚本；攻击者注入的脚本拿不到本次响应的随机 nonce，仍被拦。第二，内联事件处理器（如 onmouseover）与 javascript: URL 不属于带 nonce 的 script 标签，nonce 帮不了它们；要放行只能靠 unsafe-inline（但一旦指令含 nonce，浏览器反而会忽略 unsafe-inline），正确做法是重构为 addEventListener()。第三，eval()、Function() 以及 setTimeout 的字符串参数属于另一类，要靠 unsafe-eval（或可信类型）处理，nonce 对它们无效；注意 unsafe-eval 在含 nonce 的指令里仍然有效，而 unsafe-inline 会被忽略。</div></details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>某页面下发如下 CSP：<br><code>default-src 'self'; script-src 'self' 'nonce-N7'; style-src 'self'; img-src 'self' cdn.example.net; connect-src 'self'</code><br>页面包含：① <code>&lt;script src="/a.js"&gt;&lt;/script&gt;</code>；② <code>&lt;script nonce="N7"&gt;console.log(1)&lt;/script&gt;</code>；③ <code>&lt;script&gt;console.log(2)&lt;/script&gt;</code>；④ <code>&lt;img src="https://cdn.example.net/x.png"&gt;</code>；⑤ <code>&lt;img src="https://evil.example.com/y.png"&gt;</code>；⑥ <code>fetch("https://api.other.com/data")</code>。请逐项判定放行或被拦截，并写出依据的指令。</div>
+      <details><summary>提示</summary><p>先确定每类资源该看哪条指令——有专门指令就用它，否则回落 default-src；再逐个比对源表达式。</p></details>
+      <details><summary>完整解答</summary><div class="ex-answer">① <strong>放行</strong>：/a.js 是同源外部脚本，script-src 含 'self'。② <strong>放行</strong>：内联脚本的 nonce="N7" 与 script-src 里的 'nonce-N7' 匹配。③ <strong>拦截</strong>：内联脚本无 nonce、无散列，而 script-src 存在，内联 JS 默认不允许。④ <strong>放行</strong>：图片走 img-src，其中列了 cdn.example.net。⑤ <strong>拦截</strong>：evil.example.com 不在 img-src 的 'self' 与 cdn.example.net 之内。⑥ <strong>拦截</strong>：fetch 属于连接，走 connect-src 'self'，api.other.com 是跨源。注意各指令彼此独立：script-src 里的 nonce 不影响 style-src，图片能访问 cdn 也和 connect-src 无关。默认回落的只有那些没单列的类型。</div></details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>父页下发 <code>Permissions-Policy: camera=(self), fullscreen=(self "https://widget.example"), geolocation=("https://widget.example")</code>，页面里有 <code>&lt;iframe src="https://widget.example" allow="camera 'self'; fullscreen 'none'; geolocation 'self'"&gt;&lt;/iframe&gt;</code>。iframe 的源是 widget.example（跨源）。请逐项判定摄像头、全屏、地理定位是否可用，并说明「合并取最严格子集」如何起作用。</div>
+      <details><summary>提示</summary><p>对每项特性，分别看 widget.example 这个源在不在父页允许列表、在不在 allow 列表里，两项都在才可用。</p></details>
+      <details><summary>完整解答</summary><div class="ex-answer">判定方法：把 iframe 的源 https://widget.example 代入父页允许列表与 allow 列表求交集，两边都在且无人显式禁用才可用。摄像头 camera：<strong>不可用</strong>。父页 camera=(self) 只给同源，widget.example 相对父页是跨源，不在父页列表；allow 里的 'self' 指 iframe 自己的源，不能放大父页没给的权限。全屏 fullscreen：<strong>不可用</strong>。父页允许列表确实含 widget.example，但 allow 写了 'none'（空列表，等于全禁），两边交集为空；任一方显式禁用都不可被覆盖。地理定位 geolocation：<strong>可用</strong>。父页允许列表 ("https://widget.example") 含 iframe 的源，allow 写 'self' 指 iframe 自己的源也正是 widget.example，两边都覆盖它且无人禁用，故交集非空、可用。三项结论依次为：不可用、不可用、可用。这题的教训是别凭直觉，要逐项把 iframe 的源代入两边列表老老实实求交集。</div></details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l3">L3 建模应用</span>你要为一个带评论区、允许嵌入第三方地图 iframe、并提供「转账」写操作接口的内容站点设计浏览器侧防护。请综合本讲三套机制回答：① 用什么防止评论里的注入脚本执行，内联脚本怎么处理？② 地图 iframe 应被限制哪些能力，如何用首部与 allow 配合？③ 转账接口如何用 Fetch 元数据挡 CSRF？④ 三套机制在「缺支持」时各自的回退原则是什么？给出具体策略片段与设计理由。</div>
+      <details><summary>提示</summary><p>把 CSP、权限策略、Fetch 元数据分别套到三个需求上，再统一考虑浏览器兼容回退。</p></details>
+      <details><summary>完整解答</summary><div class="ex-answer">① 设 Content-Security-Policy：default-src 'self'；script-src 用 nonce 或散列而非 unsafe-inline；style-src 'self'；img-src 'self' 允许的 CDN；connect-src 'self'；report-to 指向上报端点。评论内容照常净化，CSP 作纵深防御；确需的内联脚本由服务器逐响应插入不可预测 nonce。先用 Report-Only 试运行再转正。② 权限策略在头里给最小集，例如 camera=()、geolocation=()、fullscreen=(self)，只给地图确实需要的源；iframe 的 allow 再收窄到该地图源，并牢记最终取两边交集、禁用不可覆盖。③ 转账接口检查 Sec-Fetch-Site：只允许 same-origin（信任子域才放宽 same-site）且非跨站的写请求；跨站 navigate + GET 可放行以保留外链跳转，跨站 POST、cors/no-cors 脚本请求一律 403；响应带 Vary: sec-fetch-site, sec-fetch-mode 防缓存串味。④ 回退原则统一为「缺支持即按不可信处理」：CSP 靠格式良好的降级与 Report-Only 观察；权限策略缺首部时按各指令默认允许列表，敏感项显式写 ()；Fetch 元数据缺首部时回退到 CSRF token / Origin 校验，绝不默认放行。三套机制方向互补——CSP 与权限策略是服务器下发给浏览器的约束，Fetch 元数据是浏览器回给服务器的线索，配合起来覆盖「能加载什么、能用什么能力、该不该受理请求」三个面。</div></details>
+    </div>
+
+    <!-- ===== 自测 ===== -->
+    <h2><span class="sec-no">✅</span>本章自测：每题只选一个答案</h2>
+
+    <div class="quiz-block" data-answer="c">
+      <div class="q-no">自测 1</div>
+      <div class="q-stem">关于 CSP 的 default-src，下列说法正确的是？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 它会覆盖所有专门指令，是所有资源的最终规则</li>
+        <li data-opt="b">B. 它专门控制内联脚本的执行</li>
+        <li data-opt="c">C. 它是未显式列出的资源类型的后备策略</li>
+        <li data-opt="d">D. 它负责发送违规报告</li>
+      </ul>
+      <div class="quiz-explain">解析：C 对。default-src 为所有没写专门指令的资源类型兜底；一旦某类有 script-src、img-src 等专门指令，就用专门指令覆盖它，故 A 错。控制内联脚本的是 script-src 里的 nonce / hash，B 错。发送违规报告是 report-uri / report-to 的职责，D 错。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 2</div>
+      <div class="q-stem">想让一段内联脚本在严格 CSP 下执行，且不引入 unsafe-inline，正确做法是？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 把脚本内容写进 default-src 的 'self'</li>
+        <li data-opt="b">B. 服务器每次响应生成不可预测 nonce，写进 script-src 并在脚本标签加匹配 nonce 属性</li>
+        <li data-opt="c">C. 把 'unsafe-inline' 与 nonce 一起写进 script-src</li>
+        <li data-opt="d">D. 给 <code>&lt;img&gt;</code> 加 onload 属性间接触发</li>
+      </ul>
+      <div class="quiz-explain">解析：B 对。nonce 要求每次响应随机且不可预测，服务器用模板把它同时写进首部与受信任标签。A 错在 'self' 只表示同源来源，不含内联内容。C 错在指令一旦含 nonce，浏览器会忽略 unsafe-inline。D 错在 inline 事件处理器同样被 CSP 拦截，绕过不了。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="a">
+      <div class="q-no">自测 3</div>
+      <div class="q-stem">父页写 <code>camera=(self)</code>，第三方 iframe（跨源）写 <code>allow="camera *"</code>。该 iframe 能否用摄像头？为什么？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 不能，因为最终取父页与 allow 的最严格子集，跨源不在父页列表里</li>
+        <li data-opt="b">B. 能，因为 allow 写了 *，覆盖了父页的限制</li>
+        <li data-opt="c">C. 能，只要用户点击同意授权即可</li>
+        <li data-opt="d">D. 不能，因为 camera 指令不支持 allow 属性</li>
+      </ul>
+      <div class="quiz-explain">解析：A 对。父页与 allow 合并取最严格子集，iframe 的源必须同时在两边列表里；跨源不在父页 (self) 中，allow 写 * 也无法放大父页没给的权限。B 错在 allow 不能越权。C 错在权限策略拦截时用户根本不会被询问。D 错在 camera 完全支持 allow，问题出在范围而非指令有无。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="d">
+      <div class="q-no">自测 4</div>
+      <div class="q-stem">下列哪一组 Sec-Fetch-* 取值最可能是一次跨站表单提交的 CSRF？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. Site=none, Mode=navigate, Dest=document, User=?1</li>
+        <li data-opt="b">B. Site=same-origin, Mode=no-cors, Dest=image, 无 User</li>
+        <li data-opt="c">C. Site=cross-site, Mode=navigate, Dest=document, User=?1, GET</li>
+        <li data-opt="d">D. Site=cross-site, Mode=no-cors, Dest=document, 无 User, POST</li>
+      </ul>
+      <div class="quiz-explain">解析：D 对。跨站、非 navigate 模式、无用户触发的 POST 正是偷偷提交的写操作特征，应拒绝。A 是地址栏直接发起的导航，应放行。B 是同源图片子资源，正常。C 是跨站顶层 GET 导航，应放行以保留外链跳转——这正是「不能拒绝一切跨源」的原因。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="c">
+      <div class="q-no">自测 5</div>
+      <div class="q-stem">关于这三套浏览器侧策略的规范归属，正确的是？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 三者都是 IETF 的 RFC，编号在 RFC 9110 系列里</li>
+        <li data-opt="b">B. 它们各自重新定义了 HTTP 字段的传输语法，与 RFC 9110 无关</li>
+        <li data-opt="c">C. 三者是 W3C 规范，只在字段传输层复用 RFC 9110 的通用规则</li>
+        <li data-opt="d">D. Sec-Fetch-* 属于 RFC 6265 定义的 cookie 扩展</li>
+      </ul>
+      <div class="quiz-explain">解析：C 对。CSP Level 3、Permissions Policy、Fetch Metadata 都是 W3C 规范，字段怎么传遵循 RFC 9110 §5 的通用规则，语义各自定义。A 错在它们不是 RFC。B 错在它们复用而非另造传输框架。D 错在 Sec-Fetch-* 与 cookie 无关，RFC 6265 管的是 cookie。</div>
+    </div>
+
+    <div class="retell">
+      <h3>🗣️ 用自己的话，三句话讲完本讲</h3>
+      <p>对着空气（或室友）说出这三句。说卡壳的那句，回去重读对应小节。</p>
+      <details><summary>句1：这讲解决什么问题？——</summary><div class="retell-answer">参考答案：回答「浏览器加载页面之后允许它做什么」——用 CSP 限定能加载与执行什么资源，用权限策略限定能调用什么能力，用 Fetch 元数据让请求自证来源供服务器判定是否受理。</div></details>
+      <details><summary>句2：核心机制是什么？——</summary><div class="retell-answer">参考答案：CSP 由响应首部的指令与 source list 组成，default-src 兜底、nonce 与 hash 放行特定内联脚本、违规走报告回路；权限策略用允许列表并取父页与 iframe 的最严格子集；Fetch 元数据是浏览器自动附加、JS 不可伪造的 Sec-Fetch-* 首部，服务器据此做资源隔离挡 CSRF。</div></details>
+      <details><summary>句3：它和前后讲怎么分工？——</summary><div class="retell-answer">参考答案：第 8 讲认证确认「你是谁」、第 9 讲 CORS 划出「哪个源能读我的响应」，本讲补上「加载后能做什么、请求该不该受理」；下一讲第 11 讲进入代理与隧道。三套机制在规范上分属 W3C，传输层复用 RFC 9110 的普通首部规则。</div></details>
+    </div>
+
+    <div class="review-plan">
+      <h3>🔁 间隔复习计划</h3>
+      <p>回忆本身比重读有效 10 倍。到点只做一件事：翻卡 + 重做标记题。</p>
+      <table>
+        <tr><th>时间点</th><th>复习内容</th><th>预计用时</th></tr>
+        <tr><td>第 1 天</td><td>概念卡 1–7 全翻 + 回忆 10.1 / 10.2 / 10.3 / 10.4 / 10.5 各 2 张</td><td>14 分钟</td></tr>
+        <tr><td>第 3 天</td><td>重做自测 1、3、4 + 翻错的概念卡 2、3、6、7</td><td>9 分钟</td></tr>
+        <tr><td>第 7 天</td><td>三句话复述 + L2 两题（CSP 逐项放行判定、权限策略交集判定）+ 概念卡 4、5</td><td>14 分钟</td></tr>
+        <tr><td>第 15 天</td><td>只重做合上书挑战；重点默写 CSP 完整首部与 Fetch 元数据判定表</td><td>16 分钟</td></tr>
+      </table>
+    </div>
+
+    <div class="final-challenge">
+      <h3>🚪 合上书挑战：能全写出来，这一讲才毕业</h3>
+      <ol id="challenge-list">
+        <li>默写一条含 default-src、script-src、style-src、img-src、connect-src、report-uri 的完整 CSP，并逐条说明它放行什么、拦什么。</li>
+        <li>推演一段内联脚本在无 nonce、加 nonce、用 hash 三种情形下的命运，并说明 CSP 为什么不能替代输入净化。</li>
+        <li>写出一份 CSP 违规报告的字段含义，并列出 report-uri 与 report-to 在端点、Content-Type、JSON 结构上的三点区别。</li>
+        <li>给定父页 Permissions-Policy 与第三方 iframe 的 allow，逐项判定摄像头、全屏、地理定位能否使用，说清「取最严格子集」。</li>
+        <li>给定几种 Sec-Fetch-Site / Mode / Dest / User 取值组合，判定哪个是导航、哪个是图片子资源、哪个是跨站表单提交，并说明如何据此挡 CSRF。</li>
+        <li>说出 CSP、权限策略、Fetch 元数据各由哪套规范定义，RFC 9110 在其中管什么，以及三者「缺支持时按不可信处理」的回退原则。</li>
+        <li>一句话回答本讲主线问题：服务器如何用响应首部约束页面能加载什么、能用什么 API，并让请求自证来源？</li>
+      </ol>
+    </div>
+
+    <div class="complete-zone">
+      <button class="btn-complete" id="btn-complete" onclick="markDone()">✓ 我已完成本讲（含合上书挑战）</button>
+    </div>
+
+    <div class="chapter-nav">
+      <a href="chapter-09.html"><span class="nav-dir">← 上一讲</span>第9讲 跨源资源共享 CORS</a>
+      <a href="chapter-11.html" class="next"><span class="nav-dir">下一讲 →</span>第11讲 代理、隧道与协议升级</a>
+    </div>
+
+  </div>
+</div>
+
+<footer class="footer">
+  <div class="wrap">第10讲 CSP、权限策略与 Fetch 元数据 · HTTP 精通 · 依据 MDN Web Docs《HTTP 指南》整理，延伸板块对照 RFC 9110 系列 · 学习进度保存在本机浏览器中</div>
+</footer>
+
+<script src="assets/mermaid.min.js"></script>
+<script>
+mermaid.initialize({
+  startOnLoad: true,
+  theme: "base",
+  themeVariables: {
+    primaryColor: "#e3edf7",
+    primaryBorderColor: "#1d5f9e",
+    primaryTextColor: "#1d5f9e",
+    lineColor: "#5c554b",
+    secondaryColor: "#fbeedd",
+    tertiaryColor: "#f5f1e8",
+    fontFamily: "-apple-system, PingFang SC, sans-serif",
+    fontSize: "14px"
+  },
+  flowchart: { curve: "linear", htmlLabels: false }
+});
+</script>
+<script>
+document.querySelectorAll(".quiz-block").forEach(block => {
+  const answer = block.dataset.answer;
+  const explain = block.querySelector(".quiz-explain");
+  block.querySelectorAll(".quiz-opts li").forEach(li => {
+    li.addEventListener("click", () => {
+      const opts = block.querySelectorAll(".quiz-opts li");
+      opts.forEach(o => o.classList.add("disabled"));
+      if (li.dataset.opt === answer) {
+        li.classList.add("correct");
+      } else {
+        li.classList.add("wrong");
+        block.querySelector(`[data-opt="${answer}"]`).classList.add("correct");
+      }
+      explain.classList.add("show");
+    });
+  });
+});
+
+document.querySelectorAll("#challenge-list li").forEach(li => {
+  li.addEventListener("click", () => li.classList.toggle("checked"));
+});
+
+const KEY = "http_guide_progress_v1";
+function loadProgress() {
+  try { return JSON.parse(localStorage.getItem(KEY)) || {}; } catch (e) { return {}; }
+}
+const progress = loadProgress();
+const btn = document.getElementById("btn-complete");
+if (progress[10] && progress[10].done) {
+  btn.textContent = "✓ 已完成 · 再次点击重置";
+  btn.classList.add("done");
+}
+function markDone() {
+  const p = loadProgress();
+  if (p[10] && p[10].done) {
+    delete p[10];
+    btn.textContent = "✓ 我已完成本讲（含合上书挑战）";
+    btn.classList.remove("done");
+  } else {
+    p[10] = { done: true, completedAt: Date.now(), reviewsDone: 0 };
+    btn.textContent = "✓ 已完成 · 复习提醒已开启";
+    btn.classList.add("done");
+  }
+  localStorage.setItem(KEY, JSON.stringify(p));
+}
+</script>
+
+</body>
+</html>

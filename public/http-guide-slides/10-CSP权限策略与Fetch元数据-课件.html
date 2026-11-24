@@ -1,0 +1,653 @@
+<!DOCTYPE html>
+<!--
+  ======================================================================
+  HTTP 精通 · 课件外壳（deck-shell.html）
+  由 build-slides.mjs 把 slides/NN.html 注入幻灯片区域，
+  输出 public/http-guide-slides/NN-xxx-课件.html。
+  骨架来自站内通用 1280×720 课件模板；本套额外增加 .wire 协议报文块。
+  每页必须写 data-narration（180–280 字口语稿，禁半角双引号、禁换行、禁小于号）。
+  ======================================================================
+-->
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第10讲 CSP、权限策略与 Fetch 元数据 · HTTP 精通 课件</title>
+<script>
+window.MathJax = {
+  tex: {
+    inlineMath: [['$', '$'], ['\\(', '\\)']],
+    displayMath: [['$$', '$$'], ['\\[', '\\]']],
+    processEscapes: true,
+    tags: 'none'
+  },
+  svg: { fontCache: 'global', scale: 1.05 },
+  options: { skipHtmlTags: ['script','noscript','style','textarea','pre','code'] }
+};
+</script>
+<!-- MathJax 本地引用（tex-svg 单文件全量组件，约2MB，自带字体数据），file:// 与断网均可用 -->
+<script src="assets/tex-svg.js" async></script>
+<style>
+  :root{
+    --primary:#1a365d; --accent:#2b6cb0; --accent-light:#ebf8ff; --accent-border:#bee3f8;
+    --text:#2d3748; --muted:#718096; --border:#e2e8f0; --bg-light:#f7fafc;
+    --success:#38a169; --danger:#e53e3e; --warning:#dd6b20; --warn-bg:#fffaf0;
+  }
+  *{margin:0;padding:0;box-sizing:border-box;}
+  html,body{width:100%;height:100%;overflow:hidden;background:#0f172a;}
+  body{
+    font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Hiragino Sans GB","Microsoft YaHei","WenQuanYi Micro Hei",sans-serif;
+    color:var(--text);
+  }
+  #stage{
+    position:absolute; left:50%; top:50%;
+    width:1280px; height:720px;
+    transform:translate(-50%,-50%) scale(1);
+    transform-origin:center center;
+    background:#ffffff;
+    box-shadow:0 0 40px rgba(0,0,0,.4);
+    overflow:hidden;
+  }
+  .slide{
+    position:absolute; inset:0;
+    padding:36px 60px 52px;
+    display:none;
+    flex-direction:column;
+    background:#ffffff;
+    opacity:0;
+    transition:opacity .35s ease;
+  }
+  .slide.active{ display:flex; opacity:1; }
+
+  #progress{ position:absolute; top:0; left:0; height:6px; background:var(--accent); width:0; z-index:50; transition:width .35s; }
+
+  /* 封面 / 结束页 */
+  .slide-cover{ justify-content:center; align-items:center; text-align:center; }
+  .slide-cover{ background:linear-gradient(135deg,#1a365d 0%,#2b6cb0 100%); color:#fff; }
+  .slide-cover .kicker{ font-size:22px; letter-spacing:6px; opacity:.85; margin-bottom:18px;}
+  .slide-cover h1{ font-size:64px; font-weight:800; line-height:1.2; margin-bottom:22px; letter-spacing:2px;}
+  .slide-cover .sub{ font-size:26px; opacity:.92; margin-bottom:36px;}
+  .slide-cover .meta{ font-size:19px; opacity:.85; line-height:2;}
+  .slide-cover .divider{ width:160px;height:5px;background:#fff;opacity:.6;margin:0 auto 30px;border-radius:3px;}
+  .slide-cover .question{ font-size:24px; background:rgba(255,255,255,.12); border:1px solid rgba(255,255,255,.35); border-radius:12px; padding:12px 28px; margin-bottom:30px;}
+
+  /* 页头：结论式标题 */
+  .slide-head{ display:flex; align-items:baseline; gap:16px; border-bottom:3px solid var(--accent); padding-bottom:9px; margin-bottom:12px;}
+  .slide-head .sec{ font-size:17px; color:var(--accent); font-weight:700; background:var(--accent-light); padding:3px 11px; border-radius:6px; white-space:nowrap;}
+  .slide-head h3{ font-size:29px; color:var(--primary); font-weight:700;}
+  .slide-body{ flex:1; display:flex; flex-direction:column; justify-content:center; min-height:0; }
+
+  p{ font-size:21px; line-height:1.65; margin-bottom:8px;}
+  .lead{ font-size:23px; color:#374151; line-height:1.75;}
+  ul,ol{ margin:0 0 8px 26px; font-size:21px; line-height:1.7;}
+  li{ margin-bottom:5px;}
+  strong{ color:var(--primary); }
+
+  /* 公式块 */
+  .formula{ background:var(--accent-light); border-left:5px solid var(--accent); border-radius:0 10px 10px 0; padding:9px 22px; margin:9px 0; text-align:center; font-size:23px;}
+  .formula-concl{ background:#fffaf0; border-left:5px solid var(--warning);}
+  .MathJax{ font-size:1.05em !important; }
+  mjx-container[display="true"]{ margin:6px 0 !important; }
+
+  /* 表格 */
+  table{ width:100%; border-collapse:collapse; margin:10px 0; font-size:20px;}
+  th{ background:var(--accent); color:#fff; padding:8px 12px; text-align:center; font-weight:600;}
+  td{ padding:7px 12px; border:1px solid var(--border); text-align:center; vertical-align:middle;}
+  tr:nth-child(even) td{ background:var(--bg-light);}
+  td.l{ text-align:left; }
+  table.small{ font-size:18px; }
+  table.small td, table.small th{ padding:6px 10px; }
+
+  /* 组件 */
+  .card{ background:var(--accent-light); border:1px solid var(--accent-border); border-radius:12px; padding:12px 20px; margin:10px 0;}
+  .tip{ background:#ebf8ff; border-left:5px solid var(--accent); border-radius:0 10px 10px 0; padding:10px 20px; margin:10px 0; font-size:20px; color:#2c5282;}
+  .deep{ background:#f0fff4; border-left:5px solid var(--success); border-radius:0 10px 10px 0; padding:10px 20px; margin:10px 0; font-size:20px; color:#22543d;}
+  .warn{ background:var(--warn-bg); border-left:5px solid var(--warning); border-radius:0 10px 10px 0; padding:10px 20px; margin:10px 0; font-size:20px; color:#744210;}
+  .trap{ background:#fef2f2; border-left:5px solid var(--danger); border-radius:0 10px 10px 0; padding:10px 20px; margin:10px 0; font-size:20px; color:#7f1d1d;}
+
+  .pause{
+    background:var(--warn-bg); border:2px dashed var(--warning); border-radius:14px;
+    padding:10px 22px; margin:10px 0; display:flex; align-items:center; gap:16px;
+  }
+  .pause .icon{ font-size:36px; line-height:1; }
+  .pause .txt b{ color:var(--warning); font-size:21px; }
+  .pause .txt p{ font-size:18px; color:#744210; margin:3px 0 0; }
+
+  .cols{ display:flex; gap:28px; align-items:stretch; }
+  .col{ flex:1; min-width:0; }
+
+  /* 推导分步：仅互动模式隐藏，截图(autohide)模式全部可见——此规则不可删 */
+  .step{ opacity:0; transform:translateY(8px); transition:opacity .3s ease, transform .3s ease; }
+  .step.on{ opacity:1; transform:none; }
+  body.autohide .step{ opacity:1 !important; transform:none !important; }
+  .step-hint{ font-size:14px; color:var(--muted); margin-top:4px;}
+  body.autohide .step-hint{ display:none; }
+
+  /* HTTP 精通课件专用：协议报文原文块 */
+  .wire{background:#0f172a;color:#e2e8f0;border-radius:10px;padding:12px 18px;margin:8px 0;
+    font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:17px;line-height:1.55;
+    white-space:pre-wrap;overflow-wrap:anywhere;}
+  .wire b{color:#7dd3fc;font-weight:700;}
+  .wire i{color:#fde68a;font-style:normal;}
+  .wire em{color:#86efac;font-style:normal;}
+  .wire.sm{font-size:15px;line-height:1.45;}
+  .wire-cap{font-size:15px;color:var(--muted);margin:0 0 8px;}
+  .to-lec{color:#bee3f8;text-decoration:none;font-size:15px;margin-left:12px;}
+  .to-lec:hover{text-decoration:underline;}
+  .badge{display:inline-block;background:var(--accent-light);color:var(--accent);border:1px solid var(--accent-border);
+    border-radius:6px;padding:2px 10px;font-size:17px;font-weight:700;margin-right:8px;}
+
+  /* 因果链 */
+  .chain{ margin:6px 0; }
+  .chain .link{ display:flex; align-items:center; gap:14px; margin:6px 0;}
+  .chain .no{ width:34px; height:34px; border-radius:50%; background:var(--accent); color:#fff; font-size:18px; font-weight:700; display:flex; align-items:center; justify-content:center; flex-shrink:0;}
+  .chain .txt{ font-size:21px; line-height:1.5;}
+  .chain .txt strong{ color:var(--primary); }
+
+  /* mermaid 容器：高度封顶，防止溢出 720px 舞台 */
+  .mmd{ background:var(--bg-light); border:1px solid var(--border); border-radius:12px; padding:10px 14px; display:flex; justify-content:center; align-items:center; margin:8px 0;}
+  .mmd .mermaid{ display:flex; justify-content:center; width:100%; visibility:hidden; }
+  .mmd .mermaid[data-done]{ visibility:visible; }
+  .mmd .mermaid svg{ max-width:100%; height:auto; max-height:230px; }
+  .mmd.mmd-tall .mermaid svg{ max-height:330px; }
+  .mmd.mmd-sm svg{ max-height:150px; }
+  .mmd-row{ display:flex; gap:18px; }
+  .mmd-row .mmd{ flex:1; flex-direction:column; }
+  .mmd .cap{ font-size:17px; color:var(--muted); margin-top:6px; text-align:center;}
+  .mmd .cap b{ color:var(--text); }
+
+  #footer{ position:absolute; bottom:0; left:0; right:0; height:40px; display:flex; align-items:center; justify-content:space-between; padding:0 30px; font-size:15px; color:#94a3b8; background:rgba(247,250,252,.85); border-top:1px solid var(--border); z-index:40;}
+  #footer .brand{ font-weight:600; color:var(--accent); }
+
+  .nav{ position:absolute; bottom:48px; right:40px; display:flex; gap:12px; z-index:45;}
+  .nav button{ width:54px; height:54px; border-radius:50%; border:none; background:var(--accent); color:#fff; font-size:24px; cursor:pointer; box-shadow:0 3px 10px rgba(43,108,176,.4); display:flex; align-items:center; justify-content:center;}
+  .nav button:hover{ background:var(--primary); }
+  .nav button:disabled{ background:#cbd5d0; cursor:default; box-shadow:none;}
+
+  #hint{ position:absolute; bottom:48px; left:40px; font-size:14px; color:#94a3b8; z-index:45;}
+
+  body.autohide #progress, body.autohide #footer, body.autohide .nav, body.autohide #hint{ display:none !important; }
+</style>
+</head>
+<body>
+<div id="stage">
+
+  <div id="progress"></div>
+
+<section class="slide slide-cover active" data-narration="欢迎回到 HTTP 精通，这是第十讲。前面第八讲讲认证确认「你是谁」，第九讲用 CORS 划出哪个源能读我的响应，这一讲转向一个正交的问题：浏览器把页面加载进来之后，到底允许它做什么。本讲要回答的是，服务器如何用响应首部约束页面能加载什么、能用什么接口、并让请求自证来源。学完你要能默写一条完整的 CSP 首部，读懂一份违规报告，逐项判定第三方 iframe 能不能用摄像头，还能用四个 Sec-Fetch 首部挡下一次跨站伪造请求。对应的 MDN 原文是内容安全策略、权限策略和 Fetch 元数据三篇。先看这一讲在十二讲主线上站在哪。">
+  <div class="kicker">第 10 讲 · 第③组 状态与安全</div>
+  <h1>CSP、权限策略与 Fetch 元数据</h1>
+  <div class="sub">服务器把安全边界写进页面</div>
+  <div class="question">服务器如何用响应首部约束页面能加载什么、能用什么 API、并让请求自证来源？</div>
+  <div class="meta">
+    配套讲义：HTTP 精通 第 10 讲 · 依据 MDN《内容安全策略 CSP》《权限策略》《Fetch 元数据》<br>
+    ← → 翻页 · 推导页按空格逐步展开 · 双击 HTML 即可离线观看
+  </div>
+</section>
+
+<section class="slide" data-narration="看这一讲在十二讲主线上的位置。第一组基础与表示把请求拆成报文和表示，第二组连接与缓存解决怎么传得快，第三组状态与安全一路讲下来：第七讲用 cookie 记住用户，第八讲用挑战响应证明身份，第九讲用 CORS 划出跨源读取边界，第十讲收尾，反过来限制页面加载后能做什么。它是第三组最后一讲，也是全书从服务器怎么答复转向浏览器怎么自律的拐点。图上高亮第十讲，牵着后面两讲：第十一讲讲代理与隧道，第十二讲用重定向收束，都属第四组中间层与分发。看懂这张图就知道三套策略是给这组补的最后一块。下一页把主线拆成因果链。">
+  <div class="slide-head"><span class="sec">定位</span><h3>第 10 讲给浏览器侧划边界，是第三组的收尾</h3></div>
+  <div class="slide-body">
+    <div class="mmd mmd-sm">
+      <div class="mermaid">
+flowchart LR
+  A["第1到3讲 基础与表示"] --> B["第4到6讲 连接与缓存"] --> C["第7到9讲 状态与跨源"] --> D["第10讲 浏览器侧策略"]:::here --> E["第11到12讲 中间层与分发"]
+  classDef here fill:#2b6cb0,color:#ffffff,stroke:#1a365d,stroke-width:3px
+      </div>
+    </div>
+    <p style="text-align:center;">本讲解决「<strong>加载之后能做什么</strong>」：前面的讲都在管请求能不能读到内容，这里管页面自身的行为。</p>
+    <div class="tip">本讲对应的 MDN 原文：CSP / Permissions Policy / Fetch metadata。</div>
+  </div>
+</section>
+
+<section class="slide" data-narration="本讲主线是一条五环因果链。一，服务器随响应下发策略首部；二，浏览器解析 CSP 指令，给脚本、样式、图片、连接立白名单，拦下不在名单上的加载并生成违规报告；三，权限策略限制页面与第三方 iframe 能否碰摄像头、全屏、地理定位，由允许列表说了算；四，方向反过来，浏览器给请求附上 Fetch 元数据，让服务器看清来源、据此挡跨站伪造；五，策略配得太严会先把自己的脚本挡在门外，上线前得先用仅报告模式试运行。这条链就是本讲目录，下一页看一个逼出这套机制的攻击现场。">
+  <div class="slide-head"><span class="sec">主线</span><h3>一条五环因果链：下发策略，再拦自己</h3></div>
+  <div class="slide-body">
+    <div class="chain">
+      <div class="link"><span class="no">1</span><span class="txt"><strong>服务器下发策略首部</strong>：CSP 与 Permissions-Policy 随响应到达</span></div>
+      <div class="link"><span class="no">2</span><span class="txt"><strong>浏览器解析 CSP 指令</strong>：给脚本、样式、图片、连接立白名单，拦违规加载</span></div>
+      <div class="link"><span class="no">3</span><span class="txt"><strong>权限策略限制 API</strong>：第三方 iframe 能否用摄像头由允许列表决定</span></div>
+      <div class="link"><span class="no">4</span><span class="txt"><strong>Fetch 元数据说明来源</strong>：请求自带上下文，服务器据此挡 CSRF</span></div>
+      <div class="link"><span class="no">5</span><span class="txt"><strong>配置过严先把自己拦在门外</strong>：策略必须先用仅报告模式试运行</span></div>
+    </div>
+    <div class="tip">这条链就是本讲目录：下发 → 解析 → 限制能力 → 自证来源 → 谨慎上线。</div>
+  </div>
+</section>
+
+<section class="slide" data-narration="先用一个场景逼出问题。你经营博客，评论区允许留 HTML，虽然做了过滤，攻击者还是塞进三段东西：外链脚本、内联脚本、带内联事件处理器的图片标签。漏掉任意一种，代码就在你站点的上下文里执行，拿到用户的 cookie 和权限，这就是跨站脚本攻击。净化输入是容易出错的第一道防线，漏一个字符就失守，于是需要第二道：哪怕恶意代码混进来，也让它跑不起来。做法不是跟过滤较劲，而是用响应首部给浏览器一份白名单，把能加载什么写死。下一页把三套策略各自管什么拆清楚。">
+  <div class="slide-head"><span class="sec">动机</span><h3>净化是容易漏的第一道防线，还需要第二道</h3></div>
+  <div class="slide-body">
+    <div class="cols">
+      <div class="col"><div class="card">😨 <strong>攻击现场</strong><br>评论区允许留 HTML，过滤百密一疏，注入脚本就在站点上下文里执行，拿到 cookie 与权限。</div></div>
+      <div class="col"><div class="card">🛡 <strong>两道防线</strong><br>净化输入是第一道；CSP 是第二道——即使代码混进来了，也让它跑不起来。</div></div>
+    </div>
+    <div class="wire sm"><b>&lt;script src="https://evil.example.com/hacker.js"&gt;&lt;/script&gt;</b>
+<b>&lt;script&gt;</b>console.log("你已被入侵")<b>&lt;/script&gt;</b>
+<b>&lt;img</b> onmouseover="..." src="thumb.jpg" <b>/&gt;</b></div>
+    <div class="wire-cap">外链脚本、内联脚本、内联事件处理器，三种伪装任漏一种就出事。这正是<strong>跨站脚本攻击</strong>（Cross-site scripting，XSS）的入口。</div>
+    <div class="tip">💡 本讲方案：用响应首部给页面立一份白名单，把能加载什么、能调用什么写死在浏览器里。</div>
+  </div>
+</section>
+
+<section class="slide" data-narration="给三个概念下定义。内容安全策略，Content Security Policy，简称 CSP，是网站发给浏览器的一串指令，控制能加载和执行哪些资源，主防跨站脚本。权限策略，Permissions Policy，管页面与第三方 iframe 能否调用摄像头、全屏、地理定位。Fetch 元数据，Fetch metadata，方向相反，是浏览器附加的上下文首部，让服务器判断该不该受理。记住分工：CSP 管加载什么，权限策略管按哪些按钮，Fetch 元数据让请求自证来源。三者都借首部载体，语义独立。下一页看第一条完整报文。">
+  <div class="slide-head"><span class="sec">定义</span><h3>三套策略，方向不同但都借首部下发</h3></div>
+  <div class="slide-body">
+    <div class="cols">
+      <div class="col"><div class="card">📜 <strong>内容安全策略</strong>（Content Security Policy，CSP）<br>由一串<strong>指令</strong>（directive）组成的白名单，控制文档能加载与执行哪些资源，主防跨站脚本。</div></div>
+      <div class="col"><div class="card">🎛 <strong>权限策略</strong>（Permissions Policy）<br>限制页面与第三方 iframe 能调用哪些 API，比如摄像头、全屏、地理定位。</div></div>
+    </div>
+    <div class="formula formula-concl">CSP 管「能加载什么」· 权限策略管「能按哪些按钮」· <strong>Fetch 元数据</strong>（Fetch metadata）让请求「自证来源」</div>
+    <div class="deep">三者都借 HTTP 首部这个通用载体：前两者是服务器发给浏览器的约束，第三个是浏览器回给服务器的线索。</div>
+  </div>
+</section>
+
+<section class="slide" data-narration="看讲义那条完整 CSP 响应首部，一条首部里挤了六条指令，用分号隔开。default-src 写 self 兜底，没单列的类型都只准同源；script-src 带 nonce，放行特定内联脚本；style-src 只给同源样式表，不继承 script-src 的 nonce；img-src 额外放 example.com；connect-src 只准同源，挡住数据外传；report-uri 指向 /csp-report 收报告，不参与放行。最要紧是 default-src 的后备关系：专门指令盖过默认。下一页推演内联脚本的三种命运。">
+  <div class="slide-head"><span class="sec">例子 · 报文</span><h3>一条完整 CSP，六条指令逐条拆</h3></div>
+  <div class="slide-body">
+    <div class="wire sm"><i>HTTP/1.1 200 OK</i>
+<i>Content-Type:</i> text/html; charset=utf-8
+<i>Content-Security-Policy:</i> default-src 'self';
+<i>  script-src</i> 'self' 'nonce-416d1177-4d12-4e3b-b7c9-f6c409789fb8';
+<i>  style-src</i> 'self';
+<i>  img-src</i> 'self' example.com;
+<i>  connect-src</i> 'self';
+<i>  report-uri</i> /csp-report</div>
+    <div class="wire-cap">为便于阅读折成多行，真实首部是一行、指令间用分号隔开。前五条是 <strong>Fetch 指令</strong>（fetch directive），最后一条把违规送到 /csp-report。</div>
+    <table class="small">
+      <thead><tr><th>指令</th><th>允许的来源</th><th>解读</th></tr></thead>
+      <tbody>
+        <tr><td class="l"><strong>default-src 'self'</strong></td><td class="l">仅同源</td><td class="l">兜底，没单列的类型都只准同源</td></tr>
+        <tr><td class="l"><strong>script-src 'self' nonce</strong></td><td class="l">同源脚本或带匹配 nonce 的标签</td><td class="l">覆盖脚本后备，放行特定内联脚本</td></tr>
+        <tr><td class="l"><strong>style-src 'self'</strong></td><td class="l">仅同源样式表</td><td class="l">不继承 script-src 的 nonce</td></tr>
+        <tr><td class="l"><strong>img-src 'self' example.com</strong></td><td class="l">同源图片加 example.com</td><td class="l">单独给图片开外部域名</td></tr>
+        <tr><td class="l"><strong>connect-src 'self'</strong></td><td class="l">仅同源连接</td><td class="l">挡住 fetch 把数据外传</td></tr>
+        <tr><td class="l"><strong>report-uri /csp-report</strong></td><td class="l">上报端点</td><td class="l">不参与放行判定</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section class="slide" data-narration="推演那段内联脚本，三种凭据三种结局。其一，光秃秃一个标签不带凭据，而策略含 script-src，内联 JavaScript 默认不许执行，浏览器拦下并按 report-uri 生成报告。其二，给标签加与首部一致的 nonce，比对相同就放行，前提是每次响应的 nonce 都不同、不可预测。其三，改用散列：脚本内容做 SHA-256 再 Base64、加 sha256 前缀写进 script-src，内容不变散列就不变，适合静态站点。三条路都不碰 unsafe-inline。下一页把判定画成图。">
+  <div class="slide-head"><span class="sec">例子 · 推演</span><h3>同一段内联脚本，三种凭据三种命运</h3></div>
+  <div class="slide-body">
+    <div class="wire sm"><b>&lt;script&gt;</b>console.log("你好")<b>&lt;/script&gt;</b>
+<em>情形一：无 nonce、无散列 → 被拦截</em>
+<b>&lt;script nonce="416d1177-4d12-4e3b-b7c9-f6c409789fb8"&gt;</b>...<b>&lt;/script&gt;</b>
+<em>情形二：带匹配 nonce → 放行</em>
+<i>script-src 'sha256-H/eahVJiG1zBXPQyXX0V6oaxkfiBdmanvfG9eZWSuEc='</i>
+<em>情形三：内容散列匹配 → 放行</em></div>
+    <div class="wire-cap">策略含 script-src 时，内联 JavaScript 默认不允许执行；nonce 与<strong>散列</strong>（hash）是不放开 unsafe-inline 的两条合法通道。</div>
+    <table class="small">
+      <thead><tr><th>情形</th><th>凭据</th><th>判定与前提</th></tr></thead>
+      <tbody>
+        <tr><td class="l">无凭据</td><td class="l">无</td><td class="l"><strong>拦截</strong>：内联默认禁止，并生成违规报告</td></tr>
+        <tr><td class="l">加 nonce</td><td class="l">每次响应随机、不可预测</td><td class="l"><strong>放行</strong>：首部与标签一致，需动态生成页面</td></tr>
+        <tr><td class="l">用 sha256 散列</td><td class="l">脚本内容的 Base64 散列</td><td class="l"><strong>放行</strong>：内容不变则散列不变，适合静态站点</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section class="slide" data-narration="把上一页三条路收成一张图，也把规则说死。浏览器要执行一段脚本，第一步问：策略里有没有 script-src 或兜底的 default-src？没有就放行。有的话第二步：是不是同源外部脚本、带匹配 nonce、或内容散列对得上？满足任意一个就放行。都不满足，才第三步：拦截脚本并生成违规报告。补一句最容易忘的：CSP 是纵深防御，MDN 强调它替代不了输入净化，正确姿势是净化加 CSP 双管齐下，净化失守时 CSP 才兜底。把三步记牢，就能对任意脚本当场判它能不能跑。下一页看违规后服务器收到什么。">
+  <div class="slide-head"><span class="sec">专题 · 判定</span><h3>把脚本能不能跑，画成三步</h3></div>
+  <div class="slide-body">
+    <div class="mmd mmd-sm">
+      <div class="mermaid">
+flowchart TD
+  A["浏览器准备执行一段脚本"] --> B["查有没有脚本相关指令"]
+  B --> C["没有指令则正常执行"]
+  B --> D["有指令则检查三种凭据"]
+  D --> E["同源外部或带匹配凭据则放行"]
+  D --> F["都不满足则拦截并生成违规报告"]
+      </div>
+    </div>
+    <div class="tip">判断三步：先看有没有 script-src 或兜底的 default-src；没有就放行，有再看是不是同源外部脚本、带匹配 nonce、或散列匹配；都不满足就拦。</div>
+    <div class="deep">CSP 是<strong>纵深防御</strong>：MDN 反复强调它不能替代输入净化，正确姿势是净化加上 CSP 双管齐下。</div>
+  </div>
+</section>
+
+<section class="slide" data-narration="拦截之后服务器收到什么？看这份由上报指令送回的违规报告，类型是 application/csp-report，主体是一份 JSON，共八个字段。出事页面指向 /post/1，来源页是谷歌搜索，被违反的是脚本指令，真正把资源拦下的值为 script-src-elem，还有当时的完整策略原文、被拦资源标成 inline、状态码 200，以及被拦代码的前若干字符。八个字段合起来就是一份案发现场记录，能定位到具体页面、具体指令、具体代码。下一页对比两代上报机制。">
+  <div class="slide-head"><span class="sec">例子 · 报文</span><h3>一份违规报告，八个字段逐字段读</h3></div>
+  <div class="slide-body">
+    <div class="wire sm"><i>POST /csp-report HTTP/1.1</i>
+<i>Content-Type:</i> application/csp-report
+
+{
+  "csp-report": {
+    "document-uri": "https://example.com/post/1",
+    "referrer": "https://www.google.com/",
+    "violated-directive": "script-src 'nonce-416d1177-4d12-4e3b-b7c9-f6c409789fb8'",
+    "effective-directive": "script-src-elem",
+    "original-policy": "default-src 'self'; ...",
+    "blocked-uri": "inline",
+    "status-code": 200,
+    "script-sample": "console.log(...)"
+  }
+}</div>
+    <div class="wire-cap">由 report-uri 上报、以 application/csp-report 类型 POST 的<strong>违规报告</strong>（violation report）。浏览器把在哪一页、违反哪条指令、被拦的是什么、策略原文打包送回。</div>
+    <table class="small">
+      <thead><tr><th>字段</th><th>含义</th></tr></thead>
+      <tbody>
+        <tr><td class="l">document-uri</td><td class="l">发生违规的文档地址，定位到 /post/1</td></tr>
+        <tr><td class="l">referrer</td><td class="l">来源页，这里来自 Google 搜索</td></tr>
+        <tr><td class="l">violated-directive</td><td class="l">被违反的指令及其值</td></tr>
+        <tr><td class="l">effective-directive</td><td class="l">实际拦下资源的指令 script-src-elem</td></tr>
+        <tr><td class="l">original-policy</td><td class="l">触发违规时的完整策略原文</td></tr>
+        <tr><td class="l">blocked-uri</td><td class="l">被拦资源，inline 表示内联脚本</td></tr>
+        <tr><td class="l">status-code</td><td class="l">被保护文档的状态码 200</td></tr>
+        <tr><td class="l">script-sample</td><td class="l">被拦代码的前若干字符</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section class="slide" data-narration="违规报告有两代，别混用。老一代的指令值直接就是一个 URL，类型是 application/csp-report，JSON 是单个对象、字段用连字符命名，MDN 已标弃用。新一代要先用一个首部声明命名端点，再在策略里引用这个名字，类型换成 application/reports+json，JSON 变成带类型、地址、时长、浏览器标识的信封，详情装在主体里、字段改驼峰。端点声明、内容类型、JSON 结构三处全不同，迁移期接收端得两种都能解析，过渡期两者同时声明。部署先用仅报告模式试运行再转正。下一页转权限策略。">
+  <div class="slide-head"><span class="sec">例子 · 对照</span><h3>report-uri 与 report-to，两代上报</h3></div>
+  <div class="slide-body">
+    <div class="wire sm"><i>Reporting-Endpoints:</i> csp-endpoint="https://example.com/csp-reports"
+<i>Content-Security-Policy:</i> default-src 'self'; report-to csp-endpoint
+<i>Content-Type:</i> application/reports+json</div>
+    <div class="wire-cap">report-to 不直接写 URL，而是引用<strong>报告 API</strong>（Reporting API）里 Reporting-Endpoints 预先命名好的端点；新的报告类型是 application/reports+json。</div>
+    <table class="small">
+      <thead><tr><th>维度</th><th>report-uri 老</th><th>report-to 新推荐</th></tr></thead>
+      <tbody>
+        <tr><td class="l">端点声明</td><td class="l">指令值直接是 URL</td><td class="l">先声明命名端点再引用名字</td></tr>
+        <tr><td class="l">Content-Type</td><td class="l">application/csp-report</td><td class="l">application/reports+json</td></tr>
+        <tr><td class="l">JSON 结构</td><td class="l">单个 csp-report 对象，连字符字段</td><td class="l">带 type、url、age、user_agent 的信封，详情在 body 里驼峰命名</td></tr>
+        <tr><td class="l">状态</td><td class="l">MDN 标注已弃用</td><td class="l">基于报告 API 的推荐方式</td></tr>
+        <tr><td class="l">迁移建议</td><td class="l">逐步退场</td><td class="l">过渡期与 report-uri 同时声明，两种都收</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section class="slide" data-narration="CSP 管能加载什么，权限策略管能调用什么能力。看讲义这道判定题：父页下发摄像头等于 self、全屏等于 self 加 partner.example、地理定位等于空列表；iframe 来自 partner.example，allow 三项都想要。逐项判：摄像头不可用，父页只给同源，跨源不在列表，allow 写星号也放大不了父页没给的权限；全屏可用，父页显式列了该源、星号也覆盖，两边交集非空；地理定位不可用，父页空列表等于全局禁用，禁用单向、子框架翻不过来。三项连起来就是铁律：最终权限取父页与 allow 的最严格子集。下一页补齐允许列表取值。">
+  <div class="slide-head"><span class="sec">例子 · 判定表</span><h3>父页策略配 iframe allow，逐项判能不能用</h3></div>
+  <div class="slide-body">
+    <div class="wire sm"><i>Permissions-Policy:</i> camera=(self),
+<i>  fullscreen=(self "https://partner.example"),</i>
+<i>  geolocation=()</i>
+<b>&lt;iframe</b> src="https://partner.example"
+    allow="camera *; fullscreen *; geolocation 'self'"<b>&gt;&lt;/iframe&gt;</b></div>
+    <div class="wire-cap">父页对摄像头只放行同源、全屏放行同源与 partner.example、地理定位全局禁用；iframe 来自 partner.example，allow 三项都想要。</div>
+    <table class="small">
+      <thead><tr><th>特性</th><th>父页</th><th>allow</th><th>判定</th></tr></thead>
+      <tbody>
+        <tr><td class="l">摄像头 camera</td><td class="l">(self)</td><td class="l">*</td><td class="l"><strong>不可用</strong>：跨源不在父页列表，allow 再宽也越不过</td></tr>
+        <tr><td class="l">全屏 fullscreen</td><td class="l">(self 及 partner)</td><td class="l">*</td><td class="l"><strong>可用</strong>：两边交集含该源</td></tr>
+        <tr><td class="l">地理定位 geolocation</td><td class="l">()</td><td class="l">'self'</td><td class="l"><strong>不可用</strong>：父页空列表禁用，单向不可覆盖</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section class="slide" data-narration="补齐权限策略的零件。允许列表五种取值：星号表示本文档与所有嵌套 iframe 都可用，空括号表示全禁用，这两个只能单独写；self 表示仅同源 iframe，可与具体源组合；src 表示与 iframe 的 src 同源即可，只在 allow 里有效；最后是具体源。更要紧的是继承：所有 iframe 继承父页策略，父页与 allow 并存时取最严格子集，某源必须同时在两边才算放行；被父框架禁用的特性，子框架和后代都不能重新启用，禁用是单向的。MDN 建议头里给最宽范围，再逐帧收窄。下一页看方向相反的首部。">
+  <div class="slide-head"><span class="sec">专题 · 规则</span><h3>允许列表五种取值，还有一条继承铁律</h3></div>
+  <div class="slide-body">
+    <table class="small">
+      <thead><tr><th>取值</th><th>含义</th><th>能否组合</th></tr></thead>
+      <tbody>
+        <tr><td class="l"><strong>星号</strong></td><td class="l">本文档及所有嵌套 iframe 都可用</td><td class="l">只能单独用</td></tr>
+        <tr><td class="l"><strong>空括号</strong></td><td class="l">顶层与嵌套环境全禁用</td><td class="l">只能单独用</td></tr>
+        <tr><td class="l"><strong>self</strong></td><td class="l">仅本文档与同源 iframe</td><td class="l">可与具体源组合</td></tr>
+        <tr><td class="l"><strong>src</strong></td><td class="l">与 iframe 的 src 同源即可，仅用于 allow</td><td class="l">可与具体源组合</td></tr>
+        <tr><td class="l"><strong>具体源</strong></td><td class="l">如 https://a.example.com</td><td class="l">可与 self、src 组合</td></tr>
+      </tbody>
+    </table>
+    <div class="formula formula-concl">最终权限 = 父页允许列表与 iframe allow 的交集，且任一方的显式禁用不可被覆盖</div>
+    <div class="deep"><strong>允许列表</strong>（allowlist）之外更要紧的是继承：所有 iframe 继承父页策略；子框架被父框架禁用的特性不能重新启用，它的后代也不能，禁用是<strong>单向</strong>的。</div>
+  </div>
+</section>
+
+<section class="slide" data-narration="前三套都是服务器发给浏览器，Fetch 元数据反过来。看一组真实首部：用户在地址栏敲下银行网址回车，请求自动带上四个 Sec-Fetch 首部。Site 是 none，表示没有站点作为请求方、用户直接发起；Mode 是 navigate，文档间导航；Dest 是 document，顶层新文档；User 是问号一，用户行为触发。四个值都由浏览器按真实上下文附加，属于禁止修改的请求首部，前端 JavaScript 一个字都改不了，正是这点让它们能当安全判据。四首部分别回答来源关系、发起模式、资源用途、是否用户触发。下一页用五种组合讲透资源隔离。">
+  <div class="slide-head"><span class="sec">例子 · 报文</span><h3>四个 Sec-Fetch 首部，让请求自证来源</h3></div>
+  <div class="slide-body">
+    <div class="wire sm"><b>GET /home HTTP/1.1</b>
+<b>Sec-Fetch-Site:</b> none
+<b>Sec-Fetch-Mode:</b> navigate
+<b>Sec-Fetch-Dest:</b> document
+<b>Sec-Fetch-User:</b> ?1
+<em>用户在地址栏敲入网址，浏览器自动附加</em></div>
+    <div class="wire-cap">用户直接发起的导航：Site 为 none、Mode 为 navigate、Dest 为 document、User 为 ?1。四个首部都由浏览器按真实上下文附加，属于<strong>禁止修改的请求首部</strong>（forbidden request header），JS 一个字都改不了。</div>
+    <table class="small">
+      <thead><tr><th>首部</th><th>回答什么</th><th>主要取值</th></tr></thead>
+      <tbody>
+        <tr><td class="l">Sec-Fetch-Site</td><td class="l">请求方与资源的关系</td><td class="l">cross-site / same-site / same-origin / none</td></tr>
+        <tr><td class="l">Sec-Fetch-Mode</td><td class="l">以什么模式发起</td><td class="l">navigate / no-cors / cors / same-origin</td></tr>
+        <tr><td class="l">Sec-Fetch-Dest</td><td class="l">资源用在哪里</td><td class="l">document / image / script / empty</td></tr>
+        <tr><td class="l">Sec-Fetch-User</td><td class="l">是否用户行为触发</td><td class="l">触发时恒为 ?1，否则不携带</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section class="slide" data-narration="五种组合逐项判，就懂资源隔离怎么挡跨站请求伪造。地址栏输入银行网址，站点关系是 none、模式是 navigate，放行；从恶意站点点链接进来，变成跨站，但仍是导航加 GET，也放行；加载自家 logo，同源、目标是 image，放行；偷偷用 fetch 发转账，跨站、模式是 cors、目标是 empty，拒绝；自动提交表单 POST，跨站、没有用户触发，拒绝。判据落在有没有副作用，攻击者改不了跨站这个标记。别拒绝全部跨源，否则外链进不来；缺首部的老浏览器按不可信处理，响应还要带 Vary。下一页写成三步。">
+  <div class="slide-head"><span class="sec">例子 · 判定表</span><h3>五种组合逐项判，资源隔离挡下 CSRF</h3></div>
+  <div class="slide-body">
+    <table class="small">
+      <thead><tr><th>场景</th><th>Site</th><th>Mode</th><th>Dest</th><th>User</th><th>判定</th></tr></thead>
+      <tbody>
+        <tr><td class="l">地址栏输入银行网址</td><td>none</td><td>navigate</td><td>document</td><td>?1</td><td class="l"><strong>导航</strong>，放行</td></tr>
+        <tr><td class="l">从 evil 点链接进银行</td><td>cross-site</td><td>navigate</td><td>document</td><td>?1</td><td class="l"><strong>跨站顶层导航</strong>，GET 放行</td></tr>
+        <tr><td class="l">加载自家 logo 图片</td><td>same-origin</td><td>no-cors</td><td>image</td><td>无</td><td class="l"><strong>同源图片子资源</strong>，放行</td></tr>
+        <tr><td class="l">evil 自动 fetch 转账</td><td>cross-site</td><td>cors</td><td>empty</td><td>无</td><td class="l"><strong>CSRF 写操作</strong>，拒绝</td></tr>
+        <tr><td class="l">evil 自动提交表单</td><td>cross-site</td><td>no-cors</td><td>document</td><td>无</td><td class="l"><strong>跨站表单提交</strong>，拒绝</td></tr>
+      </tbody>
+    </table>
+    <div class="deep"><strong>资源隔离策略</strong>（resource isolation policy）：放行同源与用户直接发起的请求、以及跨站的 GET 导航，拒绝跨站的 POST 与脚本请求。<strong>跨站请求伪造</strong>（CSRF）靠 cookie 自动带上得逞，而 Sec-Fetch-Site 被浏览器标记成 cross-site、攻击者改不了。但<strong>不能拒绝全部跨源</strong>，否则外部链接跳不进来；缺首部的老浏览器按不可信处理，响应还要带 Vary。</div>
+  </div>
+</section>
+
+<section class="slide" data-narration="把上一页收成服务器照着写的三步，按空格展开。第一步，读站点关系首部，等于同源或用户直接发起就放行。第二步，否则看是不是跨站顶层导航，模式等于 navigate 且方法是 GET 就放行，好让别的网站链进来。第三步，其余统统拒绝返回 403，比如跨站 POST、cors 或 no-cors 的脚本请求、目标为 empty 的请求。还有个尾巴别漏：响应要带 Vary，把站点关系和模式两个首部列进去，否则共享缓存可能把导航的响应错送给别的上下文。下一页轮到你自己判一遍。">
+  <div class="slide-head"><span class="sec">推导</span><h3>把资源隔离策略写成三步判定</h3></div>
+  <div class="slide-body">
+    <div class="step"><p><strong>① 先看 Sec-Fetch-Site</strong>：等于 same-origin 或 none 就放行——同源请求与用户直接发起的请求可信。</p></div>
+    <div class="step"><p><strong>② 否则看是不是跨站顶层导航</strong>：Sec-Fetch-Mode 为 navigate 且方法是 GET，放行，好让外部链接能跳进来。</p></div>
+    <div class="step"><p><strong>③ 其余一律拒绝</strong>：跨站 POST、cors 或 no-cors 的脚本请求、dest 为 empty 的请求，返回 403。</p></div>
+    <div class="step"><div class="formula formula-concl">响应带上 Vary: sec-fetch-site, sec-fetch-mode，避免缓存串味</div></div>
+    <p class="step-hint">按空格 / → 逐步展开推导</p>
+  </div>
+</section>
+
+<section class="slide" data-narration="轮到你了，把判定合起来练一遍。屏幕上有三样东西：一条带 nonce 的 CSP、三段脚本、一组 Sec-Fetch 首部。请逐项判定放行还是拦截，并写清依据哪条指令或首部。先暂停视频自己推一遍。推出来了吗？好，对答案。带 nonce 的内联脚本和 script-src 匹配，放行；无凭据的内联脚本默认被拦，还会生成违规报告；跨源 fetch 最惨，connect-src 只准同源，Site 又是 cross-site、Dest 是 empty，资源隔离直接拒掉。三处都对上就说明你串起来了。下一页对齐 MDN 与规范。">
+  <div class="slide-head"><span class="sec">演练</span><h3>给一段 CSP 与一组首部，自己推判定</h3></div>
+  <div class="slide-body">
+    <div class="wire sm"><i>Content-Security-Policy:</i> default-src 'self'; script-src 'self' 'nonce-N7'; connect-src 'self'
+<em>页面里有三段：带 nonce 的内联脚本、无凭据的内联脚本、跨源 fetch</em>
+<b>Sec-Fetch-Site:</b> cross-site  <b>Sec-Fetch-Mode:</b> cors  <b>Sec-Fetch-Dest:</b> empty</div>
+    <div class="step"><p>① 带 <strong>nonce-N7</strong> 的内联脚本：与 script-src 匹配，<strong>放行</strong>。</p></div>
+    <div class="step"><p>② 无凭据的内联脚本：script-src 存在、内联默认禁止，<strong>拦截</strong>并上报。</p></div>
+    <div class="step"><p>③ 跨源 fetch 与那组 Sec-Fetch 首部：connect-src 只允许同源，且 Site 为 cross-site、Dest 为 empty，<strong>双重拒绝</strong>。</p></div>
+    <div class="pause"><div class="icon">✍️</div><div class="txt"><b>暂停推导</b><p>合上答案，逐项写出三段各自的判定，并说出依据的是哪条指令或首部。</p></div></div>
+    <p class="step-hint">按空格 / → 逐步揭示答案</p>
+  </div>
+</section>
+
+<section class="slide" data-narration="按固定动作把 MDN 工程口径和规范口径对一次，这里有个易踩空的事实：三套策略都不是 IETF 的 RFC，而是 W3C 的浏览器安全规范。CSP 对应 CSP Level 3，nonce 与散列的正式语法、要求密码学强度随机都写在里面，权限策略和 Fetch 元数据也各有对应 W3C 规范。RFC 9110 只管字段怎么传输：第五节定字段名大小写不敏感、同名字段合并，缓存相关的 Vary 在第 12.5.5 节。记住二分：怎么写看 RFC 9110，写什么含义看对应 W3C 规范。下一页扫三个雷。">
+  <div class="slide-head"><span class="sec">规范对照</span><h3>MDN 的说法 → RFC 怎么写 → 为什么值得知道</h3></div>
+  <div class="slide-body">
+    <table class="small">
+      <thead><tr><th>MDN 的说法</th><th>RFC 怎么写</th><th>为什么值得知道</th></tr></thead>
+      <tbody>
+        <tr><td class="l">CSP 由 Content-Security-Policy 首部下发，一串分号分隔的指令</td><td class="l">规范是 W3C 的 CSP Level 3，不是 IETF RFC；RFC 9110 只定字段通用语法</td><td class="l">查指令语义去 W3C，别去找 RFC 编号</td></tr>
+        <tr><td class="l">nonce 每个响应都要不同且不可预测</td><td class="l">CSP3 把 nonce source 与 hash source 定为正式语法，要求密码学强度随机</td><td class="l">用递增计数器当 nonce 直接违背规范</td></tr>
+        <tr><td class="l">report-to 配合 Reporting-Endpoints，report-uri 已弃用</td><td class="l">report-to 由 W3C 报告 API 定义，report-uri 是 CSP2 老机制、CSP3 标记弃用</td><td class="l">两代格式不同，接收端要都能解析</td></tr>
+        <tr><td class="l">权限策略允许列表有星号、空括号、self、src、具体源</td><td class="l">规范是 W3C 的 Permissions Policy，头语法与 iframe allow 不同是历史遗留</td><td class="l">src 只在 allow 里有效，头里没有</td></tr>
+        <tr><td class="l">Sec-Fetch 是禁止修改的请求首部，由浏览器附加</td><td class="l">W3C 的 Fetch Metadata 定义取值算法；禁止修改由 Fetch 规范保证</td><td class="l">配合 Vary 用的是 RFC 9110 第 12.5.5 节的缓存机制</td></tr>
+        <tr><td class="l">这些策略都由首部下发，写法看着和普通首部一样</td><td class="l">RFC 9110 第 5 节定字段名大小写不敏感、同名字段可合并、值用 ABNF 描述</td><td class="l">怎么写看 RFC 9110，写什么含义看对应 W3C 规范</td></tr>
+      </tbody>
+    </table>
+    <div class="deep">一条判断原则：把字段怎么在网上传输与字段对浏览器意味着什么分开看——前者归 RFC 9110，后者分属三份 W3C 规范。</div>
+  </div>
+</section>
+
+<section class="slide" data-narration="扫三个最常见的雷。一，嫌麻烦给脚本指令加 unsafe-inline 放行内联脚本，MDN 建议避免，内联 JavaScript 是头号跨站脚本向量；而且指令里一旦出现 nonce 或散列，浏览器会忽略 unsafe-inline。二，以为写了 report-to 就该收到报告，端点必须先用 Reporting-Endpoints 声明，两代格式不同，接收端得两种都解析。三，把三套策略当 RFC 去查，或拒绝全部跨源，它们是 W3C 规范；拒绝一切跨源会让外链跳不进来，跨站导航必须放行。下一页看与第十一讲怎么分工。">
+  <div class="slide-head"><span class="sec">避坑</span><h3>三个把机制混为一谈的误解</h3></div>
+  <div class="slide-body">
+    <div class="trap">❌ <strong>嫌麻烦就加 unsafe-inline 放行内联脚本</strong><br>✅ 它会破坏 CSP 的大部分意义；而且指令里一旦出现 nonce 或散列，浏览器会忽略 unsafe-inline。</div>
+    <div class="trap">❌ <strong>写了 report-to 就该收到报告</strong><br>✅ 端点必须先用 Reporting-Endpoints 声明；两代 Content-Type 与 JSON 都不同，接收端得都能解析。</div>
+    <div class="trap">❌ <strong>把三套策略当 RFC 去查，或拒绝全部跨源请求</strong><br>✅ 它们是 W3C 规范；拒绝一切跨源会让外链跳不进来，跨站 GET 导航必须放行。</div>
+  </div>
+</section>
+
+<section class="slide" data-narration="这一讲和下一讲怎么分工，说清楚才不重复用功。第十讲站在浏览器一侧，关心页面加载后允许它做什么：CSP 限资源、权限策略限能力、Fetch 元数据让请求自证来源，三套机制全在首部里做文章，是第三组状态与安全的收尾。第十一讲把镜头移到客户端与源站之间那些看不见的跳，讲正向与反向代理、发给代理的请求为何用绝对 URI、Via 怎么逐跳追加、CONNECT 怎么建隧道、Upgrade 怎么换成 WebSocket。留下的钩子是：这些响应首部与请求首部，到中间层要分清哪些端到端、哪些逐跳，逐跳首部越过一跳就出故障。下一页用三句话收束本讲。">
+  <div class="slide-head"><span class="sec">接口</span><h3>第 10 讲收束浏览器侧，第 11 讲转向中间层</h3></div>
+  <div class="slide-body">
+    <table>
+      <thead><tr><th></th><th>第 10 讲</th><th>第 11 讲</th></tr></thead>
+      <tbody>
+        <tr><td class="l"><strong>关注对象</strong></td><td class="l">页面加载后能做什么、请求自证来源</td><td class="l">客户端与源站之间的代理、隧道、协议升级</td></tr>
+        <tr><td class="l"><strong>核心机制</strong></td><td class="l">CSP 指令、允许列表、Sec-Fetch 首部</td><td class="l">绝对 URI、Via、CONNECT、Upgrade</td></tr>
+        <tr><td class="l"><strong>留下的钩子</strong></td><td class="l">策略都在首部里，逐跳首部怎么传是下一讲的事</td><td class="l">接着讲哪些首部不能跨跳转发</td></tr>
+      </tbody>
+    </table>
+    <div class="tip">钩子：本讲反复用到的响应首部与请求首部，到<strong>第 11 讲</strong>要分清哪些是端到端、哪些是逐跳。</div>
+  </div>
+</section>
+
+<section class="slide" data-narration="用三句话收束第十讲。解决什么：前面几讲讲服务器怎么识别与授权用户，本讲补上加载之后能做什么，CSP 限定能加载与执行什么、权限策略限定能调用什么、Fetch 元数据让请求自证来源。核心机制：CSP 靠指令、default-src 兜底、nonce 与散列放行特定内联脚本；权限策略取父页与 iframe 的最严格子集；Fetch 元数据是四个 JS 不可伪造的 Sec-Fetch 首部，据此做资源隔离。承上启下：状态与安全这组收尾，传输归 RFC 9110、语义归三份 W3C 规范，缺支持时按不可信处理，下一讲进入代理与隧道。记住先有边界再谈放行。">
+  <div class="slide-head"><span class="sec">小结</span><h3>三句话讲完第 10 讲</h3></div>
+  <div class="slide-body">
+    <div class="chain">
+      <div class="link"><span class="no">1</span><span class="txt"><strong>解决什么</strong>：浏览器加载页面后允许它做什么——能加载什么、能用什么 API、请求该不该受理</span></div>
+      <div class="link"><span class="no">2</span><span class="txt"><strong>核心机制</strong>：CSP 指令加 nonce 与散列、权限策略取最严格子集、Sec-Fetch 首部做资源隔离</span></div>
+      <div class="link"><span class="no">3</span><span class="txt"><strong>承上启下</strong>：状态与安全这一组到此收束，下一讲进入代理、隧道与协议升级</span></div>
+    </div>
+    <div class="formula formula-concl">传输归 RFC 9110，语义归三份 W3C 规范——缺支持时一律按不可信处理</div>
+  </div>
+</section>
+
+<section class="slide slide-cover" data-narration="第十讲结束，留四项毕业挑战，合上书拿一张纸完成。一，默写含默认源、脚本源、样式源、图片源、连接源与上报端点的完整 CSP 并逐条解读。二，推演内联脚本在无 nonce、加 nonce、用散列三种情形下的命运，说清 CSP 为何替代不了输入净化。三，逐项判定第三方 iframe 的摄像头、全屏、地理定位，讲清取最严格子集，列出两代上报机制的三点区别。四，给定五组 Sec-Fetch 首部，判定导航、图片子资源、跨站表单提交，说明资源隔离怎么挡跨站伪造、为何不能拒绝全部跨源。全做出来才算毕业。下一讲看中间那一跳会发生什么。">
+  <div class="kicker">第 10 讲 结束</div>
+  <h1>把安全边界写进首部</h1>
+  <div class="sub">毕业挑战：合上书，拿一张纸</div>
+  <div class="divider"></div>
+  <div class="meta">
+    ☑ 默写含 default-src、script-src、style-src、img-src、connect-src、report-uri 的完整 CSP 并逐条解读<br>
+    ☑ 推演内联脚本在无 nonce、加 nonce、用散列三种情形下的命运<br>
+    ☑ 逐项判定第三方 iframe 的摄像头、全屏、地理定位，并列出两代上报机制的三点区别<br>
+    ☑ 给定五组 Sec-Fetch 首部判定导航、图片子资源与跨站表单提交，讲清资源隔离怎么挡 CSRF<br><br>
+    下一讲 · 第 11 讲 代理、隧道与协议升级：请求经过中间那一跳时会发生什么
+  </div>
+</section>
+
+  <!-- 页脚：brand 改为本章标题；总页数改 pagenum 初值 -->
+  <div id="footer">
+    <span class="brand">第10讲 CSP、权限策略与 Fetch 元数据 · HTTP 精通 课件　<a class="to-lec" href="../http-guide/index.html">讲义首页 ↗</a></span>
+    <span id="pagenum">1 / 1</span>
+  </div>
+
+  <!-- 导航 -->
+  <div class="nav">
+    <button id="prev" title="上一页 (←)">‹</button>
+    <button id="next" title="下一页 (→ / 空格)">›</button>
+  </div>
+  <div id="hint">← → 翻页 · 空格下一页 · 推导页逐步显示 · 点击左右半屏翻页</div>
+
+</div>
+
+<!-- mermaid 本地引用，保证离线可用；初始化参数全套课件统一，勿改 -->
+<script src="assets/mermaid.min.js"></script>
+<script>
+mermaid.initialize({
+  startOnLoad: false,   // 必须为 false：display:none 的隐藏页渲染会得到 0 宽高的退化 SVG，
+                        // 改为页面激活时懒渲染（见 renderMermaid）
+  theme: "base",
+  themeVariables: {
+    primaryColor: "#ebf8ff",
+    primaryBorderColor: "#2b6cb0",
+    primaryTextColor: "#1a365d",
+    lineColor: "#718096",
+    fontFamily: "-apple-system, PingFang SC, sans-serif",
+    fontSize: "15px"
+  },
+  flowchart: { curve: "linear", htmlLabels: false }
+});
+</script>
+<script>
+(function(){
+  const slides = Array.from(document.querySelectorAll('.slide'));
+  const total = slides.length;
+  let idx = 0;
+
+  const params = new URLSearchParams(location.search);
+  const startSlide = parseInt(params.get('slide'), 10);
+  if (params.get('autohide') === '1') document.body.classList.add('autohide');
+  if (!isNaN(startSlide) && startSlide >= 1 && startSlide <= total) idx = startSlide - 1;
+
+  const progress = document.getElementById('progress');
+  const pagenum = document.getElementById('pagenum');
+  const prevBtn = document.getElementById('prev');
+  const nextBtn = document.getElementById('next');
+
+  // 推导分步：每页记住已展开的步数；autohide（截图）模式下 CSS 强制全显
+  const stepState = new Map();
+  function stepsOf(i){ return Array.from(slides[i].querySelectorAll('.step')); }
+  function applySteps(){
+    stepsOf(idx).forEach((el, k)=> el.classList.toggle('on', k < (stepState.get(idx) || 0)));
+  }
+  // 前进一步：先展开本页下一步，全部展开后才翻页
+  function forward(){
+    const steps = stepsOf(idx);
+    const shown = stepState.get(idx) || 0;
+    if (shown < steps.length){ stepState.set(idx, shown + 1); applySteps(); return; }
+    go(idx + 1);
+  }
+  // 后退一步：先收起本页最后一步，收完才回上一页
+  function backward(){
+    const steps = stepsOf(idx);
+    const shown = stepState.get(idx) || 0;
+    if (shown > 0){ stepState.set(idx, shown - 1); applySteps(); return; }
+    go(idx - 1);
+  }
+
+  // mermaid 懒渲染：只在页面激活（有真实宽高）时渲染该页的图，渲染后打 data-done 防重复
+  function renderMermaid(slide){
+    if (typeof mermaid === 'undefined') return;
+    const nodes = Array.from(slide.querySelectorAll('.mermaid:not([data-done])'));
+    if (!nodes.length) return;
+    nodes.forEach(n => n.setAttribute('data-done', ''));
+    mermaid.run({ nodes }).catch(err => {
+      nodes.forEach(n => n.removeAttribute('data-done'));
+      console.error('mermaid 渲染失败：', err);
+    });
+  }
+
+  function render(){
+    slides.forEach((s,i)=> s.classList.toggle('active', i===idx));
+    progress.style.width = ((idx+1)/total*100) + '%';
+    pagenum.textContent = (idx+1) + ' / ' + total;
+    prevBtn.disabled = (idx===0);
+    nextBtn.disabled = (idx===total-1);
+    applySteps();
+    renderMermaid(slides[idx]);
+  }
+  function go(n){ idx = Math.max(0, Math.min(total-1, n)); render(); }
+
+  prevBtn.addEventListener('click', e=>{ e.stopPropagation(); backward(); });
+  nextBtn.addEventListener('click', e=>{ e.stopPropagation(); forward(); });
+
+  document.addEventListener('keydown', e=>{
+    if(e.key==='ArrowRight'||e.key===' '||e.key==='PageDown'){ e.preventDefault(); forward(); }
+    else if(e.key==='ArrowLeft'||e.key==='PageUp'){ e.preventDefault(); backward(); }
+    else if(e.key==='Home'){ stepState.set(idx, 0); go(0); }
+    else if(e.key==='End'){ go(total-1); }
+  });
+
+  document.getElementById('stage').addEventListener('click', e=>{
+    if(e.target.closest('.nav') || e.target.closest('a')) return;
+    const x = e.clientX;
+    if(x < window.innerWidth*0.5) backward(); else forward();
+  });
+
+  function fit(){
+    const s = Math.min(window.innerWidth/1280, window.innerHeight/720);
+    document.getElementById('stage').style.transform = 'translate(-50%,-50%) scale(' + s + ')';
+  }
+  window.addEventListener('resize', fit);
+  fit();
+  render();
+})();
+</script>
+</body>
+</html>

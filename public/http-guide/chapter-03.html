@@ -1,0 +1,859 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第3讲 内容协商、压缩与客户端提示 · HTTP 精通</title>
+<link rel="stylesheet" href="assets/style.css">
+<style>
+/* 本套专用：协议报文原文展示与 MDN 来源条 */
+.wire{background:var(--bg-deep);border:1px solid var(--line);border-left:4px solid var(--accent);border-radius:8px;padding:14px 18px;margin:14px 0;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:13.5px;line-height:1.78;white-space:pre-wrap;overflow-wrap:anywhere;color:var(--ink-soft);}
+.wire b{color:var(--accent);font-weight:700;}
+.wire i{color:var(--orange);font-style:normal;}
+.wire em{color:var(--ink-faint);font-style:normal;}
+.wire.sm{font-size:12.5px;}
+.wire-cap{font-size:13px;color:var(--ink-faint);margin:-8px 0 16px;}
+.mdn-src{background:var(--bg-deep);border:1px solid var(--line);border-left:4px solid var(--accent);border-radius:8px;padding:12px 18px;margin:16px 0 0;font-size:13px;line-height:1.8;color:var(--ink-soft);}
+.mdn-src strong{color:var(--accent);}
+.mdn-src a{color:var(--accent);text-decoration:none;border-bottom:1px dashed var(--line);}
+.mdn-src a:hover{border-bottom-style:solid;}
+.to-slide{font-size:13px;color:var(--accent);text-decoration:none;border:1px solid var(--line);border-radius:6px;padding:4px 11px;white-space:nowrap;}
+.to-slide:hover{background:var(--bg-deep);}
+</style>
+</head>
+<body>
+
+<nav class="topbar">
+  <div class="topbar-inner">
+    <span class="brand"><a href="index.html" style="color:inherit">← HTTP 精通 · 学习地图</a></span>
+    <span class="crumb">第①组 · 基础与表示 / 第3讲</span>
+    <a class="to-slide" href="../http-guide-slides/03-%E5%86%85%E5%AE%B9%E5%8D%8F%E5%95%86%E5%8E%8B%E7%BC%A9%E4%B8%8E%E5%AE%A2%E6%88%B7%E7%AB%AF%E6%8F%90%E7%A4%BA-%E8%AF%BE%E4%BB%B6.html" target="_blank" rel="noopener noreferrer">配套课件 ↗</a>
+  </div>
+</nav>
+
+<div class="wrap">
+
+  <div class="lecture-head">
+    <span class="ch-label">GUIDE 03 · 基础与表示</span>
+    <h1>内容协商、压缩与客户端提示</h1>
+    <p class="lead">同一个 URL 为什么有时返回 HTML、有时返回 JSON，有时是 gzip、有时是 Brotli？本讲把"返回哪一种表示"的选择权在客户端与服务器之间分配清楚。</p>
+    <div class="mdn-src"><strong>本讲对应的 MDN 指南：</strong><a href="https://developer.mozilla.org/zh-CN/docs/Web/HTTP/Guides/Content_negotiation" target="_blank" rel="noopener">内容协商</a> · <a href="https://developer.mozilla.org/zh-CN/docs/Web/HTTP/Guides/Compression" target="_blank" rel="noopener">数据压缩</a> · <a href="https://developer.mozilla.org/zh-CN/docs/Web/HTTP/Guides/Client_hints" target="_blank" rel="noopener">客户端提示</a> · <a href="https://developer.mozilla.org/zh-CN/docs/Web/HTTP/Guides/Browser_detection_using_the_user_agent" target="_blank" rel="noopener">用户代理检测</a></div>
+  </div>
+
+  <!-- 本章定位 -->
+  <div class="position-bar">
+    <strong>本讲在主线上的位置：</strong>第 2 讲的报文与 MIME 类型 → <u>本讲：内容协商、压缩与客户端提示</u> → 第 4 讲把目光从「传什么」转向「怎么传」。<br>
+    第3讲回答主线上的第3个问题：<strong>同一个 URL 凭什么返回不同内容，这份选择权到底在谁手里？</strong>
+    <div class="map-inline">
+      <span class="node">第2讲 HTTP 消息与 MIME 类型</span><span class="arrow">→</span>
+      <span class="node here">第3讲 内容协商、压缩与客户端提示</span><span class="arrow">→</span>
+      <span class="node">第4讲 HTTP/1.x 的连接管理</span><span class="arrow">→</span>
+      <span class="node">第4–6讲 连接与缓存</span><span class="arrow">→</span>
+      <span class="node">第7–10讲 状态与安全</span>
+    </div>
+  </div>
+
+  <!-- 学习目标 -->
+  <div class="objectives">
+    <h4>🎯 学完本讲，合上书你应该能：</h4>
+    <ol>
+      <li>用 Accept 系列首部与 q 值为候选表示打分并选出最优者</li>
+      <li>区分内容编码与传输编码，说明 gzip 与 chunked 叠加时的处理顺序</li>
+      <li>说出服务器驱动、代理驱动、透明协商三种方式的分工与代价</li>
+      <li>解释 Vary 首部如何参与缓存键，避免把一种表示发给要另一种表示的客户端</li>
+      <li>说明 UA 检测为何脆弱，以及 Client Hints 如何按能力而非按浏览器做选择</li>
+    </ol>
+  </div>
+
+  <!-- 视频卡插槽：后面录制 B 站讲解时在此插入 <details class="video-card" id="video-card">…</details> -->
+  <!-- VIDEO_CARD_SLOT -->
+
+  <div class="lecture">
+
+    <!-- 推导主线图 -->
+    <div class="figure">
+      <div class="mermaid">
+flowchart LR
+  A["一个 URL 对应多种表示"]
+  B["请求带 Accept 与 q 值"]
+  C["服务器给候选打分"]
+  D["选出的表示加 Vary"]
+  E["编码后作为主体返回"]
+  F["UA 检测的脆弱判断"]
+  A --> B
+  B --> C
+  C --> D
+  D --> E
+  A --> F
+  classDef hot fill:#fbeedd,stroke:#c4651f,stroke-width:2.5px,color:#c4651f;
+  classDef danger fill:#fae9e7,stroke:#b03a2e,stroke-width:2.5px,color:#b03a2e;
+  class C hot;
+  class F danger;
+      </div>
+      <div class="caption">协商的主线：从「一份资源多种表示」出发，请求声明偏好、服务器择优、Vary 让缓存不串味；红色节点是用 UA 字符串猜能力的老办法。</div>
+    </div>
+
+<!-- ============ 3.1 ============ -->
+    <h2><span class="sec-no">3.1</span>同一个 URL 凭什么返回不同内容：把选择权摆到桌面上</h2>
+
+    <p>上一讲把报文逐行拆开，回答了「接收方凭什么知道这段字节是什么类型」。这一讲要处理一个更刁钻的问题：同一个 <code>URL</code>，为什么有时返回 HTML、有时返回 JSON，有时是 gzip、有时是 Brotli？换句话说，当一份资源存在多个版本时，<strong>到底由谁、凭什么挑出这一次要返回的那个版本</strong>。这就是本讲的主线问题，也是 MDN《内容协商》开篇就点明的事。</p>
+
+    <p>先把概念钉牢。MDN 把一份特定的文件称为一项<span class="term">资源</span>（resource），客户端用 URL 去请求它；服务器收到 URL 后，从它指向的若干可用变体中挑一个返回，每个变体称为一种<span class="term">表示</span>（representation）。关键在于：<strong>整个资源以及它的各种表示，共享同一个 URL</strong>。所以「一个 URL 对应一个文件」是错的直觉——URL 命名的是资源，表示是某一次响应实际给出的那一份字节。<span class="term">内容协商</span>（content negotiation）就是「在多个表示中选出哪一个」的机制。</p>
+
+    <p>选择权可以放在不同人手里。MDN 把它分成三种方式，分工与代价各不相同：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>协商方式</th><th>谁做选择</th><th>怎么表达偏好</th><th>代价</th></tr>
+        <tr><td><span class="term">服务器驱动协商</span>（server-driven negotiation）</td><td>服务器</td><td>客户端随请求发送 <code>Accept</code>、<code>Accept-Language</code>、<code>Accept-Encoding</code> 等首部，服务器用内部算法择优</td><td>标准且最常用；但服务器对浏览器能力并非全知，首部冗长且带来指纹识别与缓存效率下降</td></tr>
+        <tr><td><span class="term">代理驱动协商</span>（agent-driven negotiation，又叫响应式协商）</td><td>用户或客户端脚本</td><td>服务器返回 <code>300</code>、<code>406</code> 或 <code>415</code>，并给出可选表示的链接，由对方再选</td><td>灵活但要多一次请求；可选链接页面的格式没有标准，自动化困难</td></tr>
+        <tr><td><span class="term">透明协商</span>（transparent negotiation）</td><td>双方约定的算法</td><td>通过 <code>Alternates</code> 等首部让缓存代替服务器完成协商</td><td>提案（RFC 2295）未被广泛认可，已被遗弃，实际中基本看不到</td></tr>
+      </table>
+    </div>
+
+    <p>这张表还透露出一个常被忽略的判定点：MDN 明确说，服务器驱动型是<strong>标准方式</strong>，代理驱动型只是<strong>备选方案</strong>；而 <code>406</code>（Not Acceptable）、<code>415</code>（Unsupported Media Type）与 <code>300</code>（Multiple Choices）属于后者。对 <code>POST</code> 与 <code>PATCH</code>，服务器还可以用 <code>Accept-Post</code>、<code>Accept-Patch</code> 首部声明它支持哪些媒体类型。至于「服务器具体怎么算最优」，MDN 刻意留白——规范并没有规定算法，各服务器实现不同（比如 Apache 有自己公开的算法）。这一点很重要：你能判定「哪种表示更符合要求」，但不能指望有一套全互联网统一的计算公式。</p>
+
+    <p>把本章的主线画出来，后面几节都是在这条链上补细节：</p>
+
+    <div class="figure">
+      <div class="mermaid">
+flowchart LR
+A["一个 URL 多种表示"] --> B["请求带 Accept 与 q 值"]
+B --> C["服务器给候选打分"]
+C --> D["选出的表示加 Vary"]
+D --> E["编码后作为主体返回"]
+A --> F["UA 字符串猜能力不可靠"]
+      </div>
+      <div class="caption">图 3.1 内容协商主线：从一份资源多种表示出发，请求声明偏好、服务器择优、Vary 让缓存不串味；下方分支是用 UA 字符串猜能力的老办法，正是 3.4 要纠正的对象。</div>
+    </div>
+
+    <p>服务器驱动协商的偏好，由一组 <code>Accept-*</code> 请求首部承载，其中最核心的三个分别是：<span class="term">Accept</span> 首部列出可接受的<span class="term">媒体类型</span>（media type），<span class="term">Accept-Language</span> 首部提示期望的自然语言顺序，<span class="term">Accept-Encoding</span> 首部声明能解码的内容编码。它们共用一个表达优先级的工具——<span class="term">质量因子</span>（quality factor，又称品质因数，常写作 q 值）：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>q 值规则</th><th>含义</th><th>例子</th></tr>
+        <tr><td>取值范围 0 到 1，最多三位小数</td><td>值越大优先级越高，1 为最高</td><td><code>text/html;q=0.9</code></td></tr>
+        <tr><td>不写 q 时默认为 1</td><td>首部里没标 q 的项默认最优先</td><td><code>de</code> 等价于 <code>de;q=1</code></td></tr>
+        <tr><td><code>q=0</code> 表示不可接受</td><td>用来显式排除某一项</td><td><code>image/webp;q=0</code></td></tr>
+        <tr><td>支持通配符</td><td>精确匹配优先于类型通配，类型通配优先于全通配</td><td><code>text/*</code>、<code>*/*</code></td></tr>
+        <tr><td>q 值只在同一个首部内部可比</td><td>不能拿 Accept 的 q 去和 Accept-Language 的 q 比大小</td><td>跨首部如何合成由服务器决定</td></tr>
+      </table>
+    </div>
+
+    <p>现在做本讲第一个完整手算：<strong>带 q 值的多候选择优</strong>。假设客户端请求同一个资源 <code>/api/report</code>，服务器这边准备了四种表示。先给出请求报文：</p>
+
+    <div class="wire"><b>GET /api/report HTTP/1.1</b>
+<b>Host:</b> example.com
+<b>Accept:</b> text/html;q=0.9, application/json;q=1.0, text/plain;q=0.6, */*;q=0.1
+<b>Accept-Language:</b> zh-CN,zh;q=0.8,en;q=0.5
+<b>Accept-Encoding:</b> br;q=1.0, gzip;q=0.7, identity;q=0.2, *;q=0
+
+<em>（空行：本请求无主体）</em></div>
+    <div class="wire-cap">一份带完整 q 值的请求：三个 Accept-* 首部分别在媒体类型、自然语言、内容编码三个维度上声明偏好；开头的项没写 q，默认取 1。</div>
+
+    <p>服务器可用的四种表示如下：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>候选表示</th><th>Content-Type</th><th>语言</th><th>内容编码</th></tr>
+        <tr><td>A</td><td>text/html</td><td>zh-CN</td><td>br</td></tr>
+        <tr><td>B</td><td>application/json</td><td>en</td><td>gzip</td></tr>
+        <tr><td>C</td><td>text/plain</td><td>zh-CN</td><td>identity</td></tr>
+        <tr><td>D</td><td>text/html</td><td>en</td><td>gzip</td></tr>
+      </table>
+    </div>
+
+    <p><strong>第一步：求媒体类型维度。</strong>对每种表示的 <code>Content-Type</code>，到 <code>Accept</code> 里找<strong>最具体的匹配项</strong>取它的 q：A 和 D 都是 <code>text/html</code>，被首部里的 <code>text/html;q=0.9</code> 精确命中，得 0.9；B 的 <code>application/json</code> 命中 <code>application/json;q=1.0</code>，得 1.0；C 的 <code>text/plain</code> 命中 <code>text/plain;q=0.6</code>，得 0.6。本例四种类型都被精确列出，所以用不上 <code>*/*;q=0.1</code> 这个兜底项——它只在没有任何更具体匹配时才生效。</p>
+
+    <p><strong>第二步：求自然语言维度。</strong>到 <code>Accept-Language</code> 里按同样的「最具体优先」规则查：<code>zh-CN</code> 被第一项 <code>zh-CN</code>（无 q，默认 1.0）精确命中，得 1.0；<code>en</code> 命中 <code>en;q=0.5</code>，得 0.5。首部里的 <code>zh;q=0.8</code> 用于表示语言标成 <code>zh</code>（不带地区）的场合，本例四种表示都不是纯 <code>zh</code>，故暂时用不上。</p>
+
+    <p><strong>第三步：求内容编码维度。</strong>到 <code>Accept-Encoding</code> 里查：<code>br</code> 得 1.0，<code>gzip</code> 得 0.7，<code>identity</code> 得 0.2。这里要点出两个规则：<code>identity</code>（不压缩）即使不写也默认可接受，但优先级最低，本例显式给了 0.2；末尾的 <code>*;q=0</code> 表示「没列出来的编码一律不要」，它把 <code>deflate</code> 之类的编码排除掉，但不会影响已经显式列出的三项。</p>
+
+    <p><strong>第四步：合成综合分并排序。</strong>规范没有定义跨维度怎么合成，这里采用教学用的一种直观做法——把三个维度的 q 相乘，作为「这份表示有多符合要求」的分数：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>表示</th><th>媒体类型 q</th><th>语言 q</th><th>编码 q</th><th>综合分（相乘）</th><th>排序</th></tr>
+        <tr><td>A · HTML / 中文 / br</td><td>0.9</td><td>1.0</td><td>1.0</td><td>0.9 × 1.0 × 1.0 = <strong>0.900</strong></td><td>1（最优）</td></tr>
+        <tr><td>B · JSON / 英文 / gzip</td><td>1.0</td><td>0.5</td><td>0.7</td><td>1.0 × 0.5 × 0.7 = <strong>0.350</strong></td><td>2</td></tr>
+        <tr><td>D · HTML / 英文 / gzip</td><td>0.9</td><td>0.5</td><td>0.7</td><td>0.9 × 0.5 × 0.7 = <strong>0.315</strong></td><td>3</td></tr>
+        <tr><td>C · 纯文本 / 中文 / identity</td><td>0.6</td><td>1.0</td><td>0.2</td><td>0.6 × 1.0 × 0.2 = <strong>0.120</strong></td><td>4</td></tr>
+      </table>
+    </div>
+
+    <p><strong>第五步：选出最优表示并写出响应。</strong>分数最高的是 A（HTML + 中文 + Brotli 压缩），于是服务器返回它，并用 <code>Vary</code> 首部如实交代「我这次是按这三类首部挑的」：</p>
+
+    <div class="wire"><i>HTTP/1.1 200 OK</i>
+<i>Date:</i> Mon, 16 Nov 2026 00:30:00 GMT
+<i>Content-Type:</i> text/html; charset=utf-8
+<i>Content-Language:</i> zh-CN
+<i>Content-Encoding:</i> br
+<i>Vary:</i> Accept, Accept-Language, Accept-Encoding
+
+<em>（主体：经 Brotli 压缩后的字节）</em></div>
+    <div class="wire-cap">选中的表示 A：Content-Type 与 Content-Language 描述「这是什么表示」，Content-Encoding 说明主体被怎样压缩，Vary 告诉缓存下次要用哪些请求首部来匹配这一份表示。</div>
+
+    <p>请注意 B 的媒体类型 q 是全场最高的 1.0，却不是最优——因为它的语言与编码都只是次优。这正是内容协商的精髓：<strong>它是在多个维度上同时求满意，而不是挑单个维度的最高分</strong>。也正因如此，MDN 才说服务器的实现会越来越复杂，而把这份复杂性如实告诉缓存的 <code>Vary</code> 首部才格外重要（3.3 节专门推演）。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>把「一个 URL 返回不同内容」从玄学变成可判定的问题，只需两步：先承认 URL 命名的是资源而不是某一个文件，表示才是最返回的那一版；再看请求里的 <code>Accept-*</code> + q 值如何给每个候选打分。选择权默认在服务器手里（服务器驱动），但偏好是客户端声明的——这是一场有规则的对话，不是服务器随心所欲。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>「q 值越高表示越重要，可以跨首部比较」——错。q 只描述<strong>同一个首部内部</strong>各项的相对优先级：<code>Accept</code> 里的 1.0 和 <code>Accept-Language</code> 里的 1.0 不在同一把尺子上，谁先谁后由服务器的算法决定，规范没规定。另一个误区是把 <code>q=0</code> 当成「优先级最低」：它真正的意思是「不可接受」，等价于明确拒绝该表示。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front"><div class="q-tag">回忆 3.1-1</div><div class="q-text">资源与表示是什么关系？为什么一个 URL 能返回多种内容？</div><span class="tap">点击翻面 →</span></div>
+            <div class="flip-face flip-back"><div class="a-tag">参考答案</div>URL 命名的是资源，表示是某次响应实际返回的字节及类型；一个资源有多种表示且共享同一 URL，内容协商从中选一种返回。所以「URL 唯一对应一个文件」是错的。</div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front"><div class="q-tag">回忆 3.1-2</div><div class="q-text">说出三种内容协商方式各自「谁做选择」，以及标准方式是哪种。</div><span class="tap">点击翻面 →</span></div>
+            <div class="flip-face flip-back"><div class="a-tag">参考答案</div>服务器驱动：服务器按 Accept-* 首部选（标准、最常用）；代理驱动：服务器返回 300/406/415 与可选链接，由用户或脚本再选（备选、多一次请求）；透明协商：靠 Alternates 等让缓存代选，提案已被遗弃。</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 3.2 ============ -->
+    <h2><span class="sec-no">3.2</span>压缩之后还要分块：内容编码与传输编码各管一层</h2>
+
+    <p>上一节选出了表示 A，它的响应里带着 <code>Content-Encoding: br</code>——主体被 Brotli 压缩过。这一节要回答紧接着的问题：<strong>压缩后的字节怎么变成线上的块？</strong>MDN《数据压缩》把压缩分成三个层面，理解它们的分层是分清「内容编码」与「传输编码」的钥匙。</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>层面</th><th>作用在什么上</th><th>典型技术</th><th>谁能解开</th></tr>
+        <tr><td>文件格式压缩</td><td>文件自身的冗余</td><td>无损的 PNG、GIF；有损的 JPEG、网络视频</td><td>解码该格式的应用程序</td></tr>
+        <tr><td><span class="term">端到端压缩</span>（end-to-end compression）</td><td>响应主体，在源站压缩后保持不变直到客户端</td><td><code>gzip</code>、<code>br</code>（Brotli）</td><td>最终客户端</td></tr>
+        <tr><td><span class="term">逐跳压缩</span>（hop-by-hop compression）</td><td>任意两个相邻节点之间传递的消息主体</td><td><code>TE</code> 与 <code>Transfer-Encoding</code>，常见为分块</td><td>每一跳的节点，解后可再重新编码</td></tr>
+      </table>
+    </div>
+
+    <p>先看端到端这一层。MDN 说，对文本内容做端到端压缩是提升网站性能最重要的方法之一，某些文件能压掉高达 70% 的体积；如今真正主流的算法只有两个——<code>gzip</code> 应用最广，<code>br</code>（Brotli）是新的挑战者。它是怎么协商出来的？正是上一节的 <code>Accept-Encoding</code> / <code>Content-Encoding</code> 主动协商：浏览器用 <code>Accept-Encoding</code> 报上会哪些算法及优先级，服务器选一种压缩主体，再用 <code>Content-Encoding</code> 声明选了哪种。</p>
+
+    <p>这里要先破一个常见误区：<strong>已经压缩过的文件（图片、音频、视频）不要再压一遍</strong>。MDN 明确提醒，对这些格式二次压缩往往适得其反——压缩算法要用字典，字典大小会计入文件，额外开销可能超过压缩收益，结果文件反而变大。所以压缩策略的正确姿势是「压文本，跳过已压缩的二进制」。</p>
+
+    <p>接着看逐跳这一层，它和端到端层有<strong>本质区别</strong>：逐跳压缩不是对源站资源压出一个特定表示，而是对相邻两节点之间传递的消息主体做处理，相邻连接上可以用<strong>不同</strong>的处理方式。它用 <code>TE</code> 首部宣告意愿、用 <code>Transfer-Encoding</code> 首部声明所选方式。在实际中，逐跳压缩对服务器和客户端几乎不可见，也很少配置；<code>Transfer-Encoding</code> 最常见的用途其实是<span class="term">分块编码</span>（chunked transfer coding）——让服务器在还不知道资源总长度时就能开始传输。下面把两个编码维度并列讲清楚：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>对比项</th><th>内容编码（Content-Encoding）</th><th>传输编码（Transfer-Encoding）</th></tr>
+        <tr><td>声明首部</td><td>响应首部 <code>Content-Encoding</code></td><td>响应首部 <code>Transfer-Encoding</code></td></tr>
+        <tr><td>作用对象</td><td>资源主体（表示本身）</td><td>报文主体（这一跳的承载形式）</td></tr>
+        <tr><td>作用范围</td><td>端到端，中间节点不得改变</td><td>逐跳，每跳可解开再重新编码</td></tr>
+        <tr><td>协商首部</td><td><code>Accept-Encoding</code></td><td><code>TE</code></td></tr>
+        <tr><td>典型取值</td><td><code>gzip</code>、<code>br</code>、<code>deflate</code>、<code>identity</code></td><td><code>chunked</code></td></tr>
+        <tr><td>是否改变资源语义</td><td>改变表示的编码形式，但不改变是哪份资源</td><td>完全不改变资源，只改变传输承载</td></tr>
+      </table>
+    </div>
+
+    <p>现在做第二个完整例子：<strong>内容编码 gzip 与传输编码 chunked 叠加</strong>。设想服务器要返回一段 HTML，它先用 gzip 压缩主体（内容编码），压缩后的字节长度事先不确定，于是再用 chunked 把压缩字节切成块发送（传输编码）。完整响应报文如下：</p>
+
+    <div class="wire"><i>HTTP/1.1 200 OK</i>
+<i>Date:</i> Mon, 16 Nov 2026 00:31:00 GMT
+<i>Content-Type:</i> text/html; charset=utf-8
+<i>Content-Encoding:</i> gzip
+<i>Transfer-Encoding:</i> chunked
+<i>Vary:</i> Accept-Encoding
+
+<em>1A3F (\r\n)</em>
+<em>[gzip 字节流的第 1 块，十六进制长度 1A3F = 6719 字节]</em>
+<em>(\r\n)</em>
+<em>0C80 (\r\n)</em>
+<em>[gzip 字节流的第 2 块，十六进制长度 0C80 = 3200 字节]</em>
+<em>(\r\n)</em>
+<em>0 (\r\n)</em>
+<em>(\r\n 末尾空行：最后块长度为 0，之后是空的尾部首部)</em></div>
+    <div class="wire-cap">gzip 与 chunked 叠加的响应：Content-Encoding: gzip 说「主体是 gzip 压缩后的表示」，Transfer-Encoding: chunked 说「这一段连接上按块传输」。每块以十六进制长度开头，后跟 CRLF、数据、CRLF；长度为 0 的块表示结束。注意这里没有 Content-Length。</div>
+
+    <p>这份报文有两个必须讲清的细节。第一，<strong>报文里没有 <code>Content-Length</code></strong>：一旦使用 <code>Transfer-Encoding: chunked</code>，就不再用 Content-Length 定界，块长自己就是边界（两层首部同时出现是错误配置，且传输编码的优先级高于内容长度）。第二，块长是<strong>十六进制</strong>的：<code>1A3F</code> 等于十进制 6719，<code>0C80</code> 等于 3200，所以压缩后的主体一共 9919 字节；最后一块长度为 0，表示数据结束。</p>
+
+    <p>最关键的是<strong>编码与解码的顺序正好镜像</strong>。把它写成链子最清楚：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>阶段</th><th>操作</th><th>这一层由谁负责</th><th>处理后的数据形态</th></tr>
+        <tr><td>发送端 ①</td><td>生成原始 HTML 主体</td><td>服务器应用</td><td>未压缩的 HTML 字节</td></tr>
+        <tr><td>发送端 ②</td><td>内容编码：gzip 压缩</td><td>服务器压缩模块</td><td>gzip 字节流（端到端表示）</td></tr>
+        <tr><td>发送端 ③</td><td>传输编码：切成 chunked 块</td><td>服务器 / 连接的传输层</td><td>带块长前缀的块序列</td></tr>
+        <tr><td>中间节点</td><td>按块收、去块 framing、可再重新分块</td><td>代理 / 缓存</td><td>gzip 字节流保持不变</td></tr>
+        <tr><td>接收端 ①</td><td>传输解码：去掉块长与 CRLF，拼回字节流</td><td>客户端协议栈</td><td>gzip 字节流</td></tr>
+        <tr><td>接收端 ②</td><td>内容解码：gzip 解压</td><td>客户端渲染/解析层</td><td>原始 HTML 字节</td></tr>
+      </table>
+    </div>
+
+    <p>为什么必须「先去块、再解压」？因为传输编码是<strong>最外层</strong>的包装：chunked 的块长前缀是加在 gzip 字节流外面的，你不可能在还没把块拼回连续字节流之前就对它做 gzip 解压——数据在块与块之间被 CRLF 打断，根本不是一段连续的 gzip 流。反过来，发送端必然是「先压缩、后分块」：先得到完整的 gzip 字节，才能把它切块。于是形成一条规律：<strong>发送端从里向外包，接收端从外向里拆</strong>；内容编码是里层（端到端），传输编码是外层（逐跳）。中间代理只动外层，绝不会帮你解压 gzip——这也是为什么内容编码能端到端保持不变。</p>
+
+    <div class="box insight">
+      <span class="box-tag">✅ 判定规则</span>
+      <p>看到 <code>Content-Encoding: gzip</code> 与 <code>Transfer-Encoding: chunked</code> 同时出现，不要以为是冲突：前者描述「这份表示被怎样压缩」，后者描述「这段连接怎样分块传」。排查传输问题时，先按块 framing 还原出字节流（传输层职责），再按 Content-Encoding 解压（表示层职责）。抓包里分块边界对不上，去查 chunked；解压失败，去查 Content-Encoding——两者是不同故障域。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>「压缩就是压缩，gzip 和 chunked 是一回事」——错。gzip 是内容编码，改变表示的字节，中间节点不得插手；chunked 是传输编码，只负责定界，每一跳都可以重新编码。另一个高频错误是让 <code>Content-Length</code> 与 <code>Transfer-Encoding: chunked</code> 同时出现：前者说「主体就这么长」，后者说「长度未知、按块结束」，自相矛盾，属于应当避免的报文。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front"><div class="q-tag">回忆 3.2-1</div><div class="q-text">内容编码与传输编码各作用于什么？为什么说一个端到端、一个逐跳？</div><span class="tap">点击翻面 →</span></div>
+            <div class="flip-face flip-back"><div class="a-tag">参考答案</div>内容编码作用于资源主体，是表示的一部分，中间节点不得改变，最终客户端解开；传输编码作用于这一跳的报文主体，每跳可解开再重编。前者用 Accept-Encoding/Content-Encoding 协商，后者用 TE/Transfer-Encoding。</div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front"><div class="q-tag">回忆 3.2-2</div><div class="q-text">gzip + chunked 时，发送端与接收端各自的处理顺序是什么？为什么？</div><span class="tap">点击翻面 →</span></div>
+            <div class="flip-face flip-back"><div class="a-tag">参考答案</div>发送端先 gzip 压缩再分块（从里向外包）；接收端先去块 framing 拼回字节流再 gzip 解压（从外向里拆）。因为块长前缀加在 gzip 字节外，未拼回连续字节流前无法解压；且用了 chunked 就不能再写 Content-Length。</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 3.3 ============ -->
+    <h2><span class="sec-no">3.3</span>Vary 一漏，缓存就串味：让缓存键记住「按什么挑的」</h2>
+
+    <p>前两节解决了「服务器怎么挑表示」和「挑完怎么压缩、怎么传」。但一旦引入缓存，就会出现一个新问题：<strong>缓存拿到的是某一种表示，下一个要同一 URL 的客户端未必想要这一种</strong>。MDN 在《内容协商》和《客户端提示》里都强调，答案就是 <span class="term">Vary</span> 首部——它是服务器在响应里发出的，用来如实列出「我在服务端驱动协商时到底参考了哪些请求首部」。</p>
+
+    <p>把 Vary 的作用一句话说清：它把这些请求首部变成<strong>缓存键</strong>的一部分。所谓<span class="term">缓存键</span>（cache key），是缓存用来区分「这是不是同一份可复用副本」的判据。没有 Vary 时，缓存往往只用 URL（加上方法）当键；有了 <code>Vary: Accept-Encoding</code>，键就变成「URL + 该请求的 Accept-Encoding 值」。MDN 的原话是：Vary 是必要的，它把决策规范告知缓存，让缓存能复现这个选择，既发挥作用、又保证给用户正确的内容。</p>
+
+    <p>下面做第三个完整推演：<strong>Vary 参与缓存键的五个步骤</strong>。假设缓存里还没有副本，两个客户端先后请求同一个 <code>/page</code>，A 支持 Brotli，B 只支持 gzip：</p>
+
+    <div class="wire"><b>GET /page HTTP/1.1</b>
+<b>Host:</b> example.com
+<b>Accept-Encoding:</b> br, gzip
+
+<i>HTTP/1.1 200 OK</i>
+<i>Content-Encoding:</i> br
+<i>Vary:</i> Accept-Encoding
+<i>Cache-Control:</i> max-age=3600</div>
+    <div class="wire-cap">客户端 A 的请求与响应：服务器选中 br，并用 Vary: Accept-Encoding 声明这个选择依赖请求里的 Accept-Encoding。</div>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>步骤</th><th>发生了什么</th><th>缓存键 / 结果</th></tr>
+        <tr><td>① A 请求到达</td><td>带 <code>Accept-Encoding: br, gzip</code>，缓存里无副本</td><td>未命中，转发给源站</td></tr>
+        <tr><td>② 源站返回</td><td>选中 br，响应带 <code>Content-Encoding: br</code> 与 <code>Vary: Accept-Encoding</code></td><td>缓存读出 Vary，知道键要含 Accept-Encoding</td></tr>
+        <tr><td>③ 缓存存副本</td><td>按「URL + Vary 首部的当前值」登记</td><td>键 =（<code>/page</code>, Accept-Encoding: br, gzip）→ 存 br 表示</td></tr>
+        <tr><td>④ B 请求到达</td><td>带 <code>Accept-Encoding: gzip</code></td><td>算出键 =（<code>/page</code>, Accept-Encoding: gzip），与上一条不同 → 未命中</td></tr>
+        <tr><td>⑤ 各取所需</td><td>B 的请求转发源站，得到 gzip 表示并按自己的键存下</td><td>A 命中 br 副本，B 命中 gzip 副本，互不串味</td></tr>
+      </table>
+    </div>
+
+    <p>现在把 <code>Vary</code> 抹掉，看故障链怎么一步步发生。这里特意用一个更严重的场景：源站给 A 返回的是 br 表示，但<strong>忘了写 Vary</strong>；随后一个只认 <code>identity</code>（不压缩）的客户端 C 来要同一 URL：</p>
+
+    <div class="wire"><b>GET /page HTTP/1.1</b>
+<b>Host:</b> example.com
+<b>Accept-Encoding:</b> identity
+
+<i>HTTP/1.1 200 OK</i>
+<i>Content-Encoding:</i> br
+<i>Cache-Control:</i> max-age=3600
+
+<em>（注意：这份响应的 Vary 首部缺失）</em></div>
+    <div class="wire-cap">客户端 C 只声明接受 identity，却从缓存拿到一份 Content-Encoding: br 的响应——因为它对不上「该用哪一版」。</div>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>故障步骤</th><th>发生了什么</th><th>后果</th></tr>
+        <tr><td>① 源站出错</td><td>给 A 返回 br 表示，响应里没有 Vary</td><td>缓存不知道这个表示依赖 Accept-Encoding</td></tr>
+        <tr><td>② 缓存按 URL 存</td><td>键只有（<code>/page</code>），没有编码维度</td><td>br 表示被登记成「这个 URL 的唯一答案」</td></tr>
+        <tr><td>③ C 请求到达</td><td><code>Accept-Encoding: identity</code>，明说不会解 br</td><td>缓存算出键 =（<code>/page</code>），命中那一份 br 副本</td></tr>
+        <tr><td>④ 错发给 C</td><td>缓存把 br 字节流发给一个不认识 br 的客户端</td><td>C 无法解压，页面乱码或直接报错</td></tr>
+        <tr><td>⑤ 污染持续</td><td>这份错误副本在 max-age 内一直被命中</td><td>所有来要 <code>/page</code> 且不接受 br 的用户都中招，直到过期</td></tr>
+      </table>
+    </div>
+
+    <p>这条故障链说明：<strong>Vary 漏写不是「少一个首部」的小事，而是会把只适配某类客户端的表示错发给另一类客户端</strong>。MDN 还提醒，Vary 有个特殊值 <code>*</code>，意思是「选择时还用到了没有通过首部传递的信息」（比如根据客户端 IP 或时间做的判断）。<code>Vary: *</code> 等于告诉缓存「你没法复现我的决策」，因此缓存基本无法利用这份响应——它是一个「别缓存我」的强信号。</p>
+
+    <p>客户端提示也遵循同一条规矩。MDN 举例：如果服务器用 <code>Width</code>、<code>ECT</code> 这类提示决定发哪张图，就应在响应里写 <code>Vary: Accept, Width, ECT</code>，让提示的每个不同取值各自缓存一份。但对取值变化很大的网络提示（如 <code>Downlink</code>、<code>RTT</code>），MDN 反而建议<strong>不要</strong>把它们放进 Vary——否则每个唯一值都生成一条缓存条目，资源等于无法有效缓存。这是一处需要拿捏的权衡：Vary 要精确到「足以区分表示」，又不能细到「让缓存永远命中不了」。</p>
+
+    <div class="box insight">
+      <span class="box-tag">✅ 判定规则</span>
+      <p>判断是否要写 Vary，问一句：「同一个 URL，服务器会依据请求里的哪些首部改回答？」把那些首部名逐个写进 Vary。凡是参与内容协商的请求首部（<code>Accept</code>、<code>Accept-Language</code>、<code>Accept-Encoding</code>、客户端提示等），都应出现在响应的 Vary 里。写对了，缓存按维度分副本；写漏了，就会发生本节的错发事故。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>「Vary 是请求首部，客户端用它声明偏好」——错。Vary 是<strong>响应首部</strong>，由服务器发出，作用是向缓存描述「我刚才是按哪些请求首部做的选择」；声明偏好的是 <code>Accept-*</code> 那一族请求首部。另一个误区是把 Vary 当成可有可无的优化：只要响应内容会随请求首部变化，Vary 就是正确缓存的前提，漏写就是正确性缺陷。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front"><div class="q-tag">回忆 3.3-1</div><div class="q-text">Vary 是谁发的、做什么用？它和缓存键是什么关系？</div><span class="tap">点击翻面 →</span></div>
+            <div class="flip-face flip-back"><div class="a-tag">参考答案</div>Vary 是服务器发的响应首部，列出参与内容协商的请求首部。它把这些首部的当前值纳入缓存键：键从「URL」变成「URL + Vary 各首部的值」，从而让缓存为不同表示分别存副本，不串味。</div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front"><div class="q-tag">回忆 3.3-2</div><div class="q-text">漏写 Vary 会把 br 响应错发给只认 identity 的客户端，请说出故障链的关键三步。</div><span class="tap">点击翻面 →</span></div>
+            <div class="flip-face flip-back"><div class="a-tag">参考答案</div>① 源站返回 br 表示但不写 Vary，缓存只用 URL 当键存下它；② 只认 identity 的客户端请求同 URL，缓存按 URL 命中那份 br；③ 客户端不会解 br，页面乱码/报错，且错误副本在缓存有效期内持续污染后来者。</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 3.4 ============ -->
+    <h2><span class="sec-no">3.4</span>别问「你是谁」，要问「你能干什么」：从 UA 检测到客户端提示</h2>
+
+    <p>前三节的协商都基于客户端主动声明的首部，看起来很圆满。但还有一个老办法阴魂不散：服务器去解析 <span class="term">用户代理</span>（User-Agent，简称 UA）字符串，猜「这是 Chrome 还是 Safari、是手机还是电脑」，再据此发不同内容。MDN《使用用户代理字段进行浏览器检测》开篇就泼冷水：<strong>为不同浏览器提供不同网页通常是个坏主意</strong>，用 UA 检测看似简单，做好却非常困难；几乎总能找到更好、兼容性更广的办法。</p>
+
+    <p>先弄清 UA 字符串为什么不可靠。MDN 说它由空格分隔的<span class="term">产品标记符</span>与<span class="term">注释</span>组成：产品标记符形如 <code>Firefox/4.0.1</code>（产品名加斜杠加版本），注释是括号括起来的自由文本，内部常用分号分隔标记。问题就出在这套格式缺乏统一性，且<strong>浏览器会说谎</strong>：</p>
+
+    <div class="wire"><b>User-Agent:</b> Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36
+
+<em>一个 Chrome 的 UA：里面同时含 Chrome 与 Safari，还含 AppleWebKit 与 "like Gecko"。</em></div>
+    <div class="wire-cap">MDN 指出的典型困境：Chrome 的 UA 里既有 Chrome 又有 Safari，WebKit 浏览器又写着「like Gecko」。想检测 Safari，你得检测「有 Safari 且没有 Chrome」——全是排除法。</div>
+
+    <p>这条 UA 至少藏了四个陷阱：其一，<strong>互相劫持标记</strong>——Chrome 曾劫持 Safari 的字符串，Chromium 常自称 Chrome，SeaMonkey 有时自称 Firefox，单看「包含某字符串」会误判；其二，<strong>不能只靠浏览器名判断能力</strong>，MDN 说人们嘴上的「浏览器检测」往往其实想要「渲染引擎检测」（Gecko、WebKit、Blink、Trident、Presto），而引擎标记同样会被塞进 UA 制造假阳性（WebKit 的「like Gecko」就是典型）；其三，<strong>不能用操作系统标记判断设备类型</strong>，Android 既跑手机也跑平板，MDN 建议真要找移动端就在 UA 里找 <code>Mobi</code>，但仍不完美；其四，UA 可被客户端任意伪造，且现代浏览器出于隐私考量在<strong>冻结/精简 UA</strong>，版本号信息越来越不可靠。结论：靠解析这个字符串做能力判断，是在跟一堆历史包袱博弈。</p>
+
+    <p>那该怎么做？MDN 给出三条正道，按推荐程度从高到低：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>策略</th><th>做法</th><th>适用 / 不适用</th></tr>
+        <tr><td><span class="term">特性检测</span>（feature detection）</td><td>不关心是哪种浏览器，直接检测需要的某个功能是否可用，不可用就走应变策略</td><td>首选；但不要用它推断「是哪种浏览器」——别的浏览器将来可能以不同方式实现该功能</td></tr>
+        <tr><td><span class="term">渐进增强</span>（progressive enhancement）</td><td>自底向上，从简单层次开始，逐层增加功能</td><td>推荐作为整体设计思路，配合特性检测</td></tr>
+        <tr><td><span class="term">优雅降级</span>（graceful degradation）</td><td>自顶向下，先做最好的站点，再让老浏览器勉强可用</td><td>较难、效率偏低，某些场景下有效</td></tr>
+        <tr><td>UA 检测</td><td>解析 User-Agent 字符串猜浏览器/版本</td><td>仅作最后手段，且尽量只用于修某个版本的特定 bug，不做能力判断</td></tr>
+      </table>
+    </div>
+
+    <p>如果是<strong>服务器</strong>需要在返回前就知道设备或网络能力（比如决定发哪张图），浏览器端脚本来不及，这时就用 MDN《客户端提示》给出的方案。<span class="term">客户端提示</span>（client hints）是一组请求首部，让服务器主动索取设备、网络、用户偏好等信息，再据此决定发什么。它的流程与前面一脉相承：服务器用响应首部 <code>Accept-CH</code> 声明「我想要这些提示」，客户端在<strong>后续请求</strong>里自愿带上相应首部。</p>
+
+    <div class="wire"><i>HTTP/1.1 200 OK</i>
+<i>Content-Type:</i> text/html
+<i>Accept-CH:</i> Width, Downlink, Sec-CH-UA
+<i>Vary:</i> Accept, Width, ECT</div>
+    <div class="wire-cap">服务器用 Accept-CH 声明感兴趣的提示（这里是 Width、Downlink、Sec-CH-UA）；它会随当前浏览器会话的后续请求生效，直到浏览器关闭或被新的 Accept-CH 列表替换。</div>
+
+    <p>客户端提示按隐私敏感度分为两类，这个划分很关键：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>类别</th><th>含义</th><th>是否需 Accept-CH 索取</th><th>代表首部</th></tr>
+        <tr><td><span class="term">低熵提示</span>（low-entropy hints）</td><td>泄露的指纹信息少，默认可能随每个请求发送</td><td>通常不需要</td><td><code>Sec-CH-UA</code>、<code>Sec-CH-UA-Mobile</code>、<code>Sec-CH-UA-Platform</code>、<code>Save-Data</code></td></tr>
+        <tr><td><span class="term">高熵提示</span>（high-entropy hints）</td><td>可能泄露较多指纹信息，由客户端决定是否提供</td><td>需要服务器用 Accept-CH 索取</td><td><code>Width</code>、<code>DPR</code>、<code>Device-Memory</code>、<code>Downlink</code>、<code>ECT</code>、<code>RTT</code></td></tr>
+      </table>
+    </div>
+
+    <p>按用途，提示又分成四族：<span class="term">用户代理提示</span>（如 <code>Sec-CH-UA</code>、<code>Sec-CH-UA-Platform</code>，替代解析 UA 字符串）、<span class="term">用户偏好媒体特性提示</span>（如 <code>Sec-CH-Prefers-Reduced-Motion</code>、<code>Sec-CH-Prefers-Color-Scheme</code>）、<span class="term">设备提示</span>（<code>Device-Memory</code>、<code>DPR</code>、<code>Width</code>、<code>Viewport-Width</code>）与<span class="term">网络提示</span>（<code>Save-Data</code>、<code>Downlink</code>、<code>ECT</code>、<code>RTT</code>）。其中「重要客户端提示」还有一个额外机制：像 <code>Sec-CH-Prefers-Reduced-Motion</code> 这种会显著改变渲染、必须在渲染前就应用的提示，服务器可用 <code>Critical-CH</code> 声明它很重要，客户端发现首个请求没带它就会<strong>自动重试请求并带上</strong>，避免先用错误偏好渲染一遍。</p>
+
+    <p>现在做第四个完整例子：<strong>三种判定方式的对照表</strong> + <strong>一条具体请求说明 Client Hints 如何按能力而非按浏览器选择</strong>。先看判定表：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>要解决的问题</th><th>UA 字符串检测</th><th>特性检测</th><th>客户端提示</th><th>推荐做法</th></tr>
+        <tr><td>浏览器是否支持某 API</td><td>猜版本，极易误判</td><td>直接探测能力，最准</td><td>不适用</td><td>特性检测</td></tr>
+        <tr><td>按屏幕宽度/DPR 选图</td><td>猜机型，不可靠</td><td>脚本晚一步</td><td><code>Width</code>、<code>DPR</code> 精确可用</td><td>Client Hints（或 <code>srcset</code>）</td></tr>
+        <tr><td>用户偏好减少动画</td><td>完全猜不到</td><td>脚本能查但太晚</td><td><code>Sec-CH-Prefers-Reduced-Motion</code></td><td>Client Hints + <code>Critical-CH</code></td></tr>
+        <tr><td>网络慢、想省流</td><td>猜不到</td><td>不适用</td><td><code>Save-Data</code>、<code>ECT</code>、<code>Downlink</code></td><td>Client Hints</td></tr>
+        <tr><td>修某浏览器某版本的特定 bug</td><td>唯一勉强合理处</td><td>未必可行</td><td>不针对 bug</td><td>UA 检测，仅限版本且尽快淘汰</td></tr>
+        <tr><td>区分手机与桌面</td><td>找 <code>Mobi</code>，有假阳性</td><td>不适用</td><td><code>Sec-CH-UA-Mobile</code> 更干净</td><td>响应式布局优先，其次 Client Hints</td></tr>
+      </table>
+    </div>
+
+    <p>再看具体请求。服务器先前已用 <code>Accept-CH: Width, DPR, Sec-CH-UA-Mobile</code> 声明过需求，客户端在第二轮请求里把提示带了回来：</p>
+
+    <div class="wire"><b>GET /hero.webp HTTP/1.1</b>
+<b>Host:</b> shop.example
+<b>Width:</b> 400
+<b>DPR:</b> 2
+<b>Sec-CH-UA-Mobile:</b> ?1
+
+<em>Width 是 CSS 像素下的资源宽度，DPR 是设备像素比，Sec-CH-UA-Mobile 的 ?1 表示「是移动设备」。</em></div>
+    <div class="wire-cap">客户端按上一轮的 Accept-CH 带回能力提示：没有一句「我是某品牌某浏览器」，只报出这次要展示的资源宽度与屏幕像素密度。</div>
+
+    <p>服务器拿到这条请求后，算一笔账就够了：资源在布局里占 400 CSS 像素，屏幕 DPR 是 2，所以需要约 <code>400 × 2 = 800</code> 物理像素的图片，于是从图库里挑出 800 像素宽的 WebP 返回，并在响应里带上相应 Vary（如 <code>Vary: Accept, Width, DPR</code>）让缓存分版本存。整个决策<strong>没有读取任何浏览器名称</strong>：换个品牌、换个浏览器，只要 Width 与 DPR 相同，选图结果就相同。这就是「按能力而非按浏览器」——服务器关心的是这台设备此刻能呈现多少像素，而不是它叫什么名字。相比之下，若用 UA 猜机型，同一台设备换个浏览器、或浏览器冻结了版本字符串，判断立刻失灵。</p>
+
+    <div class="box insight">
+      <span class="box-tag">✅ 判定规则</span>
+      <p>遇到「要不要针对某浏览器做特殊处理」时，按顺序自问：① 这是检测某个功能是否可用吗？是就用特性检测；② 这是服务器在响应前就需要知道的设备/网络信息吗？是就用客户端提示（Accept-CH 索取，低熵提示无需索取）；③ 真的只是为了修某个版本的特定 bug 吗？是才考虑 UA 检测，并尽快淘汰。三问下来，绝大多数「UA 检测需求」都会消解。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>「用特性检测就能判断这是不是 Safari」——MDN 明确反对：绝不要用特性检测来推断浏览器种类，因为别的浏览器以后可能以不同方式实现同一功能，这种推断造成的错误极难发现和修复。特性检测只回答「能不能用」，不回答「你是谁」。另一个误区是把所有客户端提示都塞进 Vary：<code>Downlink</code>、<code>RTT</code> 这类取值频繁变化的网络提示写进 Vary 会让缓存失效，反而不写或用别的策略。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front"><div class="q-tag">回忆 3.4-1</div><div class="q-text">说出 UA 检测不可靠的三条原因，以及 MDN 推荐的替代路径。</div><span class="tap">点击翻面 →</span></div>
+            <div class="flip-face flip-back"><div class="a-tag">参考答案</div>浏览器互相劫持标记（Chrome 含 Safari、Chromium 自称 Chrome）；「浏览器检测」其实常要「渲染引擎检测」而引擎标记也会被塞进 UA 造假；OS 标记无法判断设备类型且 UA 可被伪造/冻结。替代：特性检测 + 渐进增强/优雅降级，服务器侧用客户端提示，UA 检测只留作修特定版本 bug。</div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front"><div class="q-tag">回忆 3.4-2</div><div class="q-text">Accept-CH 与低熵/高熵提示各是什么关系？举例说明「按能力选择」。</div><span class="tap">点击翻面 →</span></div>
+            <div class="flip-face flip-back"><div class="a-tag">参考答案</div>服务器用响应首部 Accept-CH 索取提示，客户端在后续请求带回；低熵提示如 Sec-CH-UA 默认可能随请求发，高熵提示如 Width/DPR 需先索取。例：请求带 Width:400、DPR:2，服务器算 400×2=800 选 800 像素图，不看浏览器名，换浏览器同能力结果不变。</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 3.5 ============ -->
+    <h2><span class="sec-no">3.5</span>延伸：规范怎么写：从 Accept 到 Vary 的规范坐标</h2>
+
+    <p>前面四节都是 MDN 的工程口径——它按「你需要知道什么」组织，把算法的细节、首部的精确定义留在规范里。当需要判定边界行为（比如「identity 默认能不能用」「Vary 在缓存里到底怎么算键」「Client Hints 由哪份文档定义」）时，就得去看 IETF 的规范性文档。记住这套坐标：<strong>RFC 9110 定义与版本无关的语义，RFC 9111 定义缓存</strong>；内容协商、Accept 系列首部都在 RFC 9110 里，Vary 的缓存判据在 RFC 9111，而客户端提示的 HTTP 首部框架另立了一份 RFC 8942。下表把本讲的概念对到各自的规范位置：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>MDN 的说法</th><th>RFC 怎么写</th><th>为什么值得知道</th></tr>
+        <tr><td>内容协商为同一 URI 选一种表示，服务器驱动是标准方式</td><td>RFC 9110 §12 定义内容协商的总体框架，§12.1 区分资源与表示，并把「选哪种表示」建模为对候选表示的挑选</td><td>规范明确了「资源可以有多个表示」是协议层的事实，不是某服务器的特性；写 API 时才敢让同一 URL 返回多种类型</td></tr>
+        <tr><td>Accept / Accept-Language / Accept-Encoding 用 q 值表达偏好，q=0 表示不接受</td><td>RFC 9110 §12.4 精确定义质量值（0 到 1、最多三位小数、缺省为 1），§12.5.1 定义 Accept 的媒体范围匹配与通配符优先级</td><td>匹配「最具体者优先」是规范要求而非惯例；实现协商算法时要按它来定精确匹配、类型通配、全通配的优先次序</td></tr>
+        <tr><td>identity 默认优先级最低；Accept-Encoding 报上会哪些压缩算法</td><td>RFC 9110 §12.5.3 定义 Accept-Encoding，并规定 identity 编码总是可接受，除非被显式拒绝；Content-Encoding 定义在 §8.4</td><td>这解释了为什么客户端不写 identity 也不会「拒收不压缩」，以及为什么响应必须回一个 Content-Encoding 让客户端知道怎么解码</td></tr>
+        <tr><td>Vary 列出参与协商的请求首部，让缓存为不同表示分别存副本</td><td>RFC 9111 §4.1 规定缓存如何用 Vary 首部计算缓存键：只有当新请求的选定首部值与存储副本一致时，该副本才算匹配</td><td>把「Vary 参与缓存键」变成可判定的匹配规则；漏写 Vary 在规范层面就是「缓存用了不完整的键」，是正确性缺陷而非优化不足</td></tr>
+        <tr><td>Transfer-Encoding: chunked 在长度未知时按块传输，与 Content-Length 不同时用</td><td>RFC 9112 §6.1 定义传输编码，§7 定义 chunked 分块编码；规范规定 TE 优先于 Content-Length，二者同时出现应视为错误处理</td><td>抓包看到分块边界时知道该去 HTTP/1.1 的语法文档找规则，而不是到语义 RFC 里翻；也明白为何不能两个定界方式都写</td></tr>
+        <tr><td>客户端提示让服务器用 Accept-CH 按需索取设备与网络信息</td><td>RFC 8942 定义 Accept-CH 与客户端提示的 HTTP 首部框架；低熵/高熵与 Critical-CH 的细化由相关 WICG 规范与 MDN 汇总</td><td>知道该去哪类文档查「哪些提示需要索取、哪些默认可发」；理解提示是隐私权衡的产物，不能像老 UA 那样无条件全量上报</td></tr>
+      </table>
+    </div>
+
+    <p>这张表要传达的核心判断是：<strong>MDN 告诉你「怎么做」，RFC 告诉你「什么算对」</strong>。MDN 说「通常」「建议」的地方，一旦你要实现客户端、写服务器或判定某个边界，就要到 RFC 里找 MUST / SHOULD / MAY 的规范性措辞——这三个词在规范里有严格区别，不能当成同义词。比如「identity 默认可接受」「q 值最多三位小数」「Vary 不匹配就不能命中缓存」，都是可判定对错的规范结论。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>RFC 9110 系列把「语义」与「线上格式」彻底分开，这一点在本讲体现得很清楚：Accept、q 值、Vary 的<strong>含义</strong>写在 RFC 9110 / 9111（与 HTTP 版本无关），而 chunked 的<strong>字节格式</strong>写在 RFC 9112（HTTP/1.1 专用）。所以同一个 <code>Vary</code> 首部在 HTTP/1.1、/2、/3 里含义一致，只是编码成字节的方式不同；理解这个二分，就不会把版本差异错当成语义差异。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>别引用已被取代的旧 RFC 编号来讨论这些概念。内容协商与首部语义的现行规范是 RFC 9110 系列（2022 年发布），它取代了 RFC 7230–7235；缓存看 RFC 9111。网上大量旧文章仍引用 RFC 2616 或 7231 的章节号，措辞可能仍可读，但编号不再是现行口径。要确认，先看 httpwg.org/specs 的现行列表再读具体章节。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front"><div class="q-tag">回忆 3.5-1</div><div class="q-text">内容协商、Accept、Vary、客户端提示分别对应哪份 RFC？语义与线上格式为什么分开？</div><span class="tap">点击翻面 →</span></div>
+            <div class="flip-face flip-back"><div class="a-tag">参考答案</div>内容协商与 Accept 系列见 RFC 9110（§12 系列），Vary 的缓存判据见 RFC 9111 §4.1，客户端提示的 HTTP 框架见 RFC 8942，chunked 格式见 RFC 9112。语义与格式分开，使同一首部含义跨 HTTP 版本一致，升级传输不必重写语义。</div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front"><div class="q-tag">回忆 3.5-2</div><div class="q-text">为什么说「Vary 漏写是正确性缺陷而非优化不足」？用规范口径回答。</div><span class="tap">点击翻面 →</span></div>
+            <div class="flip-face flip-back"><div class="a-tag">参考答案</div>按 RFC 9111，缓存只有在请求的选定首部值与存储副本一致时才能命中；漏写 Vary 意味着缓存用了不完整的键，会把某类客户端的表示发给另一类，违反「命中必须与请求匹配」的规范要求，故属正确性缺陷。</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===== 概念卡 ===== -->
+    <h2><span class="sec-no">🃏</span>概念卡：本讲概念的一分钟画像</h2>
+    <p>翻面前先自问：这个概念我能用一句话讲清楚吗？</p>
+    <div class="flip-grid">
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front"><div class="q-tag">概念卡 1</div><div class="q-text">内容协商（Content Negotiation）</div><span class="tap">点击翻面 →</span></div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">为同一 URI 的资源，依据请求首部从多个表示中选出一种返回给客户端的机制。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">同一资源要同时服务不同语言、格式、编码的客户端，而 URL 只有一个。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">同一道菜，按客人忌口端出不同摆盘，但都算同一份订单。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为一个 URL 只能对应一个文件；URL 命名资源，表示才是具体那版字节。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">服务多语言站点、多格式 API、按设备选图；配合 Vary 让缓存正确工作。</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front"><div class="q-tag">概念卡 2</div><div class="q-text">质量因子 / q 值（Quality Factor）</div><span class="tap">点击翻面 →</span></div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">Accept-* 首部里表达相对优先级的数值，范围 0 到 1，缺省为 1，q=0 表示不可接受。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">让客户端一次性声明「最想要什么、其次要什么、坚决不要什么」。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">像点单时给每个选项打 0 到 1 的满意度分数，0 分直接划掉。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">把 q 当成跨首部可比的全局权重；它只在同一个首部内部有意义。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">手算候选表示择优（本讲例①）；匹配时精确项优先于通配符项。</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front"><div class="q-tag">概念卡 3</div><div class="q-text">内容编码（Content-Encoding）</div><span class="tap">点击翻面 →</span></div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">作用于资源主体的端到端压缩方式，由 Content-Encoding 声明，如 gzip、br。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">大幅减少文本类表示的传输字节，中间节点无需也不能改变压缩结果。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">把行李真空压缩打包，全程保持压缩态，到目的地才拆封。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">对已压缩的图片、视频再压一遍；字典开销可能让文件反而变大。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">用 Accept-Encoding 协商、Content-Encoding 声明；跳过已压缩的二进制。</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front"><div class="q-tag">概念卡 4</div><div class="q-text">传输编码与分块（Transfer-Encoding / chunked）</div><span class="tap">点击翻面 →</span></div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">作用于这一跳报文主体的编码，chunked 用十六进制块长分段，长度未知也能开传。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">在拿不到 Content-Length 时仍能定界主体，并让每跳可独立处理承载。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">一车货分成编号箱子逐个发，每箱先报件数，最后一箱报零表示发完。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">把 chunked 和 gzip 混为一谈，或让 chunked 与 Content-Length 同时出现。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">动态生成内容、流式响应；解码顺序是从外向内：先去块再解压。</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front"><div class="q-tag">概念卡 5</div><div class="q-text">Vary 与缓存键（Vary / Cache Key）</div><span class="tap">点击翻面 →</span></div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">服务器用 Vary 响应首部列出参与协商的请求首部，它们的值成为缓存键的一部分。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">防止缓存把一种表示发给要另一种表示的客户端。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">给每种口味的副本贴标签，取货时按标签找，不拿错。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为 Vary 是请求首部或可有可无的优化；漏写会导致错发，是正确性缺陷。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">凡响应随 Accept-* 或客户端提示变化就写；Vary: * 等于放弃缓存。</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front"><div class="q-tag">概念卡 6</div><div class="q-text">客户端提示（Client Hints）</div><span class="tap">点击翻面 →</span></div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">一组请求首部，服务器用 Accept-CH 索取设备/网络/偏好信息，客户端在后续请求自愿带回。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">让服务器在响应前就知道设备能力，取代不可靠的 UA 字符串解析。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">先问客人需要多大杯子，再倒水；而不是查他身份证猜他能喝多少。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">把所有提示都塞进 Vary；Downlink/RTT 这类高变化值会让缓存失效。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">按 Width/DPR 选图、按 Save-Data 省流、按减少动画偏好渲染；低熵提示无需索取。</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front"><div class="q-tag">概念卡 7</div><div class="q-text">特性检测与 UA 检测（Feature / UA Detection）</div><span class="tap">点击翻面 →</span></div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">特性检测直接探测功能能否用；UA 检测靠解析 User-Agent 字符串猜浏览器与版本。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">解决「针对谁做兼容」：前者回答能不能用，后者想回答你是谁（且常答错）。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">考实际操作看会不会，而不是看简历上的学校名字。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">用特性检测推断浏览器种类，或以为 UA 字符串稳定可信；MDN 明确反对二者。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">首选特性检测 + 渐进增强；服务器侧用客户端提示；UA 检测仅限修特定版本 bug。</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===== 分层习题 ===== -->
+    <h2><span class="sec-no">✍️</span>分层习题：先自己写，再点开核对</h2>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>判断下列说法的正误并说明理由：①「一个 URL 只能对应一份表示，返回 HTML 又返回 JSON 说明配置错了」；②「q=0 是最低优先级，服务器实在没得选时还会用它」；③「Vary 是客户端发来的请求首部，用来告诉服务器我接受哪些编码」。</div>
+      <details><summary>提示</summary><p>逐句找出被混淆的那对概念：资源 vs 表示、q=0 vs 低优先级、Vary vs Accept-Encoding。</p></details>
+      <details><summary>完整解答</summary><div class="ex-answer">① 错。URL 命名的是资源，表示是某次响应的具体字节与类型，一个资源可有多种表示并共享同一 URL，内容协商负责选一种。② 错。q=0 表示<strong>不可接受</strong>，是明确拒绝，服务器不应返回该表示；「优先级最低」的是没写 q 的项（默认为 1）或被通配兜底的项，二者含义完全不同。③ 错。Vary 是<strong>响应首部</strong>，由服务器发出，作用是把参与协商的请求首部纳入缓存键；声明「我接受哪些编码」的是客户端请求首部 Accept-Encoding。三句分别混淆了资源/表示、q=0/低优先级、Vary/Accept-Encoding。</div></details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>有人说：「gzip 和 chunked 都是压缩，作用一样，只是名字不同。」请从作用对象、作用范围、协商首部、能否被中间节点改变四个角度逐条驳斥，并说明为什么二者同时使用时要「先去块、再解压」。</div>
+      <details><summary>提示</summary><p>回到 3.2 的对比表和「发送端从里向外包、接收端从外向里拆」那条规律。</p></details>
+      <details><summary>完整解答</summary><div class="ex-answer">① 作用对象：gzip 作用于资源主体（表示本身），chunked 作用于这一跳的报文主体（承载形式）。② 作用范围：gzip 是端到端的，中间节点不得改变；chunked 是逐跳的，每跳可解开并重新分块。③ 协商首部：gzip 用 Accept-Encoding / Content-Encoding，chunked 用 TE / Transfer-Encoding。④ 中间节点：不会帮你解压 gzip（那是端到端的），但会处理 chunked 的 framing。之所以「先去块、再解压」，是因为块长前缀与 CRLF 加在 gzip 字节流外面；未把块拼回连续字节流之前，数据被分隔打断，根本不是一段完整的 gzip 流，无法解压。发送端顺序正好相反：先压缩得到 gzip 字节，再切块。</div></details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>客户端请求 <code>GET /data HTTP/1.1</code>，首部为：<code>Accept: application/json;q=0.9, text/html;q=0.7, text/plain;q=0.4</code>；<code>Accept-Language: fr;q=0.8, en;q=0.5</code>；<code>Accept-Encoding: gzip;q=1.0, identity;q=0.1</code>。服务器有四种表示：A（JSON/英文/gzip）、B（JSON/法文/identity）、C（HTML/法文/gzip）、D（text/plain/英文/gzip）。按本讲的「各维度 q 相乘」法，逐项算出综合分、排序，并指出最优表示及其响应应带的三个描述首部（类型、语言、编码）。</div>
+      <details><summary>提示</summary><p>分三步分别求每个维度的 q，再做乘法。注意没写 q 的项默认是 1，本题三项都显式写了，直接用给定值。</p></details>
+      <details><summary>完整解答</summary><div class="ex-answer">第一步，媒体类型维度：application/json 命中 q=0.9，text/html 命中 q=0.7，text/plain 命中 q=0.4。第二步，语言维度：英文 en 命中 q=0.5，法文 fr 命中 q=0.8。第三步，编码维度：gzip 命中 q=1.0，identity 命中 q=0.1。<br><br>逐项综合分：A（JSON/英/gzip）= 0.9 × 0.5 × 1.0 = <strong>0.450</strong>；B（JSON/法/identity）= 0.9 × 0.8 × 0.1 = <strong>0.072</strong>；C（HTML/法/gzip）= 0.7 × 0.8 × 1.0 = <strong>0.560</strong>；D（text/plain/英/gzip）= 0.4 × 0.5 × 1.0 = <strong>0.200</strong>。<br><br>排序：C(0.560) &gt; A(0.450) &gt; D(0.200) &gt; B(0.072)。最优表示是 <strong>C（HTML + 法文 + gzip）</strong>：虽然它的媒体类型 q（0.7）低于 JSON，但语言与编码两项都是高分，综合胜出——这正说明协商是多维度求满意，不是单看最高 q。响应应带 <code>Content-Type: text/html</code>、<code>Content-Language: fr</code>、<code>Content-Encoding: gzip</code>，并用 <code>Vary: Accept, Accept-Language, Accept-Encoding</code> 告知缓存。</div></details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>缓存里已有一份 <code>/style.css</code> 的副本，来自请求 <code>Accept-Encoding: gzip</code>，源站响应为 <code>Content-Encoding: gzip</code> + <code>Vary: Accept-Encoding</code> + <code>Cache-Control: max-age=600</code>。现在依次来了三个请求：① <code>Accept-Encoding: gzip</code>；② <code>Accept-Encoding: br, gzip</code>；③ <code>Accept-Encoding: identity</code>。请分别判断能否命中这份副本，并写出每个请求的缓存键；再回答：如果源站当初漏写了 Vary，三个请求的结果各自变成什么？</div>
+      <details><summary>提示</summary><p>缓存键 =（URL, Vary 列出首部的当前值）。只有当新请求的值与存储副本登记的值一致才命中。</p></details>
+      <details><summary>完整解答</summary><div class="ex-answer">存储副本登记时的键 =（<code>/style.css</code>, Accept-Encoding: gzip）。<br>① 值同为 gzip，键一致 → <strong>命中</strong>。<br>② 值是 "br, gzip"，与 "gzip" 不同，键 =（<code>/style.css</code>, Accept-Encoding: br, gzip）→ <strong>未命中</strong>，转发源站；若源站选 br 并带 Vary，缓存会以这个新键另存一份 br 副本。<br>③ 值是 identity，键 =（<code>/style.css</code>, Accept-Encoding: identity）→ <strong>未命中</strong>，转发源站取未压缩版。<br><br>若源站漏写 Vary：缓存只用 URL 当键，把这份 gzip 副本登记成 <code>/style.css</code> 的唯一答案。于是①命中（恰好正确）；②也命中，但拿到的是 gzip 而非它更想要的 br（次优，但客户端会解压）；③<strong>命中同一份 gzip 副本</strong>，而这个客户端声明只认 identity、不会解压 gzip → 样式乱码或加载失败。可见漏写 Vary 的危害集中在「声明的能力与副本编码不匹配」的请求上，与本讲 br/identity 故障链同构。</div></details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l3">L3 建模应用</span>你要为一个图片站点设计「按设备选图」的方案：既要在服务器返回前就知道目标图片的显示宽度与屏幕像素密度，又要兼顾缓存效率与用户隐私。请用本讲概念回答：① 为什么用 UA 字符串猜机型不合适，特性检测又为什么不适用于「服务器响应前」这个场景？② 给出一套基于客户端提示的方案，写出服务器索取提示的响应首部与客户端后续请求的关键首部；③ 这些提示该如何配合 Vary，哪些又不宜放进 Vary？④ 若用户偏好减少动画，如何保证首屏就按该偏好渲染？</div>
+      <details><summary>提示</summary><p>把「按能力而非按浏览器」「Accept-CH 索取与后续带回」「Vary 的权衡」「Critical-CH 自动重试」四个概念分别套到四个小问上。</p></details>
+      <details><summary>完整解答</summary><div class="ex-answer">① UA 字符串会互相劫持标记、可被伪造、又被浏览器冻结精简，猜机型既不准也侵犯隐私；特性检测需要执行脚本，往往在响应之后才跑得起来，而「发哪张图」必须在服务器生成响应前就决定，所以脚本式特性检测赶不上。② 方案：服务器在响应里用 <code>Accept-CH: Width, DPR</code> 声明需求；客户端在后续请求带回 <code>Width: 400</code>、<code>DPR: 2</code>；服务器算 400×2=800 物理像素，选 800 像素宽的图返回。服务器从头到尾不看浏览器名，只看能力值，换浏览器同能力结果一致。③ 由于响应随 Width 与 DPR 变化，应写 <code>Vary: Accept, Width, DPR</code>，让不同尺寸各自缓存一份；但网络类提示如 <code>Downlink</code>、<code>RTT</code> 取值频繁变化，不宜放进 Vary，否则每条唯一值都生成缓存条目，缓存形同失效。④ 减少动画属于重要客户端提示：服务器用 <code>Accept-CH</code> 加 <code>Critical-CH: Sec-CH-Prefers-Reduced-Motion</code> 声明它必须在渲染前生效，并在响应里带上对应 Vary；客户端若发现首请求没带该提示会自动重试并带上 <code>Sec-CH-Prefers-Reduced-Motion: "reduce"</code>，从而首屏就按减少动画渲染，避免闪烁。</div></details>
+    </div>
+
+    <!-- ===== 自测 ===== -->
+    <h2><span class="sec-no">✅</span>本章自测：每题只选一个答案</h2>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 1</div>
+      <div class="q-stem">关于 q 值，下列说法正确的是？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. q=0 表示优先级最低，服务器没得选时仍可能返回</li>
+        <li data-opt="b">B. q 值只在同一个首部内部表达相对优先级，q=0 表示不可接受</li>
+        <li data-opt="c">C. Accept 里的 q 可以拿来和 Accept-Language 里的 q 直接比大小</li>
+        <li data-opt="d">D. q 值可以取任意正数，越大越优先</li>
+      </ul>
+      <div class="quiz-explain">解析：B 对。A 错在 q=0 是明确拒绝而非「最低优先级」，服务器不应返回；C 错在 q 只在同一首部内部可比，跨首部如何合成由服务器算法决定、规范未规定；D 错在 q 的取值范围被限定为 0 到 1（最多三位小数），不是任意正数。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="c">
+      <div class="q-no">自测 2</div>
+      <div class="q-stem">响应同时带 <code>Content-Encoding: gzip</code> 与 <code>Transfer-Encoding: chunked</code> 时，客户端的正确处理顺序是？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 先 gzip 解压，再去掉分块边界</li>
+        <li data-opt="b">B. 两种编码作用相同，任选一种解开即可</li>
+        <li data-opt="c">C. 先按 chunked 去掉块长与 CRLF 拼回字节流，再做 gzip 解压</li>
+        <li data-opt="d">D. 直接把收到的字节交给浏览器，首部只是说明、无需处理</li>
+      </ul>
+      <div class="quiz-explain">解析：C 对。chunked 是最外层、逐跳的承载编码，gzip 是里层、端到端的表示编码，接收端必须从外向内拆。A 顺序颠倒：未拼回连续字节流前无法 gzip 解压，因为数据被块边界与 CRLF 打断。B 错在二者作用对象与范围完全不同。D 错在两种编码都必须解码，否则得到的不是原始资源。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="a">
+      <div class="q-no">自测 3</div>
+      <div class="q-stem">服务器给 <code>/page</code> 返回了 br 表示却漏写 Vary，随后一个只接受 identity 的客户端请求同一 URL。最可能发生什么？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 缓存按 URL 命中那份 br 副本发给它，客户端不会解压，页面出错</li>
+        <li data-opt="b">B. 缓存发现编码不匹配，自动向源站重新请求 identity 版本</li>
+        <li data-opt="c">C. 客户端会从响应里自动推断 br 并解压，一切正常</li>
+        <li data-opt="d">D. 缓存因为没有 Vary 而拒绝存储该响应，每次都回源</li>
+      </ul>
+      <div class="quiz-explain">解析：A 对。这正是本讲的漏写 Vary 故障链：没有 Vary 时缓存只用 URL 当键，会把 br 副本误发给不接受 br 的客户端。B 错在缓存不会「自动察觉」编码不匹配——它正因为不知道有编码维度才出错。C 错在客户端只声明接受 identity，没有解压 br 的能力。D 错在没有 Vary 并不会阻止存储，反而让缓存误以为这份响应适用于所有请求。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="d">
+      <div class="q-no">自测 4</div>
+      <div class="q-stem">关于 UA 检测、特性检测与客户端提示，下列说法错误的是？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 浏览器 UA 字符串会互相劫持标记，且可被伪造或冻结，因此不适合判断能力</li>
+        <li data-opt="b">B. 特性检测直接探测功能能否用，但不能用来推断「这是哪种浏览器」</li>
+        <li data-opt="c">C. 客户端提示由服务器用 Accept-CH 索取，客户端在后续请求自愿带回</li>
+        <li data-opt="d">D. 低熵提示如 Width、DPR 默认随每个请求发送，无需服务器索取</li>
+      </ul>
+      <div class="quiz-explain">解析：D 错，为本题答案。Width、DPR 属于<strong>高熵</strong>提示，需要服务器先用 Accept-CH 索取；真正的低熵提示是 Sec-CH-UA、Sec-CH-UA-Mobile、Sec-CH-UA-Platform、Save-Data 这一类，才可能默认随请求发送。A、B、C 分别准确描述了 UA 不可靠、特性检测的边界、客户端提示的工作流程。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="c">
+      <div class="q-no">自测 5</div>
+      <div class="q-stem">客户端请求带回 <code>Width: 400</code> 与 <code>DPR: 2</code>，服务器据此选图。这体现了什么原则？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 按浏览器品牌选择内容，因为不同品牌渲染不同</li>
+        <li data-opt="b">B. 按操作系统判断设备类型，因为系统决定屏幕大小</li>
+        <li data-opt="c">C. 按设备能力（此处为约 800 物理像素）选择，与浏览器名称无关</li>
+        <li data-opt="d">D. 按 User-Agent 里的 Mobi 标记区分手机后再选图</li>
+      </ul>
+      <div class="quiz-explain">解析：C 对。服务器用 Width×DPR 算出约 800 物理像素来选图，决策依据是能力数值而非浏览器身份，换浏览器只要能力相同结果就一样。A、B、D 都是「按身份猜能力」的老思路，正是 MDN 反对的：品牌、OS、Mobi 标记都不能可靠推出实际能力，且侵犯隐私。</div>
+    </div>
+
+    <div class="retell">
+      <h3>🗣️ 用自己的话，三句话讲完本讲</h3>
+      <p>对着空气（或室友）说出这三句。说卡壳的那句，回去重读对应小节。</p>
+      <details><summary>句1：这讲解决什么问题？——</summary><div class="retell-answer">参考答案：解决「同一个 URL 凭什么返回不同内容」——把选择权在客户端与服务器之间分配清楚：客户端用 Accept-* 与 q 值声明偏好，服务器据此从多种表示中择优，再用 Vary 让缓存不串味。</div></details>
+      <details><summary>句2：核心机制是什么？——</summary><div class="retell-answer">参考答案：资源有多种表示、共享一个 URL；内容编码 gzip 端到端压缩主体、传输编码 chunked 逐跳分块承载，解码时先去块再解压；Vary 把影响选择的请求首部纳入缓存键；客户端提示让服务器按能力而非按 UA 字符串做选择。</div></details>
+      <details><summary>句3：它和前后讲怎么分工？——</summary><div class="retell-answer">参考答案：第 2 讲拆报文与 MIME，本讲讲「传什么」（表示的选择、压缩与缓存标识），第 4 讲转向「怎么传」（连接管理），第 5、6 讲展开本讲埋下的 Vary 与缓存、条件请求，第 3.4 节为后面的安全与隐私话题埋下指纹识别的伏笔。</div></details>
+    </div>
+
+    <div class="review-plan">
+      <h3>🔁 间隔复习计划</h3>
+      <p>回忆本身比重读有效 10 倍。到点只做一件事：翻卡 + 重做标记题。</p>
+      <table>
+        <tr><th>时间点</th><th>复习内容</th><th>预计用时</th></tr>
+        <tr><td>第 1 天</td><td>概念卡 1–7 + 回忆 3.1 / 3.2 / 3.3 / 3.4 / 3.5 各 2 张</td><td>14 分钟</td></tr>
+        <tr><td>第 3 天</td><td>重做自测 2、3、4 + 翻错的概念卡 2、4、5、6</td><td>9 分钟</td></tr>
+        <tr><td>第 7 天</td><td>三句话复述 + L2 两题（q 值择优手算、Vary 缓存键判定）</td><td>14 分钟</td></tr>
+        <tr><td>第 15 天</td><td>只重做合上书挑战；能全过就毕业</td><td>15 分钟</td></tr>
+      </table>
+    </div>
+
+    <div class="final-challenge">
+      <h3>🚪 合上书挑战：能全写出来，这一讲才毕业</h3>
+      <ol id="challenge-list">
+        <li>说清内容协商解决什么问题，列出服务器驱动、代理驱动、透明协商三种方式各自「谁做选择」与代价。</li>
+        <li>默写三个 Accept-* 首部并说出 q 值规则（范围、默认值、q=0 的含义、通配符优先级），再独立手算一次带 q 值的多候选择优。</li>
+        <li>区分内容编码与传输编码，写出 gzip + chunked 的发送端与接收端顺序，并说明为何不能与 Content-Length 共存。</li>
+        <li>画出 Vary 参与缓存键的五个步骤，并复述「漏写 Vary 把 br 响应错发给只认 identity 客户端」的故障链。</li>
+        <li>说出 UA 检测不可靠的三条原因，给出特性检测、渐进增强、客户端提示三条替代路径及各自边界。</li>
+        <li>用一轮 Accept-CH 与后续带回 Width、DPR 的请求，说明 Client Hints 如何按能力而非按浏览器选图，并说清哪些提示不宜放进 Vary。</li>
+        <li>一句话回答本讲主线问题：同一个 URL 凭什么返回不同内容，这份选择权到底在谁手里？</li>
+      </ol>
+    </div>
+
+    <div class="complete-zone">
+      <button class="btn-complete" id="btn-complete" onclick="markDone()">✓ 我已完成本讲（含合上书挑战）</button>
+    </div>
+
+    <div class="chapter-nav">
+      <a href="chapter-02.html"><span class="nav-dir">← 上一讲</span>第2讲 HTTP 消息与 MIME 类型</a>
+      <a href="chapter-04.html" class="next"><span class="nav-dir">下一讲 →</span>第4讲 HTTP/1.x 的连接管理</a>
+    </div>
+
+  </div>
+</div>
+
+<footer class="footer">
+  <div class="wrap">第3讲 内容协商、压缩与客户端提示 · HTTP 精通 · 依据 MDN Web Docs《HTTP 指南》整理，延伸板块对照 RFC 9110 系列 · 学习进度保存在本机浏览器中</div>
+</footer>
+
+<script src="assets/mermaid.min.js"></script>
+<script>
+mermaid.initialize({
+  startOnLoad: true,
+  theme: "base",
+  themeVariables: {
+    primaryColor: "#e3edf7",
+    primaryBorderColor: "#1d5f9e",
+    primaryTextColor: "#1d5f9e",
+    lineColor: "#5c554b",
+    secondaryColor: "#fbeedd",
+    tertiaryColor: "#f5f1e8",
+    fontFamily: "-apple-system, PingFang SC, sans-serif",
+    fontSize: "14px"
+  },
+  flowchart: { curve: "linear", htmlLabels: false }
+});
+</script>
+<script>
+document.querySelectorAll(".quiz-block").forEach(block => {
+  const answer = block.dataset.answer;
+  const explain = block.querySelector(".quiz-explain");
+  block.querySelectorAll(".quiz-opts li").forEach(li => {
+    li.addEventListener("click", () => {
+      const opts = block.querySelectorAll(".quiz-opts li");
+      opts.forEach(o => o.classList.add("disabled"));
+      if (li.dataset.opt === answer) {
+        li.classList.add("correct");
+      } else {
+        li.classList.add("wrong");
+        block.querySelector(`[data-opt="${answer}"]`).classList.add("correct");
+      }
+      explain.classList.add("show");
+    });
+  });
+});
+
+document.querySelectorAll("#challenge-list li").forEach(li => {
+  li.addEventListener("click", () => li.classList.toggle("checked"));
+});
+
+const KEY = "http_guide_progress_v1";
+function loadProgress() {
+  try { return JSON.parse(localStorage.getItem(KEY)) || {}; } catch (e) { return {}; }
+}
+const progress = loadProgress();
+const btn = document.getElementById("btn-complete");
+if (progress[3] && progress[3].done) {
+  btn.textContent = "✓ 已完成 · 再次点击重置";
+  btn.classList.add("done");
+}
+function markDone() {
+  const p = loadProgress();
+  if (p[3] && p[3].done) {
+    delete p[3];
+    btn.textContent = "✓ 我已完成本讲（含合上书挑战）";
+    btn.classList.remove("done");
+  } else {
+    p[3] = { done: true, completedAt: Date.now(), reviewsDone: 0 };
+    btn.textContent = "✓ 已完成 · 复习提醒已开启";
+    btn.classList.add("done");
+  }
+  localStorage.setItem(KEY, JSON.stringify(p));
+}
+</script>
+
+</body>
+</html>

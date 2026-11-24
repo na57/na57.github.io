@@ -1,0 +1,765 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第2讲 HTTP 消息与 MIME 类型 · HTTP 精通</title>
+<link rel="stylesheet" href="assets/style.css">
+<style>
+/* 本套专用：协议报文原文展示与 MDN 来源条 */
+.wire{background:var(--bg-deep);border:1px solid var(--line);border-left:4px solid var(--accent);border-radius:8px;padding:14px 18px;margin:14px 0;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:13.5px;line-height:1.78;white-space:pre-wrap;overflow-wrap:anywhere;color:var(--ink-soft);}
+.wire b{color:var(--accent);font-weight:700;}
+.wire i{color:var(--orange);font-style:normal;}
+.wire em{color:var(--ink-faint);font-style:normal;}
+.wire.sm{font-size:12.5px;}
+.wire-cap{font-size:13px;color:var(--ink-faint);margin:-8px 0 16px;}
+.mdn-src{background:var(--bg-deep);border:1px solid var(--line);border-left:4px solid var(--accent);border-radius:8px;padding:12px 18px;margin:16px 0 0;font-size:13px;line-height:1.8;color:var(--ink-soft);}
+.mdn-src strong{color:var(--accent);}
+.mdn-src a{color:var(--accent);text-decoration:none;border-bottom:1px dashed var(--line);}
+.mdn-src a:hover{border-bottom-style:solid;}
+.to-slide{font-size:13px;color:var(--accent);text-decoration:none;border:1px solid var(--line);border-radius:6px;padding:4px 11px;white-space:nowrap;}
+.to-slide:hover{background:var(--bg-deep);}
+</style>
+</head>
+<body>
+
+<nav class="topbar">
+  <div class="topbar-inner">
+    <span class="brand"><a href="index.html" style="color:inherit">← HTTP 精通 · 学习地图</a></span>
+    <span class="crumb">第①组 · 基础与表示 / 第2讲</span>
+    <a class="to-slide" href="../http-guide-slides/02-HTTP%E6%B6%88%E6%81%AF%E4%B8%8EMIME%E7%B1%BB%E5%9E%8B-%E8%AF%BE%E4%BB%B6.html" target="_blank" rel="noopener noreferrer">配套课件 ↗</a>
+  </div>
+</nav>
+
+<div class="wrap">
+
+  <div class="lecture-head">
+    <span class="ch-label">GUIDE 02 · 基础与表示</span>
+    <h1>HTTP 消息与 MIME 类型</h1>
+    <p class="lead">上一讲把会话拆成了阶段，这一讲把阶段里流动的东西——报文——逐行拆开，并回答「接收方怎么知道这段字节是什么」。</p>
+    <div class="mdn-src"><strong>本讲对应的 MDN 指南：</strong><a href="https://developer.mozilla.org/zh-CN/docs/Web/HTTP/Guides/Messages" target="_blank" rel="noopener">HTTP 消息</a> · <a href="https://developer.mozilla.org/zh-CN/docs/Web/HTTP/Guides/MIME_types" target="_blank" rel="noopener">MIME 类型</a></div>
+  </div>
+
+  <!-- 本章定位 -->
+  <div class="position-bar">
+    <strong>本讲在主线上的位置：</strong>第 1 讲建立的会话三阶段 → <u>本讲：HTTP 消息与 MIME 类型</u> → 第 3 讲讲同一个 URL 如何给出不同表示。<br>
+    第2讲回答主线上的第2个问题：<strong>一条 HTTP 报文由哪几部分组成，接收方凭什么知道主体从哪里开始、到哪里结束、该用什么解析？</strong>
+    <div class="map-inline">
+      <span class="node">第1讲 HTTP 概述与典型会话</span><span class="arrow">→</span>
+      <span class="node here">第2讲 HTTP 消息与 MIME 类型</span><span class="arrow">→</span>
+      <span class="node">第3讲 内容协商、压缩与客户端提示</span><span class="arrow">→</span>
+      <span class="node">第4–6讲 连接与缓存</span><span class="arrow">→</span>
+      <span class="node">第7–10讲 状态与安全</span>
+    </div>
+  </div>
+
+  <!-- 学习目标 -->
+  <div class="objectives">
+    <h4>🎯 学完本讲，合上书你应该能：</h4>
+    <ol>
+      <li>默写请求与响应的四段结构，并说明空行在解析中的不可替代作用</li>
+      <li>逐行解析一条真实请求与响应，指出方法、目标、版本、状态码各自承诺什么</li>
+      <li>用 Content-Length 手算主体边界，并解释了写错长度会导致什么故障</li>
+      <li>说出 1xx 到 5xx 五类状态码的分工，并各举一个常见码</li>
+      <li>解释 MIME 类型的 type/subtype 结构，说明为什么不能只靠文件扩展名判断内容类型</li>
+    </ol>
+  </div>
+
+  <!-- 视频卡插槽：后面录制 B 站讲解时在此插入 <details class="video-card" id="video-card">…</details> -->
+  <!-- VIDEO_CARD_SLOT -->
+
+  <div class="lecture">
+
+    <!-- 推导主线图 -->
+    <div class="figure">
+      <div class="mermaid">
+flowchart LR
+  A["会话中的一次事务"]
+  B["起始行给出意图或结果"]
+  C["首部携带元数据"]
+  D["空行划出边界"]
+  E["主体承载表示字节"]
+  F["类型声明与嗅探的冲突"]
+  A --> B
+  B --> C
+  C --> D
+  D --> E
+  E --> F
+  classDef hot fill:#fbeedd,stroke:#c4651f,stroke-width:2.5px,color:#c4651f;
+  classDef danger fill:#fae9e7,stroke:#b03a2e,stroke-width:2.5px,color:#b03a2e;
+  class D hot;
+  class F danger;
+      </div>
+      <div class="caption">报文的解析顺序：先读起始行，再逐行读首部，遇空行停止，最后按长度读主体；红色节点是 Content-Type 缺失或被覆盖时的故障源。</div>
+    </div>
+
+<!-- ============ 2.1 ============ -->
+    <h2><span class="sec-no">2.1</span>报文的四段骨架：把会话里流动的东西逐行拆开</h2>
+
+    <p>上一讲把一次 Web 访问拆成了「建立连接—交换报文—复用或结束」三个阶段。中间那个阶段里真正在网络上流动的，就是本讲的主角——<span class="term">HTTP 报文</span>（HTTP message）。MDN 的定义很朴素：报文是服务器与客户端之间交换数据的方式，只有两种——客户端发出、用来触发服务器动作的<span class="term">请求</span>（request），以及服务器给出的<span class="term">响应</span>（response）。这一节先把它拆成一副人人都能默写的骨架，再逐行读一条真实事务。</p>
+
+    <p>先问一个反例。假设客户端想告诉服务器「把 /index.html 给我」，它在这条 TCP 连接上写下字节 <code>GET /index.html</code>。TCP  faithfully 保证这串字节按序、不丢、不重地到达，可服务器拿到后面对三个无解的追问：这串字节到哪儿算一条完整的指令（边界）？它是一条读请求还是一次写入（意图）？回答完之后跟着的内容是多长（定界）？TCP 一概不回答，因为它只搬运字节、不解释字节。HTTP 的解决办法，是给每次交换套一个<strong>固定四段结构</strong>，让接收方按规则把字节流切成一条条报文。</p>
+
+    <p>请求与响应结构相似，都由四部分组成，顺序不可交换：</p>
+    <ol>
+      <li><strong>一行起始行</strong>（start-line），描述要执行的请求或对应的成败状态，永远是单行；</li>
+      <li><strong>一组可选的 HTTP 首部</strong>（header），指明请求的属性或描述消息主体；</li>
+      <li><strong>一个空行</strong>，指示所有元数据已经发送完毕；</li>
+      <li><strong>一个可选的<span class="term">主体</span>（body）</strong>，承载请求相关数据或响应文档；主体大小由首部指定。</li>
+    </ol>
+    <p>MDN 还给出一个统称：起始行与首部合称「请求头」，有效载荷称为「消息主体」。记住这个统称有好处——后面谈缓存、谈编码时，你要能分清「我在动报文的头，还是动它的载荷」。</p>
+
+    <div class="figure">
+      <div class="mermaid">
+flowchart LR
+  A["读起始行到 CRLF 结束"] --> B["逐行解析首部键值对"]
+  B --> C["遇到空行停止读取"]
+  C --> D["按长度或分块读主体"]
+  D --> E["按 Content-Type 解析表示"]
+  classDef hot fill:#fbeedd,stroke:#c4651f,stroke-width:2.5px,color:#c4651f;
+  class C hot;
+      </div>
+      <div class="caption">图 2.1 报文的解析流水线：先读起始行，再逐行读首部，遇空行停止，最后按长度读主体并按类型解析。红色的空行是全流程的转折点——没有它，解析器不知道首部读到哪一行算完。</div>
+    </div>
+
+    <p><strong>完整例子①：一条 GET 请求与它的 200 响应，逐行解析。</strong>浏览器向 <code>www.example.com</code> 请求首页，线上字节如下（每一行的 CRLF 已省略显示）：</p>
+    <div class="wire"><b>GET /index.html HTTP/1.1</b>
+<b>Host:</b> www.example.com
+<b>Accept:</b> text/html,application/xhtml+xml
+<b>User-Agent:</b> Mozilla/5.0 (X11; Linux x86_64) Gecko/20100101 Firefox/128.0
+
+<i>HTTP/1.1 200 OK</i>
+<i>Date:</i> Mon, 16 Nov 2026 08:00:00 GMT
+<i>Content-Type:</i> text/html; charset=utf-8
+<i>Content-Length:</i> 19
+
+&lt;html&gt;你好&lt;/html&gt;</div>
+    <div class="wire-cap">图 2.2 一次最小但完整的请求—响应事务：上半是请求报文，下半是响应报文，中间那一行空行各自把首部与主体隔开。</div>
+
+    <p>逐行拆解请求报文，一步都不能跳：</p>
+    <ol>
+      <li><code>GET /index.html HTTP/1.1</code> 是<strong>起始行</strong>，也叫请求行。按空格切成三段：<code>GET</code> 是方法，声明「读」这个意图；<code>/index.html</code> 是请求目标，指出要哪份资源；<code>HTTP/1.1</code> 是版本，承诺剩余报文按 1.1 的语法解析，也暗示期望的响应版本。三段的顺序与分隔由语法固定，这就是「请求行三要素」。</li>
+      <li><code>Host: www.example.com</code> 是请求首部。它不指出 IP——IP 由 TCP 层已经连好的对端决定；它指出「我原本要访问哪个主机名」。同一台服务器托管几百个站点，靠 Host 才能选到正确的虚拟主机。这就是上一讲留下的那个问题的答案。</li>
+      <li><code>Accept: text/html,application/xhtml+xml</code> 声明客户端愿意接收的表示类型，是第 3 讲内容协商的输入。</li>
+      <li><code>User-Agent: …</code> 报出客户端身份字符串，服务器可据此做统计或兼容处理（第 3 讲会讲它为什么不再是可靠的选型依据）。</li>
+      <li>接下来是<strong>空行</strong>（一个只有 CRLF 的行）。解析到此停止读首部。GET 通常不带主体，所以空行之后没有字节——但「没有主体」与「还没读完」必须由首部说清楚。</li>
+    </ol>
+
+    <p>再拆响应报文：</p>
+    <ol>
+      <li><code>HTTP/1.1 200 OK</code> 是响应的起始行，专名<span class="term">状态行</span>（status line）：协议版本 + 三位<span class="term">状态码</span>（status code）<code>200</code> + 给人看的<span class="term">状态文本</span>（status text）<code>OK</code>。200 宣告请求成功，状态文本只是注释，客户端判断成败只读数字。</li>
+      <li><code>Date</code> 是通用的时间首部；<code>Content-Type: text/html; charset=utf-8</code> 是表示首部，声明主体的媒体类型是 HTML、字符编码是 UTF-8；<code>Content-Length: 19</code> 给出主体的字节数。</li>
+      <li>又一个空行，之后是主体 <code>&lt;html&gt;你好&lt;/html&gt;</code>。它正好是 19 字节：<code>&lt;html&gt;</code> 6 字节，<code>你好</code> 两个汉字在 UTF-8 下各 3 字节共 6 字节，<code>&lt;/html&gt;</code> 7 字节，合计 6+6+7=19。接收方读完这 19 字节就知道报文结束，可以把连接交还给下一条请求。</li>
+    </ol>
+
+    <p>这条事务把四段结构演示得很干净，但真实报文的首部远不止这几行。首部怎么归类，直接决定「谁能读它、能读几跳」。MDN 把首部按作用域分成四类：</p>
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>首部类别</th><th>作用域</th><th>例子</th><th>出现位置</th></tr>
+        <tr><td><span class="term">通用首部</span>（General header）</td><td>适用于整条消息，既不专属于请求也不专属于响应</td><td><code>Via</code>、<code>Date</code></td><td>请求与响应都可</td></tr>
+        <tr><td><span class="term">请求首部</span>（Request header）</td><td>描述请求本身或客户端，进一步定义、给定上下文或加条件限制</td><td><code>User-Agent</code>、<code>Accept-Language</code>、<code>Referer</code>、<code>If-None-Match</code></td><td>仅请求</td></tr>
+        <tr><td><span class="term">响应首部</span>（Response header）</td><td>提供状态行放不下的服务器附加信息</td><td><code>Vary</code>、<code>Accept-Ranges</code></td><td>仅响应</td></tr>
+        <tr><td><span class="term">表示首部</span>（Representation header）</td><td>描述消息数据的原始格式与应用的编码，仅在消息有主体时出现</td><td><code>Content-Type</code>、<code>Content-Encoding</code></td><td>请求与响应都可（有主体时）</td></tr>
+      </table>
+    </div>
+    <p>要注意一处口径演进：更老的资料里还有「实体首部」（entity header）这一类，MDN 现在把其中描述数据格式的部分并入了表示首部。所以你在旧文档里看到的「实体首部」，今天的对应物多半是表示首部。至于 <code>Content-Length</code>，MDN 把它和 <code>Content-Type</code> 一起作为定义主体的两个首部来介绍——它描述的是载荷有多长，课堂上我们按「与主体定界相关」单独记忆。</p>
+
+    <div class="box insight">
+      <span class="box-tag">✅ 判定规则</span>
+      <p>拿到任意一行首部，先问三个问题：<strong>它只在某一方向出现吗</strong>（请求首部 / 响应首部）？<strong>它描述的是整条消息还是载荷</strong>（通用 / 表示）？<strong>它有没有主体才有意义</strong>（表示首部依赖主体存在）？三问下来，99% 的首部都能归位，也就能推出「代理转发时该不该改它」。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>「空行只是排版，删掉也能解析」——大错。空行（CRLF CRLF）是首部结束、主体开始的<strong>唯一语法标志</strong>：解析器逐行读首部，直到读出空行才停。没有它，接收方会把主体的第一行当作又一个首部去解析，整条报文全乱。另一个高频错：把 <code>Host</code> 当成「目标 IP 地址」。它只是主机名，解析与建连发生在 HTTP 之下的一层。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front"><div class="q-tag">回忆 2.1-1</div><div class="q-text">默写请求与响应报文的四段结构，并说明空行为什么不可替代。</div><span class="tap">点击翻面 →</span></div>
+            <div class="flip-face flip-back"><div class="a-tag">参考答案</div>起始行、首部、空行、主体。空行是首部结束与主体开始的唯一语法标志；解析器逐行读到空行才停止读首部，缺了它就会把主体首行误当作首部解析。</div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front"><div class="q-tag">回忆 2.1-2</div><div class="q-text">MDN 把首部按作用域分成哪四类？各自的边界是什么？</div><span class="tap">点击翻面 →</span></div>
+            <div class="flip-face flip-back"><div class="a-tag">参考答案</div>通用首部（整条消息）、请求首部（仅请求、描述客户端/请求）、响应首部（仅响应、服务器附加信息）、表示首部（描述载荷格式与编码，有主体时才有）。旧称「实体首部」描述格式的部分已并入表示首部。</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 2.2 ============ -->
+    <h2><span class="sec-no">2.2</span>起始行：请求行三要素、请求目标四形式与状态码分流</h2>
+
+    <p>上一节把报文拆成四段，最先被读到的那一行——起始行——信息密度最高：请求里它一次讲清「做什么、对谁做、按什么版本」，响应里它一句宣告「成了还是败了」。这一节把这一行彻底展开，并顺势把全书反复要用的状态码五类立起来。</p>
+
+    <p>MDN 说，请求的起始行含三个元素：<span class="term">HTTP 方法</span>（HTTP method）、<span class="term">请求目标</span>（request target）与 <span class="term">HTTP 版本</span>（HTTP version）。方法是一个动词（GET、PUT、POST）或名词（HEAD、OPTIONS），描述要执行的动作；版本定义剩余消息的结构，并指示期望的响应版本。三者顺序固定为：</p>
+    <div class="wire"><em>&lt;方法&gt; &lt;请求目标&gt; &lt;HTTP 版本&gt;</em></div>
+    <div class="wire-cap">图 2.3 请求行的语法骨架：三个空格分隔的记号，从左到右依次是动作、对象、版本。</div>
+
+    <p>三要素里最容易被低估的是<strong>请求目标</strong>。多数人以为它永远是一个以 <code>/</code> 开头的路径，MDN 明确列出四种形式，各有各的出场场合：</p>
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>形式</th><th>长什么样</th><th>什么时候用</th><th>为什么是这种形式</th></tr>
+        <tr><td><span class="term">原始形式</span>（origin form）</td><td><code>GET /background.png HTTP/1.0</code>；末尾可跟 <code>?</code> 与查询串，如 <code>HEAD /test.html?query=alibaba HTTP/1.1</code></td><td>GET、POST、HEAD、OPTIONS 直接连源站时，最常见</td><td>主机名已由 Host 首部给出，目标只需指出资源路径</td></tr>
+        <tr><td><span class="term">绝对形式</span>（absolute form）</td><td><code>GET http://developer.mozilla.org/zh-CN/docs/Web/HTTP/Messages HTTP/1.1</code></td><td>GET 连接<strong>代理</strong>时</td><td>代理可能同时服务多个源站，必须给出完整 URL 才能确定去向</td></tr>
+        <tr><td><span class="term">authority 形式</span>（authority form）</td><td><code>CONNECT developer.mozilla.org:80 HTTP/1.1</code></td><td>仅 <code>CONNECT</code> 建立 HTTP 隧道时</td><td>此刻要的是「和谁建隧道」，只需要域名与可选端口，不需要路径</td></tr>
+        <tr><td><span class="term">星号形式</span>（asterisk form）</td><td><code>OPTIONS * HTTP/1.1</code></td><td>仅 <code>OPTIONS</code> 询问服务器整体能力时</td><td>问的是「整台服务器支持什么」，不针对某个具体资源</td></tr>
+      </table>
+    </div>
+    <p>把这张表读成一句话：<strong>目标和「连谁」绑在一起</strong>。直连源站，路径够了；经代理，要给完整 URL；建隧道，只给 authority；问全局能力，用星号。第 11 讲讲代理与隧道时，这四种形式会原封不动地回来。</p>
+
+    <p>响应的起始行叫状态行，MDN 给出三件信息：协议版本（通常 <code>HTTP/1.1</code>）、状态码（表明成功或失败，常见 <code>200</code>、<code>404</code>、<code>302</code>）、状态文本（对状态码的简短文字描述，帮人理解）。典型写法是 <code>HTTP/1.1 404 Not Found</code>。客户端判成败<strong>只读三位数字</strong>，状态文本可以替换、可以本地化，不具备机器语义。</p>
+
+    <p>状态码按首位分成五类，每类回答一类问题、规定「下一步该谁行动」。下面这张分流判定表把五类和九个高频码放在一张纸上，含各自的触发方与客户端动作：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>状态码</th><th>类别</th><th>触发方与触发条件</th><th>客户端该做什么</th></tr>
+        <tr><td><code>100 Continue</code></td><td>1xx 信息性</td><td>服务器在收到带 <code>Expect: 100-continue</code> 的请求头后，先回临时响应说「可以继续发主体」</td><td>继续发送请求主体；这是过渡响应，不是最终结果</td></tr>
+        <tr><td><code>200 OK</code></td><td>2xx 成功</td><td>服务器确认请求已成功处理，并带回表示的主体</td><td>读取并处理主体，按 Content-Type 解析</td></tr>
+        <tr><td><code>301 Moved Permanently</code></td><td>3xx 重定向</td><td>服务器宣告资源已永久迁到新位置，通常带 <code>Location</code></td><td>更新书签，跟随 Location 再发一次请求；后续都用新地址</td></tr>
+        <tr><td><code>304 Not Modified</code></td><td>3xx 重定向</td><td>服务器收到条件请求后判定本地副本仍有效，故不回主体</td><td>直接用本地缓存副本；这是再验证<strong>成功</strong>，不是错误</td></tr>
+        <tr><td><code>400 Bad Request</code></td><td>4xx 客户端错误</td><td>服务器认为请求语法有误，无法理解</td><td>检查并修改请求，不要原样重试</td></tr>
+        <tr><td><code>401 Unauthorized</code></td><td>4xx 客户端错误</td><td>服务器要求先认证，请求缺少或凭据无效</td><td>带 <code>Authorization</code> 凭据重新发起；真正缺的是身份</td></tr>
+        <tr><td><code>403 Forbidden</code></td><td>4xx 客户端错误</td><td>服务器理解请求，但拒绝授权，与身份无关也可拒绝</td><td>换身份或放弃；原样重试没有意义，问题在权限不在语法</td></tr>
+        <tr><td><code>404 Not Found</code></td><td>4xx 客户端错误</td><td>服务器找不到可用的表示，且不愿说明是暂时还是永久</td><td>核对 URL；重试通常无益（与 403 的差别见 warning）</td></tr>
+        <tr><td><code>500 Internal Server Error</code></td><td>5xx 服务器错误</td><td>服务器遇到阻止其完成请求的意外状况，属服务端故障</td><td>幂等请求可稍后重试；真正要修的是服务端</td></tr>
+      </table>
+    </div>
+    <p><strong>完整例子②（分流手算）。</strong>把五个类别抽象成一棵判定树，从「谁需要采取下一步动作」出发：拿到一个状态码，先看首位——1xx 说明事情还没完，客户端<strong>继续发</strong>；2xx 说明成了，客户端<strong>处理结果</strong>；3xx 说明「去别处」，客户端<strong>再发一次请求</strong>（304 是特例：去的是自己的缓存）；4xx 说明请求有问题，<strong>客户端改请求</strong>；5xx 说明服务端有问题，<strong>服务端修、客户端可重试</strong>。这棵树的价值在重试决策：网络抖动没收到响应时，只有 5xx 与幂等方法的组合才值得自动重试，4xx 重试一百次还是 4xx。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>请求目标四种形式不是四种「写法偏好」，而是四种「连接拓扑」的投影：直连、经代理、建隧道、问全局。看到 <code>CONNECT host:port</code> 就该想到 authority form；看到 <code>OPTIONS *</code> 就该想到星号形式。形式与拓扑一一对应，这比死记例子可靠得多。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>「404 就是服务器上没有这个文件」「403 就是没登录」——都不精确。403 是<strong>服务器知道你要什么但就是不给</strong>，401 才是「先证明你是谁」；404 是服务器<strong>不愿说明</strong>有没有，可能出于安全故意隐藏存在性。另一个高频错：把 304 当错误。它是 3xx 里唯一「不用去别处」的码，表示缓存副本经再验证仍然有效，响应的主体是空的。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front"><div class="q-tag">回忆 2.2-1</div><div class="q-text">请求行三要素是什么？请求目标有哪四种形式，各配什么场景？</div><span class="tap">点击翻面 →</span></div>
+            <div class="flip-face flip-back"><div class="a-tag">参考答案</div>三要素：方法、请求目标、HTTP 版本。四形式：原始形式（直连源站的常见路径）、绝对形式（经代理的完整 URL）、authority form（CONNECT 建隧道的域名+端口）、星号形式（OPTIONS 问服务器整体能力）。</div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front"><div class="q-tag">回忆 2.2-2</div><div class="q-text">1xx–5xx 五类各由谁采取下一步动作？304 为什么不算错误？</div><span class="tap">点击翻面 →</span></div>
+            <div class="flip-face flip-back"><div class="a-tag">参考答案</div>1xx 客户端继续发、2xx 客户端处理结果、3xx 客户端再发一次请求、4xx 客户端改请求、5xx 服务端修且客户端可重试。304 是条件请求再验证成功的信号，表示本地副本仍有效、无主体，所以是成功路径而非错误。</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 2.3 ============ -->
+    <h2><span class="sec-no">2.3</span>空行之后：主体定界、分块手算与两种「编码」的分工</h2>
+
+    <p>上一节停在空行之前。空行一过，接收方面对的是一串没有天然边界的字节——TCP 是流，它不知道「这条消息到此为止」。这一节回答本讲的主线问题的一半：主体从哪儿开始、到哪儿结束。答案只有两条路：<code>Content-Length</code> 给出已知长度，或 <code>Transfer-Encoding: chunked</code> 用分块编码处理未知长度。</p>
+
+    <p>MDN 把主体按规模分两类：单一资源主体（一个文件）与多资源主体（多部分主体，常见于 HTML 表单）。对单一资源主体，长度已知时用 <code>Content-Type</code> 与 <code>Content-Length</code> 两个首部定义；长度未知时，把 <code>Transfer-Encoding</code> 设为 <code>chunked</code>。响应的主体还多一种<strong>单资源、已知长度</strong>的明确说法——MDN 特意把「已知长度」与「未知长度」拆成两条，就是在提醒你定界方式取决于长度能否预先算出。</p>
+
+    <p><strong>完整例子③：同一份内容的两种定界方式对照。</strong>客户端要上传一段纯文本 <code>hello world</code>（11 字节），服务端在生成响应前不一定知道总长。两条路并列如下：</p>
+
+    <p><strong>路线 A：<code>Content-Length</code> 定界（长度已知）。</strong></p>
+    <div class="wire"><b>POST /upload HTTP/1.1</b>
+<b>Host:</b> www.example.com
+<b>Content-Type:</b> text/plain; charset=utf-8
+<b>Content-Length:</b> 11
+
+hello world</div>
+    <div class="wire-cap">图 2.4 用 Content-Length 定界：读完空行后，接收方再读恰好 11 字节即结束。主体字节数必须事先算准。</div>
+
+    <p><strong>路线 B：<code>Transfer-Encoding: chunked</code> 定界（长度未知）。</strong></p>
+    <div class="wire"><b>POST /upload HTTP/1.1</b>
+<b>Host:</b> www.example.com
+<b>Content-Type:</b> text/plain; charset=utf-8
+<b>Transfer-Encoding:</b> chunked
+
+<b>5</b>
+hello
+<b>6</b>
+ world
+<b>0</b>
+
+</div>
+    <div class="wire-cap">图 2.5 用分块编码定界：主体被切成若干块，每块先写十六进制长度、再写数据；大小为 0 的块表示主体结束。</div>
+
+    <p><strong>逐块解析手算（一步不跳）。</strong>接收方在空行之后按下面的循环读，直到读到一个大小为 0 的块：</p>
+    <ol>
+      <li>读第一行 <code>5</code>：这是一个<strong>块大小</strong>，十六进制的 5 等于十进制 5，表示紧接着有 5 字节数据。</li>
+      <li>紧接着读恰好 5 字节：<code>hello</code>，正好 5 字节。随后读一个 CRLF 作为块结束符（它不计入块大小）。累计主体 = <code>hello</code>。</li>
+      <li>读下一行 <code>6</code>：十六进制 6 = 十进制 6，表示下一块 6 字节。</li>
+      <li>读恰好 6 字节：<code>&nbsp;world</code>（一个空格 + <code>world</code> 五个字母 = 6 字节）。读块结束 CRLF。累计主体 = <code>hello world</code>，与路线 A 完全一致。</li>
+      <li>读一行 <code>0</code>：大小为 0，表示主体到此结束，后面不再有数据块。</li>
+      <li>0 块之后可以跟若干<strong>尾部首部</strong>（trailer），本例没有，所以直接是一个空行；读到这个空行，整条消息解析完毕。</li>
+    </ol>
+    <p>手算结论：分块编码用「长度头 + 数据 + CRLF」的三段式重复，把未知长度的内容边生成边发送；0 块是唯一的「正文结束」信号。这解释了为什么动态生成的大响应偏爱 chunked——服务端一边算一边发，不必先把全部内容攒起来数出总字节数。</p>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>两个高频错误。其一：<code>Content-Length</code> 写小于实际字节。接收方按声明长度读完就停，多出来的字节会被误当成<strong>下一条报文的起始行</strong>，造成「粘包式」错乱。写大于实际字节则相反，接收方会一直等那些永远不来字节，连接挂到超时。因为 TCP 是字节流，长度是唯一依据。其二：把分块编码的块大小当十进制。它是<strong>十六进制</strong>，例如 <code>1A</code> 表示 26 字节，不是 1 也不是 10。</p>
+    </div>
+
+    <p>还有一个必须与内容类型分清的概念：<span class="term">内容编码</span>（Content-Encoding）与 <code>Content-Type</code> 是<strong>两个正交维度</strong>。<code>Content-Type</code> 声明<strong>表示本身是什么</strong>（HTML、JSON、PNG），<code>Content-Encoding</code> 声明<strong>对这份表示施加了什么变换</strong>（最常见是 <code>gzip</code> 压缩）。二者可以叠加在同一条响应上：</p>
+    <div class="wire"><i>HTTP/1.1 200 OK</i>
+<i>Content-Type:</i> text/html; charset=utf-8
+<i>Content-Encoding:</i> gzip
+<i>Content-Length:</i> 843
+
+<i>（843 字节是 gzip 压缩后的字节，不是解压后的 HTML 大小）</i></div>
+    <div class="wire-cap">图 2.6 Content-Type 与 Content-Encoding 正交：客户端先按 Content-Encoding 解压得到 HTML 字节，再按 Content-Type 把字节渲染成页面。压缩是传输时的外衣，类型才是内容的身份。</div>
+    <p>解析顺序很关键：客户端先按 <code>Content-Encoding</code> 逆变换（解压），得到原始字节，再按 <code>Content-Type</code> 决定用哪个解析器。反过来做——先按 HTML 解析一堆 gzip 字节——只会得到乱码。第 3 讲讲压缩协商、第 6 讲讲范围请求时，都会回到这条「先解码、后解析」的顺序。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>定界与类型是两件独立的事：<code>Content-Length</code>/<code>chunked</code> 回答「到哪儿结束」，<code>Content-Type</code> 回答「用什么解析」，<code>Content-Encoding</code> 回答「先做什么逆变换」。三条首部分工清晰，正是 HTTP 可扩展性的来源——换压缩算法不必动解析器，换媒体类型不必动传输层。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front"><div class="q-tag">回忆 2.3-1</div><div class="q-text">主体定界有哪两条路？分块编码里大小为 0 的块表示什么？块大小按什么进制读？</div><span class="tap">点击翻面 →</span></div>
+            <div class="flip-face flip-back"><div class="a-tag">参考答案</div>长度已知用 Content-Length 读固定字节；未知用 Transfer-Encoding: chunked 逐块读。0 块表示主体结束，之后是可选尾部首部与一个空行。块大小按十六进制读，如 1A 表示 26 字节。</div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front"><div class="q-tag">回忆 2.3-2</div><div class="q-text">Content-Encoding 与 Content-Type 各回答什么问题？解析顺序是什么？</div><span class="tap">点击翻面 →</span></div>
+            <div class="flip-face flip-back"><div class="a-tag">参考答案</div>Content-Type 声明表示本身的媒体类型（是什么），Content-Encoding 声明对表示施加的变换（如 gzip）。二者正交、可叠加；客户端先按 Content-Encoding 解压，再按 Content-Type 解析表示。</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 2.4 ============ -->
+    <h2><span class="sec-no">2.4</span>MIME 类型：一条 type/subtype 如何决定字节的命运</h2>
+
+    <p>上一节解决了「主体到哪儿结束」，还剩主线问题的最后一问：接收方凭什么知道该用什么解析这些字节？答案写在 <code>Content-Type</code> 里，而它的值就是一个 <span class="term">MIME 类型</span>（MIME type），MDN 又称<span class="term">媒体类型</span>（media type）——全称<strong>多用途互联网邮件扩展</strong>（Multipurpose Internet Mail Extensions），由 IETF 的 RFC 6838 定义与标准化，IANA 负责跟踪所有官方类型。这一节把它拆开，并讲清浏览器「声明与猜测」之间的博弈。</p>
+
+    <p>MDN 特别警告：浏览器通常用 MIME 类型<strong>而不是文件扩展名</strong>来决定如何处理一个 URL，所以服务器在 <code>Content-Type</code> 响应首部中给出正确类型非常重要；配错会让浏览器曲解内容、网站失常、下载被错误处理。为什么不能靠扩展名？因为同一路径可以按协商返回不同表示，而 URL 里的 <code>.html</code> 与实际字节并无必然联系——扩展名只是名字，MIME 才是声明。</p>
+
+    <p>MIME 类型的结构只有两部分：<code>type/subtype</code>，斜杠两边无空白。<strong>类型</strong>（type）是大类，<strong>子类型</strong>（subtype）是大类里的精确种类；二者必须成对出现。此外可带一个可选<strong>参数</strong>（parameter），写法是 <code>type/subtype;parameter=value</code>。对 <code>text</code> 类，最常用的参数是 <code>charset</code>：它指定字符所使用的字符集，缺省为 US-ASCII（除非被用户代理设置覆盖）。所以明确写 UTF-8 的纯文本应写成 <code>text/plain;charset=UTF-8</code>。MDN 还提醒：MIME 类型大小写不敏感、传统写小写，但<strong>参数值可能大小写敏感</strong>。</p>
+
+    <p>类型又分两类：<span class="term">独立类型</span>（discrete type）表示单一文件或媒介，<span class="term">多部分类型</span>（multipart type）表示由多个部件组成的复合文档。对 Web 开发者最重要的独立类型包括 <code>application</code>（不明确属于其他类型的二进制数据）、<code>text</code>（人类可读文本、源代码）、<code>image</code>、<code>audio</code>、<code>video</code>、<code>font</code>、<code>model</code>。两条兜底规则要记牢：没有明确子类型的文本用 <code>text/plain</code>，未知或真实类型未知的二进制用 <code>application/octet-stream</code>。</p>
+
+    <p><strong>完整例子④：四种高频 MIME 类型的判定表。</strong>下表把类型归类、浏览器默认处理，以及「类型缺失或被篡改时」的风险摆在一起：</p>
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>Content-Type</th><th>归类</th><th>浏览器默认处理</th><th>声明缺失/错误时的风险</th></tr>
+        <tr><td><code>text/html</code></td><td>text 独立类型</td><td>按 HTML 解析成 DOM 并渲染，脚本可执行</td><td>若一个本该是纯文本的响应被嗅探成 HTML，其中内容可能被当作标记与脚本执行，形成注入风险</td></tr>
+        <tr><td><code>application/json</code></td><td>application 独立类型</td><td>当作数据：交给脚本解析或触发下载，不渲染成页面</td><td>历史上若被嗅探成 HTML，JSON 里的可控文本可能被执行；正确声明并配合 nosniff 可堵住这条路</td></tr>
+        <tr><td><code>image/svg+xml</code></td><td>image 独立类型（<code>+xml</code> 结构化后缀）</td><td>作为矢量图渲染；SVG 内部可含脚本</td><td>作为顶层导航文档直接打开时，其中脚本可执行；嵌入为图片时通常受限，用途不同风险不同</td></tr>
+        <tr><td><code>application/octet-stream</code></td><td>application 独立类型，未知二进制兜底</td><td>浏览器视为应保存到本地，弹出「另存为」，不自动执行</td><td>这是<strong>安全默认值</strong>：正因为不猜用途，未知二进制不会被误当可执行内容</td></tr>
+      </table>
+    </div>
+    <p>表中的 <code>+xml</code> 后缀值得单独说：<code>image/svg+xml</code> 说明 SVG 是一种基于 XML 的结构化格式，而不是像 <code>image/png</code> 那样的位图。IANA 用这种结构化后缀标记「本类型遵循某个基础语法」，同类还有 <code>+json</code>、<code>+zip</code>。看到后缀，你就知道这类内容有可解析的结构。</p>
+
+    <p>现在讲<strong>内容嗅探</strong>（MIME sniffing）。MDN 说：在 MIME 类型缺失，或客户端认为文件设置了错误类型时，浏览器可能通过查看资源本身来猜测类型。每个浏览器在不同情况下行为不同（例如 Safari 会在收到的类型不合适时去看扩展名）。问题在于某些 MIME 类型代表<strong>可执行内容</strong>，让浏览器自由猜测就带来安全风险。服务器可以用 <code>X-Content-Type-Options: nosniff</code> 首部禁止嗅探。</p>
+
+    <p>把有无 <code>nosniff</code> 的差别列成对照表，安全意义一目了然：</p>
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>场景</th><th>没有 nosniff</th><th>带 X-Content-Type-Options: nosniff</th></tr>
+        <tr><td>响应完全缺失 Content-Type</td><td>浏览器读取开头字节进行嗅探，可能猜成 HTML/JavaScript 并<strong>执行</strong></td><td>按保守类型（如 application/octet-stream 或 text/plain）处理，<strong>不</strong>嗅探成可执行类型</td></tr>
+        <tr><td>脚本文件被错发成 text/plain</td><td>浏览器可能嗅探出它是脚本并照常执行，掩盖了配置错误</td><td>浏览器<strong>拒绝执行</strong>该脚本，因为声明类型与执行要求不符</td></tr>
+        <tr><td>API 返回 JSON 但类型写错</td><td>可能被当成 HTML 渲染，引入脚本执行面</td><td>按声明的保守类型处理，不升级为可执行类型</td></tr>
+        <tr><td>用户上传文件下载</td><td>浏览器可能据内容猜测而尝试打开</td><td>配合正确类型时更可能走「另存为」，减少就地执行</td></tr>
+      </table>
+    </div>
+    <p>MDN 还列出 MIME 类型之外的两种判定手段，但都不可靠：文件扩展名（不是所有系统都认，且不能保证正确）与<span class="term">魔数</span>（magic number，看文件头结构，如 GIF 以十六进制 <code>47 49 46 38</code> 开头、PNG 以 <code>89 50 4E 47</code> 开头，但并非所有类型都有魔数）。这正是「必须显式声明 Content-Type」的根本理由——猜测手段都只是近似。</p>
+
+    <p>顺带补一个容易被问到的类型：<code>text/javascript</code>。MDN 明确，按照 IANA 注册表、RFC 9239 与 HTML 规范，JavaScript 内容应始终以 <code>text/javascript</code> 提供，其他类型可能导致脚本无法加载或运行；而且 JavaScript 内容<strong>不该带 charset 参数</strong>，那在多数情况下会导致加载失败。这与前面 <code>text/plain;charset=UTF-8</code> 形成对照：charset 对文本文档有意义，对脚本反而是坑。</p>
+
+    <div class="box insight">
+      <span class="box-tag">✅ 判定规则</span>
+      <p>看到 <code>Content-Type</code> 就按三步走：① 读 <code>type/subtype</code> 判大类与精确格式，遇到 <code>+xml</code>/<code>+json</code> 想到结构化后缀；② 读参数，文本类看 <code>charset</code>，脚本类警惕多余的 charset；③ 问「有没有 <code>nosniff</code>」——可执行内容（HTML/JS/JSON/SVG）强烈建议带，防止嗅探把声明绕过。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>「根据文件后缀就能判断类型」——这是把 URL 名字当内容声明，协商一份资源多种表示时立刻失效。另一个错：给所有未知二进制都发 <code>application/octet-stream</code> 就万事大吉——对真正未知的文件它是安全默认值，但对已知类型（如 RAR、音视频、专有文档）应给出更具体的类型（如 <code>application/x-rar-compressed</code>、<code>application/vnd.mspowerpoint</code>），否则用户得不到「用某程序打开」的体验。第三个别把它和上一节混了：<code>charset=utf-8</code> 是 <code>Content-Type</code> 的<strong>参数</strong>，不是 <code>Content-Encoding</code>；压缩编码和字符编码是两码事。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front"><div class="q-tag">回忆 2.4-1</div><div class="q-text">MIME 类型的结构是什么？charset 参数起什么作用？独立类型与大类型各举一例。</div><span class="tap">点击翻面 →</span></div>
+            <div class="flip-face flip-back"><div class="a-tag">参考答案</div>结构是 type/subtype，可带 ;parameter=value。charset 指定文本字符所用字符集，缺省 US-ASCII，UTF-8 文本应写 text/plain;charset=UTF-8。独立类型如 text/html、application/json；多部分类型如 multipart/form-data。</div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front"><div class="q-tag">回忆 2.4-2</div><div class="q-text">什么是内容嗅探？nosniff 为什么能提升安全？为什么说不能只靠扩展名？</div><span class="tap">点击翻面 →</span></div>
+            <div class="flip-face flip-back"><div class="a-tag">参考答案</div>缺失或类型异常时浏览器读字节猜类型，可能把内容猜成可执行类型而引入风险；X-Content-Type-Options: nosniff 禁止嗅探、强制按声明处理。扩展名只是名字，同一 URL 可按协商返回不同表示，与实际字节无必然对应，故必须以 Content-Type 声明为准。</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 2.5 延伸：规范怎么写 ============ -->
+    <h2><span class="sec-no">2.5</span>延伸：规范怎么写：从 MDN 的说法回到 RFC 的字句</h2>
+
+    <p>前面四节按 MDN 的口径把报文与 MIME 讲透了。MDN 是面向开发者的指南，它把规范的严苛语法藏在了通俗表述背后。这一节做本讲唯一允许的事：翻开底层规范，看同样一件事 RFC 是怎么逐字定义的。对照三份规范——报文语法看 RFC 9112、方法与状态码的语义看 RFC 9110、媒体类型注册看 RFC 6838——你会发现 MDN 的每句「说法」背后都有一条精确的「写法」。理解它，才能在报文解析报错、类型注册争论时知道根在哪。</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>MDN 的说法</th><th>RFC 怎么写</th><th>为什么值得知道</th></tr>
+        <tr><td>请求与响应都由起始行、首部、空行、主体四部分组成，空行表示元数据结束</td><td>RFC 9112 用 ABNF 规定报文 = start-line 后跟若干 field-line、一个空行（CRLF）与可选 message-body，对各部分的顺序与 CRLF 位置逐字节约束</td><td>解析错误都能定位到某条 ABNF 规则：「空行缺失」不是风格问题而是语法违规，写解析器时据此决定报错位置</td></tr>
+        <tr><td>请求起始行含方法、请求目标、版本；请求目标有原始/绝对/authority/星号四种形式</td><td>RFC 9112 把 request-target 明确定义为 origin-form、absolute-form、authority-form、asterisk-form 五种语法产生式并分述约束；RFC 9110 则把方法定义为可独立命名的语义操作</td><td>知道形式由语法产生式固定，就不会发明第五种写法；理解方法语义与报文编码解耦，才能看懂 HTTP/2 改编码不改语义</td></tr>
+        <tr><td>状态码首位分五类，表明成功或失败；常见 200、404、302</td><td>RFC 9110 为状态码建立注册表与类别定义，逐码规定语义，并定义 safe（安全）与 idempotent（幂等）等方法属性供缓存与重试判定</td><td>判断「能否自动重试」「能否缓存」的权威依据在 RFC 的属性定义里，而不在数字的记忆里；这正是第 5、6 讲的底座</td></tr>
+        <tr><td>主体长度未知时用 Transfer-Encoding: chunked，分块编码用大小 0 的块结束</td><td>RFC 9112 定义 chunked-body = 若干 chunk 后跟 last-chunk、trailer-section 与 CRLF；chunk = chunk-size CRLF chunk-data CRLF，其中 chunk-size 是十六进制</td><td>手算分块边界、排查「多一个 CRLF 就错位」的经典 bug，都要回到这条产生式；也解释了 0 块后为何还可能需要尾部首部</td></tr>
+        <tr><td>MIME 类型形如 type/subtype，由 IANA 跟踪官方类型</td><td>RFC 6838 定义媒体类型的注册树与命名语法，规定 type/subtype 的命名规则、结构化后缀（如 +xml、+json）与各类注册流程</td><td>理解 +xml/+json 后缀和「为何不能随便造类型」，就懂了 application/vnd.* 厂商类型的来路，也为第 3 讲内容协商打底</td></tr>
+        <tr><td>浏览器可能在类型缺失时用 MIME 嗅探猜测；nosniff 可阻止嗅探</td><td>嗅探的判定算法不在核心 HTTP RFC 中，而由 Fetch 规范与浏览器实现定义；nosniff 的处理规则在那里被精确规定</td><td>知道「这条规则归谁管」，排查时用对文档：语法查 9112、语义查 9110、类型查 6838、嗅探行为查 Fetch</td></tr>
+      </table>
+    </div>
+
+    <p>把这张表读薄，只留一句：<strong>MDN 告诉你「是什么」，RFC 告诉你「精确到字节是什么」</strong>。本讲所有结论都能在 MDN 找到对应说法；而当你需要写解析器、判定重试、争论某个类型是否合法时，最终要落到右边那列的规范字句。这个「指南—规范」的双层视角，是全课程反复使用的读法。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>把 RFC 的 ABNF 当成「报文的语法图」来读，而不是当成天书：<code>chunk-size CRLF chunk-data CRLF</code> 这一行，就直接解释了例子④里每块的读法；<code>start-line → field-line* → CRLF → body</code> 这一串，就是图 2.1 的解析流水线。规范不是额外的负担，而是你已经在用的规则的精确版本。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>「MDN 和 RFC 说法不一致时，必有一方错了」——通常不是。MDN 是面向开发者的指南，会做合理简化（比如把实体首部并入表示首部、把四种请求目标写成通俗例子）；RFC 是 normative 规范，逐字严谨。二者是抽象层级不同，不是互相矛盾。真正要警惕的是拿旧资料里的 HTTP/1.0 或早期 RFC（如已被取代的 7230 系列）当现行口径——本系列的现行规范是 RFC 9110 系列。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front"><div class="q-tag">回忆 2.5-1</div><div class="q-text">RFC 9112、RFC 9110、RFC 6838 各自管什么？分块编码的 chunk-size 按什么进制？</div><span class="tap">点击翻面 →</span></div>
+            <div class="flip-face flip-back"><div class="a-tag">参考答案</div>9112 管报文语法（含分块编码），9110 管方法与状态码等语义及 safe/idempotent 属性，6838 管媒体类型注册与命名。chunk-size 按十六进制，且 0 块后可跟 trailer-section 再以 CRLF 结束。</div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front"><div class="q-tag">回忆 2.5-2</div><div class="q-text">为什么 MDN 与 RFC 说法不同不一定是矛盾？ sniffing 行为该查哪份文档？</div><span class="tap">点击翻面 →</span></div>
+            <div class="flip-face flip-back"><div class="a-tag">参考答案</div>MDN 是为开发者简化的指南、RFC 是逐字的 normative 规范，属于抽象层级不同而非冲突。嗅探与 nosniff 的判定算法不在核心 HTTP RFC，而在 Fetch 规范与浏览器实现里，排查时应查 Fetch。</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===== 概念卡 ===== -->
+    <h2><span class="sec-no">🃏</span>概念卡：本章概念的一分钟画像</h2>
+    <p>翻面前先自问：这个概念我能用一句话讲清楚吗？讲不清就回到对应小节重读。</p>
+    <div class="flip-grid">
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front"><div class="q-tag">概念卡 1</div><div class="q-text">HTTP 报文（HTTP message）与四段结构</div><span class="tap">点击翻面 →</span></div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">客户端与服务器交换的数据单元，分请求与响应；由起始行、首部、空行、主体四段构成。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">TCP 只有字节流、没有消息边界，四段结构让收发双方能切出完整的一次交换。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">信封四件套：抬头（起始行）、附注（首部）、分隔线（空行）、信纸（主体）。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">把报文等同于主体，或以为空行可省略；空行是首部结束的唯一语法标志。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">2.1 逐行解析；第 3 讲内容协商、第 6 讲范围请求都回到这副骨架。</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front"><div class="q-tag">概念卡 2</div><div class="q-text">请求行三要素与请求目标四形式</div><span class="tap">点击翻面 →</span></div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">请求行 = 方法 + 请求目标 + 版本；目标有原始、绝对、authority、星号四种形式。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">一次讲清做什么、对谁做、按什么版本；不同连接拓扑用不同目标形式。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">直连写门牌、经代理写全址、建隧道写对方名、问全局打星号。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为请求目标永远是 / 开头的路径；忽略 CONNECT 的 authority 与 OPTIONS 的星号形式。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">2.2 展开起始行；第 11 讲代理与隧道时四种形式原样回归。</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front"><div class="q-tag">概念卡 3</div><div class="q-text">首部四类作用域（General / Request / Response / Representation）</div><span class="tap">点击翻面 →</span></div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">MDN 按作用域分通用、请求、响应、表示四类首部；旧称「实体首部」描述格式的部分并入表示首部。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">决定每个首部谁能读、出现在哪个方向、是否依赖主体存在。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">通用是公共告示、请求是客户点单、响应是店家回话、表示是包裹标签。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">把 Host 当成目标 IP；或无主体时也硬塞表示首部。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">2.1 归类首部；端到端与逐跳的进一步区分见 2.5 延伸。</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front"><div class="q-tag">概念卡 4</div><div class="q-text">主体定界：Content-Length 与 chunked</div><span class="tap">点击翻面 →</span></div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">长度已知用 Content-Length 读固定字节；未知用 Transfer-Encoding: chunked 逐块读，0 块结束。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">在无边界的字节流上标出「主体到哪儿结束」，避免粘包或挂起。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">Content-Length 是先数好页数，chunked 是一页一页边写边交、最后一页标「完」。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">块大小按十进制读（应按十六进制）；或把长度写错而不意识到会错乱连接。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">2.3 逐块手算；L2 习题定界；第 6 讲范围请求也依赖长度。</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front"><div class="q-tag">概念卡 5</div><div class="q-text">状态码（Status code）五类</div><span class="tap">点击翻面 →</span></div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">状态行里的三位数字，按首位分 1xx 信息、2xx 成功、3xx 重定向、4xx 客户端错、5xx 服务端错。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">一句话告诉客户端「成了没有、下一步该谁行动」，是重试与缓存判定的依据。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">1xx 继续、2xx 收下、3xx 去别处、4xx 你改、5xx 我修。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">把 304 当错误；把 403 与 401、404 混为一谈；依赖状态文本而非数字判断。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">2.2 分流判定表；第 5、6 讲缓存与条件请求、第 12 讲重定向反复使用。</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front"><div class="q-tag">概念卡 6</div><div class="q-text">MIME 类型（Media type）与 type/subtype</div><span class="tap">点击翻面 →</span></div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">形如 type/subtype 的媒体类型标签，由 Content-Type 声明，可带 charset 等参数，由 RFC 6838 注册。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">同一串字节可能是文本、图片或程序，必须显式声明该用哪个解析器。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">包裹上的「易碎/冷藏」标签，决定拆包方式；+xml/+json 后缀说明内容有结构。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">靠扩展名猜类型；漏写 charset 导致乱码；把 charset 当 Content-Encoding。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">2.4 判定表；第 3 讲内容协商据此选择表示。</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front"><div class="q-tag">概念卡 7</div><div class="q-text">内容嗅探、nosniff 与两种「编码」</div><span class="tap">点击翻面 →</span></div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">嗅探是类型缺失时浏览器读字节猜类型；nosniff 禁止之。Content-Type 说类型，Content-Encoding 说变换。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">防止可控内容被猜成可执行类型；把「是什么」与「做了什么变换」分开表达。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">nosniff 是「别猜、按标签来」；压缩编码是外衣、类型是内容身份。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为 nosniff 会自动修好错误类型（它只是拒绝嗅探）；把 gzip 压缩与 UTF-8 字符集混为一谈。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">2.3 与 2.4 的正交分工；第 3 讲压缩、第 10 讲安全策略均涉及。</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===== 分层习题 ===== -->
+    <h2><span class="sec-no">📝</span>分层习题</h2>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>有人说：「请求目标就是 URL 里的路径，永远是 / 开头；Host 首部只是把目标 IP 换成了域名。」请分别指出这两句话的错处，并说出正确规则。</div>
+      <details><summary>提示</summary><p>回想请求目标的四种形式，以及 Host 与 TCP 连接的关系：IP 由谁决定？</p></details>
+      <details><summary>完整解答</summary><div class="ex-answer">第一句错：请求目标有四种形式，/ 开头的原始形式只是最常见的一种。经代理的 GET 用<strong>绝对形式</strong>（完整 URL），CONNECT 用 <strong>authority form</strong>（域名+端口），OPTIONS 问整体能力用<strong>星号形式</strong> <code>*</code>。第二句错：Host 并非「目标 IP 的域名写法」。客户端先由 DNS 与 TCP 层确定并连上某个 IP，Host 首部携带的是<strong>用户原本访问的主机名</strong>，用于让同一 IP 上的服务器区分虚拟主机。IP 在网络层/传输层已经确定，Host 是 HTTP 层额外携带的语义信息。两句话都把「HTTP 层的声明」误当成了「网络层的地址」。</div></details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>某响应同时带有 <code>Content-Type: text/html; charset=utf-8</code> 与 <code>Content-Encoding: gzip</code>，<code>Content-Length: 843</code>。请回答：843 是压缩前还是压缩后的字节数？客户端应按什么顺序处理这三条信息？如果把 charset 误当成 Content-Encoding 会怎样？</div>
+      <details><summary>提示</summary><p>分清「类型 / 变换 / 长度」三件事，并想清楚客户端解码与解析的先后。</p></details>
+      <details><summary>完整解答</summary><div class="ex-answer">843 是<strong>压缩后</strong>的字节数：Content-Length 计的是线上实际传输的主体字节，而主体此时是 gzip 数据。处理顺序：① 按 <code>Content-Length</code> 读出 843 字节；② 按 <code>Content-Encoding: gzip</code> 解压，得到原始 HTML 字节；③ 按 <code>Content-Type: text/html; charset=utf-8</code> 把字节解释为 UTF-8 编码的 HTML 并渲染。若把 charset 误当 Content-Encoding，就会试图对 HTML 做一种叫「utf-8」的<strong>内容解码</strong>（并不存在这样的压缩变换），或者反过来忽略真正的 gzip，结果要么解压失败、要么把 gzip 字节当 HTML 解析成乱码。正确认知：<code>charset</code> 是 <code>Content-Type</code> 的<strong>参数</strong>（字符如何解释），<code>Content-Encoding</code> 是独立的首部（字节做过什么变换），二者维度不同。</div></details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>下面是一段分块编码的响应主体（每行后的 CRLF 已省略显示，空格用一个可见的「␠」标记以便计数）。请逐块解析，把拼接出的完整主体写出来，并指出主体一共解码出多少字节。<br><code>4</code> / <code>Welc</code> / <code>6</code> / <code>ome␠to</code> / <code>4</code> / <code>␠you</code> / <code>0</code> / <code>（空行）</code></div>
+      <details><summary>提示</summary><p>块大小是十六进制；每块数据后有一个不计入大小的 CRLF；0 块后是尾部与空行。这里所有块大小都在 10 以内，十六进制值与十进制相同。</p></details>
+      <details><summary>完整解答</summary><div class="ex-answer">按「读块大小 → 读对应字节 → 跳过 CRLF」的循环：<br>① 第一行 <code>4</code>，十六进制 4 = 4 字节，读 <code>Welc</code>（W、e、l、c 共 4 字节），累计 <code>Welc</code>。<br>② 下一行 <code>6</code>，6 字节，读 <code>ome␠to</code>（o、m、e、␠、t、o 共 6 字节，空格也算 1 字节），累计 <code>Welcome to</code>。<br>③ 下一行 <code>4</code>，4 字节，读 <code>␠you</code>（␠、y、o、u 共 4 字节），累计 <code>Welcome to you</code>。<br>④ 下一行 <code>0</code>，大小为 0，主体结束；随后空行表示无尾部首部，整条消息解析完毕。<br>完整主体 = <code>Welcome to you</code>，逐字符数得 14 字节（Welcome 7 + 空格 1 + to 2 + 空格 1 + you 3 = 14）。校验各块：4 + 6 + 4 = 14，与解码出的字符串长度完全一致。<br>关键结论：每块的「大小」必须与随后数据的字节数严格相等，空格也占 1 字节；接收方靠长度精确切片，不靠寻找特殊字符，这正是分块编码能承载任意二进制内容的原因。</div></details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>一条 POST 请求主体是 UTF-8 编码的中文 <code>你好世界</code>（4 个汉字）。请手算它作为主体时 Content-Length 应写多少；若误写成 10，会发生什么？若改用 chunked，且把这 4 个汉字拆成两块（每块 2 个汉字），写出对应的分块报文片段（块大小用十六进制）。</div>
+      <details><summary>提示</summary><p>UTF-8 下一个常用汉字占 3 字节；先算总字节，再想长度写错时字节流会怎样。</p></details>
+      <details><summary>完整解答</summary><div class="ex-answer"><strong>手算长度：</strong>UTF-8 下每个常用汉字 3 字节，4 个汉字 = 4 × 3 = <strong>12 字节</strong>，所以 <code>Content-Length: 12</code>。<br><strong>写成 10 的后果：</strong>声明 10 小于实际 12。接收方读完 10 字节就认为主体结束，剩下的 2 字节仍留在字节流里；在持久连接上，这多出的 2 字节会被当作<strong>下一条报文的起始行开头</strong>，导致后续解析错乱（典型表现是莫名其妙的「非法起始行」）。反之若写大于 12，接收方会一直等那些不来的字节，连接挂起直到超时。根因：TCP 是字节流，长度是唯一边界。<br><strong>改用 chunked（每块 2 汉字 = 6 字节，十六进制为 6）：</strong><br><code>Transfer-Encoding: chunked</code><br>空行后主体：<br><code>6</code> CRLF <code>你好</code> CRLF<br><code>6</code> CRLF <code>世界</code> CRLF<br><code>0</code> CRLF <code>（空行）</code><br>解析：第一块大小 6（十六进制）= 6 字节，正好两个汉字；第二块同理；0 块结束。总字节仍为 12，与 Content-Length 方案一致，只是把「一次数总长」换成了「逐块报长度」。</div></details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l3">L3 建模应用</span>你在为一个下载站设计响应策略：站点既有已知大小的静态安装包，也有服务端实时生成、事先无法统计长度的报表；同时站点曾被告警「有 API 返回的 JSON 被浏览器当成 HTML 执行」。请综合本讲知识给出方案：两类内容各用什么主体定界？JSON 响应应带哪些首部、为什么？并说明 <code>Content-Type</code> 与 <code>Content-Encoding</code> 应如何配合压缩。</div>
+      <details><summary>提示</summary><p>把「定界二选一」「嗅探与 nosniff」「类型与变换正交」三块拼到一起。</p></details>
+      <details><summary>完整解答</summary><div class="ex-answer"><strong>主体定界：</strong>静态安装包大小已知，用 <code>Content-Length</code> 精确声明字节数，客户端按长度读、可显示进度；实时报表长度未知，用 <code>Transfer-Encoding: chunked</code>，服务端边生成边发送，每块报十六进制大小，0 块收尾，避免先全量缓存到内存数长度。<br><strong>JSON 安全：</strong>正确设置 <code>Content-Type: application/json; charset=utf-8</code>，并加 <code>X-Content-Type-Options: nosniff</code>。前者让浏览器按数据处理而非渲染成页面；后者阻止浏览器在类型异常时嗅探成 HTML 而执行其中可控文本。只写对类型仍不够——若某些链路把类型改错，nosniff 是第二道防线。<br><strong>类型与压缩配合：</strong>若对 JSON 做 gzip，则 <code>Content-Type: application/json</code> 描述<strong>解压后的数据本身</strong>，<code>Content-Encoding: gzip</code> 描述<strong>线上施加的变换</strong>，<code>Content-Length</code>（若用）记压缩后的字节数。客户端先解压再按 JSON 解析。<br><strong>一致性检查：</strong>三条信息互不替代——类型管解析、编码管逆变换、长度/分块管定界，三者齐全且互相匹配，才算一条能被正确、安全处理的响应。</div></details>
+    </div>
+
+    <!-- ===== 自测 ===== -->
+    <h2><span class="sec-no">✍️</span>本章自测</h2>
+    <p class="quiz-hint">点击选项判分，答错会给出原因。</p>
+
+    <div class="quiz-block" data-answer="c">
+      <div class="q-no">自测 1</div>
+      <div class="q-stem">关于 HTTP 报文的空行，哪一句正确？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 空行只是排版美化，删掉不影响解析</li>
+        <li data-opt="b">B. 空行标志着主体传输结束</li>
+        <li data-opt="c">C. 空行标志首部结束、主体开始，是解析器停止读首部的唯一语法信号</li>
+        <li data-opt="d">D. 空行只在响应报文中出现，请求报文没有</li>
+      </ul>
+      <div class="quiz-explain">解析：C 对。A 错在空行是语法的一部分（CRLF CRLF），缺失会导致主体首行被误当首部；B 错在空行标志的是「首部结束」而非「主体结束」，主体结束靠 Content-Length 或 0 块；D 错在请求与响应都用空行分隔首部与主体。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 2</div>
+      <div class="q-stem">客户端要通过 HTTP 代理用 GET 取一个资源，请求目标应采用哪种形式？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 原始形式，如 GET /path HTTP/1.1</li>
+        <li data-opt="b">B. 绝对形式，如 GET http://example.com/path HTTP/1.1</li>
+        <li data-opt="c">C. authority form，如 GET example.com:80 HTTP/1.1</li>
+        <li data-opt="d">D. 星号形式，如 GET * HTTP/1.1</li>
+      </ul>
+      <div class="quiz-explain">解析：B 对。经代理时必须给完整 URL，代理才知道要向哪个源站转发。A 的原始形式用于直连源站；C 的 authority form 仅用于 CONNECT 建隧道，且这里方法是 GET 而非 CONNECT；D 的星号形式仅配合 OPTIONS 询问服务器整体能力，不用于 GET 取资源。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="d">
+      <div class="q-no">自测 3</div>
+      <div class="q-stem">一段分块编码中出现 <code>1A</code> 这个块大小行，紧接着的数据块应读多少字节？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 1 字节</li>
+        <li data-opt="b">B. 10 字节</li>
+        <li data-opt="c">C. 11 字节</li>
+        <li data-opt="d">D. 26 字节</li>
+      </ul>
+      <div class="quiz-explain">解析：D 对。块大小按十六进制读，1A = 1×16 + 10 = 26 字节，随后数据块 CRLF 之前恰好 26 字节。A 把它当成十进制首位、B 当成 A=10、C 当成 1 与 A 拼接，都是没有按十六进制规则换算所致；数据块后的 CRLF 不计入这 26 字节。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="a">
+      <div class="q-no">自测 4</div>
+      <div class="q-stem">某 API 响应带 <code>Content-Type: application/json</code> 与 <code>X-Content-Type-Options: nosniff</code>。关于 nosniff，哪一句正确？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 它阻止浏览器在类型缺失或异常时嗅探，强制按声明的保守类型处理，降低被猜成可执行内容的风险</li>
+        <li data-opt="b">B. 它会自动把写错的 Content-Type 修正为正确类型</li>
+        <li data-opt="c">C. 它压缩响应内容，减小 JSON 体积</li>
+        <li data-opt="d">D. 它是 Content-Encoding 的一种，表示某种压缩算法</li>
+      </ul>
+      <div class="quiz-explain">解析：A 对。nosniff 只是「禁止猜测」，并不修正类型（B 错），也不压缩内容（C 错），更不是内容编码算法（D 错）。它要求浏览器按已声明的类型保守处理：类型缺失时不嗅探成可执行类型，类型不符时（如脚本被发成 text/plain）拒绝执行。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="c">
+      <div class="q-no">自测 5</div>
+      <div class="q-stem">下列哪一组说法全部正确？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 403 表示「没登录」，401 表示「知道你是谁但不给」；304 是 4xx 客户端错误</li>
+        <li data-opt="b">B. 状态码文本是机器判断成败的依据，客户端应读文本而非数字</li>
+        <li data-opt="c">C. 401 要求先认证，403 是理解但拒绝授权；304 是缓存再验证成功、无主体；5xx 属服务端故障</li>
+        <li data-opt="d">D. 请求目标只有原始形式一种；Host 首部就是目标服务器的 IP 地址</li>
+      </ul>
+      <div class="quiz-explain">解析：C 对。A 把 401 与 403 说反了，且 304 属 3xx 而非 4xx；B 错在客户端判成败只读三位状态码，状态文本只是给人看的注释；D 错在请求目标有四种形式，且 Host 是主机名而非 IP。C 四项均与 MDN 口径一致。</div>
+    </div>
+
+    <!-- ===== 复述 ===== -->
+    <div class="retell">
+      <h3>🗣️ 用自己的话，三句话讲完本章</h3>
+      <p>对着空气（或室友）说出这三句。说卡壳的那句，回去重读对应小节。</p>
+      <details><summary>句1：这章解决什么问题？——</summary><div class="retell-answer">参考答案：在 TCP 只搬运字节、没有消息边界的前提下，为一次交换建立固定结构，让接收方知道「从哪儿读、到哪儿停、按什么解析」，从而把上一讲抽象的「交换报文」变成可逐行拆开的具体对象。</div></details>
+      <details><summary>句2：核心机制是什么？——</summary><div class="retell-answer">参考答案：用四段结构（起始行 + 首部 + 空行 + 主体）承载一次事务；起始行给出意图或结果，首部携带元数据，空行划出边界，Content-Length 或 chunked 定界主体，Content-Type 声明媒体类型与字符集，nosniff 防止嗅探绕过声明。</div></details>
+      <details><summary>句3：它和前后章怎么分工？——</summary><div class="retell-answer">参考答案：第 1 讲给会话全景，本讲把其中流动的报文明细化；第 3 讲接着讲同一资源如何按 Accept 给出不同表示、如何压缩；本讲立起的定界、类型、状态码，是后续连接、缓存、条件请求、重定向各讲的共同底座。</div></details>
+    </div>
+
+    <div class="review-plan">
+      <h3>🔁 间隔复习计划</h3>
+      <p>回忆本身比重读有效 10 倍。到点只做一件事：翻卡 + 重做标记题。</p>
+      <table>
+        <tr><th>时间点</th><th>复习内容</th><th>预计用时</th></tr>
+        <tr><td>第 1 天</td><td>概念卡 1–7 全过；回忆 2.1-1、2.3-1、2.4-1 各 2 张</td><td>12 分钟</td></tr>
+        <tr><td>第 3 天</td><td>重做自测 3、4；翻错的概念卡 4、7；回忆 2.2-1、2.5-1</td><td>8 分钟</td></tr>
+        <tr><td>第 7 天</td><td>三句话复述 + L2 两题（汉字 Content-Length 手算、分块逐块解析）；回看例子①的逐行解析</td><td>12 分钟</td></tr>
+        <tr><td>第 15 天</td><td>只重做合上书挑战；再默写一次四段结构与请求目标四形式，能全过就毕业</td><td>15 分钟</td></tr>
+      </table>
+    </div>
+
+    <div class="final-challenge">
+      <h3>📕 合上书挑战</h3>
+      <p class="fc-sub">现在关掉这个页面，拿一张纸，凭记忆完成以下任务。全部做完再回来核对——这是本章真正的毕业考试。</p>
+      <ol id="challenge-list">
+        <li><span class="fc-check"></span>默写请求与响应报文的四段结构，并各写一条含空行与主体的完整报文</li>
+        <li><span class="fc-check"></span>写出请求行三要素与请求目标四种形式，各配一个场景</li>
+        <li><span class="fc-check"></span>把 MDN 的四类首部列出来，各举一例并说出作用域</li>
+        <li><span class="fc-check"></span>手算：UTF-8 的「你好世界」作为主体的 Content-Length 是多少？若写成 10 会怎样？</li>
+        <li><span class="fc-check"></span>写 1xx–5xx 五类的分工，各举一码并说出「下一步该谁行动」</li>
+        <li><span class="fc-check"></span>用一张表对比 text/html、application/json、image/svg+xml、application/octet-stream 的处理，并说明 nosniff 的作用</li>
+        <li><span class="fc-check"></span>一句话回答本讲主线问题：一条 HTTP 报文由哪几部分组成，接收方凭什么知道主体从哪里开始、到哪里结束、该用什么解析？</li>
+      </ol>
+    </div>
+
+    <div class="complete-zone">
+      <button class="btn-complete" id="btn-complete" onclick="markDone()">✓ 我已完成本讲（含合上书挑战）</button>
+    </div>
+
+    <div class="chapter-nav">
+      <a href="chapter-01.html"><span class="nav-dir">← 上一讲</span>第1讲 HTTP 概述与典型会话</a>
+      <a href="chapter-03.html" class="next"><span class="nav-dir">下一讲 →</span>第3讲 内容协商、压缩与客户端提示</a>
+    </div>
+
+  </div>
+</div>
+
+<footer class="footer">
+  <div class="wrap">第2讲 HTTP 消息与 MIME 类型 · HTTP 精通 · 依据 MDN Web Docs《HTTP 指南》整理，延伸板块对照 RFC 9110 系列 · 学习进度保存在本机浏览器中</div>
+</footer>
+
+<script src="assets/mermaid.min.js"></script>
+<script>
+mermaid.initialize({
+  startOnLoad: true,
+  theme: "base",
+  themeVariables: {
+    primaryColor: "#e3edf7",
+    primaryBorderColor: "#1d5f9e",
+    primaryTextColor: "#1d5f9e",
+    lineColor: "#5c554b",
+    secondaryColor: "#fbeedd",
+    tertiaryColor: "#f5f1e8",
+    fontFamily: "-apple-system, PingFang SC, sans-serif",
+    fontSize: "14px"
+  },
+  flowchart: { curve: "linear", htmlLabels: false }
+});
+</script>
+<script>
+document.querySelectorAll(".quiz-block").forEach(block => {
+  const answer = block.dataset.answer;
+  const explain = block.querySelector(".quiz-explain");
+  block.querySelectorAll(".quiz-opts li").forEach(li => {
+    li.addEventListener("click", () => {
+      const opts = block.querySelectorAll(".quiz-opts li");
+      opts.forEach(o => o.classList.add("disabled"));
+      if (li.dataset.opt === answer) {
+        li.classList.add("correct");
+      } else {
+        li.classList.add("wrong");
+        block.querySelector(`[data-opt="${answer}"]`).classList.add("correct");
+      }
+      explain.classList.add("show");
+    });
+  });
+});
+
+document.querySelectorAll("#challenge-list li").forEach(li => {
+  li.addEventListener("click", () => li.classList.toggle("checked"));
+});
+
+const KEY = "http_guide_progress_v1";
+function loadProgress() {
+  try { return JSON.parse(localStorage.getItem(KEY)) || {}; } catch (e) { return {}; }
+}
+const progress = loadProgress();
+const btn = document.getElementById("btn-complete");
+if (progress[2] && progress[2].done) {
+  btn.textContent = "✓ 已完成 · 再次点击重置";
+  btn.classList.add("done");
+}
+function markDone() {
+  const p = loadProgress();
+  if (p[2] && p[2].done) {
+    delete p[2];
+    btn.textContent = "✓ 我已完成本讲（含合上书挑战）";
+    btn.classList.remove("done");
+  } else {
+    p[2] = { done: true, completedAt: Date.now(), reviewsDone: 0 };
+    btn.textContent = "✓ 已完成 · 复习提醒已开启";
+    btn.classList.add("done");
+  }
+  localStorage.setItem(KEY, JSON.stringify(p));
+}
+</script>
+
+</body>
+</html>

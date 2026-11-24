@@ -1,0 +1,635 @@
+<!DOCTYPE html>
+<!--
+  ======================================================================
+  HTTP 精通 · 课件外壳（deck-shell.html）
+  由 build-slides.mjs 把 slides/NN.html 注入幻灯片区域，
+  输出 public/http-guide-slides/NN-xxx-课件.html。
+  骨架来自站内通用 1280×720 课件模板；本套额外增加 .wire 协议报文块。
+  每页必须写 data-narration（180–280 字口语稿，禁半角双引号、禁换行、禁小于号）。
+  ======================================================================
+-->
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第12讲 HTTP 重定向 · HTTP 精通 课件</title>
+<script>
+window.MathJax = {
+  tex: {
+    inlineMath: [['$', '$'], ['\\(', '\\)']],
+    displayMath: [['$$', '$$'], ['\\[', '\\]']],
+    processEscapes: true,
+    tags: 'none'
+  },
+  svg: { fontCache: 'global', scale: 1.05 },
+  options: { skipHtmlTags: ['script','noscript','style','textarea','pre','code'] }
+};
+</script>
+<!-- MathJax 本地引用（tex-svg 单文件全量组件，约2MB，自带字体数据），file:// 与断网均可用 -->
+<script src="assets/tex-svg.js" async></script>
+<style>
+  :root{
+    --primary:#1a365d; --accent:#2b6cb0; --accent-light:#ebf8ff; --accent-border:#bee3f8;
+    --text:#2d3748; --muted:#718096; --border:#e2e8f0; --bg-light:#f7fafc;
+    --success:#38a169; --danger:#e53e3e; --warning:#dd6b20; --warn-bg:#fffaf0;
+  }
+  *{margin:0;padding:0;box-sizing:border-box;}
+  html,body{width:100%;height:100%;overflow:hidden;background:#0f172a;}
+  body{
+    font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Hiragino Sans GB","Microsoft YaHei","WenQuanYi Micro Hei",sans-serif;
+    color:var(--text);
+  }
+  #stage{
+    position:absolute; left:50%; top:50%;
+    width:1280px; height:720px;
+    transform:translate(-50%,-50%) scale(1);
+    transform-origin:center center;
+    background:#ffffff;
+    box-shadow:0 0 40px rgba(0,0,0,.4);
+    overflow:hidden;
+  }
+  .slide{
+    position:absolute; inset:0;
+    padding:36px 60px 52px;
+    display:none;
+    flex-direction:column;
+    background:#ffffff;
+    opacity:0;
+    transition:opacity .35s ease;
+  }
+  .slide.active{ display:flex; opacity:1; }
+
+  #progress{ position:absolute; top:0; left:0; height:6px; background:var(--accent); width:0; z-index:50; transition:width .35s; }
+
+  /* 封面 / 结束页 */
+  .slide-cover{ justify-content:center; align-items:center; text-align:center; }
+  .slide-cover{ background:linear-gradient(135deg,#1a365d 0%,#2b6cb0 100%); color:#fff; }
+  .slide-cover .kicker{ font-size:22px; letter-spacing:6px; opacity:.85; margin-bottom:18px;}
+  .slide-cover h1{ font-size:64px; font-weight:800; line-height:1.2; margin-bottom:22px; letter-spacing:2px;}
+  .slide-cover .sub{ font-size:26px; opacity:.92; margin-bottom:36px;}
+  .slide-cover .meta{ font-size:19px; opacity:.85; line-height:2;}
+  .slide-cover .divider{ width:160px;height:5px;background:#fff;opacity:.6;margin:0 auto 30px;border-radius:3px;}
+  .slide-cover .question{ font-size:24px; background:rgba(255,255,255,.12); border:1px solid rgba(255,255,255,.35); border-radius:12px; padding:12px 28px; margin-bottom:30px;}
+
+  /* 页头：结论式标题 */
+  .slide-head{ display:flex; align-items:baseline; gap:16px; border-bottom:3px solid var(--accent); padding-bottom:9px; margin-bottom:12px;}
+  .slide-head .sec{ font-size:17px; color:var(--accent); font-weight:700; background:var(--accent-light); padding:3px 11px; border-radius:6px; white-space:nowrap;}
+  .slide-head h3{ font-size:29px; color:var(--primary); font-weight:700;}
+  .slide-body{ flex:1; display:flex; flex-direction:column; justify-content:center; min-height:0; }
+
+  p{ font-size:21px; line-height:1.65; margin-bottom:8px;}
+  .lead{ font-size:23px; color:#374151; line-height:1.75;}
+  ul,ol{ margin:0 0 8px 26px; font-size:21px; line-height:1.7;}
+  li{ margin-bottom:5px;}
+  strong{ color:var(--primary); }
+
+  /* 公式块 */
+  .formula{ background:var(--accent-light); border-left:5px solid var(--accent); border-radius:0 10px 10px 0; padding:9px 22px; margin:9px 0; text-align:center; font-size:23px;}
+  .formula-concl{ background:#fffaf0; border-left:5px solid var(--warning);}
+  .MathJax{ font-size:1.05em !important; }
+  mjx-container[display="true"]{ margin:6px 0 !important; }
+
+  /* 表格 */
+  table{ width:100%; border-collapse:collapse; margin:10px 0; font-size:20px;}
+  th{ background:var(--accent); color:#fff; padding:8px 12px; text-align:center; font-weight:600;}
+  td{ padding:7px 12px; border:1px solid var(--border); text-align:center; vertical-align:middle;}
+  tr:nth-child(even) td{ background:var(--bg-light);}
+  td.l{ text-align:left; }
+  table.small{ font-size:18px; }
+  table.small td, table.small th{ padding:6px 10px; }
+
+  /* 组件 */
+  .card{ background:var(--accent-light); border:1px solid var(--accent-border); border-radius:12px; padding:12px 20px; margin:10px 0;}
+  .tip{ background:#ebf8ff; border-left:5px solid var(--accent); border-radius:0 10px 10px 0; padding:10px 20px; margin:10px 0; font-size:20px; color:#2c5282;}
+  .deep{ background:#f0fff4; border-left:5px solid var(--success); border-radius:0 10px 10px 0; padding:10px 20px; margin:10px 0; font-size:20px; color:#22543d;}
+  .warn{ background:var(--warn-bg); border-left:5px solid var(--warning); border-radius:0 10px 10px 0; padding:10px 20px; margin:10px 0; font-size:20px; color:#744210;}
+  .trap{ background:#fef2f2; border-left:5px solid var(--danger); border-radius:0 10px 10px 0; padding:10px 20px; margin:10px 0; font-size:20px; color:#7f1d1d;}
+
+  .pause{
+    background:var(--warn-bg); border:2px dashed var(--warning); border-radius:14px;
+    padding:10px 22px; margin:10px 0; display:flex; align-items:center; gap:16px;
+  }
+  .pause .icon{ font-size:36px; line-height:1; }
+  .pause .txt b{ color:var(--warning); font-size:21px; }
+  .pause .txt p{ font-size:18px; color:#744210; margin:3px 0 0; }
+
+  .cols{ display:flex; gap:28px; align-items:stretch; }
+  .col{ flex:1; min-width:0; }
+
+  /* 推导分步：仅互动模式隐藏，截图(autohide)模式全部可见——此规则不可删 */
+  .step{ opacity:0; transform:translateY(8px); transition:opacity .3s ease, transform .3s ease; }
+  .step.on{ opacity:1; transform:none; }
+  body.autohide .step{ opacity:1 !important; transform:none !important; }
+  .step-hint{ font-size:14px; color:var(--muted); margin-top:4px;}
+  body.autohide .step-hint{ display:none; }
+
+  /* HTTP 精通课件专用：协议报文原文块 */
+  .wire{background:#0f172a;color:#e2e8f0;border-radius:10px;padding:12px 18px;margin:8px 0;
+    font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:17px;line-height:1.55;
+    white-space:pre-wrap;overflow-wrap:anywhere;}
+  .wire b{color:#7dd3fc;font-weight:700;}
+  .wire i{color:#fde68a;font-style:normal;}
+  .wire em{color:#86efac;font-style:normal;}
+  .wire.sm{font-size:15px;line-height:1.45;}
+  .wire-cap{font-size:15px;color:var(--muted);margin:0 0 8px;}
+  .to-lec{color:#bee3f8;text-decoration:none;font-size:15px;margin-left:12px;}
+  .to-lec:hover{text-decoration:underline;}
+  .badge{display:inline-block;background:var(--accent-light);color:var(--accent);border:1px solid var(--accent-border);
+    border-radius:6px;padding:2px 10px;font-size:17px;font-weight:700;margin-right:8px;}
+
+  /* 因果链 */
+  .chain{ margin:6px 0; }
+  .chain .link{ display:flex; align-items:center; gap:14px; margin:6px 0;}
+  .chain .no{ width:34px; height:34px; border-radius:50%; background:var(--accent); color:#fff; font-size:18px; font-weight:700; display:flex; align-items:center; justify-content:center; flex-shrink:0;}
+  .chain .txt{ font-size:21px; line-height:1.5;}
+  .chain .txt strong{ color:var(--primary); }
+
+  /* mermaid 容器：高度封顶，防止溢出 720px 舞台 */
+  .mmd{ background:var(--bg-light); border:1px solid var(--border); border-radius:12px; padding:10px 14px; display:flex; justify-content:center; align-items:center; margin:8px 0;}
+  .mmd .mermaid{ display:flex; justify-content:center; width:100%; visibility:hidden; }
+  .mmd .mermaid[data-done]{ visibility:visible; }
+  .mmd .mermaid svg{ max-width:100%; height:auto; max-height:230px; }
+  .mmd.mmd-tall .mermaid svg{ max-height:330px; }
+  .mmd.mmd-sm svg{ max-height:150px; }
+  .mmd-row{ display:flex; gap:18px; }
+  .mmd-row .mmd{ flex:1; flex-direction:column; }
+  .mmd .cap{ font-size:17px; color:var(--muted); margin-top:6px; text-align:center;}
+  .mmd .cap b{ color:var(--text); }
+
+  #footer{ position:absolute; bottom:0; left:0; right:0; height:40px; display:flex; align-items:center; justify-content:space-between; padding:0 30px; font-size:15px; color:#94a3b8; background:rgba(247,250,252,.85); border-top:1px solid var(--border); z-index:40;}
+  #footer .brand{ font-weight:600; color:var(--accent); }
+
+  .nav{ position:absolute; bottom:48px; right:40px; display:flex; gap:12px; z-index:45;}
+  .nav button{ width:54px; height:54px; border-radius:50%; border:none; background:var(--accent); color:#fff; font-size:24px; cursor:pointer; box-shadow:0 3px 10px rgba(43,108,176,.4); display:flex; align-items:center; justify-content:center;}
+  .nav button:hover{ background:var(--primary); }
+  .nav button:disabled{ background:#cbd5d0; cursor:default; box-shadow:none;}
+
+  #hint{ position:absolute; bottom:48px; left:40px; font-size:14px; color:#94a3b8; z-index:45;}
+
+  body.autohide #progress, body.autohide #footer, body.autohide .nav, body.autohide #hint{ display:none !important; }
+</style>
+</head>
+<body>
+<div id="stage">
+
+  <div id="progress"></div>
+
+<!-- 第 12 讲：HTTP 重定向（全书收官） -->
+<section class="slide slide-cover active" data-narration="欢迎来到 HTTP 精通最后一讲，第 12 讲 HTTP 重定向。上一讲清点完代理、隧道与协议升级，中间层看似数完了，其实还差最常见的一种干预：服务器不交资源，而是回一条响应请客户端去别处取，这正是全书主线的收束处。本讲回答封面问题：301 与 302、307 与 308 分别承诺了什么，为什么方法被改写会出事。学完你要能区分 3xx 家族、写出 Location 相对地址的解析、判断 POST 后方法是否保留、识别并打破循环，说清永久重定向被长期缓存的后果。对应的 MDN 原文是 HTTP 的重定向。先看它在主线上的位置。">
+  <div class="kicker">HTTP 精通 · 第 12 讲 · 第④组 中间层与分发</div>
+  <h1>HTTP 重定向</h1>
+  <div class="sub">12 讲主线走到终点：让一次请求全程闭合</div>
+  <div class="question">301 与 302、307 与 308 分别承诺了什么，为什么方法被改写会出事？</div>
+  <div class="meta">
+    配套讲义：HTTP 精通 第 12 讲 · 依据 MDN《HTTP 的重定向》<br>
+    终点：一次请求从发起到落地全程闭合<br>
+    ← → 翻页 · 推导页按空格逐步显示
+  </div>
+</section>
+
+<section class="slide" data-narration="这一讲站在十二讲主线的终点。前三讲拆会话、报文与表示，第四到第六讲处理连接与缓存，第七到第十讲补状态、身份与边界，第十一讲讲代理隧道，第十二讲用重定向收尾。图上高亮的是本讲，属第四组中间层与分发。和前面每讲一样，它是往第 1 讲那条骨架上插的又一条规则；不同的是它插在服务器返回响应之后、客户端重发请求之前，于是成了闭环处。本讲 MDN 原文是 Redirections，即 HTTP 的重定向。接下来用一条因果链看这次改道经过哪几步。">
+  <div class="slide-head"><span class="sec">定位</span><h3>第 12 讲是全书闭环处，不是又一个孤立知识点</h3></div>
+  <div class="slide-body">
+    <div class="mmd mmd-sm">
+      <div class="mermaid">
+flowchart LR
+  A["第1讲 会话骨架"] --> B["第2到3讲 报文与表示"] --> C["第4到6讲 连接与缓存"] --> D["第7到10讲 状态与安全"] --> E["第11讲 代理与隧道"] --> F["第12讲 重定向"]:::here
+  classDef here fill:#2b6cb0,color:#ffffff,stroke:#1a365d,stroke-width:3px
+      </div>
+    </div>
+    <p style="text-align:center;">本讲解决「<strong>把请求送到正确的地方</strong>」，补上全书的最后一跳。</p>
+    <div class="tip">本讲对应的 MDN 原文：Redirections（HTTP 的重定向）。</div>
+  </div>
+</section>
+
+<section class="slide" data-narration="本讲主线是五环因果链，也是目录。一，用户请求旧地址；二，服务器不返回资源而回 3xx；三，响应里 Location 指向新地址；四，也是最该盯住的一环，客户端按状态码决定要不要改写原方法，这一判定错了下单和表单就出事；五，客户端朝新地址重新发起请求。最后是危险分支：地址互相指回，重发链永远收敛不到 2xx，形成死循环。记住主线那句话，黄色节点是方法是否被改写的判据，红色节点是回环。先看一个场景，逼出为什么需要它。">
+  <div class="slide-head"><span class="sec">主线</span><h3>一次改道的五环因果链</h3></div>
+  <div class="slide-body">
+    <div class="chain">
+      <div class="link"><span class="no">1</span><span class="txt"><strong>请求一个旧地址</strong>：资源可能已经搬走</span></div>
+      <div class="link"><span class="no">2</span><span class="txt"><strong>服务器返回 3xx</strong>：不交资源，请客户端去别处</span></div>
+      <div class="link"><span class="no">3</span><span class="txt"><strong>Location 指向新地址</strong>：回答去哪</span></div>
+      <div class="link"><span class="no">4</span><span class="txt"><strong>按状态码决定是否改写方法</strong>：本讲最该盯住的判据</span></div>
+      <div class="link"><span class="no">5</span><span class="txt"><strong>客户端重新发起请求</strong>：换地址重投一次</span></div>
+      <div class="link"><span class="no">6</span><span class="txt"><strong>地址互相指回无法收敛</strong>：形成重定向死循环</span></div>
+    </div>
+    <div class="tip">caption 口径：黄色节点是方法是否被改写的判据，红色节点是地址首尾相接的死循环。</div>
+  </div>
+</section>
+
+<section class="slide" data-narration="先看躲不开的场景。站点重构，文章从 /blog/post-42 搬到 /articles/42。站内链接能逐个改，可用户书签、搜索收录、别人网站的外链一个都改不了。旧地址直接回 404，用户以为站点坏了，搜索引擎也把收录慢慢降级。左卡是过于省事的想法，右卡是它解释不了的现实。更好的做法是让旧地址回一条响应：东西搬家了，请去新地址拿。MDN 叫它 URL 重定向或 URL 转发，HTTP 备了一整类专门的响应。除多一次往返，用户几乎察觉不到。要读懂它，先把三个术语钉牢。">
+  <div class="slide-head"><span class="sec">动机</span><h3>书签、收录与外链，你一个都改不了</h3></div>
+  <div class="slide-body">
+    <div class="cols">
+      <div class="col"><div class="card">🙂 <strong>过于省事的想法</strong><br>旧地址直接回 404，站点重构就算完成。</div></div>
+      <div class="col"><div class="card">🤔 <strong>解释不了的现实</strong><br>用户书签、搜索收录、别人网站的外链都指旧地址，改不动。</div></div>
+    </div>
+    <div class="tip">💡 本讲方案：旧地址回一条「搬家了，去新地址拿」的响应，让旧链接继续可用。</div>
+    <div class="deep">除额外一次往返的性能损失外，重定向对用户不可见，地址栏最终显示新地址。</div>
+  </div>
+</section>
+
+<section class="slide" data-narration="给三个术语下定义。3xx 是重定向状态码的类别；状态码是起始行里那个三位数；Location 首部携带目标地址，值是一个 URI 引用，可绝对可相对。重定向响应由 3 开头的状态码加 Location 构成，浏览器收到后立刻加载新地址、把原请求换个地址再发一遍。MDN 又分三类：301 与 308 永久，302、303、307 临时，300 与 304 特殊。记住贯穿全讲的事实：决定重定向之后怎么办的是状态码，不是 Location。Location 只答去哪，状态码答永久还是临时、方法要不要保留，后者是方法改写事故的总根源。来看一条最小响应。">
+  <div class="slide-head"><span class="sec">定义</span><h3>3xx + Location：状态码决定怎么办，首部只答去哪</h3></div>
+  <div class="slide-body">
+    <table class="small">
+      <thead><tr><th>类别</th><th>状态码</th><th>核心暗示</th></tr></thead>
+      <tbody>
+        <tr><td class="l"><strong>永久重定向</strong></td><td class="l">301、308</td><td class="l">原 URL 作废，爬虫更新收录，默认可长期缓存</td></tr>
+        <tr><td class="l"><strong>临时重定向</strong></td><td class="l">302、303、307</td><td class="l">资源暂时不在标准地址，爬虫不记录新地址</td></tr>
+        <tr><td class="l"><strong>特殊重定向</strong></td><td class="l">300、304</td><td class="l">让你选或用本地缓存，不是去另一个地址</td></tr>
+      </tbody>
+    </table>
+    <div class="formula formula-concl">决定「重定向之后怎么办」的是状态码，不是 Location</div>
+    <div class="deep">Location 只回答去哪；状态码回答永久还是临时、方法要不要保留——后者是事故总根源。</div>
+  </div>
+</section>
+
+<section class="slide" data-narration="看一条最小重定向响应。状态行是 301 加 Moved Permanently，Location 给新地址 articles/42，Content-Length 为零，空行后没有主体。这就是 HTTP 重定向（HTTP Redirect），由状态码（Status Code）与 Location 首部（Location Header）构成。浏览器不渲染它，而是朝新地址再发一次请求，方法、主体、首部都带过去，只把请求目标换成 Location 的 URL，用户只觉得慢一点。决定该不该改方法的是状态码。下一页把五个状态码摆齐判定。">
+  <div class="slide-head"><span class="sec">例子 · 报文</span><h3>一条最小的重定向响应长什么样</h3></div>
+  <div class="slide-body">
+    <div class="wire sm"><i>HTTP/1.1 301 Moved Permanently</i>
+<i>Date:</i> Mon, 16 Nov 2026 00:30:00 GMT
+<i>Location:</i> https://www.example.com/articles/42
+<i>Content-Length:</i> 0
+
+<em>空行之后通常没有可渲染的主体</em></div>
+    <div class="wire-cap">状态行给出 301 与原因短语，Location 给出新地址；浏览器不渲染它，而是朝新地址再发一次请求。</div>
+    <div class="deep">这等于把用户原本的请求「照原样、换个地址」重投一次；用户除多一次往返外毫无察觉。</div>
+  </div>
+</section>
+
+<section class="slide" data-narration="回答最危险的问题：POST 被重定向后还是不是 POST。基准请求是 POST /submit，主体为姓名与城市两字段。判定表摆齐五个状态码：301 与 302 通常改 GET、主体丢失；303 明确改 GET、主体丢弃；307 与 308 严格保持 POST 与主体不变。分水岭：303 明确要你改 GET，307 与 308 明确要你保持，301 与 302 夹在中间，规范说不该改、历史实现却常改，最不可靠。想保 POST 别用 301 或 302，想改 GET 用 303。下一页把每种写成带 Location 的完整响应报文。">
+  <div class="slide-head"><span class="sec">例子 · 判定表</span><h3>POST /submit 经五个状态码后的方法判定</h3></div>
+  <div class="slide-body">
+    <table class="small">
+      <thead><tr><th>状态码</th><th>类别</th><th>POST 后方法</th><th>主体</th><th>MDN 口径</th></tr></thead>
+      <tbody>
+        <tr><td>301</td><td class="l">永久</td><td class="l">通常改 GET</td><td class="l">丢失</td><td class="l">规范无意改，用户代理常改</td></tr>
+        <tr><td>302</td><td class="l">临时</td><td class="l">通常改 GET</td><td class="l">丢失</td><td class="l">规范无意改，用户代理常改</td></tr>
+        <tr><td>303</td><td class="l">临时</td><td class="l">明确改 GET</td><td class="l">明确丢失</td><td class="l">用于 POST 完成后防刷新重复提交</td></tr>
+        <tr><td>307</td><td class="l">临时</td><td class="l">保持 POST</td><td class="l">保留</td><td class="l">方法与主体都不变，优于 302</td></tr>
+        <tr><td>308</td><td class="l">永久</td><td class="l">保持 POST</td><td class="l">保留</td><td class="l">方法与主体都不变，永久重组</td></tr>
+      </tbody>
+    </table>
+    <div class="tip">分水岭：303 明确改 GET、307/308 明确保持，301/302 规范说不该改而现实常改，最不可靠。</div>
+  </div>
+</section>
+
+<section class="slide" data-narration="先给前三种各写一条完整响应。301 的 Location 指向 submit-v2、带 max-age 等于 3600，永久可缓存；302 指向 submit-temp、带 no-store，临时；303 指向 order/42/done，随后浏览器发出的是 GET、主体为空。这正是 PRG，即 Post/Redirect/Get：提交成功后回 303 让浏览器改 GET 取结果页，刷新只刷新那个 GET 页面，不会重投表单。301 与 302 虽规范无意改方法，多数客户端仍把 POST 降级成 GET。剩下 307 与 308 两条报文，下一页看。">
+  <div class="slide-head"><span class="sec">例子 · 报文</span><h3>301 / 302 / 303：三条带 Location 的响应</h3></div>
+  <div class="slide-body">
+    <div class="wire sm"><i>HTTP/1.1 301 Moved Permanently</i>
+<i>Location:</i> https://www.example.com/submit-v2
+<i>Cache-Control:</i> max-age=3600
+<i>Content-Length:</i> 0
+
+<i>HTTP/1.1 302 Found</i>
+<i>Location:</i> https://www.example.com/submit-temp
+<i>Cache-Control:</i> no-store
+<i>Content-Length:</i> 0
+
+<i>HTTP/1.1 303 See Other</i>
+<i>Location:</i> https://www.example.com/order/42/done
+<i>Cache-Control:</i> no-store
+<em>随后浏览器发出 GET /order/42/done，方法已改为 GET，主体为空</em></div>
+    <div class="wire-cap">301/302 下多数客户端把随后的 POST 改为 GET、原主体丢失；303 明确改 GET，构成 PRG 模式。</div>
+  </div>
+</section>
+
+<section class="slide" data-narration="再看保方法的两条。307 Temporary Redirect 指向 submit-new、带 no-store，随后仍是 POST /submit-new，主体不丢。308 Permanent Redirect 指向 api.example.com 的 v2/submit，随后仍是 POST /v2/submit。四种重投结论：301 与 302 常改 GET 不可靠，303 改 GET 可靠，307 与 308 保方法可靠。保方法用 307 或 308，改 GET 用 303。Location 不一定写全，下一页手算六种写法。">
+  <div class="slide-head"><span class="sec">例子 · 报文</span><h3>307 / 308：严格保持方法与主体的响应</h3></div>
+  <div class="slide-body">
+    <div class="wire sm"><i>HTTP/1.1 307 Temporary Redirect</i>
+<i>Location:</i> https://www.example.com/submit-new
+<i>Cache-Control:</i> no-store
+<i>Content-Length:</i> 0
+<em>随后浏览器发出 POST /submit-new，主体仍为 name=alice&amp;city=sz</em>
+
+<i>HTTP/1.1 308 Permanent Redirect</i>
+<i>Location:</i> https://api.example.com/v2/submit
+<i>Cache-Control:</i> max-age=86400
+<i>Content-Length:</i> 0
+<em>随后浏览器发出 POST /v2/submit，主体仍为 name=alice&amp;city=sz</em></div>
+    <div class="wire-cap">307/308 明确要求方法与主体都不变；选择指南：要保方法用 307/308，要改 GET 用 303。</div>
+  </div>
+</section>
+
+<section class="slide" data-narration="Location 常给相对 URL（Relative URL），客户端要按引用解析算法以请求 URL 为基准变成绝对地址，不能拼字符串。基准 https://www.example.com/docs/guide/intro.html 里 scheme 为 https、authority 为 www.example.com、path 为 /docs/guide/intro.html。逐一算六种相对值：斜杠、点斜杠、点点斜杠开头，只带查询串、片段、双斜杠开头，右侧是绝对目标。双斜杠沿用 https、只换 authority。下一页摊开判据。">
+  <div class="slide-head"><span class="sec">专题 · 手算</span><h3>Location 的六种相对值，逐一解析成绝对 URL</h3></div>
+  <div class="slide-body">
+    <div class="wire"><em>基准 https://www.example.com/docs/guide/intro.html</em>
+<i>Location:</i> /new/guide.html → https://www.example.com/new/guide.html
+<i>Location:</i> ./next.html → https://www.example.com/docs/guide/next.html
+<i>Location:</i> ../index.html → https://www.example.com/docs/index.html
+<i>Location:</i> ?page=2 → https://www.example.com/docs/guide/intro.html?page=2
+<i>Location:</i> #section-3 → https://www.example.com/docs/guide/intro.html#section-3
+<i>Location:</i> //cdn.example.com/a.css → https://cdn.example.com/a.css</div>
+    <div class="wire-cap">以基准各组成部分为参照，套用「scheme → authority → 绝对 path → 相对 path → query/fragment」优先级得到右侧目标。</div>
+    <div class="tip">术语首现：相对 URL（Relative URL）；解析按 RFC 3986 引用解析算法，不是字符串拼接。</div>
+  </div>
+</section>
+
+<section class="slide" data-narration="解析相对引用有四条判据：带 scheme 整体采用；双斜杠开头带 authority，沿用基准 scheme、采用引用的 authority；path 以斜杠开头直接替换；其余把基准 path 去掉末段当目录，拼上引用再消除点与点点段。逐条对答案：斜杠开头替换 path；点斜杠得 /docs/guide/next.html；点点斜杠回退一级得 /docs/index.html；只带查询串时 path 沿用基准只换 query；只带片段时其余沿用仅追加 fragment；双斜杠换成 cdn.example.com。来看误配 301 的故障链。">
+  <div class="slide-head"><span class="sec">专题 · 手算</span><h3>四条判据与六种结果的逐条依据</h3></div>
+  <div class="slide-body">
+    <table class="small">
+      <thead><tr><th>相对值</th><th>判据</th><th>推导与结果</th></tr></thead>
+      <tbody>
+        <tr><td class="l">/new/guide.html</td><td class="l">绝对 path</td><td class="l">以斜杠开头，直接替换整个 path</td></tr>
+        <tr><td class="l">./next.html</td><td class="l">相对 path</td><td class="l">去末段得 /docs/guide/，拼接消点段</td></tr>
+        <tr><td class="l">../index.html</td><td class="l">相对 path</td><td class="l">消掉点点段回退一级，得 /docs/index.html</td></tr>
+        <tr><td class="l">?page=2</td><td class="l">只带 query</td><td class="l">引用 path 为空，path 沿用基准只换 query</td></tr>
+        <tr><td class="l">#section-3</td><td class="l">只带 fragment</td><td class="l">其余沿用基准，仅追加片段</td></tr>
+        <tr><td class="l">//cdn.example.com/a.css</td><td class="l">带 authority</td><td class="l">沿用 https，换成 cdn.example.com</td></tr>
+      </tbody>
+    </table>
+    <div class="tip">fragment 一律不沿用基准，query 在引用 path 为空时才沿用基准；双斜杠是协议相对 URL 的历史写法。</div>
+  </div>
+</section>
+
+<section class="slide" data-narration="看一条真实故障链。运维把活动页 /sale 配成永久重定向到新域名的 /sale，还写了 Cache-Control 的 max-age 等于 31536000，也就是一年。第一步误配发生。第二步浏览器把它记下来：301 默认可缓存，加一年显式缓存，浏览器把映射存进本地，此后再输入旧地址，发请求之前就命中跳转直接去新地址，旧服务器收不到请求。第三步运维把旧地址改回 200、撤掉 Location，可缓存了 301 的浏览器仍跳到已下线目标看到 404，日志里旧地址一条请求都没有。修复在服务端，症状留客户端。怎么清怎么防，下一页列清单。">
+  <div class="slide-head"><span class="sec">专题 · 故障链</span><h3>误配 301 被长期缓存：修好了却仍跳失效目标</h3></div>
+  <div class="slide-body">
+    <div class="wire sm"><b>GET /sale HTTP/1.1</b>
+<b>Host:</b> old.example.com
+
+<i>HTTP/1.1 301 Moved Permanently</i>
+<i>Location:</i> https://new.example.com/sale
+<i>Cache-Control:</i> max-age=31536000
+<i>Content-Length:</i> 0</div>
+    <div class="wire-cap">本意只是临时导流，却用了 301 并给出长达一年的缓存时间。</div>
+    <div class="chain">
+      <div class="link"><span class="no">1</span><span class="txt"><strong>误配</strong>：/sale 被发成 301 加一年 max-age</span></div>
+      <div class="link"><span class="no">2</span><span class="txt"><strong>缓存</strong>：发请求前就命中跳转，旧服务器收不到请求</span></div>
+      <div class="link"><span class="no">3</span><span class="txt"><strong>改回 200 仍无效</strong>：残留缓存跳到已下线目标，看到 404</span></div>
+      <div class="link"><span class="no">4</span><span class="txt"><strong>症状在客户端</strong>：服务端日志里旧地址一条请求都没有</span></div>
+    </div>
+  </div>
+</section>
+
+<section class="slide" data-narration="清除手段四条：用户在开发者工具网络面板禁用缓存重试，或清站点缓存与站点数据；共享缓存一侧，也就是 CDN 与代理，在控制台主动 purge 对应 URL；浏览器那条若没有可靠过期时间往往清不干净，最后一招是换全新 URL，比如加版本号写成 /sale-v2 绕开旧缓存。预防也是四条：确定永不回头才发永久；拿不准先用 302 观察、稳定后再升级为 301 或 308；设置真正想要的 Cache-Control，别顺手写一年；上线前用 curl -I 核对状态码。判定一句话：这新地址愿不愿意让浏览器和搜索引擎记一年，愿意才用永久。下一页推演地址首尾相接。">
+  <div class="slide-head"><span class="sec">专题 · 故障链</span><h3>误配 301 的四条清除手段与四条预防手段</h3></div>
+  <div class="slide-body">
+    <div class="cols">
+      <div class="col"><div class="card">🧹 <strong>清除 4 条</strong><br>DevTools 禁用缓存重试；清站点缓存与站点数据；CDN/代理 purge；换全新 URL 如 /sale-v2 绕开。</div></div>
+      <div class="col"><div class="card">🛡 <strong>预防 4 条</strong><br>确定永不回头才用永久；拿不准先用 302 观察再升级；设置真正想要的 Cache-Control；上线前 curl -I 核对。</div></div>
+    </div>
+    <div class="tip">判定规则：这个新地址，我愿不愿意让搜索引擎和浏览器记一年？愿意才用永久。</div>
+    <div class="deep">永久重定向被缓存后客户端不再来问，所以「修好了却仍跳旧的」不是配置没生效，而是缓存残留。</div>
+  </div>
+</section>
+
+<section class="slide" data-narration="重定向就是收到 3xx 朝新地址重发一次，只要重发链永远指不到 2xx，客户端就会一直重发，这就是重定向循环（Redirect Loop），MDN 也叫重定向死锁。设 /a、/b、/c 被误配成 a 指 b、b 指 c、c 指回 a。屏幕是四次完整请求响应序列：第一次 GET /a 收 302 指向 /b，第二次 GET /b 指向 /c，第三次 GET /c 指向 /a，第四次又回到 GET /a 指向 /b，如此往复。每一跳都合法，可地址集合首尾相接，永远收敛不到任何资源。它是全书一次请求全程闭合的反面教材。浏览器怎么发现、用户看到什么，下一页说。">
+  <div class="slide-head"><span class="sec">专题 · 环路</span><h3>A → B → C → A：四次请求响应序列</h3></div>
+  <div class="slide-body">
+    <div class="wire"><em>第 1 次请求</em>
+<b>GET /a HTTP/1.1</b>
+<b>Host:</b> site.example
+<i>响应 HTTP/1.1 302 Found，Location: /b</i>
+
+<em>第 2 次请求</em>
+<b>GET /b HTTP/1.1</b>
+<i>响应 HTTP/1.1 302 Found，Location: /c</i>
+
+<em>第 3 次请求</em>
+<b>GET /c HTTP/1.1</b>
+<i>响应 HTTP/1.1 302 Found，Location: /a</i>
+
+<em>第 4 次请求</em>
+<b>GET /a HTTP/1.1</b>
+<i>响应 HTTP/1.1 302 Found，Location: /b</i>
+<em>如此往复，永远等不到一个 2xx</em></div>
+    <div class="wire-cap">每一跳都是合法的 302 加 Location，但地址首尾相接，重发链无法收敛到任何资源。</div>
+  </div>
+</section>
+
+<section class="slide" data-narration="发现环路分两种。服务器能自己检测到，比如发现路径又要回到访问过的地址，于是返回 500。检测不到时，循环发生在多台服务器之间，每台只看见自己那一跳，由浏览器负责：跟踪重定向链，一旦发现目标地址重复或跳转次数超过自身上限，就中止报错。用户可见文案，Firefox 显示检测到服务器正在无限循环重定向，Chrome 显示该网页将你重定向的次数过多，用户往往无能为力。定位用 curl -I -L 跟住每一跳画一张地址到目标的有向图，出现环的节点就是故障点；清掉冲突的 meta 与 JS、修正协议跳转方向、purge 陈旧缓存即可打破。下一页把它收进主线。">
+  <div class="slide-head"><span class="sec">专题 · 环路</span><h3>两种发现方式、用户可见错误与定位打破</h3></div>
+  <div class="slide-body">
+    <table class="small">
+      <thead><tr><th>环节</th><th>内容</th></tr></thead>
+      <tbody>
+        <tr><td class="l"><strong>服务器可检测</strong></td><td class="l">同一台服务器发现路径回到已访问地址，返回 500</td></tr>
+        <tr><td class="l"><strong>服务器检测不到</strong></td><td class="l">跨多台服务器时由浏览器跟踪重复地址或超过跳转上限，中止并报错</td></tr>
+        <tr><td class="l"><strong>用户可见错误</strong></td><td class="l">Firefox 报无限循环重定向，Chrome 报该网页将你重定向的次数过多</td></tr>
+        <tr><td class="l"><strong>定位</strong></td><td class="l">curl -I -L 跟每一跳，画地址到目标的有向图找环</td></tr>
+        <tr><td class="l"><strong>打破</strong></td><td class="l">清冲突的 meta 与 JS、修正协议跳转方向、purge 陈旧缓存</td></tr>
+      </tbody>
+    </table>
+    <div class="tip">常见成因：http 与 https 互跳写反、HTTP/meta/JS 三处目标不一致、陈旧永久缓存与当前配置打架。</div>
+  </div>
+</section>
+
+<section class="slide" data-narration="把全书主线合拢，按空格逐步展开。第一步，回想第 1 讲，MDN 把一次会话分三阶段：建立连接、客户端发请求并等待应答、服务器处理并返回响应，之后连接关闭或复用。第二步，重定向全发生在第二与第三阶段之间：客户端发请求，服务器不交资源，用 3xx 加 Location 回一条去别处。第三步，客户端开启新一轮：换主机要重新建连，再发请求并等待、服务器再返回响应，等于把三阶段再走一遍。第四步，重定向循环就是三阶段被卡在中间，永远走不到终点。一次重定向等于三阶段再走一遍，成环等于卡在三阶段走不到终点。轮到你推一遍了。">
+  <div class="slide-head"><span class="sec">推导</span><h3>一次重定向就是把三阶段再走一遍</h3></div>
+  <div class="slide-body">
+    <div class="step"><p><strong>① 第 1 讲的三阶段</strong>：建立连接 → 客户端发送请求并等待应答 → 服务器处理并返回响应；之后连接关闭或复用。</p></div>
+    <div class="step"><p><strong>② 重定向插在哪</strong>：客户端发请求（阶段二）后，服务器不交资源，用 3xx 加 Location 回一条「去别处」。</p></div>
+    <div class="step"><p><strong>③ 开启新一轮</strong>：换了主机要重新建连，再发请求并等待、服务器再返回响应——三阶段再走一遍。</p></div>
+    <div class="step"><div class="formula formula-concl">成环 = 三阶段被卡在中间，永远走不到终点</div></div>
+    <p class="step-hint">按空格 / → 逐步展开推导</p>
+  </div>
+</section>
+
+<section class="slide" data-narration="轮到你了，三题自己算。第一，基准 intro.html 下 Location 给 ../index.html，解析成什么。第二，POST /submit 分别遇 302、307、303，重发方法是什么。第三，为何用 307 与 308 替代 301 与 302。先暂停视频自己推一遍。推出来了吗？好，对答案。第一题回退一级得 /docs/index.html。第二题 302 多半改 GET，307 保持 POST 与主体，303 明确改 GET 主体为空。第三题因 301 与 302 实现不统一，307 与 308 才把保持方法写成保证。下一页对规范口径。">
+  <div class="slide-head"><span class="sec">演练</span><h3>自己推相对解析、方法判定与选码理由</h3></div>
+  <div class="slide-body">
+    <div class="step"><p>① <strong>../index.html</strong> → 去掉末段得目录再回退一级，结果是 /docs/index.html。</p></div>
+    <div class="step"><p>② POST 遇 <strong>302</strong> 多半改 GET 且主体丢失；<strong>307</strong> 严格保持 POST 与主体；<strong>303</strong> 明确改 GET、主体为空。</p></div>
+    <div class="step"><p>③ 301/302 历史实现不统一、方法不可靠，故用 <strong>307/308</strong> 把「保持方法」写成明确保证。</p></div>
+    <div class="pause"><div class="icon">✍️</div><div class="txt"><b>暂停推导</b><p>合上答案，自己写出 ../index.html 的绝对目标、三种状态码的重投方法，以及 307/308 的存在理由。</p></div></div>
+    <p class="step-hint">按空格 / → 逐步揭示答案</p>
+  </div>
+</section>
+
+<section class="slide" data-narration="按固定动作把 MDN 工程口径和 RFC 规范口径对一次。MDN 说 3xx 需进一步动作、Location 给目标，RFC 9110 第 15.4 节给出 3xx 定义，第 10.2.2 节说明 Location 是 URI 引用。MDN 说 301 与 302 无意改方法、307 与 308 消除歧义，规范里第 15.4.2 与 15.4.3 节用 MAY 允许改 GET，第 15.4.7 与 15.4.8 节用 MUST NOT 不得改方法。永久重定向被缓存对应 RFC 9111 第 3 节。平时查 MDN 更快，判断合规回条文。扫几个最常见的雷。">
+  <div class="slide-head"><span class="sec">规范对照</span><h3>MDN 的说法 / RFC 怎么写 / 为什么值得知道</h3></div>
+  <div class="slide-body">
+    <table class="small">
+      <thead><tr><th>MDN 的说法</th><th>RFC 怎么写</th><th>为什么值得知道</th></tr></thead>
+      <tbody>
+        <tr><td class="l">3xx 需进一步动作，Location 给目标</td><td class="l">RFC 9110 第 15.4 节定义 3xx；第 10.2.2 节 Location 是 URI 引用</td><td class="l">「进一步动作」是规范性定义，URI 引用才知相对解析必须按算法</td></tr>
+        <tr><td class="l">301/302 无意改方法，307/308 消除歧义</td><td class="l">第 15.4.2/15.4.3 节 MAY 允许改 GET；15.4.7/15.4.8 节 MUST NOT 不得改方法</td><td class="l">MAY 与 MUST NOT 强度不同，实现客户端必须照此办理</td></tr>
+        <tr><td class="l">303 用于 POST 完成后防刷新重复提交</td><td class="l">RFC 9110 第 15.4.4 节指示用 GET 或 HEAD 取目标</td><td class="l">「改 GET」是规范要求，可放心用于 PRG 模式</td></tr>
+        <tr><td class="l">浏览器会缓存永久重定向</td><td class="l">RFC 9111 第 3 节可缓存性、第 4 节新鲜度，301/308 默认可长期存储</td><td class="l">能用 Cache-Control 精确控制，理解误配 301 为何长期作祟</td></tr>
+        <tr><td class="l">互相指向成环，浏览器负责检测</td><td class="l">RFC 9110 第 15.4 节首段 SHOULD detect 检测无限循环</td><td class="l">SHOULD 解释了各浏览器阈值与文案不同，检测责任在客户端</td></tr>
+      </tbody>
+    </table>
+    <div class="deep">MDN 说「通常」「建议」处，规范里往往藏着 MAY / SHOULD / MUST 的精确分级。</div>
+  </div>
+</section>
+
+<section class="slide" data-narration="扫三个最贵的雷。第一，以为重定向方法无所谓，给接收 POST 的回调配 302，浏览器可能把 POST 改 GET，参数从主体跑到 URL，既泄露又让服务端收不到数据；保方法要用 307 或 308。第二，以为把服务端 301 改回 302 用户马上走新配置，其实缓存旧 301 的浏览器不再问服务器，修改对它们无效。第三，以为 HTTP 层做了重定向再加一条 meta 或 JS 是双保险，可 HTTP 跳转永远先触发，两处目标不一致互相指回就成无限循环，正确做法是只在 HTTP 层做一处。把本讲放回全书主线，看它怎么闭合。">
+  <div class="slide-head"><span class="sec">避坑</span><h3>三个把方法、缓存与层数混为一谈的误解</h3></div>
+  <div class="slide-body">
+    <div class="trap">❌ <strong>重定向方法无所谓</strong><br>✅ 给接收 POST 的回调配 302，可能被改 GET，参数跑到 URL、服务端收不到数据；保方法要用 307/308。</div>
+    <div class="trap">❌ <strong>把 301 改回 302，用户马上走新配置</strong><br>✅ 缓存旧 301 的浏览器不再问服务器，修改对它们无效，收录更新以周计。</div>
+    <div class="trap">❌ <strong>HTTP 跳转再加 meta 或 JS 做双保险</strong><br>✅ HTTP 永远先触发，两处目标不一致互相指回就成无限循环，只在 HTTP 层做一处。</div>
+  </div>
+</section>
+
+<section class="slide" data-narration="这一讲没有下一讲，接口页是和全书主线怎么闭合。把一次请求走一遍：输入网址是第 1 讲起点；建连是阶段一，第 4 讲；编码请求、带 cookie 与认证是阶段二，第 7、8 讲；经代理转发、CORS 与 CSP 判边界是第 9、10、11 讲；服务器回 3xx 与 Location，本讲登场；按状态码决定是否改方法、按相对算法算目标重发，可能命中旧跳转缓存，第 5、6 讲在此显形；成环被浏览器截断；最终 2xx 按 MIME 渲染，第 2、3 讲；连接复用或关闭，第 4 讲。开篇那句这些都是主线插入的规则，到此完整落地，全书闭环。用三句话收束。">
+  <div class="slide-head"><span class="sec">接口</span><h3>本讲与全书主线怎么闭合</h3></div>
+  <div class="slide-body">
+    <table class="small">
+      <thead><tr><th>主线环节</th><th>对应讲次</th><th>本讲的位置</th></tr></thead>
+      <tbody>
+        <tr><td class="l">输入网址、DNS/TCP/TLS 建连</td><td class="l">第 1、4 讲</td><td class="l">阶段一</td></tr>
+        <tr><td class="l">发请求带 cookie 与认证</td><td class="l">第 7、8 讲</td><td class="l">阶段二</td></tr>
+        <tr><td class="l">代理、CORS/CSP 判定边界</td><td class="l">第 9、10、11 讲</td><td class="l">经中间层</td></tr>
+        <tr><td class="l">3xx 加 Location 改道并算目标重发</td><td class="l">本讲 + 第 5、6 讲</td><td class="l">本讲登场，缓存在此显形</td></tr>
+        <tr><td class="l">成环被截断，最终 2xx 按 MIME 渲染</td><td class="l">本讲 + 第 2、3 讲</td><td class="l">收束到终点</td></tr>
+        <tr><td class="l">连接复用或关闭</td><td class="l">第 4 讲</td><td class="l">阶段三收尾</td></tr>
+      </tbody>
+    </table>
+    <div class="tip">钩子：本讲是终点，不是第 13 讲的引子；一次请求从发起到落地，到此全程闭合。</div>
+  </div>
+</section>
+
+<section class="slide" data-narration="用三句话收束第 12 讲。解决什么：资源换地址、旧链接还要用，服务器用 3xx 加 Location 让客户端换地址重发一次，并区分永久临时、决定方法是否改写、防成环与永久缓存反噬。核心机制：状态码决定语义与缓存，301 与 308 永久且默认可缓存，302、303、307 临时；307 与 308 保方法、303 改 GET、301 与 302 不可靠，地址首尾相接就成循环。承上启下：本讲补上服务器返回响应之后、客户端重发请求之前那一跳，一次重定向就是把第 1 讲三阶段再走一遍，一次请求从发起到落地全程闭合。合上书前，接住最后的毕业挑战。">
+  <div class="slide-head"><span class="sec">小结</span><h3>三句话讲完第 12 讲</h3></div>
+  <div class="slide-body">
+    <div class="chain">
+      <div class="link"><span class="no">1</span><span class="txt"><strong>解决什么</strong>：旧地址还能用，3xx 加 Location 换地址重发一次</span></div>
+      <div class="link"><span class="no">2</span><span class="txt"><strong>核心机制</strong>：状态码定语义与缓存，Location 相对解析定目标，首尾相接成环</span></div>
+      <div class="link"><span class="no">3</span><span class="txt"><strong>承上启下</strong>：补上重发那一跳，三阶段再走一遍，一次请求全程闭合</span></div>
+    </div>
+    <div class="formula formula-concl">一次请求，从发起到落地全程闭合 —— 合上书也要能默写</div>
+  </div>
+</section>
+
+<section class="slide slide-cover" data-narration="第 12 讲到这儿结束，也是 HTTP 精通全书收官。留四项毕业挑战，合上书完成：第一，默写 301、302、303、307、308 对 POST 的判定表，并各写一条带 Location 的响应报文；第二，手算六种相对 Location 的绝对目标并说明依据；第三，推演 A 到 B 到 C 再回 A 的环路与误配 301 故障链，说出清除预防各两条；第四，回扣第 1 讲说清全书如何闭合。记住收束：一次会话分建立连接、交换报文、复用或结束三阶段，重定向等于三阶段再走一遍，成环等于卡在三阶段走不到终点。从骨架到本讲，每条规则都已补齐。全做出来再点完成按钮。">
+  <div class="kicker">第 12 讲 结束 · 全书收官</div>
+  <h1>一次请求，全程闭合</h1>
+  <div class="sub">毕业挑战：合上书，拿一张纸</div>
+  <div class="divider"></div>
+  <div class="meta">
+    ☑ 默写五种状态码的 POST 方法判定表并各写一条带 Location 的响应报文<br>
+    ☑ 手算六种相对 Location 的绝对目标并说明判据　　☑ 推演 A→B→C→A 环路与误配 301 故障链<br>
+    ☑ 回扣第 1 讲三阶段，一句话说清全书如何闭合<br><br>
+    全书收束：建立连接 → 交换报文 → 复用或结束；重定向等于三阶段再走一遍，<br>
+    成环等于卡在三阶段走不到终点。从会话骨架到重定向，一次请求全程闭合。
+  </div>
+</section>
+
+  <!-- 页脚：brand 改为本章标题；总页数改 pagenum 初值 -->
+  <div id="footer">
+    <span class="brand">第12讲 HTTP 重定向 · HTTP 精通 课件　<a class="to-lec" href="../http-guide/index.html">讲义首页 ↗</a></span>
+    <span id="pagenum">1 / 1</span>
+  </div>
+
+  <!-- 导航 -->
+  <div class="nav">
+    <button id="prev" title="上一页 (←)">‹</button>
+    <button id="next" title="下一页 (→ / 空格)">›</button>
+  </div>
+  <div id="hint">← → 翻页 · 空格下一页 · 推导页逐步显示 · 点击左右半屏翻页</div>
+
+</div>
+
+<!-- mermaid 本地引用，保证离线可用；初始化参数全套课件统一，勿改 -->
+<script src="assets/mermaid.min.js"></script>
+<script>
+mermaid.initialize({
+  startOnLoad: false,   // 必须为 false：display:none 的隐藏页渲染会得到 0 宽高的退化 SVG，
+                        // 改为页面激活时懒渲染（见 renderMermaid）
+  theme: "base",
+  themeVariables: {
+    primaryColor: "#ebf8ff",
+    primaryBorderColor: "#2b6cb0",
+    primaryTextColor: "#1a365d",
+    lineColor: "#718096",
+    fontFamily: "-apple-system, PingFang SC, sans-serif",
+    fontSize: "15px"
+  },
+  flowchart: { curve: "linear", htmlLabels: false }
+});
+</script>
+<script>
+(function(){
+  const slides = Array.from(document.querySelectorAll('.slide'));
+  const total = slides.length;
+  let idx = 0;
+
+  const params = new URLSearchParams(location.search);
+  const startSlide = parseInt(params.get('slide'), 10);
+  if (params.get('autohide') === '1') document.body.classList.add('autohide');
+  if (!isNaN(startSlide) && startSlide >= 1 && startSlide <= total) idx = startSlide - 1;
+
+  const progress = document.getElementById('progress');
+  const pagenum = document.getElementById('pagenum');
+  const prevBtn = document.getElementById('prev');
+  const nextBtn = document.getElementById('next');
+
+  // 推导分步：每页记住已展开的步数；autohide（截图）模式下 CSS 强制全显
+  const stepState = new Map();
+  function stepsOf(i){ return Array.from(slides[i].querySelectorAll('.step')); }
+  function applySteps(){
+    stepsOf(idx).forEach((el, k)=> el.classList.toggle('on', k < (stepState.get(idx) || 0)));
+  }
+  // 前进一步：先展开本页下一步，全部展开后才翻页
+  function forward(){
+    const steps = stepsOf(idx);
+    const shown = stepState.get(idx) || 0;
+    if (shown < steps.length){ stepState.set(idx, shown + 1); applySteps(); return; }
+    go(idx + 1);
+  }
+  // 后退一步：先收起本页最后一步，收完才回上一页
+  function backward(){
+    const steps = stepsOf(idx);
+    const shown = stepState.get(idx) || 0;
+    if (shown > 0){ stepState.set(idx, shown - 1); applySteps(); return; }
+    go(idx - 1);
+  }
+
+  // mermaid 懒渲染：只在页面激活（有真实宽高）时渲染该页的图，渲染后打 data-done 防重复
+  function renderMermaid(slide){
+    if (typeof mermaid === 'undefined') return;
+    const nodes = Array.from(slide.querySelectorAll('.mermaid:not([data-done])'));
+    if (!nodes.length) return;
+    nodes.forEach(n => n.setAttribute('data-done', ''));
+    mermaid.run({ nodes }).catch(err => {
+      nodes.forEach(n => n.removeAttribute('data-done'));
+      console.error('mermaid 渲染失败：', err);
+    });
+  }
+
+  function render(){
+    slides.forEach((s,i)=> s.classList.toggle('active', i===idx));
+    progress.style.width = ((idx+1)/total*100) + '%';
+    pagenum.textContent = (idx+1) + ' / ' + total;
+    prevBtn.disabled = (idx===0);
+    nextBtn.disabled = (idx===total-1);
+    applySteps();
+    renderMermaid(slides[idx]);
+  }
+  function go(n){ idx = Math.max(0, Math.min(total-1, n)); render(); }
+
+  prevBtn.addEventListener('click', e=>{ e.stopPropagation(); backward(); });
+  nextBtn.addEventListener('click', e=>{ e.stopPropagation(); forward(); });
+
+  document.addEventListener('keydown', e=>{
+    if(e.key==='ArrowRight'||e.key===' '||e.key==='PageDown'){ e.preventDefault(); forward(); }
+    else if(e.key==='ArrowLeft'||e.key==='PageUp'){ e.preventDefault(); backward(); }
+    else if(e.key==='Home'){ stepState.set(idx, 0); go(0); }
+    else if(e.key==='End'){ go(total-1); }
+  });
+
+  document.getElementById('stage').addEventListener('click', e=>{
+    if(e.target.closest('.nav') || e.target.closest('a')) return;
+    const x = e.clientX;
+    if(x < window.innerWidth*0.5) backward(); else forward();
+  });
+
+  function fit(){
+    const s = Math.min(window.innerWidth/1280, window.innerHeight/720);
+    document.getElementById('stage').style.transform = 'translate(-50%,-50%) scale(' + s + ')';
+  }
+  window.addEventListener('resize', fit);
+  fit();
+  render();
+})();
+</script>
+</body>
+</html>

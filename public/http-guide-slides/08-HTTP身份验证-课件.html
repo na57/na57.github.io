@@ -1,0 +1,632 @@
+<!DOCTYPE html>
+<!--
+  ======================================================================
+  HTTP 精通 · 课件外壳（deck-shell.html）
+  由 build-slides.mjs 把 slides/NN.html 注入幻灯片区域，
+  输出 public/http-guide-slides/NN-xxx-课件.html。
+  骨架来自站内通用 1280×720 课件模板；本套额外增加 .wire 协议报文块。
+  每页必须写 data-narration（180–280 字口语稿，禁半角双引号、禁换行、禁小于号）。
+  ======================================================================
+-->
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第8讲 HTTP 身份验证 · HTTP 精通 课件</title>
+<script>
+window.MathJax = {
+  tex: {
+    inlineMath: [['$', '$'], ['\\(', '\\)']],
+    displayMath: [['$$', '$$'], ['\\[', '\\]']],
+    processEscapes: true,
+    tags: 'none'
+  },
+  svg: { fontCache: 'global', scale: 1.05 },
+  options: { skipHtmlTags: ['script','noscript','style','textarea','pre','code'] }
+};
+</script>
+<!-- MathJax 本地引用（tex-svg 单文件全量组件，约2MB，自带字体数据），file:// 与断网均可用 -->
+<script src="assets/tex-svg.js" async></script>
+<style>
+  :root{
+    --primary:#1a365d; --accent:#2b6cb0; --accent-light:#ebf8ff; --accent-border:#bee3f8;
+    --text:#2d3748; --muted:#718096; --border:#e2e8f0; --bg-light:#f7fafc;
+    --success:#38a169; --danger:#e53e3e; --warning:#dd6b20; --warn-bg:#fffaf0;
+  }
+  *{margin:0;padding:0;box-sizing:border-box;}
+  html,body{width:100%;height:100%;overflow:hidden;background:#0f172a;}
+  body{
+    font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Hiragino Sans GB","Microsoft YaHei","WenQuanYi Micro Hei",sans-serif;
+    color:var(--text);
+  }
+  #stage{
+    position:absolute; left:50%; top:50%;
+    width:1280px; height:720px;
+    transform:translate(-50%,-50%) scale(1);
+    transform-origin:center center;
+    background:#ffffff;
+    box-shadow:0 0 40px rgba(0,0,0,.4);
+    overflow:hidden;
+  }
+  .slide{
+    position:absolute; inset:0;
+    padding:36px 60px 52px;
+    display:none;
+    flex-direction:column;
+    background:#ffffff;
+    opacity:0;
+    transition:opacity .35s ease;
+  }
+  .slide.active{ display:flex; opacity:1; }
+
+  #progress{ position:absolute; top:0; left:0; height:6px; background:var(--accent); width:0; z-index:50; transition:width .35s; }
+
+  /* 封面 / 结束页 */
+  .slide-cover{ justify-content:center; align-items:center; text-align:center; }
+  .slide-cover{ background:linear-gradient(135deg,#1a365d 0%,#2b6cb0 100%); color:#fff; }
+  .slide-cover .kicker{ font-size:22px; letter-spacing:6px; opacity:.85; margin-bottom:18px;}
+  .slide-cover h1{ font-size:64px; font-weight:800; line-height:1.2; margin-bottom:22px; letter-spacing:2px;}
+  .slide-cover .sub{ font-size:26px; opacity:.92; margin-bottom:36px;}
+  .slide-cover .meta{ font-size:19px; opacity:.85; line-height:2;}
+  .slide-cover .divider{ width:160px;height:5px;background:#fff;opacity:.6;margin:0 auto 30px;border-radius:3px;}
+  .slide-cover .question{ font-size:24px; background:rgba(255,255,255,.12); border:1px solid rgba(255,255,255,.35); border-radius:12px; padding:12px 28px; margin-bottom:30px;}
+
+  /* 页头：结论式标题 */
+  .slide-head{ display:flex; align-items:baseline; gap:16px; border-bottom:3px solid var(--accent); padding-bottom:9px; margin-bottom:12px;}
+  .slide-head .sec{ font-size:17px; color:var(--accent); font-weight:700; background:var(--accent-light); padding:3px 11px; border-radius:6px; white-space:nowrap;}
+  .slide-head h3{ font-size:29px; color:var(--primary); font-weight:700;}
+  .slide-body{ flex:1; display:flex; flex-direction:column; justify-content:center; min-height:0; }
+
+  p{ font-size:21px; line-height:1.65; margin-bottom:8px;}
+  .lead{ font-size:23px; color:#374151; line-height:1.75;}
+  ul,ol{ margin:0 0 8px 26px; font-size:21px; line-height:1.7;}
+  li{ margin-bottom:5px;}
+  strong{ color:var(--primary); }
+
+  /* 公式块 */
+  .formula{ background:var(--accent-light); border-left:5px solid var(--accent); border-radius:0 10px 10px 0; padding:9px 22px; margin:9px 0; text-align:center; font-size:23px;}
+  .formula-concl{ background:#fffaf0; border-left:5px solid var(--warning);}
+  .MathJax{ font-size:1.05em !important; }
+  mjx-container[display="true"]{ margin:6px 0 !important; }
+
+  /* 表格 */
+  table{ width:100%; border-collapse:collapse; margin:10px 0; font-size:20px;}
+  th{ background:var(--accent); color:#fff; padding:8px 12px; text-align:center; font-weight:600;}
+  td{ padding:7px 12px; border:1px solid var(--border); text-align:center; vertical-align:middle;}
+  tr:nth-child(even) td{ background:var(--bg-light);}
+  td.l{ text-align:left; }
+  table.small{ font-size:18px; }
+  table.small td, table.small th{ padding:6px 10px; }
+
+  /* 组件 */
+  .card{ background:var(--accent-light); border:1px solid var(--accent-border); border-radius:12px; padding:12px 20px; margin:10px 0;}
+  .tip{ background:#ebf8ff; border-left:5px solid var(--accent); border-radius:0 10px 10px 0; padding:10px 20px; margin:10px 0; font-size:20px; color:#2c5282;}
+  .deep{ background:#f0fff4; border-left:5px solid var(--success); border-radius:0 10px 10px 0; padding:10px 20px; margin:10px 0; font-size:20px; color:#22543d;}
+  .warn{ background:var(--warn-bg); border-left:5px solid var(--warning); border-radius:0 10px 10px 0; padding:10px 20px; margin:10px 0; font-size:20px; color:#744210;}
+  .trap{ background:#fef2f2; border-left:5px solid var(--danger); border-radius:0 10px 10px 0; padding:10px 20px; margin:10px 0; font-size:20px; color:#7f1d1d;}
+
+  .pause{
+    background:var(--warn-bg); border:2px dashed var(--warning); border-radius:14px;
+    padding:10px 22px; margin:10px 0; display:flex; align-items:center; gap:16px;
+  }
+  .pause .icon{ font-size:36px; line-height:1; }
+  .pause .txt b{ color:var(--warning); font-size:21px; }
+  .pause .txt p{ font-size:18px; color:#744210; margin:3px 0 0; }
+
+  .cols{ display:flex; gap:28px; align-items:stretch; }
+  .col{ flex:1; min-width:0; }
+
+  /* 推导分步：仅互动模式隐藏，截图(autohide)模式全部可见——此规则不可删 */
+  .step{ opacity:0; transform:translateY(8px); transition:opacity .3s ease, transform .3s ease; }
+  .step.on{ opacity:1; transform:none; }
+  body.autohide .step{ opacity:1 !important; transform:none !important; }
+  .step-hint{ font-size:14px; color:var(--muted); margin-top:4px;}
+  body.autohide .step-hint{ display:none; }
+
+  /* HTTP 精通课件专用：协议报文原文块 */
+  .wire{background:#0f172a;color:#e2e8f0;border-radius:10px;padding:12px 18px;margin:8px 0;
+    font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:17px;line-height:1.55;
+    white-space:pre-wrap;overflow-wrap:anywhere;}
+  .wire b{color:#7dd3fc;font-weight:700;}
+  .wire i{color:#fde68a;font-style:normal;}
+  .wire em{color:#86efac;font-style:normal;}
+  .wire.sm{font-size:15px;line-height:1.45;}
+  .wire-cap{font-size:15px;color:var(--muted);margin:0 0 8px;}
+  .to-lec{color:#bee3f8;text-decoration:none;font-size:15px;margin-left:12px;}
+  .to-lec:hover{text-decoration:underline;}
+  .badge{display:inline-block;background:var(--accent-light);color:var(--accent);border:1px solid var(--accent-border);
+    border-radius:6px;padding:2px 10px;font-size:17px;font-weight:700;margin-right:8px;}
+
+  /* 因果链 */
+  .chain{ margin:6px 0; }
+  .chain .link{ display:flex; align-items:center; gap:14px; margin:6px 0;}
+  .chain .no{ width:34px; height:34px; border-radius:50%; background:var(--accent); color:#fff; font-size:18px; font-weight:700; display:flex; align-items:center; justify-content:center; flex-shrink:0;}
+  .chain .txt{ font-size:21px; line-height:1.5;}
+  .chain .txt strong{ color:var(--primary); }
+
+  /* mermaid 容器：高度封顶，防止溢出 720px 舞台 */
+  .mmd{ background:var(--bg-light); border:1px solid var(--border); border-radius:12px; padding:10px 14px; display:flex; justify-content:center; align-items:center; margin:8px 0;}
+  .mmd .mermaid{ display:flex; justify-content:center; width:100%; visibility:hidden; }
+  .mmd .mermaid[data-done]{ visibility:visible; }
+  .mmd .mermaid svg{ max-width:100%; height:auto; max-height:230px; }
+  .mmd.mmd-tall .mermaid svg{ max-height:330px; }
+  .mmd.mmd-sm svg{ max-height:150px; }
+  .mmd-row{ display:flex; gap:18px; }
+  .mmd-row .mmd{ flex:1; flex-direction:column; }
+  .mmd .cap{ font-size:17px; color:var(--muted); margin-top:6px; text-align:center;}
+  .mmd .cap b{ color:var(--text); }
+
+  #footer{ position:absolute; bottom:0; left:0; right:0; height:40px; display:flex; align-items:center; justify-content:space-between; padding:0 30px; font-size:15px; color:#94a3b8; background:rgba(247,250,252,.85); border-top:1px solid var(--border); z-index:40;}
+  #footer .brand{ font-weight:600; color:var(--accent); }
+
+  .nav{ position:absolute; bottom:48px; right:40px; display:flex; gap:12px; z-index:45;}
+  .nav button{ width:54px; height:54px; border-radius:50%; border:none; background:var(--accent); color:#fff; font-size:24px; cursor:pointer; box-shadow:0 3px 10px rgba(43,108,176,.4); display:flex; align-items:center; justify-content:center;}
+  .nav button:hover{ background:var(--primary); }
+  .nav button:disabled{ background:#cbd5d0; cursor:default; box-shadow:none;}
+
+  #hint{ position:absolute; bottom:48px; left:40px; font-size:14px; color:#94a3b8; z-index:45;}
+
+  body.autohide #progress, body.autohide #footer, body.autohide .nav, body.autohide #hint{ display:none !important; }
+</style>
+</head>
+<body>
+<div id="stage">
+
+  <div id="progress"></div>
+
+<!-- 第 8 讲：HTTP 身份验证 -->
+<section class="slide slide-cover active" data-narration="欢迎回到 HTTP 精通。上一讲的 cookie 让服务器认出同一个浏览器，可认出来之后还有两道追问：你凭什么说你是 alice，以及你能不能看这份报表。一个叫认证，一个叫授权，天天被混着用，本讲专讲中间那环。你会看到 HTTP 内置的通用框架：服务器用 401 挑战，客户端用 Authorization 带凭据，realm 圈定复用范围，以及为什么 Basic 离开 TLS 就等于把口令写在明信片上。学完要能默写 401 到 200 的四条报文，把 user:pass 算成 dXNlcjpwYXNz，还能对着六个网址判断会不会自动带凭据。我们先看它在全书的位置。">
+  <div class="kicker">第 8 讲 · 第③组 状态与安全</div>
+  <h1>HTTP 身份验证</h1>
+  <div class="sub">认出你，和证明你是你，不是一回事</div>
+  <div class="question">一次 401 挑战—响应是怎么走完的，为什么说认证和识别不是一回事？</div>
+  <div class="meta">
+    配套讲义：HTTP 精通 第 8 讲 · 依据 MDN《HTTP 身份验证》<br>
+    ← → 翻页 · 推导页按空格逐步显示 · 双击 HTML 即可离线观看
+  </div>
+</section>
+
+<section class="slide" data-narration="先看本讲在十二讲主线的位置。第③组是状态与安全：第 7 讲 cookie 负责认出你，本讲第 8 讲紧接着证明你是你，第 9 讲转向跨源边界，第 10 讲反过来限制页面能做什么。图上高亮的就是第 8 讲，它夹在认出你和划边界之间，是验明身份的关口。往后还牵到第 11 讲的代理，因为代理认证另用一套状态码和首部；规范上对齐 RFC 9110 的框架、7617 的 Basic、6750 的 Bearer。本讲对应 MDN 原文只有 HTTP 身份验证一篇。位置清楚了，下一页把主线拆成因果链。">
+  <div class="slide-head"><span class="sec">定位</span><h3>第 8 讲站在「认出你」和「划边界」之间</h3></div>
+  <div class="slide-body">
+    <div class="mmd mmd-sm">
+      <div class="mermaid">
+flowchart LR
+  A["第1到6讲 连接与缓存"] --> B["第7讲 cookie 认出你"]
+  B --> C["第8讲 认证证明你是你"]:::here
+  C --> D["第9讲 CORS 跨源边界"]
+  D --> E["第10讲 浏览器侧策略"]
+  C --> F["RFC 9110 与 7617 6750"]
+  C --> G["第11讲 代理 407 车道"]
+  classDef here fill:#2b6cb0,color:#ffffff,stroke:#1a365d,stroke-width:3px
+      </div>
+    </div>
+    <p style="text-align:center;">本讲解决「<strong>证明</strong>」：用一套标准流程把凭据送到服务器校验，而不是只认出浏览器。</p>
+    <div class="tip">本讲对应的 MDN 原文：Authentication 一篇；承第 7 讲 cookie，启第 9 讲 CORS。</div>
+  </div>
+</section>
+
+<section class="slide" data-narration="本讲主线是六环因果链，也是目录。一，客户端请求受保护资源。二，服务器返回 401 挑战，说明用哪种方案证明。三，客户端把凭据放进 Authorization 重试。四，校验通过返回 200 和资源，这是高光节点。五，从第三环分出去，realm 和源站决定以后哪些请求能复用凭据。六，从第二环分出去是红灯：Basic 的 Base64 只是可逆编码，链路一旦没有 TLS，凭据就是明文，这是后面所有安全结论的起点。记住这条链的形状，每页都挂在其中一环。下一页用具体场景逼出为什么非得有它。">
+  <div class="slide-head"><span class="sec">主线</span><h3>认证主线的六环因果链</h3></div>
+  <div class="slide-body">
+    <div class="chain">
+      <div class="link"><span class="no">1</span><span class="txt"><strong>请求受保护资源</strong>：客户端先发一条裸请求</span></div>
+      <div class="link"><span class="no">2</span><span class="txt"><strong>服务器返回 401 挑战</strong>：用 WWW-Authenticate 说明方案与 realm</span></div>
+      <div class="link"><span class="no">3</span><span class="txt"><strong>客户端带凭据重试</strong>：把凭据放进 Authorization 首部</span></div>
+      <div class="link"><span class="no">4</span><span class="txt"><strong>校验通过返回资源</strong>：200 加主体，闭环完成</span></div>
+      <div class="link"><span class="no">5</span><span class="txt"><strong>realm 决定复用哪份凭据</strong>：同源同 realm 才自动带，路径无关</span></div>
+      <div class="link"><span class="no">6</span><span class="txt"><strong>明文或弱凭据的风险</strong>：Base64 可逆，离开 TLS 就是明文</span></div>
+    </div>
+    <div class="tip">这条链就是本讲目录：报文闭环 → 编码手算 → realm 判定 → 代理与安全。</div>
+  </div>
+</section>
+
+<section class="slide" data-narration="用日常场景钉牢问题。你打开公司季度报表，上一讲的 cookie 让服务器认出是老浏览器，可服务器不打算就此放行。左边是很多人以为的终点，认出用户就够了；右边是它解释不了的两道追问，你凭什么说你是 alice，以及就算真是 alice，能不能改报表。写字楼最贴切：报名字是识别，查工牌是认证，刷卡只上三楼是授权。cookie 像访客手环，认得出你，却证明不了你没借给别人。所以本讲的方案是每进一道门都出示一次真凭证。下一页正式定义三个概念和这套框架。">
+  <div class="slide-head"><span class="sec">动机</span><h3>「认出浏览器」解释不了两道追问</h3></div>
+  <div class="slide-body">
+    <div class="cols">
+      <div class="col"><div class="card">🙂 <strong>以为的终点</strong><br>cookie 认出这是同一个浏览器，服务器就该放行。</div></div>
+      <div class="col"><div class="card">🤔 <strong>解释不了的两道追问</strong><br>你凭什么说你是 alice？就算你是 alice，能看报表、能改报表吗？</div></div>
+    </div>
+    <div class="tip">写字楼：报名字是识别，查工牌是认证，刷卡只上 3 楼是授权；cookie 像访客手环，认得出你却证明不了你没借给别人。</div>
+  </div>
+</section>
+
+<section class="slide" data-narration="先立三个混用的概念，英文原名一并给出。识别 Identification 是声称自己是谁，一句声明；认证 Authentication 是证明这句成立，靠口令、令牌或签名；授权 Authorization 是确认身份后决定能访问什么。HTTP 身份验证的通用框架只解决中间那环，机制叫质询—响应 Challenge–Response：服务器先拒绝并说明怎么证明，客户端再带凭据请求一次。注意一个反直觉设计，客户端不会在第一条请求就主动带凭据。结论是，先挑战、后凭据、方案由服务器定。分不清时就问，这是在声明、证明身份，还是分配权限。下一页落到真实报文。">
+  <div class="slide-head"><span class="sec">定义</span><h3>识别、认证、授权，加一副通用骨架</h3></div>
+  <div class="slide-body">
+    <div class="cols">
+      <div class="col"><div class="card">🧾 <strong>三个概念别混着用</strong><br><strong>识别</strong>（Identification）：声称自己是谁，一句声明。<br><strong>认证</strong>（Authentication）：证明这句声明成立。<br><strong>授权</strong>（Authorization）：确认身份后决定能访问什么。</div></div>
+      <div class="col"><div class="card">🔐 <strong>HTTP 的通用框架</strong><br><strong>质询—响应</strong>（Challenge–Response）：服务器先用 401 拒绝并说明方案，客户端再用 Authorization 带凭据重试一次。</div></div>
+    </div>
+    <div class="formula formula-concl">先挑战、后凭据、方案由服务器定</div>
+    <div class="deep">判断标准：分不清时问一句，这是在声明身份、证明身份，还是分配权限；本讲主线只解决中间那一环。</div>
+  </div>
+</section>
+
+<section class="slide" data-narration="第一个必会例子，401 挑战到 Authorization 的完整交互，先走前两步。第一步裸请求：GET 目标 /admin/report，带 Host、User-Agent、Accept，关键是通篇没有 Authorization，客户端压根不知道这路径受保护。第二步服务器拒绝并挑战，返回 401，用 WWW-Authenticate 写明 Basic 方案、realm 叫 Admin Area，主体是一段提示页。报文里蓝色起始行、黄色首部名、绿色主体，注意主体尖括号已转成实体，否则会被当标签吃掉。两个数字记牢：状态 401，Content-Length 是 63。挑战只是出题，下一页看带凭据重试拿 200。">
+  <div class="slide-head"><span class="sec">例子 · 报文 ①</span><h3>前两步：裸请求 → 401 挑战</h3></div>
+  <div class="slide-body">
+    <div class="wire sm"><b>GET /admin/report HTTP/1.1</b>
+<i>Host</i>: app.example.com
+<i>User-Agent</i>: DemoClient/1.0
+<i>Accept</i>: text/html
+
+<em>（空行：本请求没有任何凭据首部）</em></div>
+    <div class="wire-cap">裸请求：客户端不知道这个路径受保护，所以没有 Authorization 首部，它并不知道自己马上会被挑战。</div>
+    <div class="wire sm"><i>HTTP/1.1 401 Unauthorized</i>
+<i>Date</i>: Mon, 16 Nov 2026 00:30:00 GMT
+<i>WWW-Authenticate</i>: Basic realm="Admin Area"
+<i>Content-Length</i>: 63
+<i>Content-Type</i>: text/html; charset=utf-8
+
+<em>&lt;html&gt;&lt;body&gt;&lt;h1&gt;401 Unauthorized&lt;/h1&gt;&lt;/body&gt;&lt;/html&gt;</em></div>
+    <div class="wire-cap">401 挑战：状态码说明未提供有效凭据，WWW-Authenticate 说明用 Basic 方案、保护区域 realm 叫 Admin Area；主体尖括号已按 HTML 规则转义。</div>
+  </div>
+</section>
+
+<section class="slide" data-narration="接着走后两步。第三步浏览器弹登录框，用户输入 user 和 pass，客户端拼成 user:pass 做一次 Base64 编码得到 dXNlcjpwYXNz，放进 Authorization 重发同一条 GET，格式是方案名 Basic 加空格再跟凭据。第四步校验通过返回 200，Content-Type 是 text/html，Content-Length 是 42，主体是季度报表数据。四步连起来数，两条请求、两条响应，这是最小完整闭环。留意 WWW-Authenticate 在第二步响应里，Authorization 在第三步请求里，一问一答各归其位。那串编码怎么算的是下个例子，动手前先把 401 的邻居状态码分清。">
+  <div class="slide-head"><span class="sec">例子 · 报文 ②</span><h3>后两步：带凭据重试 → 200</h3></div>
+  <div class="slide-body">
+    <div class="wire sm"><b>GET /admin/report HTTP/1.1</b>
+<i>Host</i>: app.example.com
+<i>User-Agent</i>: DemoClient/1.0
+<i>Authorization</i>: Basic dXNlcjpwYXNz
+<i>Accept</i>: text/html
+
+<em>（空行：凭据已随本次请求发出）</em></div>
+    <div class="wire-cap">重试请求：Authorization 的格式是「方案名 + 空格 + 凭据」，Basic 后面那串就是 Base64 编码后的 user:pass。</div>
+    <div class="wire sm"><i>HTTP/1.1 200 OK</i>
+<i>Date</i>: Mon, 16 Nov 2026 00:30:01 GMT
+<i>Content-Type</i>: text/html; charset=utf-8
+<i>Content-Length</i>: 42
+
+<em>&lt;html&gt;&lt;body&gt;季度报表数据…&lt;/body&gt;&lt;/html&gt;</em></div>
+    <div class="wire-cap">校验成功返回 200。整个交互用了两条请求、两条响应，这就是通用框架的最小完整闭环。</div>
+  </div>
+</section>
+
+<section class="slide" data-narration="401 有个容易混的家族，排障先分流。401 是没证明身份或凭据无效，请再试，响应必须带 WWW-Authenticate，客户端提示重输再重试。403 语气完全不同：凭据有效但权限不够，别再试了，重试无意义，也不需要挑战首部。还有 404，MDN 提醒服务器常干脆用它回应无权限请求来藏住页面，因为对攻击者来说 404 不存在比 403 没权限泄露得更少。判定收成一句，401 认证没过就找挑战首部看方案，403 授权没过就换账号或申请权限。带了正确凭据却一直收 401，先怀疑编码、realm 或代理拦下。下一页开始 Base64 手算。">
+  <div class="slide-head"><span class="sec">专题 · 状态码</span><h3>401 / 403 / 404 先分流，再决定重试还是放弃</h3></div>
+  <div class="slide-body">
+    <table class="small">
+      <thead><tr><th>状态码</th><th>服务器想表达什么</th><th>客户端会怎么做</th><th>是否带挑战首部</th></tr></thead>
+      <tbody>
+        <tr><td class="l"><strong>401 Unauthorized</strong></td><td class="l">未提供或提供了无效凭据</td><td class="l">提示用户重新输入，可重试</td><td class="l">必须带 WWW-Authenticate</td></tr>
+        <tr><td class="l"><strong>403 Forbidden</strong></td><td class="l">凭据有效，但权限不足</td><td class="l">不再尝试，直接告知失败</td><td class="l">不需要</td></tr>
+        <tr><td class="l"><strong>404 Not Found</strong></td><td class="l">可能真不存在，也可能刻意隐藏</td><td class="l">当作资源不存在</td><td class="l">不需要</td></tr>
+      </tbody>
+    </table>
+    <div class="tip">判定：<strong>401 是认证没过</strong>（找挑战首部看方案）；<strong>403 是授权没过</strong>（换账号或申请权限，重试无意义）。</div>
+    <div class="deep">带了正确凭据却一直收到 401，先怀疑 Base64 编码、realm 是否对得上，或是否被中间代理拦下，而不是继续傻等。</div>
+  </div>
+</section>
+
+<section class="slide" data-narration="第二个必会例子，手工把 user:pass 编成 Base64，三步走，这页第一步逐字符查 ASCII。九个字符 u、s、e、r、冒号、p、a、s、s，十进制 117、115、101、114、58、112、97、115、115，十六进制 75、73、65、72、3A、70、61、73、73。盯住中间那个冒号，它不是字母，十进制 58、十六进制 3A，写错整串全错。展开八位二进制，u 是 01110101，冒号 00111010。一共九字节，正好三的倍数，干净分三组不用补位。字母表也摆好：大写 A 到 Z 是 0 到 25，小写 26 到 51，数字 52 到 61，加号 62、斜杠 63。下一页拆成四组六位算结果。">
+  <div class="slide-head"><span class="sec">例子 · 手算 ①</span><h3>第一步：user:pass 逐字符查 ASCII</h3></div>
+  <div class="slide-body">
+    <table class="small">
+      <thead><tr><th>字符</th><th>十进制</th><th>十六进制</th><th>8 位二进制</th></tr></thead>
+      <tbody>
+        <tr><td>u</td><td>117</td><td>75</td><td>01110101</td></tr>
+        <tr><td>s</td><td>115</td><td>73</td><td>01110011</td></tr>
+        <tr><td>e</td><td>101</td><td>65</td><td>01100101</td></tr>
+        <tr><td>r</td><td>114</td><td>72</td><td>01110010</td></tr>
+        <tr><td class="l"><strong>冒号 :</strong></td><td><strong>58</strong></td><td><strong>3A</strong></td><td>00111010</td></tr>
+        <tr><td>p</td><td>112</td><td>70</td><td>01110000</td></tr>
+        <tr><td>a</td><td>97</td><td>61</td><td>01100001</td></tr>
+        <tr><td>s</td><td>115</td><td>73</td><td>01110011</td></tr>
+        <tr><td>s</td><td>115</td><td>73</td><td>01110011</td></tr>
+      </tbody>
+    </table>
+    <div class="tip"><strong>Base64 编码</strong>（Base64 encoding）字母表：A–Z 为 0–25，a–z 为 26–51，0–9 为 52–61，加号 62，斜杠 63；共 9 字节，正好 3 组，无需补位。</div>
+  </div>
+</section>
+
+<section class="slide" data-narration="第二、三步，把九字节按每三字节二十四位拆成四组六位再查表。第一组 use 切出索引 29、23、13、37，得 d、X、N、l 也就是 dXNl；第二组 r:p 索引 28、35、41、48，得 c、j、p、w 也就是 cjpw；第三组 ass 索引 24、23、13、51，得 Y、X、N、z 也就是 YXNz。三组拼接 dXNl 加 cjpw 加 YXNz，正是 dXNlcjpwYXNz，和报文分毫不差。九字节是三的倍数，末尾没有补位符。反过来每四个字符还原成三字节就是解码，人人能为。那它算保护吗？下一页给结论。">
+  <div class="slide-head"><span class="sec">例子 · 手算 ②</span><h3>每 3 字节分 4 组 6 位，一路算到 dXNlcjpwYXNz</h3></div>
+  <div class="slide-body">
+    <table class="small">
+      <thead><tr><th>分组</th><th>3 字节的 24 位</th><th>拆成 4 个 6 位</th><th>索引</th><th>字符</th></tr></thead>
+      <tbody>
+        <tr><td class="l"><strong>use</strong></td><td class="l">01110101 01110011 01100101</td><td class="l">011101 / 010111 / 001101 / 100101</td><td class="l">29 / 23 / 13 / 37</td><td class="l">d X N l</td></tr>
+        <tr><td class="l"><strong>r:p</strong></td><td class="l">01110010 00111010 01110000</td><td class="l">011100 / 100011 / 101001 / 110000</td><td class="l">28 / 35 / 41 / 48</td><td class="l">c j p w</td></tr>
+        <tr><td class="l"><strong>ass</strong></td><td class="l">01100001 01110011 01110011</td><td class="l">011000 / 010111 / 001101 / 110011</td><td class="l">24 / 23 / 13 / 51</td><td class="l">Y X N z</td></tr>
+      </tbody>
+    </table>
+    <div class="formula formula-concl">dXNl + cjpw + YXNz = dXNlcjpwYXNz</div>
+    <div class="tip">三组拼接即得报文里那串；反过来把每 4 个字符还原成 3 个字节就是解码，没有任何秘密。</div>
+  </div>
+</section>
+
+<section class="slide" data-narration="结论很硬：Base64 是编码 Encoding，不是加密 Encryption，Basic 凭据等价明文。编码只是换种表示方便传输，算法和字母表公开、无密钥，人人能还原；加密必须靠密钥，没密钥读不回来。把 dXNlcjpwYXNz 贴进在线工具，一秒就还原成 user:pass，MDN 也说用户 ID 与密码以明文传输。顺带立住认证方案 Scheme 这个概念：RFC 9110 只规定 401 挑战加 Authorization 这副骨架，凭据长什么样由方案定，Basic 由 7617 定义，最不安全却支持最广。把编码和加密分家，是理解所有方案安全性的钥匙。凭据适用范围由谁定？下一页看 realm。">
+  <div class="slide-head"><span class="sec">专题 · 安全</span><h3>Base64 是编码不是加密，凭据等价于明文</h3></div>
+  <div class="slide-body">
+    <div class="cols">
+      <div class="col"><div class="card">🔁 <strong>编码</strong>（Encoding）<br>换一种表示方便传输，算法与字母表公开，无密钥，人人可还原。</div></div>
+      <div class="col"><div class="card">🔑 <strong>加密</strong>（Encryption）<br>依赖密钥，没有密钥的第三方无法还原，才谈得上保密。</div></div>
+    </div>
+    <div class="formula formula-concl">Base64 可逆、无密钥 → Basic 凭据 = 明文 → 必须靠 TLS</div>
+    <div class="deep"><strong>认证方案</strong>（Scheme）是插进 RFC 9110 框架的插件：Basic、<strong>Bearer 令牌</strong>（Bearer Token）、Digest 都共用同一副挑战—响应骨架；<strong>Basic 方案</strong>（Basic authentication scheme）由 RFC 7617 定义，把全部安全责任推给了 TLS。</div>
+  </div>
+</section>
+
+<section class="slide" data-narration="第三个例子，realm 与凭据缓存范围。挑战首部带方案名和 realm，凭据首部带方案名和凭据。规范把 realm 和规范化根 URI，也就是协议、主机、端口，合成一个保护空间，它是缓存凭据的键，路径不在键里。场景：用户在后台被 Admin Area 挑战，缓存了协议 https、端口 443、realm 为 Admin Area 到 alice 凭据，docs 目录用 Docs Area。逐行判六个网址：前两个路径深浅不同但四元组全同，都会带；第三个 realm 变 Docs Area，不会；后三个改端口 8443、降级 http、换主机，都不会。口诀，同源加同 realm 才复用，路径无关。下一页抽成推导。">
+  <div class="slide-head"><span class="sec">例子 · 判定</span><h3>realm 与四元组：六个 URL 逐行判凭据复用</h3></div>
+  <div class="slide-body">
+    <table class="small">
+      <thead><tr><th>后续请求 URL</th><th>该路径的 realm</th><th>与缓存四元组是否相同</th><th>是否自动带 Admin 凭据</th></tr></thead>
+      <tbody>
+        <tr><td class="l">https://app.example.com/admin/page2</td><td class="l">Admin Area</td><td class="l">四元组全同</td><td class="l"><strong>会，直接带上</strong></td></tr>
+        <tr><td class="l">https://app.example.com/admin/deep/report</td><td class="l">Admin Area</td><td class="l">同四元组，路径更深不影响</td><td class="l"><strong>会，路径不是键</strong></td></tr>
+        <tr><td class="l">https://app.example.com/docs/api</td><td class="l">Docs Area</td><td class="l">realm 不同</td><td class="l">不会，另行挑战</td></tr>
+        <tr><td class="l">https://app.example.com:8443/admin/page2</td><td class="l">Admin Area</td><td class="l">端口 8443 不等于 443</td><td class="l">不会，端口不同</td></tr>
+        <tr><td class="l">http://app.example.com/admin/page2</td><td class="l">Admin Area</td><td class="l">协议 http 不等于 https</td><td class="l">不会，协议不同</td></tr>
+        <tr><td class="l">https://other.example.com/admin/page2</td><td class="l">Admin Area</td><td class="l">主机名不同</td><td class="l">不会，主机不同</td></tr>
+      </tbody>
+    </table>
+    <div class="deep"><strong>保护空间</strong>（Protection Space）由 scheme、host、port、realm 四元组决定，<strong>路径不在键里</strong>；口诀：同源加同 realm 才复用，路径无关。排障先核对四项里到底哪一项变了。</div>
+  </div>
+</section>
+
+<section class="slide" data-narration="按空格展开，把挑战—响应主线拆成三步，每步回答一个为什么。第一步客户端先发裸请求不带凭据，因为凭据不该访问每个网址都无谓出现，先探一步只在受保护页面传递。第二步服务器用 401 加 WWW-Authenticate 挑战并写明方案和 realm，因为怎么证明、属于哪个保护区的决定权必须交给服务器，客户端不能自己猜。第三步客户端按题目拼凭据放进 Authorization 重试，这是凭据唯一该出现的位置，校验通过才回 200。三步合起来解释了一个反直觉设计，标准流程是先被拒绝再带凭据，而不是见门就先递证件。想通它，就懂 401 为什么必须带挑战首部、realm 为什么会进缓存键。下一页轮到你。">
+  <div class="slide-head"><span class="sec">推导</span><h3>挑战—响应为什么是「先拒绝、后凭据」</h3></div>
+  <div class="slide-body">
+    <div class="step"><p><strong>① 先发裸请求</strong>：凭据不该无谓出现在每个 URL，先探一步，只在确需保护的页面上传递。</p></div>
+    <div class="step"><p><strong>② 服务器 401 挑战</strong>：用 WWW-Authenticate 写明方案与 realm，把「怎么证明、属于哪个空间」的决定权交给服务器。</p></div>
+    <div class="step"><p><strong>③ 带 Authorization 重试</strong>：客户端按题目拼好凭据，这是凭据唯一该出现的位置，校验通过才回到 200。</p></div>
+    <div class="step"><div class="formula formula-concl">两条请求 + 两条响应 = 最小完整闭环</div></div>
+    <p class="step-hint">按空格 / → 逐步展开推导</p>
+  </div>
+</section>
+
+<section class="slide" data-narration="轮到你了。屏幕给一段 401 挑战，先做三件事：数出方案名和 realm 字符串，说出重试时凭据放哪个首部，再判断已缓存凭据后访问更深路径 /admin/deep/x 会不会自动带。先暂停视频自己推一遍。推出来了吗？好，对答案。第一，方案 Basic，realm 叫 Admin Area，来自 WWW-Authenticate 那行。第二，凭据走 Authorization 首部，格式是 Basic 加空格加 Base64 串。第三，会，保护空间只看协议、主机、端口、realm 四项，路径深浅不在键里。若把 realm 当纯提示语，或以为换路径要重输口令，说明保护空间这个键还没立住，回看上一页。下一页换车道看代理认证。">
+  <div class="slide-head"><span class="sec">演练</span><h3>读一段 401 挑战，自己把凭据与 realm 推出来</h3></div>
+  <div class="slide-body">
+    <div class="wire sm"><i>HTTP/1.1 401 Unauthorized</i>
+<i>WWW-Authenticate</i>: Basic realm="Admin Area"
+<i>Content-Length</i>: 0
+
+<em>（主体为空，关键信息全在首部里）</em></div>
+    <div class="step"><p>① 方案是 <strong>Basic</strong>，realm 是 <strong>Admin Area</strong>，来自 WWW-Authenticate 那一行。</p></div>
+    <div class="step"><p>② 凭据走 <strong>Authorization</strong> 首部，格式是 Basic 加空格加 Base64 串。</p></div>
+    <div class="step"><p>③ 更深路径 <strong>会</strong>自动带：保护空间只认四元组，路径深浅不在键里。</p></div>
+    <div class="pause"><div class="icon">✍️</div><div class="txt"><b>暂停推导</b><p>合上答案，自己说出方案名、realm、凭据首部名，并判断更深路径会不会带凭据。</p></div></div>
+    <p class="step-hint">按空格 / → 逐步揭示答案</p>
+  </div>
+</section>
+
+<section class="slide" data-narration="第四个例子分两半，先看第一半。前面默认挑战你的是目标服务器，可客户端和源站之间常夹着代理，公司网关、学校出口都要你先证明身份。MDN 说两套认证可以并存，走两条平行车道：源站用 401 配 WWW-Authenticate 和 Authorization，代理用 407 配 Proxy-Authenticate 和 Proxy-Authorization，状态码、挑战首部、凭据首部一一对应，只差一个 Proxy 前缀。一条请求能同时向代理和源站各证明一次身份。看报文，407 由代理返回，随后请求里两套凭据各走各的。两条车道安全性质一样，下一页推演 Basic 离开 TLS 会怎样。">
+  <div class="slide-head"><span class="sec">专题 · 代理</span><h3>401 属于源站，407 属于代理：两条平行车道</h3></div>
+  <div class="slide-body">
+    <table class="small">
+      <thead><tr><th>维度</th><th>401 源站认证</th><th>407 代理认证</th></tr></thead>
+      <tbody>
+        <tr><td class="l"><strong>挑战方</strong></td><td class="l">目标源服务器</td><td class="l">路径上的代理服务器</td></tr>
+        <tr><td class="l"><strong>状态码</strong></td><td class="l">401 Unauthorized</td><td class="l">407 Proxy Authentication Required</td></tr>
+        <tr><td class="l"><strong>挑战首部</strong>（响应）</td><td class="l">WWW-Authenticate</td><td class="l">Proxy-Authenticate</td></tr>
+        <tr><td class="l"><strong>凭据首部</strong>（请求）</td><td class="l">Authorization</td><td class="l">Proxy-Authorization</td></tr>
+        <tr><td class="l"><strong>语法</strong></td><td class="l">Basic 加 realm 参数</td><td class="l">Basic 加 realm 参数</td></tr>
+        <tr><td class="l"><strong>能否并存</strong></td><td class="l" colspan="2">可以：两套首部独立，一条请求可分别向代理与源站证明身份</td></tr>
+      </tbody>
+    </table>
+    <div class="wire sm"><i>HTTP/1.1 407 Proxy Authentication Required</i>
+<i>Proxy-Authenticate</i>: Basic realm="Corporate Proxy"
+<i>Content-Length</i>: 0
+
+<em>（由代理返回，要求先向代理证明身份）</em></div>
+    <div class="wire-cap">407 挑战：首部名带 Proxy 前缀，说明这是代理而非源站的要求。</div>
+    <div class="wire sm"><b>GET http://example.com/report HTTP/1.1</b>
+<i>Host</i>: example.com
+<i>Proxy-Authorization</i>: Basic YWxpY2U6czNjcjN0
+<i>Authorization</i>: Basic dXNlcjpwYXNz
+
+<em>（前者给代理，后者给源站，互不混淆）</em></div>
+    <div class="wire-cap">两套凭据并存：Proxy-Authorization 交给代理，Authorization 由代理转发给源站，各走各的车道。</div>
+  </div>
+</section>
+
+<section class="slide" data-narration="推演第四个例子的第二半，也是关键结论。前置是用户访问 http 明文地址，没有 TLS，攻击者夹在中间可监听，源站用 Basic 保护。六步：一，裸 GET，攻击者看到路径；二，源站回 401 加 Basic 挑战，得知要凭据；三，浏览器弹框，用户输入 alice 和 s3cr3t，毫无察觉；四，客户端发凭据，攻击者抓到可逆字符 YWxpY2U6czNjcjN0；五，逆向还原出明文 alice:s3cr3t，不需要密钥；六，重放或撞库，完全冒充 alice。链条成立只要一个条件，凭据可被监听。加上 TLS，第四步就断：报文被封装进加密记录，看不到首部，证书校验还挡住冒充。Basic 必须搭配 TLS。下一页对齐规范。">
+  <div class="slide-head"><span class="sec">专题 · 攻击链</span><h3>无 TLS 时 Basic 凭据被窃取的六步链</h3></div>
+  <div class="slide-body">
+    <table class="small">
+      <thead><tr><th>步骤</th><th>发生了什么</th><th>攻击者获得什么</th></tr></thead>
+      <tbody>
+        <tr><td>1</td><td class="l">客户端发裸 GET 到明文 http 地址</td><td class="l">看到路径与目标，确认有受保护资源</td></tr>
+        <tr><td>2</td><td class="l">源站返回 401 加 Basic realm 叫 Intranet 的挑战</td><td class="l">知道需要 Basic 凭据</td></tr>
+        <tr><td>3</td><td class="l">浏览器弹框，用户输入 alice 与 s3cr3t</td><td class="l">用户毫无察觉，以为只是普通登录</td></tr>
+        <tr><td>4</td><td class="l">客户端算 Base64 并发出 Authorization: Basic YWxpY2U6czNjcjN0</td><td class="l">抓到整条报文，读到那串可逆字符</td></tr>
+        <tr><td>5</td><td class="l">对 Base64 做逆向，还原出 alice:s3cr3t</td><td class="l">拿到明文用户名与口令，无需任何密钥</td></tr>
+        <tr><td>6</td><td class="l">用凭据向源站重放请求，或去其他系统撞库</td><td class="l">完全冒充 alice，横向扩大战果</td></tr>
+      </tbody>
+    </table>
+    <div class="warn"><strong>传输层安全协议</strong>（TLS，Transport Layer Security）：链条在<strong>第 4 步</strong>截断，整条报文被封装进加密记录，观察者看不到 Authorization 首部，证书校验还挡住主动冒充。Base64 可逆，等于把口令写在明信片背面——Basic 必须搭配 TLS。</div>
+  </div>
+</section>
+
+<section class="slide" data-narration="按固定动作对齐两套口径，表头三列。认证有三份文档，框架在 RFC 9110，Basic 在 7617，Bearer 在 6750。第一行，9110 把质询与凭据定成抽象模型；MDN 仍引的 7235 已被 9110 取代，写实现得查现行条文。第二行，7617 写死凭据为 base64 的用户名加冒号加口令，用户名不得含冒号、realm 区分大小写。第三行，realm 和根 URI 共同定义保护空间，是六网址判定表的依据。第四行，6750 的 Bearer 换用持有即有权令牌。第五行，401 必须带 WWW-Authenticate 是 MUST，用 404 隐藏只是工程实践。下一页扫雷。">
+  <div class="slide-head"><span class="sec">规范对照</span><h3>MDN 的说法 → RFC 怎么写 → 为什么值得知道</h3></div>
+  <div class="slide-body">
+    <table class="small">
+      <thead><tr><th>MDN 的说法</th><th>RFC 怎么写</th><th>为什么值得知道</th></tr></thead>
+      <tbody>
+        <tr><td class="l">服务器质询、客户端提供凭据，正文引 RFC 7235</td><td class="l">现行框架在 RFC 9110 第 11 章；401 / 403 / 407 见第 15 章</td><td class="l">7235 已被 9110 取代，写实现要查现行编号</td></tr>
+        <tr><td class="l">Basic 用 Base64 编码凭据，不安全，应与 TLS 搭配</td><td class="l">RFC 7617：凭据为 base64 的用户名加冒号加口令；用户名不得含冒号，realm 区分大小写</td><td class="l">这些边界只有规范写死，解析器按它写才能互通</td></tr>
+        <tr><td class="l">realm 描述受保护的区域或范围</td><td class="l">RFC 7617 第 2 节与 9110 第 11.5 节：realm 与规范化根 URI 共同定义保护空间</td><td class="l">这是六网址判定表的规范依据，解释了改端口就重新挑战</td></tr>
+        <tr><td class="l">Bearer 令牌通过 OAuth 2.0 保护资源</td><td class="l">RFC 6750：凭据为持有即有权令牌，形式是 Authorization: Bearer 加令牌</td><td class="l">凭据从用户名口令换成短期令牌，同样强制要求 TLS</td></tr>
+        <tr><td class="l">权限不足返回 403，也可能用 404 隐藏页面</td><td class="l">RFC 9110 第 15.5.2 节要求 401 必须发送 WWW-Authenticate</td><td class="l">401 带挑战首部是 MUST，404 隐藏只是工程权衡</td></tr>
+      </tbody>
+    </table>
+    <div class="deep">三份文档按职责摆好：RFC 9110 定义<strong>通用框架</strong>，RFC 7617 填进 <strong>Basic</strong>，RFC 6750 填进 <strong>Bearer</strong>，框架与方案是「插槽与插件」的关系；分清 MUST 与实践建议，评审才有依据。</div>
+  </div>
+</section>
+
+<section class="slide" data-narration="扫三个最常见的雷。第一，以为 HTTP 认证就是登录表单，错。表单是应用层流程，POST 到 /login 换回 cookie 靠它识别你；HTTP 认证是协议内置的质询—响应，凭据走 Authorization，每条请求显式携带，机制完全不同。第二，以为 Base64 之后是乱码、口令被藏住了，这是错得最典型的一条，看不懂不等于不可读，纯可逆变换无密钥，抓包一行命令就还原，Basic 必须配 TLS。第三，以为 realm 只是登录框上的提示文字，错，它同时是缓存键的一部分，直接决定浏览器发不发口令；给不同安全等级区域起同一个 realm 名，等于主动拆掉隔离。三件事分开，下一页看本讲和第 9 讲怎么分工。">
+  <div class="slide-head"><span class="sec">避坑</span><h3>三个把机制混为一谈的误解</h3></div>
+  <div class="slide-body">
+    <div class="trap">❌ <strong>HTTP 认证 = 登录表单</strong><br>✅ 表单是应用层流程，POST 到 /login 换回 cookie 靠它识别你；HTTP 认证是协议内置的质询—响应，凭据走 Authorization 首部，每条请求显式携带。</div>
+    <div class="trap">❌ <strong>Base64 后是乱码，口令被藏住了</strong><br>✅ 看不懂不等于不可读：纯可逆变换、无密钥，抓包一行命令就还原。Basic 凭据等价于明文，必须搭配 TLS。</div>
+    <div class="trap">❌ <strong>realm 只是登录框上的提示文字</strong><br>✅ 它同时是凭据缓存键的一部分，直接决定浏览器发不发口令；给不同安全等级的区域起同一个 realm 名，等于主动拆掉隔离。</div>
+  </div>
+</section>
+
+<section class="slide" data-narration="这一讲和下一讲怎么分工，说清才不重复用功。本讲负责在一条请求内部证明身份：挑战—响应、401 与 407 两条车道、Base64 凭据、realm 保护空间，关心服务器凭什么信你。第 9 讲 CORS 转向另一个维度，管浏览器允许一个源读另一个源的资源，靠同源策略默认拒绝、再由服务器首部逐个开口子，还带 OPTIONS 预检。粒度不同，本讲确认来者是谁，第 9 讲确认这次跨源读取放不放行。本讲两笔账，凭据在跨源里怎么带、带凭据时通配符为何失效，交给第 9 讲；代理那条 407 车道要到第 11 讲代理与隧道才展开。钩子一句：身份关口守住了，下一讲看跨源边界。">
+  <div class="slide-head"><span class="sec">接口</span><h3>第 8 讲证明身份，第 9 讲划跨源边界</h3></div>
+  <div class="slide-body">
+    <table>
+      <thead><tr><th></th><th>第 8 讲 认证</th><th>第 9 讲 CORS</th></tr></thead>
+      <tbody>
+        <tr><td class="l"><strong>回答什么</strong></td><td class="l">凭什么信来者是谁</td><td class="l">这次跨源读取放不放行</td></tr>
+        <tr><td class="l"><strong>核心对象</strong></td><td class="l">401/407、Authorization、Base64、realm</td><td class="l">同源三元组、Origin、ACAO、OPTIONS 预检</td></tr>
+        <tr><td class="l"><strong>默认姿态</strong></td><td class="l">先拒绝、被挑战后才带凭据</td><td class="l">默认拒绝跨源读取，再逐个开口子</td></tr>
+        <tr><td class="l"><strong>留下的账</strong></td><td class="l">凭据在跨源里怎么带、407 车道</td><td class="l">带凭据时通配符为何失效；407 留到第 11 讲</td></tr>
+      </tbody>
+    </table>
+    <div class="tip">钩子：身份这道关口守住了，下一讲把目光移到浏览器允许的跨源边界上，看一个源怎么读另一个源。</div>
+  </div>
+</section>
+
+<section class="slide" data-narration="用三句话收束第八讲。解决什么：把认出你、证明你是你、允许你做什么三件事分开，讲清 HTTP 用通用质询—响应完成认证，服务器 401 挑战、客户端 Authorization 带凭据，代理用 407 那套。核心机制：401 加 WWW-Authenticate 发起挑战，客户端把用户名冒号口令做 Base64 后重试，realm 四元组决定凭据能否复用，而 Base64 可逆等价明文，必须靠 TLS。承上启下：第 7 讲 cookie 认出你，本讲证明你，第 9 讲转向跨源；规范对齐 RFC 9110、7617、6750。记住口诀，先挑战后凭据、编码不等于加密。合上书也要能默写四报文闭环，下一页是毕业挑战。">
+  <div class="slide-head"><span class="sec">小结</span><h3>三句话讲完第 8 讲</h3></div>
+  <div class="slide-body">
+    <div class="chain">
+      <div class="link"><span class="no">1</span><span class="txt"><strong>解决什么</strong>：把认出你、证明你是你、允许你做什么三件事分开，讲清通用质询—响应</span></div>
+      <div class="link"><span class="no">2</span><span class="txt"><strong>核心机制</strong>：401 挑战 + Authorization 凭据 + realm 四元组；Base64 可逆，必须靠 TLS</span></div>
+      <div class="link"><span class="no">3</span><span class="txt"><strong>承上启下</strong>：第 7 讲认出你，本讲证明你，第 9 讲转向跨源；对齐 RFC 9110 / 7617 / 6750</span></div>
+    </div>
+    <div class="formula formula-concl">先挑战后凭据 · 编码不等于加密 —— 合上书也要能默写</div>
+  </div>
+</section>
+
+<section class="slide slide-cover" data-narration="第八讲到这儿结束，留四项毕业挑战，合上书拿张纸完成。第一，区分识别、认证、授权，各举一例并说出通用框架解决哪一个。第二，默写 401 到 200 的四条报文，标出两个关键首部各在哪一步。第三，手写 user:pass 的 Base64，写出逐字符 ASCII、三字节分组、四组六位，算到 dXNlcjpwYXNz，再说出保护空间四元组并判两个不同 realm 会否复用。第四，列 401 与 407 对应，口述无 TLS 的六步攻击链、指出 TLS 在第几步截断，说出框架、Basic、Bearer 各由哪份 RFC 定义。四项全写出再点完成按钮。下一讲第 9 讲 CORS，看跨源边界。">
+  <div class="kicker">第 8 讲 结束</div>
+  <h1>先挑战后凭据，编码不等于加密</h1>
+  <div class="sub">毕业挑战：合上书，拿一张纸</div>
+  <div class="divider"></div>
+  <div class="meta">
+    ☑ 区分识别 / 认证 / 授权　　☑ 默写 401 到 200 的四条报文<br>
+    ☑ 手算 user:pass 到 dXNlcjpwYXNz 并判 realm　　☑ 列 401 与 407 对应、口述六步攻击链与三份 RFC<br><br>
+    下一讲 · 第 9 讲 跨源资源共享 CORS：浏览器允许一个源读另一个源的那道边界
+  </div>
+</section>
+
+  <!-- 页脚：brand 改为本章标题；总页数改 pagenum 初值 -->
+  <div id="footer">
+    <span class="brand">第8讲 HTTP 身份验证 · HTTP 精通 课件　<a class="to-lec" href="../http-guide/index.html">讲义首页 ↗</a></span>
+    <span id="pagenum">1 / 1</span>
+  </div>
+
+  <!-- 导航 -->
+  <div class="nav">
+    <button id="prev" title="上一页 (←)">‹</button>
+    <button id="next" title="下一页 (→ / 空格)">›</button>
+  </div>
+  <div id="hint">← → 翻页 · 空格下一页 · 推导页逐步显示 · 点击左右半屏翻页</div>
+
+</div>
+
+<!-- mermaid 本地引用，保证离线可用；初始化参数全套课件统一，勿改 -->
+<script src="assets/mermaid.min.js"></script>
+<script>
+mermaid.initialize({
+  startOnLoad: false,   // 必须为 false：display:none 的隐藏页渲染会得到 0 宽高的退化 SVG，
+                        // 改为页面激活时懒渲染（见 renderMermaid）
+  theme: "base",
+  themeVariables: {
+    primaryColor: "#ebf8ff",
+    primaryBorderColor: "#2b6cb0",
+    primaryTextColor: "#1a365d",
+    lineColor: "#718096",
+    fontFamily: "-apple-system, PingFang SC, sans-serif",
+    fontSize: "15px"
+  },
+  flowchart: { curve: "linear", htmlLabels: false }
+});
+</script>
+<script>
+(function(){
+  const slides = Array.from(document.querySelectorAll('.slide'));
+  const total = slides.length;
+  let idx = 0;
+
+  const params = new URLSearchParams(location.search);
+  const startSlide = parseInt(params.get('slide'), 10);
+  if (params.get('autohide') === '1') document.body.classList.add('autohide');
+  if (!isNaN(startSlide) && startSlide >= 1 && startSlide <= total) idx = startSlide - 1;
+
+  const progress = document.getElementById('progress');
+  const pagenum = document.getElementById('pagenum');
+  const prevBtn = document.getElementById('prev');
+  const nextBtn = document.getElementById('next');
+
+  // 推导分步：每页记住已展开的步数；autohide（截图）模式下 CSS 强制全显
+  const stepState = new Map();
+  function stepsOf(i){ return Array.from(slides[i].querySelectorAll('.step')); }
+  function applySteps(){
+    stepsOf(idx).forEach((el, k)=> el.classList.toggle('on', k < (stepState.get(idx) || 0)));
+  }
+  // 前进一步：先展开本页下一步，全部展开后才翻页
+  function forward(){
+    const steps = stepsOf(idx);
+    const shown = stepState.get(idx) || 0;
+    if (shown < steps.length){ stepState.set(idx, shown + 1); applySteps(); return; }
+    go(idx + 1);
+  }
+  // 后退一步：先收起本页最后一步，收完才回上一页
+  function backward(){
+    const steps = stepsOf(idx);
+    const shown = stepState.get(idx) || 0;
+    if (shown > 0){ stepState.set(idx, shown - 1); applySteps(); return; }
+    go(idx - 1);
+  }
+
+  // mermaid 懒渲染：只在页面激活（有真实宽高）时渲染该页的图，渲染后打 data-done 防重复
+  function renderMermaid(slide){
+    if (typeof mermaid === 'undefined') return;
+    const nodes = Array.from(slide.querySelectorAll('.mermaid:not([data-done])'));
+    if (!nodes.length) return;
+    nodes.forEach(n => n.setAttribute('data-done', ''));
+    mermaid.run({ nodes }).catch(err => {
+      nodes.forEach(n => n.removeAttribute('data-done'));
+      console.error('mermaid 渲染失败：', err);
+    });
+  }
+
+  function render(){
+    slides.forEach((s,i)=> s.classList.toggle('active', i===idx));
+    progress.style.width = ((idx+1)/total*100) + '%';
+    pagenum.textContent = (idx+1) + ' / ' + total;
+    prevBtn.disabled = (idx===0);
+    nextBtn.disabled = (idx===total-1);
+    applySteps();
+    renderMermaid(slides[idx]);
+  }
+  function go(n){ idx = Math.max(0, Math.min(total-1, n)); render(); }
+
+  prevBtn.addEventListener('click', e=>{ e.stopPropagation(); backward(); });
+  nextBtn.addEventListener('click', e=>{ e.stopPropagation(); forward(); });
+
+  document.addEventListener('keydown', e=>{
+    if(e.key==='ArrowRight'||e.key===' '||e.key==='PageDown'){ e.preventDefault(); forward(); }
+    else if(e.key==='ArrowLeft'||e.key==='PageUp'){ e.preventDefault(); backward(); }
+    else if(e.key==='Home'){ stepState.set(idx, 0); go(0); }
+    else if(e.key==='End'){ go(total-1); }
+  });
+
+  document.getElementById('stage').addEventListener('click', e=>{
+    if(e.target.closest('.nav') || e.target.closest('a')) return;
+    const x = e.clientX;
+    if(x < window.innerWidth*0.5) backward(); else forward();
+  });
+
+  function fit(){
+    const s = Math.min(window.innerWidth/1280, window.innerHeight/720);
+    document.getElementById('stage').style.transform = 'translate(-50%,-50%) scale(' + s + ')';
+  }
+  window.addEventListener('resize', fit);
+  fit();
+  render();
+})();
+</script>
+</body>
+</html>

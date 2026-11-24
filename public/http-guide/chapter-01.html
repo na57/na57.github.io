@@ -1,0 +1,689 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第1讲 HTTP 概述与典型会话 · HTTP 精通</title>
+<link rel="stylesheet" href="assets/style.css">
+<style>
+/* 本套专用：协议报文原文展示与 MDN 来源条 */
+.wire{background:var(--bg-deep);border:1px solid var(--line);border-left:4px solid var(--accent);border-radius:8px;padding:14px 18px;margin:14px 0;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:13.5px;line-height:1.78;white-space:pre-wrap;overflow-wrap:anywhere;color:var(--ink-soft);}
+.wire b{color:var(--accent);font-weight:700;}
+.wire i{color:var(--orange);font-style:normal;}
+.wire em{color:var(--ink-faint);font-style:normal;}
+.wire.sm{font-size:12.5px;}
+.wire-cap{font-size:13px;color:var(--ink-faint);margin:-8px 0 16px;}
+.mdn-src{background:var(--bg-deep);border:1px solid var(--line);border-left:4px solid var(--accent);border-radius:8px;padding:12px 18px;margin:16px 0 0;font-size:13px;line-height:1.8;color:var(--ink-soft);}
+.mdn-src strong{color:var(--accent);}
+.mdn-src a{color:var(--accent);text-decoration:none;border-bottom:1px dashed var(--line);}
+.mdn-src a:hover{border-bottom-style:solid;}
+.to-slide{font-size:13px;color:var(--accent);text-decoration:none;border:1px solid var(--line);border-radius:6px;padding:4px 11px;white-space:nowrap;}
+.to-slide:hover{background:var(--bg-deep);}
+</style>
+</head>
+<body>
+
+<nav class="topbar">
+  <div class="topbar-inner">
+    <span class="brand"><a href="index.html" style="color:inherit">← HTTP 精通 · 学习地图</a></span>
+    <span class="crumb">第①组 · 基础与表示 / 第1讲</span>
+    <a class="to-slide" href="../http-guide-slides/01-%E8%AF%BE%E7%A8%8B%E5%AF%BC%E8%AE%BA%E4%B8%8EHTTP%E6%A6%82%E8%BF%B0-%E8%AF%BE%E4%BB%B6.html" target="_blank" rel="noopener noreferrer">配套课件 ↗</a>
+  </div>
+</nav>
+
+<div class="wrap">
+
+  <div class="lecture-head">
+    <span class="ch-label">GUIDE 01 · 基础与表示</span>
+    <h1>HTTP 概述与典型会话</h1>
+    <p class="lead">从地址栏敲下一个网址到看见完整页面——本讲把这次旅程拆成可命名的对象，建立全课程的骨架。</p>
+    <div class="mdn-src"><strong>本讲对应的 MDN 指南：</strong><a href="https://developer.mozilla.org/zh-CN/docs/Web/HTTP/Guides/Overview" target="_blank" rel="noopener">HTTP 概述</a> · <a href="https://developer.mozilla.org/zh-CN/docs/Web/HTTP/Guides/Session" target="_blank" rel="noopener">典型的 HTTP 会话</a> · <a href="https://developer.mozilla.org/zh-CN/docs/Web/HTTP/Guides/Evolution_of_HTTP" target="_blank" rel="noopener">HTTP 的发展</a></div>
+  </div>
+
+  <!-- 本章定位 -->
+  <div class="position-bar">
+    <strong>本讲在主线上的位置：</strong>起点：一个用户想看某个 Web 资源 → <u>本讲：HTTP 概述与典型会话</u> → 第 2 讲把会话里交换的「报文」逐行拆开。<br>
+    第1讲回答主线上的第1个问题：<strong>一次典型 HTTP 会话分几个阶段，为什么无状态的 HTTP 仍能支撑登录和购物车？</strong>
+    <div class="map-inline">
+      <span class="node">起点：一次 Web 请求</span><span class="arrow">→</span>
+      <span class="node here">第1讲 HTTP 概述与典型会话</span><span class="arrow">→</span>
+      <span class="node">第2讲 HTTP 消息与 MIME 类型</span><span class="arrow">→</span>
+      <span class="node">第4–6讲 连接与缓存</span><span class="arrow">→</span>
+      <span class="node">第7–10讲 状态与安全</span>
+    </div>
+  </div>
+
+  <!-- 学习目标 -->
+  <div class="objectives">
+    <h4>🎯 学完本讲，合上书你应该能：</h4>
+    <ol>
+      <li>画出「客户端 → DNS → TCP → TLS → 服务器」的链路，并说清每层各自解决什么问题</li>
+      <li>按 MDN 的三阶段模型复述一次典型会话，指出每次请求都必须携带 Host 的原因</li>
+      <li>解释「HTTP 无状态」与「Web 应用有会话」为何不矛盾，并说出维持状态的三类手段</li>
+      <li>区分资源与表示，说明为什么同一个 URL 可以返回 HTML 或 JSON</li>
+      <li>按时间顺序排列 HTTP/0.9、1.0、1.1、2、3 的关键变化，并指出哪些语义始终没变</li>
+    </ol>
+  </div>
+
+  <!-- 视频卡插槽：后面录制 B 站讲解时在此插入 <details class="video-card" id="video-card">…</details> -->
+  <!-- VIDEO_CARD_SLOT -->
+
+  <div class="lecture">
+
+    <!-- 推导主线图 -->
+    <div class="figure">
+      <div class="mermaid">
+flowchart LR
+  A["用户输入 URL"]
+  B["DNS 解析到 IP"]
+  C["TCP 与 TLS 建连"]
+  D["请求—响应事务"]
+  E["复用连接取子资源"]
+  F["无状态留下的状态难题"]
+  A --> B
+  B --> C
+  C --> D
+  D --> E
+  E --> F
+  classDef hot fill:#fbeedd,stroke:#c4651f,stroke-width:2.5px,color:#c4651f;
+  classDef danger fill:#fae9e7,stroke:#b03a2e,stroke-width:2.5px,color:#b03a2e;
+  class D hot;
+  class F danger;
+      </div>
+      <div class="caption">一次会话的主线：前半段是连接建立，中段是事务交换，后半段是复用与收尾；红色节点是后面 cookie、认证、缓存各讲要分别偿还的债。</div>
+    </div>
+
+<!-- ============ 1.1 ============ -->
+    <h2><span class="sec-no">1.1</span>HTTP 不负责把字节送到，它负责说清这次事务是什么意思</h2>
+
+    <p>先别背协议格式。设想一个最朴素的问题：浏览器和服务器之间已经能用 TCP 收发字节了，为什么还要在中间再插一层 <span class="term">HTTP</span>（Hypertext Transfer Protocol，超文本传输协议）？</p>
+
+    <p>MDN 对 HTTP 的定义里有两个关键词：<strong>客户端—服务器协议</strong>和<strong>获取资源</strong>。但这两个词都预设了一件事——双方对「这次交互是什么意思」有共同理解。TCP 恰恰不提供这种理解。它只承诺把字节流<strong>按序、不丢、不重复</strong>地送到对端，至于这些字节是一条请求、一张图片还是一段乱写的文本，TCP 一个字也不关心。</p>
+
+    <p>把问题具体化。假如没有 HTTP，客户端发过去 <code>GET /index.html</code> 和发过去一整个 JPEG 文件，在 TCP 眼里是同一种东西：一串长度不定的字节。服务器因此答不出下面这些决定性的问题：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>服务器必须回答的问题</th><th>TCP 能不能回答</th><th>实际由谁回答</th></tr>
+        <tr><td>你要的是哪一份资源？</td><td>不能，只有字节流</td><td>请求目标（URL 的路径部分）</td></tr>
+        <tr><td>你是想「读」还是想「改」？</td><td>不能</td><td>方法：GET / POST / PUT…</td></tr>
+        <tr><td>事情办成了没有？没成是谁的锅？</td><td>不能</td><td>状态码：2xx / 4xx / 5xx</td></tr>
+        <tr><td>这段字节是 HTML、JSON 还是 JPEG？</td><td>不能</td><td>Content-Type 首部</td></tr>
+        <tr><td>主体到哪儿结束？</td><td>不能，字节流没有天然消息边界</td><td>Content-Length 或分块编码</td></tr>
+        <tr><td>你用的是哪个版本的语法？</td><td>不能</td><td>版本字段：HTTP/1.1 等</td></tr>
+      </table>
+    </div>
+
+    <p>这张表给出了本讲的第一个结论：HTTP 是在可靠字节流之上，用<strong>报文</strong>补上的一套语义约定。MDN 把这套约定拆成三个基本对象——<span class="term">资源</span>（resource）、<span class="term">消息</span>（message）与<span class="term">会话</span>（session）。本讲把它们摆上桌面，后面 11 讲逐一展开。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>HTTP 不是「传网页的协议」，而是<strong>「在客户端与服务器之间约定一次事务语义」的协议</strong>。传的可以是 HTML、图片、API 返回的 JSON、一段视频，甚至一次远程过程调用；变的是承载的内容，不变的是「请求—响应」这个事务模型。MDN 把这些统称为资源与表示，第 3 讲会专门拆开这对概念。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>「HTTP 负责把数据安全可靠地送到」——错，而且错在三个层次。可靠性由 TCP（或 HTTP/3 的 QUIC）负责；机密性与完整性由 TLS 负责；HTTP 只负责说清楚这次事务<strong>是什么意思</strong>。把三层的职责混在一起，就会得出「HTTPS 是一种新的 HTTP 协议」这类错误结论——HTTPS 只是 HTTP over TLS，语义完全一样。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front"><div class="q-tag">回忆 1.1-1</div><div class="q-text">TCP 已经保证了可靠传输，HTTP 补上的到底是什么？</div><span class="tap">点击翻面 →</span></div>
+            <div class="flip-face flip-back"><div class="a-tag">参考答案</div>补的是<strong>语义</strong>：要哪份资源、想做什么操作、结果如何、内容是什么类型、主体到哪儿结束。TCP 只交付字节，不解释字节。</div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front"><div class="q-tag">回忆 1.1-2</div><div class="q-text">说出三个「TCP 无法回答、必须靠 HTTP 回答」的问题。</div><span class="tap">点击翻面 →</span></div>
+            <div class="flip-face flip-back"><div class="a-tag">参考答案</div>要哪份资源（请求目标）、要读还是要改（方法）、成了没有（状态码）；另外主体是什么类型（Content-Type）与到哪结束（Content-Length）也都要靠 HTTP。</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 1.2 ============ -->
+    <h2><span class="sec-no">1.2</span>一次典型会话的三阶段：连接、请求与等待、服务器应答</h2>
+
+    <p>上一节把 HTTP 定位成「语义层」，但语义必须挂在一个具体的过程上。MDN 的《典型的 HTTP 会话》把这个过程分成三个阶段：<strong>客户端建立连接</strong>、<strong>客户端发送请求并等待应答</strong>、<strong>服务器处理请求并返回响应</strong>。注意 MDN 是按教学顺序分的——连接关闭或复用发生在第三阶段之后，属于连接管理的话题，第 4 讲展开。</p>
+
+    <p><strong>阶段一：建立连接。</strong>在客户端—服务器模型里，通信必须由客户端发起。用户在地址栏输入 <code>https://example.com/index.html</code> 之后，浏览器先把域名交给 DNS 解析成 IP 地址，再与服务器的 443 端口建立 TCP 连接；如果是 HTTPS，还要在 TCP 之上完成 TLS 握手，确认对方身份并协商出会话密钥。这一步里 HTTP 还没出场——它只是这场通信的「乘客」，TCP 与 TLS 才是「车」和「铅封」。</p>
+
+    <p><strong>阶段二：客户端发送请求并等待。</strong>连接就绪后，浏览器把用户意图编码成一条请求报文发出。一个最小的 GET 请求长这样：</p>
+
+    <div class="wire"><b>GET /index.html HTTP/1.1</b>
+<b>Host:</b> example.com
+<b>User-Agent:</b> Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)
+<b>Accept:</b> text/html,application/xhtml+xml
+<b>Accept-Encoding:</b> gzip, deflate, br
+
+<em>（空行：首部到此结束，本请求没有主体）</em></div>
+    <div class="wire-cap">一条典型的浏览器请求：起始行给出方法、目标与版本；首部行补充说明身份、可接受的类型与压缩算法；空行标志首部结束。</div>
+
+    <p>这里有一个新手极易忽略的细节：<code>Host</code> 首部在 HTTP/1.1 里是<strong>强制</strong>的。因为一台物理服务器可能同时托管几百个域名，TCP 连接只告诉它「有人连到了 443 端口」，只有 Host 才能告诉它「这个请求是给哪个站点的」。MDN 特别强调每个请求都必须携带 Host，正是这个原因。缺了它，服务器无法决定该返回哪个站点的内容。</p>
+
+    <p><strong>阶段三：服务器处理并返回响应。</strong>服务器解析请求，找到资源，按约定格式回一条响应：</p>
+
+    <div class="wire"><i>HTTP/1.1 200 OK</i>
+<i>Date:</i> Mon, 16 Nov 2026 00:30:00 GMT
+<i>Content-Type:</i> text/html; charset=utf-8
+<i>Content-Length:</i> 74
+<i>Cache-Control:</i> max-age=60
+
+&lt;!doctype html&gt;&lt;html lang="zh-CN"&gt;&lt;body&gt;你好，HTTP&lt;/body&gt;&lt;/html&gt;</div>
+    <div class="wire-cap">响应同样分四段：状态行、首部、空行、主体。200 表示请求成功，Content-Type 告诉浏览器按 UTF-8 编码的 HTML 来解析这 74 个字节。</div>
+
+    <p>浏览器收到响应后并不是结束了。一个网页通常包含 CSS、JS、图片等几十个子资源，浏览器会在连接上继续发请求（或建立少量并行连接）把它们取回来，最后才渲染出完整页面。MDN 把这整个过程称为一次<strong>会话</strong>：它不是「一次请求—一次响应」，而是从建立连接到取齐资源、连接关闭或复用的完整过程。第 4 讲会算清楚「重复建连」到底有多贵，以及持久连接和 HTTP/2 多路复用各自省掉了什么。</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>阶段</th><th>谁发起</th><th>这一层在做什么</th><th>失败时用户看到什么</th></tr>
+        <tr><td>建立连接</td><td>客户端</td><td>DNS 解析、TCP 握手、必要时 TLS 握手</td><td>「无法访问此网站」、连接超时、证书告警</td></tr>
+        <tr><td>客户端发送请求并等待</td><td>客户端</td><td>把意图编码成请求报文发出，阻塞等待应答</td><td>页面转圈、请求 pending</td></tr>
+        <tr><td>服务器处理并返回响应</td><td>服务器</td><td>解析请求、定位资源、生成状态码与首部、写回主体</td><td>4xx / 5xx 页面、空白页</td></tr>
+      </table>
+    </div>
+
+    <div class="box insight">
+      <span class="box-tag">✅ 判定规则</span>
+      <p>排查网络问题时，先按这三阶段定位：连接都建不起来，去看 DNS / TCP / TLS；连接好了但请求迟迟不返回，去看请求是否发出、服务器是否在等主体；返回了但页面不对，去看状态码与表示首部。三阶段对应三种完全不同的故障域，混着查会浪费大量时间。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>「一次 HTTP 会话 = 一次请求—响应」——错。网页往往要几十次请求—响应才组装完成；这些请求可能复用同一条连接，也可能走不同连接。把「事务」（一次请求加一次响应）和「会话」（完整过程）分开，才能理解第 4 讲的持久连接与第 5 讲的缓存命中。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front"><div class="q-tag">回忆 1.2-1</div><div class="q-text">按 MDN 的口径复述一次典型 HTTP 会话的三个阶段。</div><span class="tap">点击翻面 →</span></div>
+            <div class="flip-face flip-back"><div class="a-tag">参考答案</div>① 客户端建立连接（DNS → TCP → 必要时 TLS）；② 客户端发送请求并等待应答；③ 服务器处理请求并返回响应。连接关闭或复用发生在第三阶段之后，属于连接管理。</div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front"><div class="q-tag">回忆 1.2-2</div><div class="q-text">HTTP/1.1 为什么强制要求 Host 首部？缺了会怎样？</div><span class="tap">点击翻面 →</span></div>
+            <div class="flip-face flip-back"><div class="a-tag">参考答案</div>一台服务器可托管多个域名，TCP 连接只包含 IP 与端口，无法区分站点。Host 告诉服务器该请求属于哪个虚拟主机；缺失时服务器无法确定目标，HTTP/1.1 下应返回 400。</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 1.3 ============ -->
+    <h2><span class="sec-no">1.3</span>无状态是设计选择，不是缺陷：Web 应用靠额外的层记住你</h2>
+
+    <p>上一节的会话过程里藏着一个容易被忽略的事实：第三阶段结束后，服务器对刚才那个客户端<strong>没有任何记忆</strong>。MDN 的措辞很直接——HTTP 是一种<span class="term">无状态</span>（stateless）协议：服务器不会在两个请求之间保留关于客户端的信息。</p>
+
+    <p>这句话经常被误解。它说的不是「浏览器不记得你」，而是「<strong>协议本身</strong>不要求服务器记得」。每一次请求都是一条独立的、自包含的事务：服务器处理它只需要这一条报文里的信息，不需要知道这是不是同一个客户端的第几次请求。用两个请求做对比最清楚：</p>
+
+    <div class="wire"><b>GET /cart HTTP/1.1</b>
+<b>Host:</b> shop.example
+<b>User-Agent:</b> DemoClient/1.0
+
+<i>HTTP/1.1 200 OK</i>
+<i>Set-Cookie:</i> session=abc123; Path=/; HttpOnly
+<i>Content-Length:</i> 28
+
+购物车是空的。</div>
+    <div class="wire-cap">第一次请求：服务器在响应里用 Set-Cookie 发给客户端一个会话标识。协议并没有要求它记住这件事。</div>
+
+    <div class="wire"><b>GET /cart HTTP/1.1</b>
+<b>Host:</b> shop.example
+<b>User-Agent:</b> DemoClient/1.0
+<b>Cookie:</b> session=abc123
+
+<i>HTTP/1.1 200 OK</i>
+<i>Content-Length:</i> 34
+
+购物车里有 2 件商品。</div>
+    <div class="wire-cap">第二次请求：客户端主动把标识带回来。服务器看到 Cookie 才知道「还是你」，从而恢复购物车状态。</div>
+
+    <p>请注意这两个请求的关系：<strong>是客户端把状态带回给服务器的</strong>，不是服务器自己记住的。这正是无状态协议的精髓——状态被显式地放在请求里传递，而不是隐含在服务器的连接记忆里。</p>
+
+    <p>MDN 指出，虽然 HTTP 本身无状态，但 cookie 的引入让「用无状态协议记录稳定状态」成为可能。除了 cookie，常见的状态承载方式还有三类：把会话标识写进 URL（MDN 称为胖 URL，fumbling URL，今天基本不再推荐）、在表单里放隐藏字段、以及用 Web Storage 在浏览器本地保存数据。它们都遵循同一个模式——<strong>状态在客户端，每次请求显式携带</strong>。第 7 讲会专门讲 cookie 的属性与安全边界。</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>无状态带来的好处</th><th>对应的代价</th><th>补上代价的机制</th></tr>
+        <tr><td>服务器不保存连接状态，横向扩容只需加机器</td><td>每次请求都要重新携带身份信息</td><td>cookie / Authorization 首部</td></tr>
+        <tr><td>请求失败后可以重试，不依赖「这条连接的历史」</td><td>服务器无法凭连接判断用户是谁</td><td>会话标识 + 服务端会话存储</td></tr>
+        <tr><td>中间代理、缓存可以自由转发和复用响应</td><td>状态放在请求里，可能泄露到日志与 Referer</td><td>HttpOnly / Secure / SameSite 等属性</td></tr>
+        <tr><td>协议实现简单，互操作成本低</td><td>业务逻辑必须自己处理状态一致性</td><td>应用层的会话与数据库设计</td></tr>
+      </table>
+    </div>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>「HTTP 无状态」和「Web 应用有会话」不但不矛盾，前者恰恰是后者的基础：因为协议不替你记状态，你才能自由选择把状态放在 cookie、token 还是服务端，也才能让任意一台服务器接手任意一次请求。MDN 把 cookie 称作「让无状态协议记录稳定状态」的机制，就是这个意思。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>「无状态 = 用户每次都要重新登录」——错。登录状态是通过在后续请求里携带 cookie 或 Bearer Token 恢复的；无状态说的是服务器不靠连接记忆，不是用户得反复输密码。反过来说，把会话标识塞进 URL 虽然能工作，但会出现在浏览器历史、服务器日志和 Referer 里，这是它能被弃用的根本原因。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front"><div class="q-tag">回忆 1.3-1</div><div class="q-text">用一句话解释「HTTP 无状态」，再说出它为什么不是缺陷。</div><span class="tap">点击翻面 →</span></div>
+            <div class="flip-face flip-back"><div class="a-tag">参考答案</div>服务器不保留两次请求之间的信息，每条请求自包含。这换来了横向扩容、可重试与中间层自由转发；状态由客户端显式携带（cookie / token）即可恢复。</div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front"><div class="q-tag">回忆 1.3-2</div><div class="q-text">第二次请求凭什么「恢复」了购物车？状态到底存在哪？</div><span class="tap">点击翻面 →</span></div>
+            <div class="flip-face flip-back"><div class="a-tag">参考答案</div>第一次响应的 Set-Cookie 把 session=abc123 交给客户端，第二次请求用 Cookie 首部带回。状态标识在客户端，真实购物车数据通常在服务端会话存储里。</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 1.4 ============ -->
+    <h2><span class="sec-no">1.4</span>从 0.9 到 3：地基换了三次，事务语义一次没换</h2>
+
+    <p>前三节建立了本讲的主线：会话三阶段承载请求—响应事务，而无状态让这套事务可以被任意中间层转发。但 HTTP 并不是一成不变的：从 HTTP/1.0 到 1.1、2、3，连接管理、代理与缓存的实现细节一直在变，而请求—响应模型、方法与状态码这套语义几乎没动——<strong>换的是地基，不是房子</strong>。MDN 的《HTTP 的发展》把这个演进过程讲得很清楚，值得逐个版本对照。</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>版本</th><th>关键变化</th><th>留下的问题</th><th>今天的地位</th></tr>
+        <tr><td>HTTP/0.9（1991）</td><td>只有一行 GET，无首部、无状态码，响应只能是 HTML</td><td>无法表达类型、错误与复杂请求</td><td>早已废弃，现代服务器默认关闭</td></tr>
+        <tr><td>HTTP/1.0（1996）</td><td>引入首部、状态码、方法、版本号，可传任意类型资源</td><td>每个事务都要新建连接</td><td>仍见于老设备与嵌入式系统</td></tr>
+        <tr><td>HTTP/1.1（1997，1999 修订）</td><td>持久连接、Host 首部、管道化、chunked 定界、缓存控制</td><td>队头阻塞，首部重复且冗长</td><td>至今仍大量在用，尤其 API 调用</td></tr>
+        <tr><td>HTTP/2（2015）</td><td>二进制帧、多路复用、HPACK 首部压缩、优先级</td><td>多条 stream 仍共享一条 TCP，丢包会拖累全部</td><td>主流网站与 CDN 的标配</td></tr>
+        <tr><td>HTTP/3（2022）</td><td>换用 QUIC over UDP，流之间独立，连接迁移</td><td>中间设备对 UDP 的支持仍不齐</td><td>浏览器与主流 CDN 已广泛支持</td></tr>
+      </table>
+    </div>
+
+    <p>看这张表要抓住一条判据：<strong>方法、状态码、首部含义、URL、缓存语义，从 1.0 到 3 一直没有变</strong>。变的只是「这些语义怎么编码到线上」和「字节怎么在连接上跑」。同一个 <code>GET /index.html</code>，在三个版本里的待遇完全不同：</p>
+
+    <div class="wire"><em>HTTP/1.1：一行纯文本起始行 + 一行行首部</em>
+<b>GET /index.html HTTP/1.1</b>
+<b>Host:</b> example.com
+<b>Accept:</b> text/html
+
+<em>HTTP/2：改成带编号的 HEADERS 帧，首部小写并加伪首部</em>
+<i>HEADERS (stream=1, END_HEADERS)</i>
+<i>:method: GET</i>
+<i>:scheme: https</i>
+<i>:authority: example.com</i>
+<i>:path: /index.html</i>
+<i>accept: text/html</i>
+
+<em>HTTP/3：帧格式延续 HTTP/2，但承载在 QUIC 流上</em>
+<i>QUIC stream 0 → HEADERS (:method GET, :path /index.html…)</i></div>
+    <div class="wire-cap">三次换地基的对照：1.1 把语义写成可读文本；2 保留语义只换二进制编码；3 保留 2 的帧语义，把传输从 TCP 换成 QUIC。</div>
+
+    <p>这正是 HTTP/2 能大规模铺开的原因：它<strong>没有改变应用语义</strong>，浏览器和服务器只要换掉编码层，上层代码几乎不用动。MDN 在《HTTP 的发展》里也强调，HTTP/2 并没有废弃 HTTP/1.1 的方法与状态码，而是通过帧和流让它们传得更快。相比之下，当年试图同时重做语义与传输的 HTTP-NG 方案就因为要求全链路同时升级而失败——这条历史教训在第 11 讲讲协议升级时还会回来。</p>
+
+    <div class="box insight">
+      <span class="box-tag">✅ 判定规则</span>
+      <p>遇到「新版本 HTTP 会不会让我的代码失效」这类问题，先问：变的是<strong>语义</strong>还是<strong>编码</strong>？HTTP/2 与 HTTP/3 只换编码与传输，GET 还是 GET，404 还是 404，缓存首部还是那几个。真正会改变你代码的是新增的语义（如 SameSite、CORS、CSP），它们与版本号无关。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>「升级到 HTTP/2 就要改造应用」——错。要改的是服务器与中间设备的配置，应用层语义不变。反过来也别以为「HTTP/1.1 已经过时」：它仍在大量 API 场景里工作良好，很多性能问题出在应用层而不是协议版本。版本是工具，不是信仰。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front"><div class="q-tag">回忆 1.4-1</div><div class="q-text">按顺序列出 0.9 → 1.0 → 1.1 → 2 → 3 各自最关键的一项变化。</div><span class="tap">点击翻面 →</span></div>
+            <div class="flip-face flip-back"><div class="a-tag">参考答案</div>0.9 单行 GET；1.0 首部与状态码；1.1 持久连接与 Host；2 二进制帧与多路复用；3 QUIC over UDP 与流独立。方法、状态码、首部语义始终未变。</div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front"><div class="q-tag">回忆 1.4-2</div><div class="q-text">为什么 HTTP/2 能增量部署，而「同时重做语义与传输」的方案容易失败？</div><span class="tap">点击翻面 →</span></div>
+            <div class="flip-face flip-back"><div class="a-tag">参考答案</div>因为 HTTP/2 保留全部语义只换编码，两端与中间设备可以分别升级、协商使用；若语义和传输一起改，要求链路上所有节点同时升级，任何一个环节不支持就全链路失败。</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 1.5 ============ -->
+    <h2><span class="sec-no">1.5</span>延伸：规范怎么写：MDN 的三阶段对应 RFC 的哪一段</h2>
+
+    <p>MDN 是<strong>面向开发者的工作文档</strong>——它按「你需要知道什么」组织，刻意省略了规范性细节。当你需要写客户端、实现服务器或者判定一个边界行为时，就得去看 IETF 的规范。2022 年 6 月，IETF 把 HTTP 规范重新整理成 RFC 9110 系列：<strong>RFC 9110 定义与版本无关的语义，RFC 9111 定义缓存，RFC 9112 / 9113 / 9114 分别定义 HTTP/1.1、HTTP/2、HTTP/3 的线上格式</strong>。这套文档一次性作废了 RFC 2616、RFC 7230–7235 和 RFC 7540。</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>MDN 的说法</th><th>RFC 怎么写</th><th>为什么值得知道</th></tr>
+        <tr><td>一次会话分三个阶段：建立连接、发请求并等待、服务器返回响应</td><td>RFC 9110 把事务建模为请求与响应消息，不规定连接如何建立；连接模型分别写在 RFC 9112 §2、RFC 9113、RFC 9114 中</td><td>MDN 按教学顺序讲，RFC 按实现责任分文件。实现客户端要同时读 9110 与你用的那个版本文档，只读一本不够</td></tr>
+        <tr><td>HTTP 是无状态协议</td><td>RFC 9110 §3.1 明确写：HTTP is a stateless request/response protocol；cookie 由独立的 RFC 6265 定义</td><td>「无状态」是核心规范的性质，而「记住用户」是扩展规范的能力。混淆二者会做出把会话状态塞进核心协议的错设计</td></tr>
+        <tr><td>请求与响应由起始行、首部、空行、主体组成</td><td>这套四段结构只属于 RFC 9112 的 HTTP/1.1 语法；RFC 9113/9114 定义的是帧与流，没有「起始行」这个概念</td><td>抓包看到 HTTP/2 的 HEADERS 帧时不要去找起始行；报文四段是 1.x 的实现，不是 HTTP 的定义</td></tr>
+        <tr><td>每个 HTTP/1.1 请求都必须带 Host</td><td>RFC 9112 §3.2 要求客户端在所有 HTTP/1.1 请求中发送 Host；RFC 9110 §7.2 定义其语义与「权威」判断</td><td>缺失 Host 在 1.1 下应返回 400，这是规范要求而不是某个服务器的偏好；写反向代理时必须正确处理它</td></tr>
+        <tr><td>资源由 URL 标识，同一资源可以有不同表示</td><td>RFC 9110 §7.1 讲 URI 引用，通用语法在 RFC 3986；表示与内容协商在 RFC 9110 §12</td><td>写重定向和相对链接解析要按 RFC 3986 的算法，不能靠字符串拼接；这正是第 12 讲重定向的规范基础</td></tr>
+      </table>
+    </div>
+
+    <p>这张表不是让你去啃 RFC 原文，而是给你一个判断依据：<strong>当 MDN 说「通常」「建议」而你需要一个确定的对错时，去 RFC 找规范性措辞</strong>（RFC 里 MUST / SHOULD / MAY 是有严格区别的）。本讲义后续每一讲的末尾都会做这件事——把 MDN 的工程口径与 RFC 的规范口径对齐，这正是这套讲义与普通教程的区别。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>RFC 9110 系列最重要的结构变化是<strong>把语义与线上格式彻底分开</strong>。「404 是什么意思」只在 RFC 9110 里写一次，HTTP/1.1、/2、/3 都引用它；「404 这段字节怎么编码」才分别写在三个版本文档里。理解这个二分，你就能判断任何一条新知识属于哪一层，不会把版本差异错当成语义差异。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>不要拿旧文章里的 RFC 编号当现行规范。RFC 2616、RFC 7230–7235、RFC 7540 都已被 2022 年的 RFC 9110 系列取代；网上大量教程仍在引用旧编号，并不意味着它们还有效。查规范先看 httpwg.org/specs 的现行列表，再读具体章节。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front"><div class="q-tag">回忆 1.5-1</div><div class="q-text">RFC 9110 系列把 HTTP 规范拆成了哪两类文档？这样拆的好处是什么？</div><span class="tap">点击翻面 →</span></div>
+            <div class="flip-face flip-back"><div class="a-tag">参考答案</div>9110/9111 定义与版本无关的语义和缓存，9112/9113/9114 定义各版本的线上格式。好处是「404 的含义」只定义一次，三个版本共用，升级传输不必重写语义。</div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front"><div class="q-tag">回忆 1.5-2</div><div class="q-text">哪三个旧 RFC 系列已经被 9110 系列取代？你会在什么场合需要确认规范编号？</div><span class="tap">点击翻面 →</span></div>
+            <div class="flip-face flip-back"><div class="a-tag">参考答案</div>RFC 2616、RFC 7230–7235、RFC 7540（以及 RFC 1945、2068、2617 等更早文档）。 quando 需要确定的对错、实现客户端或服务器、或看到旧教程引用旧编号时，应到 httpwg.org/specs 核对现行列表。</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===== 概念卡 ===== -->
+    <h2><span class="sec-no">🃏</span>概念卡：本讲概念的一分钟画像</h2>
+    <p>翻面前先自问：这个概念我能用一句话讲清楚吗？</p>
+    <div class="flip-grid">
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front"><div class="q-tag">概念卡 1</div><div class="q-text">HTTP（Hypertext Transfer Protocol）</div><span class="tap">点击翻面 →</span></div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">在字节流之上约定请求/响应事务语义的应用层协议，采用客户端—服务器模型。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">TCP 只交付字节，不说明要什么、结果如何、内容是什么。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">TCP 是货车，HTTP 是货单：写清收件人、动作和回执。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为它负责可靠性或加密；那分别归 TCP/QUIC 与 TLS。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">全课程的基础；第 2 讲拆报文，第 4 讲拆连接。</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front"><div class="q-tag">概念卡 2</div><div class="q-text">资源与表示（Resource / Representation）</div><span class="tap">点击翻面 →</span></div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">资源是被命名的事物，表示是某次响应实际返回的字节及其类型。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">同一个 URL 按客户端能力返回 HTML 或 JSON 时，语义上仍是同一份资源。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">资源是一道菜，表示是摆在盘里的那一版。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">把 URL 当成文件本身；URL 定位资源，不承诺具体内容。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">第 3 讲内容协商，第 5 讲 Vary 缓存键。</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front"><div class="q-tag">概念卡 3</div><div class="q-text">会话与事务（Session / Transaction）</div><span class="tap">点击翻面 →</span></div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">事务 = 一条请求 + 一条响应；会话 = 从建立连接到取齐资源、连接关闭或复用的完整过程。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">把「一次浏览」拆成可测量的单位，便于定位故障与优化性能。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">事务是一通电话里的一次问答，会话是整通电话。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为一次会话只有一次请求；网页通常有几十次。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">第 4 讲连接复用，第 5 讲缓存命中，第 12 讲重定向跳数。</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front"><div class="q-tag">概念卡 4</div><div class="q-text">无状态（Stateless）</div><span class="tap">点击翻面 →</span></div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">服务器不保留两次请求之间的信息，每条请求自包含。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">让任意服务器接手任意请求，使横向扩展与失败重试变得简单。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">每次对话都重新自我介绍，而不是指望对方记得你。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为无状态等于用户不能登录；状态由 cookie/token 显式携带。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">第 7 讲 cookie，第 8 讲认证，第 9 讲 CORS 的凭据规则。</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front"><div class="q-tag">概念卡 5</div><div class="q-text">Host 首部</div><span class="tap">点击翻面 →</span></div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">请求首部，给出目标主机的域名与可选端口，HTTP/1.1 强制要求。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">一台服务器托管多个站点时，靠它决定把请求交给哪个站点。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">TCP 把你送到写字楼，Host 告诉前台你找哪家公司。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为 Host 可从 URL 里省略；缺了它在 1.1 下应返回 400。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">第 2 讲报文，第 11 讲代理转发，第 12 讲重定向的 Location。</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front"><div class="q-tag">概念卡 6</div><div class="q-text">语义与线上格式（Semantics / Wire Format）</div><span class="tap">点击翻面 →</span></div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">语义是方法与状态码等含义，线上格式是把它们编码成字节的方式。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">让 HTTP/1.1、/2、/3 共用同一套语义，升级传输不必重写应用。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">同一封信，可以手写、打字或发电报，内容不变。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">把「HTTP/2 没有起始行」误解为「HTTP/2 没有 GET」。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">第 1.5 节 RFC 对照，第 11 讲协议升级机制。</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===== 分层习题 ===== -->
+    <h2><span class="sec-no">✍️</span>分层习题：先自己写，再点开核对</h2>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>有人说：「HTTPS 比 HTTP 更可靠，因为它会重传丢失的数据包。」这句话错在哪？分别指出可靠性、机密性、事务语义各由谁负责。</div>
+      <details><summary>提示</summary><p>把 TCP / TLS / HTTP 三层拆开，逐层问「它承诺了什么」。</p></details>
+      <details><summary>完整解答</summary><div class="ex-answer">可靠性（丢包重传、按序、去重）由 <strong>TCP</strong> 提供；HTTP/3 换成 QUIC，但可靠性仍由传输层负责。机密性与完整性由 <strong>TLS</strong> 提供。请求/响应的语义由 <strong>HTTP</strong> 提供。HTTPS 只是 HTTP over TLS，既不额外重传，也不改变方法、状态码的含义。这句话把三层的职责压进一个缩写，所以三个判断全错。</div></details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>判断下列说法的正误并说明理由：①「HTTP 无状态，所以浏览器不记得我访问过哪些页面」；②「一条 HTTP 报文就是一次 HTTP 会话」；③「HTTP/2 已经不用 GET 方法了』」。</div>
+      <details><summary>提示</summary><p>逐句找出被混淆的那对概念：无状态 vs 浏览器记忆、事务 vs 会话、语义 vs 线上格式。</p></details>
+      <details><summary>完整解答</summary><div class="ex-answer">① 错。无状态说的是服务器不保留请求之间的信息；浏览器的历史记录、cookie 与 Web Storage 都是浏览器本地的记忆，与协议性质无关。② 错。一条请求加一条响应是<strong>事务</strong>；一次<strong>会话</strong>包含建立连接、多次事务和连接收尾，一个网页通常有几十次事务。③ 错。HTTP/2 只把首部编码成二进制帧并加伪首部 <code>:method: GET</code>，GET 的语义原样保留；换的是线上格式，不是语义。</div></details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>给出下面这条请求，逐行解析并回答四个问题：① 请求目标是什么？② 客户端声明能接受哪些表示？③ 这条请求为什么必须带 Host？④ 若把 Host 删掉，在 HTTP/1.1 下服务器应当如何响应？<br><br><code>GET /docs/guide.html HTTP/1.1</code><br><code>Host: example.org</code><br><code>Accept: text/html,application/xhtml+xml</code><br><code>Accept-Encoding: gzip, br</code></div>
+      <details><summary>提示</summary><p>按「起始行 → 各首部 → 空行」顺序读；再想一台服务器托管多个站点时靠什么区分。</p></details>
+      <details><summary>完整解答</summary><div class="ex-answer">① 请求目标是 <code>/docs/guide.html</code>，这是 origin-form 形式，只带路径不含域名。② <code>Accept</code> 声明能接受 <code>text/html</code> 与 <code>application/xhtml+xml</code>；<code>Accept-Encoding</code> 另声明能解码 gzip 与 Brotli 压缩，两者是不同维度——前者说「什么类型」，后者说「什么编码」。③ TCP 连接只给出 IP 与端口，无法区分同一台机器上的多个虚拟主机；Host 告诉服务器这个请求属于哪个站点，HTTP/1.1 因此强制要求携带。④ 缺少 Host 时服务器无法确定目标站点，按 RFC 9112 的要求应返回 <strong>400 Bad Request</strong>；这不是可选优化，而是协议合规性要求。</div></details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>某用户先请求 <code>GET /login</code>，服务器在响应里返回 <code>Set-Cookie: sid=xyz; HttpOnly</code>；随后他请求 <code>GET /cart</code>，但请求里没有 Cookie 首部。请分步推演：服务器能不能知道这是同一个用户？如果想让他保持登录，正确的机制是什么？分别说明「状态存在哪」与「谁负责带回来」。</div>
+      <details><summary>提示</summary><p>回到第 1.3 节的两条报文对比，逐条问「服务器凭什么判断」。</p></details>
+      <details><summary>完整解答</summary><div class="ex-answer">第一步：<code>Set-Cookie</code> 只是<strong>响应首部</strong>，它把标识交给客户端，并没有要求服务器自己保存连接状态。第二步：第二条请求没有 Cookie 首部，服务器收到的信息只有方法、路径与 Host，无法与第一次请求关联，因此<strong>不知道</strong>这是同一个用户。第三步：正确机制是客户端在后续请求里主动带回 <code>Cookie: sid=xyz</code>，服务器再据此查服务端会话存储恢复登录态。结论：会话标识存在<strong>客户端</strong>（cookie 里），由<strong>客户端</strong>在每次请求中显式携带；服务器只负责校验标识并查找对应的会话数据。这正是无状态协议维持状态的通用模式。</div></details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l3">L3 建模应用</span>你要为一个读多写少的内容站点设计 HTTP 层：资源用 <code>/api/articles/{id}</code> 定位，同一篇文章可以返回 HTML 页面或 JSON 数据，还要支持登录用户看到草稿。请用本讲的概念回答：① 哪部分是资源，哪部分是表示？② 哪些机制让你能把静态副本放到离用户更近的 CDN 上？③ 为什么无状态特性有助于横向扩容？给出至少三条具体设计决策。</div>
+      <details><summary>提示</summary><p>把「资源 / 表示」「客户端携带状态」「语义与传输分离」三个概念分别套到设计上。</p></details>
+      <details><summary>完整解答</summary><div class="ex-answer">① <code>/api/articles/123</code> 是资源标识；返回的 HTML 或 JSON 是它的两种<strong>表示</strong>，由 Content-Type 区分，语义上指向同一篇文章。② 能放 CDN 的前提是响应可复用：给公开的已发布文章设置明确的 Cache-Control（第 5 讲），并把「返回 HTML 还是 JSON」这个差异写进 Vary 或改用不同 URL，避免把一种表示发给要另一种表示的客户端；草稿属于个性化内容，应标记 private 或 no-store，不进共享缓存。③ 因为服务器不依赖连接历史，任意一台应用服务器都能处理任意请求，扩容只需增加实例并把会话状态放在 cookie/token 或共享存储里；请求失败也能安全重试 GET。三条决策示例：URL 只标识资源不编码用户身份；认证信息放 Authorization 或 cookie 而非 URL；缓存策略按「公开内容 / 个性化内容」分组配置，不搞一套全局规则。</div></details>
+    </div>
+
+    <!-- ===== 自测 ===== -->
+    <h2><span class="sec-no">✅</span>本章自测：每题只选一个答案</h2>
+
+    <div class="quiz-block" data-answer="c">
+      <div class="q-no">自测 1</div>
+      <div class="q-stem">TCP 已保证可靠传输，HTTP 主要补上的是哪一类信息？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 丢包重传与流量控制</li>
+        <li data-opt="b">B. 数据加密与证书校验</li>
+        <li data-opt="c">C. 资源定位、操作意图、结果状态与内容类型的语义</li>
+        <li data-opt="d">D. IP 路由与 MAC 寻址</li>
+      </ul>
+      <div class="quiz-explain">解析：C 对。A 是 TCP/QUIC 的职责，B 是 TLS 的职责，D 是网络层与链路层的职责。把下层能力安到 HTTP 头上，是初学最常见的层级错位。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 2</div>
+      <div class="q-stem">按 MDN 的口径，一次典型 HTTP 会话的第一个阶段是什么？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 服务器处理请求并返回响应</li>
+        <li data-opt="b">B. 客户端建立连接</li>
+        <li data-opt="c">C. 客户端发送 Cookie</li>
+        <li data-opt="d">D. 浏览器渲染页面</li>
+      </ul>
+      <div class="quiz-explain">解析：B 对。A 是第三阶段，C 属于第二阶段里请求报文的一部分而非独立阶段，D 发生在会话之后，不属于 HTTP 会话的三个阶段。第一阶段包含 DNS 解析、TCP 握手与必要的 TLS 握手。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="a">
+      <div class="q-no">自测 3</div>
+      <div class="q-stem">「HTTP 无状态」的准确含义是？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 服务器不保留两次请求之间的信息</li>
+        <li data-opt="b">B. 浏览器不保存任何历史记录</li>
+        <li data-opt="c">C. 每次请求都必须重新建立 TCP 连接</li>
+        <li data-opt="d">D. 服务器不能返回个性化内容</li>
+      </ul>
+      <div class="quiz-explain">解析：A 对。B 描述的是浏览器行为，与协议性质无关；C 错在持久连接正是 HTTP/1.1 的默认能力；D 错在服务器完全可以返回个性化内容，只是需要在请求里携带身份信息（cookie/token）。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="d">
+      <div class="q-no">自测 4</div>
+      <div class="q-stem">下列哪一项是 HTTP/2 相对于 HTTP/1.1 的关键变化？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 废弃了 GET 与 POST 方法</li>
+        <li data-opt="b">B. 重新定义了 404 状态码的含义</li>
+        <li data-opt="c">C. 取消了 Host 首部</li>
+        <li data-opt="d">D. 用二进制帧与多路复用取代文本行与串行请求</li>
+      </ul>
+      <div class="quiz-explain">解析：D 对。HTTP/2 保留方法、状态码与首部语义，只更换线上编码与连接模型。A、B、C 都是把「换地基」误读成「换语义」的典型错误；事实上 <code>:method</code> 伪首部仍然表达 GET，Host 由 <code>:authority</code> 承担。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="c">
+      <div class="q-no">自测 5</div>
+      <div class="q-stem">同一个 URL 有时返回 HTML、有时返回 JSON，这说明？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 服务器配置错误，URL 必须唯一对应一个文件</li>
+        <li data-opt="b">B. HTTP 是有状态协议，所以能记住上次返回了什么</li>
+        <li data-opt="c">C. 同一资源可以有多种表示，由内容协商决定返回哪一种</li>
+        <li data-opt="d">D. 这两次请求访问的是两个不同资源</li>
+      </ul>
+      <div class="quiz-explain">解析：C 对。资源是由 URL 命名的事物，表示是某次返回的具体字节与类型，两者不是一一对应关系。A 错在把 URL 当成文件路径；B 与无状态事实相反；D 错在资源标识没有变，变的是表示——第 3 讲会展开 Accept 首部如何驱动这个选择。</div>
+    </div>
+
+    <div class="retell">
+      <h3>🗣️ 用自己的话，三句话讲完本讲</h3>
+      <p>对着空气（或室友）说出这三句。说卡壳的那句，回去重读对应小节。</p>
+      <details><summary>句1：这讲解决什么问题？——</summary><div class="retell-answer">参考答案：把「在浏览器敲一个网址到看见页面」拆成可命名的对象——HTTP 只负责事务语义，会话分三阶段，服务器无状态，以及从 0.9 到 3 到底换了什么。</div></details>
+      <details><summary>句2：核心机制是什么？——</summary><div class="retell-answer">参考答案：客户端建立连接后发送请求报文并等待，服务器返回带状态码的响应；每条请求自包含，状态由客户端用 cookie 等方式显式携带；版本演进只换编码与传输，不换方法与状态码语义。</div></details>
+      <details><summary>句3：它和前后讲怎么分工？——</summary><div class="retell-answer">参考答案：本讲给全景；第 2 讲拆报文与 MIME，第 3 讲讲表示的协商，第 4 讲算连接的账，第 5、6 讲讲缓存与条件请求，第 7 讲回到本讲留下的「无状态如何记住你」。</div></details>
+    </div>
+
+    <div class="review-plan">
+      <h3>🔁 间隔复习计划</h3>
+      <p>回忆本身比重读有效 10 倍。到点只做一件事：翻卡 + 重做标记题。</p>
+      <table>
+        <tr><th>时间点</th><th>复习内容</th><th>预计用时</th></tr>
+        <tr><td>第 1 天</td><td>概念卡 1–6 + 回忆 1.1 / 1.2 / 1.3 / 1.4 / 1.5 各 2 张</td><td>12 分钟</td></tr>
+        <tr><td>第 3 天</td><td>重做自测 2、3、4 + 翻错的概念卡 3、4、6</td><td>8 分钟</td></tr>
+        <tr><td>第 7 天</td><td>三句话复述 + L2 两题（请求逐行解析、无状态会话推演）</td><td>12 分钟</td></tr>
+        <tr><td>第 15 天</td><td>只重做合上书挑战；能全过就毕业</td><td>15 分钟</td></tr>
+      </table>
+    </div>
+
+    <div class="final-challenge">
+      <h3>🚪 合上书挑战：能全写出来，这一讲才毕业</h3>
+      <ol id="challenge-list">
+        <li>徒手画出 TCP / TLS / HTTP 三层的职责分工，并说出 HTTPS 改变了什么、没改变什么。</li>
+        <li>按 MDN 三阶段复述一次典型会话，指出每阶段失败时用户会看到什么现象。</li>
+        <li>默写一条最小 GET 请求与一条 200 响应，标出 Host、Content-Type、Content-Length。</li>
+        <li>解释为什么 HTTP/1.1 强制 Host，以及缺了它应当返回什么状态码。</li>
+        <li>用两条带 Set-Cookie / Cookie 的报文，讲清无状态协议如何恢复登录状态。</li>
+        <li>按 0.9 → 1.0 → 1.1 → 2 → 3 列出关键变化，并说出哪一项语义从头到尾没变。</li>
+        <li>一句话回答本讲主线问题：一次典型 HTTP 会话分几个阶段，为什么无状态的 HTTP 仍能支撑登录和购物车？</li>
+      </ol>
+    </div>
+
+    <div class="complete-zone">
+      <button class="btn-complete" id="btn-complete" onclick="markDone()">✓ 我已完成本讲（含合上书挑战）</button>
+    </div>
+
+    <div class="chapter-nav">
+      <a href="index.html"><span class="nav-dir">← 上一讲</span>课程学习地图</a>
+      <a href="chapter-02.html" class="next"><span class="nav-dir">下一讲 →</span>第2讲 HTTP 消息与 MIME 类型</a>
+    </div>
+
+  </div>
+</div>
+
+<footer class="footer">
+  <div class="wrap">第1讲 HTTP 概述与典型会话 · HTTP 精通 · 依据 MDN Web Docs《HTTP 指南》整理，延伸板块对照 RFC 9110 系列 · 学习进度保存在本机浏览器中</div>
+</footer>
+
+<script src="assets/mermaid.min.js"></script>
+<script>
+mermaid.initialize({
+  startOnLoad: true,
+  theme: "base",
+  themeVariables: {
+    primaryColor: "#e3edf7",
+    primaryBorderColor: "#1d5f9e",
+    primaryTextColor: "#1d5f9e",
+    lineColor: "#5c554b",
+    secondaryColor: "#fbeedd",
+    tertiaryColor: "#f5f1e8",
+    fontFamily: "-apple-system, PingFang SC, sans-serif",
+    fontSize: "14px"
+  },
+  flowchart: { curve: "linear", htmlLabels: false }
+});
+</script>
+<script>
+document.querySelectorAll(".quiz-block").forEach(block => {
+  const answer = block.dataset.answer;
+  const explain = block.querySelector(".quiz-explain");
+  block.querySelectorAll(".quiz-opts li").forEach(li => {
+    li.addEventListener("click", () => {
+      const opts = block.querySelectorAll(".quiz-opts li");
+      opts.forEach(o => o.classList.add("disabled"));
+      if (li.dataset.opt === answer) {
+        li.classList.add("correct");
+      } else {
+        li.classList.add("wrong");
+        block.querySelector(`[data-opt="${answer}"]`).classList.add("correct");
+      }
+      explain.classList.add("show");
+    });
+  });
+});
+
+document.querySelectorAll("#challenge-list li").forEach(li => {
+  li.addEventListener("click", () => li.classList.toggle("checked"));
+});
+
+const KEY = "http_guide_progress_v1";
+function loadProgress() {
+  try { return JSON.parse(localStorage.getItem(KEY)) || {}; } catch (e) { return {}; }
+}
+const progress = loadProgress();
+const btn = document.getElementById("btn-complete");
+if (progress[1] && progress[1].done) {
+  btn.textContent = "✓ 已完成 · 再次点击重置";
+  btn.classList.add("done");
+}
+function markDone() {
+  const p = loadProgress();
+  if (p[1] && p[1].done) {
+    delete p[1];
+    btn.textContent = "✓ 我已完成本讲（含合上书挑战）";
+    btn.classList.remove("done");
+  } else {
+    p[1] = { done: true, completedAt: Date.now(), reviewsDone: 0 };
+    btn.textContent = "✓ 已完成 · 复习提醒已开启";
+    btn.classList.add("done");
+  }
+  localStorage.setItem(KEY, JSON.stringify(p));
+}
+</script>
+
+</body>
+</html>

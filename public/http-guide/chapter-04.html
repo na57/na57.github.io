@@ -1,0 +1,843 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第4讲 HTTP/1.x 的连接管理 · HTTP 精通</title>
+<link rel="stylesheet" href="assets/style.css">
+<style>
+/* 本套专用：协议报文原文展示与 MDN 来源条 */
+.wire{background:var(--bg-deep);border:1px solid var(--line);border-left:4px solid var(--accent);border-radius:8px;padding:14px 18px;margin:14px 0;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:13.5px;line-height:1.78;white-space:pre-wrap;overflow-wrap:anywhere;color:var(--ink-soft);}
+.wire b{color:var(--accent);font-weight:700;}
+.wire i{color:var(--orange);font-style:normal;}
+.wire em{color:var(--ink-faint);font-style:normal;}
+.wire.sm{font-size:12.5px;}
+.wire-cap{font-size:13px;color:var(--ink-faint);margin:-8px 0 16px;}
+.mdn-src{background:var(--bg-deep);border:1px solid var(--line);border-left:4px solid var(--accent);border-radius:8px;padding:12px 18px;margin:16px 0 0;font-size:13px;line-height:1.8;color:var(--ink-soft);}
+.mdn-src strong{color:var(--accent);}
+.mdn-src a{color:var(--accent);text-decoration:none;border-bottom:1px dashed var(--line);}
+.mdn-src a:hover{border-bottom-style:solid;}
+.to-slide{font-size:13px;color:var(--accent);text-decoration:none;border:1px solid var(--line);border-radius:6px;padding:4px 11px;white-space:nowrap;}
+.to-slide:hover{background:var(--bg-deep);}
+</style>
+</head>
+<body>
+
+<nav class="topbar">
+  <div class="topbar-inner">
+    <span class="brand"><a href="index.html" style="color:inherit">← HTTP 精通 · 学习地图</a></span>
+    <span class="crumb">第②组 · 连接与缓存 / 第4讲</span>
+    <a class="to-slide" href="../http-guide-slides/04-HTTP1x%E8%BF%9E%E6%8E%A5%E7%AE%A1%E7%90%86-%E8%AF%BE%E4%BB%B6.html" target="_blank" rel="noopener noreferrer">配套课件 ↗</a>
+  </div>
+</nav>
+
+<div class="wrap">
+
+  <div class="lecture-head">
+    <span class="ch-label">GUIDE 04 · 连接与缓存</span>
+    <h1>HTTP/1.x 的连接管理</h1>
+    <p class="lead">上一讲解决了「传什么」，本讲解决「怎么传」：建一次连接到底有多贵，以及 HTTP/1.1 用哪几种方式把这笔成本摊薄。</p>
+    <div class="mdn-src"><strong>本讲对应的 MDN 指南：</strong><a href="https://developer.mozilla.org/zh-CN/docs/Web/HTTP/Guides/Connection_management_in_HTTP_1.x" target="_blank" rel="noopener">HTTP/1.x 的连接管理</a></div>
+  </div>
+
+  <!-- 本章定位 -->
+  <div class="position-bar">
+    <strong>本讲在主线上的位置：</strong>第 3 讲的内容协商与表示 → <u>本讲：HTTP/1.x 的连接管理</u> → 第 5 讲讲另一种提速：少传字节。<br>
+    第4讲回答主线上的第4个问题：<strong>三种连接模型各自省了什么，又留下了什么病？</strong>
+    <div class="map-inline">
+      <span class="node">第3讲 内容协商、压缩与客户端提示</span><span class="arrow">→</span>
+      <span class="node here">第4讲 HTTP/1.x 的连接管理</span><span class="arrow">→</span>
+      <span class="node">第5讲 HTTP 缓存</span><span class="arrow">→</span>
+      <span class="node">第7–10讲 状态与安全</span><span class="arrow">→</span>
+      <span class="node">第11–12讲 中间层与分发</span>
+    </div>
+  </div>
+
+  <!-- 学习目标 -->
+  <div class="objectives">
+    <h4>🎯 学完本讲，合上书你应该能：</h4>
+    <ol>
+      <li>用 RTT 与握手次数估算三种连接模型的总时延</li>
+      <li>说明持久连接如何复用 TCP，以及空闲连接为何会被关闭</li>
+      <li>描述流水线的请求—响应时序，并指出它仍未解决的队头阻塞</li>
+      <li>区分端到端首部与逐跳首部，说明 Connection 首部的作用</li>
+      <li>判断一条连接在当前请求之后能否安全复用</li>
+    </ol>
+  </div>
+
+  <!-- 视频卡插槽：后面录制 B 站讲解时在此插入 <details class="video-card" id="video-card">…</details> -->
+  <!-- VIDEO_CARD_SLOT -->
+
+  <div class="lecture">
+
+    <!-- 推导主线图 -->
+    <div class="figure">
+      <div class="mermaid">
+flowchart LR
+  A["每条事务新建连接"]
+  B["三次握手与慢启动很贵"]
+  C["持久连接复用 TCP"]
+  D["流水线连续发请求"]
+  E["响应按序形成队头阻塞"]
+  F["连接何时关闭"]
+  A --> B
+  B --> C
+  C --> D
+  D --> E
+  C --> F
+  classDef hot fill:#fbeedd,stroke:#c4651f,stroke-width:2.5px,color:#c4651f;
+  classDef danger fill:#fae9e7,stroke:#b03a2e,stroke-width:2.5px,color:#b03a2e;
+  class C hot;
+  class E danger;
+      </div>
+      <div class="caption">连接演进的主线：成本逼出复用，复用逼出流水线，流水线又留下队头阻塞；红色节点是 HTTP/2 多路复用要解决的核心痛点。</div>
+    </div>
+
+<!-- ============ 4.1 ============ -->
+    <h2><span class="sec-no">4.1</span>短连接：每取一个资源就开一条 TCP，钱全花在握手和慢启动上</h2>
+
+    <p>上一讲把「传什么」拆成了资源、表示与协商，本讲把目光转向同一条主线上的另一半——「怎么传」。MDN 在《HTTP/1.x 的连接管理》开篇就把这件事挑明：<strong>打开和保持连接在很大程度上影响着网站与 Web 应用的性能</strong>。一次请求看起来只是浏览器里一闪而过的转圈，可在网络层面，它要先在客户端与服务器之间建立一条 TCP 连接，之后 HTTP 报文才有的可发。连接不是免费的，本讲第一件事就是把这笔隐藏成本算清楚。</p>
+
+    <p>先看最早、也最朴素的模型。MDN 称之为<span class="term">短连接</span>（short-lived connection）：<strong>每一个 HTTP 请求都由它自己独立的一条连接完成，发起请求之前都会有一次 TCP 握手，收到应答之后立即关闭</strong>。这是 HTTP 早期与 HTTP/1.0 的默认模型——如果请求里没有 <code>Connection</code> 首部，或者它的值被设为 <code>close</code>，走的就是这条路。在 HTTP/1.1 里，只有显式写出 <code>Connection: close</code> 才会退回这个模型。</p>
+
+    <p>为什么这个模型先天低效？MDN 给了两个理由，都值得展开。第一，<strong>打开每一条 TCP 连接都是相当耗费资源的操作</strong>，客户端和服务器之间要来回交换好几个消息才能真正开始传数据。第二，<strong>TCP 连接的性能要被使用一段时间之后才会变好</strong>——刚建立的连接是「冷」的，拥塞窗口小、还没摸清链路带宽，传大对象尤其吃亏。短连接每来一个请求就把这条刚养热一点的连接掐掉，下次又从头开始，等于永远在冷启动。现代浏览器打开一个页面往往要发十几个甚至几十个请求，短连接意味着几十次握手、几十次慢启动，效率自然低得惊人。</p>
+
+    <p>把这个过程画成报文，能看清「一条连接只为一次事务服务」。下面是为了取两个资源而建立的两条独立连接；中间的灰色注释标出 TCP 的状态变化——注意每条连接都在响应之后被关闭：</p>
+
+    <div class="wire"><em>—— 连接 A：为 /style.css 而生 ——</em>
+<em>[客户端发 SYN → 服务器回 SYN-ACK → 客户端发 ACK，三次握手完成]</em>
+<b>GET /style.css HTTP/1.1</b>
+<b>Host:</b> www.example.com
+<b>Connection:</b> close
+
+<i>HTTP/1.1 200 OK</i>
+<i>Content-Type:</i> text/css
+<i>Content-Length:</i> 128
+
+body { color: #333; }
+<em>[服务器发 FIN，连接 A 关闭]</em>
+
+<em>—— 连接 B：为 /app.js 重新建一条 ——</em>
+<em>[又一次三次握手……]</em>
+<b>GET /app.js HTTP/1.1</b>
+<b>Host:</b> www.example.com
+<b>Connection:</b> close
+
+<i>HTTP/1.1 200 OK</i>
+<i>Content-Type:</i> application/javascript
+<i>Content-Length:</i> 64
+<em>[又一次关闭……]</em></div>
+    <div class="wire-cap">短连接模型下两个资源要走两条完整连接：握手、传输、关闭三步重复两遍。第二条连接完全享受不到第一条连接积累的任何 TCP 状态。</div>
+
+    <p>光说「浪费」还不够，得能用数字衡量。这里给出本讲第一个完整推演：<strong>把「建一条连接到底有多贵」拆成三次握手与慢启动两部分，逐项算时间</strong>。为便于手算，先固定一组参数，后面几节都沿用它们：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>参数</th><th>取值</th><th>含义</th></tr>
+        <tr><td>往返时延 RTT</td><td>50 ms</td><td>一个包从客户端到服务器再回到客户端的时间</td></tr>
+        <tr><td>最大分段大小 MSS</td><td>1460 字节</td><td>一条 TCP 段能承载的最大应用层数据</td></tr>
+        <tr><td>初始拥塞窗口 cwnd</td><td>10 MSS（14600 字节）</td><td>连接刚建立时发送方被允许「在收到确认前」发出的数据量</td></tr>
+        <tr><td>服务器处理时间</td><td>忽略（记为 0）</td><td>本例只关心网络开销，把应用逻辑耗时单列在例子③里讨论</td></tr>
+      </table>
+    </div>
+
+    <p><strong>第一部分：三次握手的分项时延。</strong><span class="term">三次握手</span>（three-way handshake）的标准流程是：客户端发 <code>SYN</code>，服务器回 <code>SYN-ACK</code>，客户端再发 <code>ACK</code>。按单程传播等于 RTT 的一半来拆：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>时刻</th><th>事件</th><th>累计耗时</th></tr>
+        <tr><td>t = 0</td><td>客户端发出 SYN</td><td>0</td></tr>
+        <tr><td>t = RTT/2 = 25 ms</td><td>服务器收到 SYN，回发 SYN-ACK</td><td>25 ms</td></tr>
+        <tr><td>t = RTT = 50 ms</td><td>客户端收到 SYN-ACK，发出 ACK；客户端侧连接建立，可以立即写入请求</td><td>50 ms</td></tr>
+        <tr><td>t = 1.5 RTT = 75 ms</td><td>服务器收到 ACK，服务器侧确认连接建立</td><td>75 ms</td></tr>
+      </table>
+    </div>
+
+    <p>结论：<strong>在客户端发出第一个 HTTP 请求字节之前，已经先付掉了 1 个 RTT（50 ms）的握手时间</strong>；如果加上 TLS 握手，还要再多付一到两个 RTT（本讲为聚焦连接模型，TLS 暂不计入，但你要知道它在真实 HTTPS 里是实实在在的一笔）。这笔钱与请求本身是什么、资源有多大无关——哪怕只取一个 30 字节的小图标，也得先花 50 ms 握手。</p>
+
+    <p><strong>第二部分：慢启动的分项推演。</strong>连接建好后进入<span class="term">慢启动</span>（slow start）：发送方每收到一轮确认，就把<span class="term">拥塞窗口</span>（congestion window，cwnd）翻倍，于是可发数据量按 1、2、4、8……指数增长。设服务器要在这条新连接上返回一个 100 KB（102400 字节）的响应，逐轮计算能发多少：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>轮次</th><th>本轮 cwnd</th><th>本轮可发数据</th><th>累计已发</th><th>结束时点</th></tr>
+        <tr><td>第 1 轮</td><td>10 MSS</td><td>10 × 1460 = 14600 字节</td><td>14600 字节</td><td>约 1 RTT（50 ms）</td></tr>
+        <tr><td>第 2 轮</td><td>20 MSS（收到确认后翻倍）</td><td>20 × 1460 = 29200 字节</td><td>43800 字节</td><td>约 2 RTT（100 ms）</td></tr>
+        <tr><td>第 3 轮</td><td>40 MSS</td><td>40 × 1460 = 58400 字节</td><td>102200 字节</td><td>约 3 RTT（150 ms）</td></tr>
+        <tr><td>第 4 轮</td><td>80 MSS</td><td>只剩 102400 − 102200 = 200 字节，1 个段即可发完</td><td>102400 字节（完成）</td><td>约 4 RTT（200 ms）</td></tr>
+      </table>
+    </div>
+
+    <p>把两部分相加：<strong>一条全新的冷连接传完 100 KB，总成本 ≈ 握手 1 RTT + 慢启动 4 RTT = 5 RTT = 250 ms</strong>。作为对照，如果这是一条已经养热的连接——cwnd 早已涨到 100 MSS（约 146000 字节，大于 100 KB）——那么整个响应在 1 个 RTT 内就能发完，且无需再握手，总成本约 1 RTT = 50 ms。<strong>冷连接比热连接慢了整整 4 个 RTT</strong>。这就是 MDN 说「短连接破坏了 TCP 具备的能力、新的冷连接降低性能」的量化含义：它不只是多一次握手，还让每条连接永远停在慢启动的开头几轮。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>把「连接」当成一种<strong>有生命周期的稀缺资源</strong>：它要花时间建立（握手），要花时间变快（慢启动），闲置还会占内存。短连接的根本问题不是「多发了一个包」，而是把这条刚刚开始增值的连接立刻作废。后面两种模型——持久连接与流水线——本质上都是在回答同一个问题：<strong>怎样让一条连接活得久一点，把握手与慢启动的成本摊到更多请求上</strong>。抓住这条主线，三种模型的关系就不再是三个孤立名词。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>「现在带宽这么大，建连接的开销可以忽略」——这是拿带宽去掩盖时延。握手与慢启动的成本主要由 <strong>RTT</strong> 决定，而不是带宽；在跨洲链路上 RTT 动辄 200 ms，一次握手就占用几百毫秒。带宽再大也压缩不了「包一来一回」的物理时间。另一个误区是「短连接更安全，因为用完就关」：连接何时关闭与数据是否加密是两回事，机密性由 TLS 负责，短连接既不增加也不减少安全性。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front"><div class="q-tag">回忆 4.1-1</div><div class="q-text">按 MDN 的口径说出短连接的定义，以及它在 HTTP/1.0 与 HTTP/1.1 下分别何时使用。</div><span class="tap">点击翻面 →</span></div>
+            <div class="flip-face flip-back"><div class="a-tag">参考答案</div>每条请求用一条独立连接，请求前握手、应答后立刻关闭。它是 HTTP/1.0 的默认模型（无 Connection 首部或值为 close）；在 HTTP/1.1 里只有写明 Connection: close 才使用。</div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front"><div class="q-tag">回忆 4.1-2</div><div class="q-text">RTT 为 50 ms、cwnd 初始 10 MSS 的冷连接传 100 KB，握手与慢启动各占多少？热连接为什么快？</div><span class="tap">点击翻面 →</span></div>
+            <div class="flip-face flip-back"><div class="a-tag">参考答案</div>握手 1 RTT 即 50 ms；慢启动按 10/20/40/80 MSS 四轮，约 4 RTT 即 200 ms，合计约 250 ms。热连接的 cwnd 已涨到超过对象大小，无需握手且一个 RTT 内发完，约 50 ms。</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 4.2 ============ -->
+    <h2><span class="sec-no">4.2</span>长连接：一条 TCP 跑完一串请求，但闲着也要烧钱</h2>
+
+    <p>上一节算清楚了短连接的账：握手加慢启动让每个请求都重新付一遍启动成本。既然成本来自「反复新建」，最直接的对策就是<strong>别关</strong>——这正是本节的模型。MDN 指出，为了缓解短连接的两个问题（建连耗时、连接要热起来才快），<span class="term">长连接</span>（persistent connection，也叫 <span class="term">keep-alive</span> 连接）被设计出来，而且早在 HTTP/1.1 之前就已存在。</p>
+
+    <p><strong>定义：</strong>长连接会保持一段时间，在这段时间内被<strong>重复用于发送一系列请求</strong>，从而省掉反复新建 TCP 握手的时间，并让连接有机会「热起来」、享受 TCP 的性能增强。注意 MDN 的用词很克制——它「保持一段时间」而<strong>不是永远</strong>：连接在空闲一段时间后会被关闭，服务器可以用 <code>Keep-Alive</code> 首部指定一个最小的连接保持时间。换句话说，长连接解决的是「连续请求」的浪费，并没有承诺永久在线。</p>
+
+    <p><strong>它是怎么开启的？</strong>这里有一个版本差异必须记牢，也是面试与排障的高频考点：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>版本</th><th>默认模型</th><th>如何得到长连接</th><th>如何退回短连接</th></tr>
+        <tr><td>HTTP/1.0</td><td>短连接</td><td>把 <code>Connection</code> 设成 <code>close</code> 以外的值（常见写法是 keep-alive）</td><td>不写 Connection 首部，或写 <code>close</code></td></tr>
+        <tr><td>HTTP/1.1</td><td>长连接（默认）</td><td>什么都不用做，默认就是长连接</td><td>显式写 <code>Connection: close</code></td></tr>
+      </table>
+    </div>
+
+    <p>MDN 还特意提醒一个实践细节：在 HTTP/1.1 里虽然默认就是长连接、不再需要首部，但<strong>工程上仍会把它加上</strong>，为的是万一链路中某个环节因为某种原因退回到 HTTP/1.0，行为还能一致。这体现了 HTTP 一个反复出现的主题——协议默认值的演进要照顾中间层的兼容性。</p>
+
+    <p>看一条真实的长连接报文。与上一节相比，最明显的区别是第二条请求<strong>没有重新握手</strong>，直接在同一个连接上发出；响应里多了 <code>Keep-Alive</code> 参数告诉你这条连接打算保持多久：</p>
+
+    <div class="wire"><em>[一次三次握手，此后两条请求复用同一条连接]</em>
+<b>GET /style.css HTTP/1.1</b>
+<b>Host:</b> www.example.com
+<b>Connection:</b> keep-alive
+
+<i>HTTP/1.1 200 OK</i>
+<i>Content-Type:</i> text/css
+<i>Content-Length:</i> 128
+<i>Keep-Alive:</i> timeout=5, max=100
+
+<em>[没有关闭！连接保持打开……]</em>
+<b>GET /app.js HTTP/1.1</b>
+<b>Host:</b> www.example.com
+<b>Connection:</b> keep-alive
+
+<i>HTTP/1.1 200 OK</i>
+<i>Content-Type:</i> application/javascript
+<i>Content-Length:</i> 64
+<i>Keep-Alive:</i> timeout=5, max=100
+<em>[连接继续保持，直到空闲超时或任一方要求关闭]</em></div>
+    <div class="wire-cap">长连接模型：两条请求共用一条 TCP，只在开头握手一次。Keep-Alive 的 timeout 告诉对端「我至少愿意再等 5 秒」，max 表示这条连接最多还能承载 100 次请求。</div>
+
+    <p>这里要区分两个长得很像、职责却不同的首部，MDN 把它们都列为逐跳首部（这个概念 4.4 节专门讲）：<code>Connection: keep-alive</code> 是在<strong>声明「我要用长连接」这一意图</strong>；而 <code>Keep-Alive: timeout=5, max=100</code> 是在<strong>给出这条连接的具体参数</strong>——闲置 5 秒后视为超时、最多复用 100 次。前者是开关，后者是旋钮。把它们混为一谈，就会写出「发了 Connection 却调不动超时」这种配置错误。</p>
+
+    <p><strong>那么一条连接什么时候会被关闭？</strong>MDN 与后续规范给出三类触发条件，这也是课程主线里的节点 F。判断「当前请求之后这条连接还能不能安全复用」，要逐条排查：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>关闭原因</th><th>触发信号</th><th>客户端应当怎么做</th></tr>
+        <tr><td>服务器指令</td><td>响应带 <code>Connection: close</code></td><td>读完本次响应后关闭连接，后续请求另开新连接，不得再复用</td></tr>
+        <tr><td>空闲超时</td><td>连接闲置超过 Keep-Alive 的 timeout，或服务器自身的空闲计时器到期</td><td>下次发请求前若发现连接已被对端关闭，重建连接并安全重试幂等请求</td></tr>
+        <tr><td>上限用尽</td><td>复用次数达到 Keep-Alive 的 max</td><td>关闭并新建，不要继续使用已到寿命的连接</td></tr>
+        <tr><td>错误或半关闭</td><td>连接被 RST、读到 EOF、主体长度不符</td><td>丢弃这条连接；只有幂等方法能自动重试，POST 等非幂等请求须谨慎</td></tr>
+      </table>
+    </div>
+
+    <p>最后一行藏着一个非常实际的原则：<strong>连接能否安全复用，取决于请求是否<span class="term">幂等</span>（idempotent）</strong>。GET、HEAD、PUT、DELETE 重复执行的效果与执行一次相同，所以在连接意外中断时可以放心重试；而 POST 重复一次可能就多下了一笔订单。MDN 在讲流水线时也强调只有幂等方法能被安全地流水线化，根源就在这里——网络 intermediates 与客户端都无法保证「一个请求到底有没有被服务器处理过」，只有幂等性才能让重试变得无害。</p>
+
+    <div class="box insight">
+      <span class="box-tag">✅ 判定规则</span>
+      <p>判断一条连接在当前请求之后能否复用，按此顺序问三句：① 响应有没有 <code>Connection: close</code>？有就不能复用。② Keep-Alive 的 <code>max</code> 是否已到、<code>timeout</code> 是否已过？是就关闭重建。③ 期间有没有出现 RST、EOF 或主体长度不符？有就丢弃连接，且只对幂等请求自动重试。三句全过，才可复用。把它做成客户端连接池的回收条件，能避开绝大多数「复用了一条已死连接」的诡异故障。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>「长连接 = 永不关闭，连接越多越好」——两个错误。其一，长连接在空闲时<strong>依然消耗服务器资源</strong>；MDN 明确点出，在高负载下大量闲置长连接甚至可能成为<span class="term">拒绝服务攻击</span>（Denial of Service，DoS）的载体，此时尽快关闭空闲连接反而有利于性能。其二，浏览器对同一域名的并发连接数有上限（历史上 2 到 3 条，后来常见为 6 条），不是想开多少开多少。把长连接理解成「有成本、有上限、有寿命」的资源，才算真正理解它。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front"><div class="q-tag">回忆 4.2-1</div><div class="q-text">HTTP/1.0 与 HTTP/1.1 各自如何开启长连接？Connection 与 Keep-Alive 首部分别管什么？</div><span class="tap">点击翻面 →</span></div>
+            <div class="flip-face flip-back"><div class="a-tag">参考答案</div>1.0 默认短连接，需把 Connection 设为 close 以外的值；1.1 默认长连接，无需首部，写 close 才退回短连接。Connection 是「是否长连接」的开关，Keep-Alive 的 timeout 与 max 是具体参数。</div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front"><div class="q-tag">回忆 4.2-2</div><div class="q-text">列出三种会让连接被关闭的情况，并说明为什么只有幂等请求能自动重试。</div><span class="tap">点击翻面 →</span></div>
+            <div class="flip-face flip-back"><div class="a-tag">参考答案</div>服务器发 Connection: close、空闲超时或 max 用尽、出现 RST/EOF/长度不符等错误。因为客户端无法确认失联前请求是否已被处理，只有幂等方法（GET/HEAD/PUT/DELETE）重试不会造成重复副作用。</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 4.3 ============ -->
+    <h2><span class="sec-no">4.3</span>HTTP 流水线：请求可以抢着发，响应却必须排着回</h2>
+
+    <p>上一节的长连接让一条 TCP 跑完一串请求，但有个明显的空档：客户端必须<strong>发一个、等一个</strong>——第二个请求要等第一个响应回来才发出去。MDN 指出，默认情况下 HTTP 请求是按顺序发出的，下一个请求只有在当前请求收到响应之后才会被发出；受网络延迟与带宽限制，这个等待可能很长。既然连接已经复用，能不能把「等」这段时间也省掉？这就是本节的主角。</p>
+
+    <p><strong>定义：</strong><span class="term">HTTP 流水线</span>（HTTP pipelining）是在<strong>同一条长连接上连续发出多个请求，而不必等待应答返回</strong>。请求背靠背地进入管道，理论上还有额外好处：多个请求可能被打包进同一个 TCP 段里发送（MDN 提到，即便请求不断增多，只要不超过 MSS，仍可容纳一系列简单请求）。它省掉的是「每个请求各等一个 RTT」的那段时间。</p>
+
+    <p>但 MDN 紧接着给了一大段冷静的提醒，这些话几乎决定了流水线今天的地位，必须逐条记住：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>MDN 指出的问题</th><th>具体表现</th><th>后果</th></tr>
+        <tr><td>有缺陷的代理仍然常见</td><td>行为奇怪且不稳定，开发人员难以预见和诊断</td><td>线上问题难定位</td></tr>
+        <tr><td>正确实现很复杂</td><td>改善幅度取决于资源大小、有效 RTT 与实际带宽</td><td>重要消息可能被排到不重要消息后面，甚至影响页面布局</td></tr>
+        <tr><td>受制于队头阻塞</td><td>响应必须按请求顺序返回</td><td>前面的慢响应堵住后面所有响应</td></tr>
+        <tr><td>多数浏览器不默认启用</td><td>尽管规范要求遵循 HTTP/1.1 的代理与服务器应支持</td><td>实际收益有限，已被 HTTP/2 的多路复用取代</td></tr>
+      </table>
+    </div>
+
+    <p>关于最后一点，MDN 的原话是：流水线「已被 HTTP/2 中更好的算法——<span class="term">多路复用</span>（multiplexing）所取代」。本讲 4.5 节会讲清多路复用为什么能做到流水线做不到的事。这里先把流水线本身算透。</p>
+
+    <p><strong>例子①：三种模型取 4 个资源的总耗时对决。</strong>现在把前三节放到同一把尺子下。沿用 4.1 节的参数：RTT = 50 ms，忽略服务器处理时间与主体传输时间（资源都很小，几十到几百字节，能在首个往返内发完），只算握手与「请求—响应往返」两类开销。设每个请求从发出到响应首字节回来恰好耗时 1 RTT，三次握手耗时 1 RTT。要取的是同一个页面上的 4 个小资源。</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>模型</th><th>握手开销</th><th>传输开销（逐项）</th><th>总耗时</th></tr>
+        <tr><td>短连接（4 条连接，逐个取）</td><td>4 × 50 = 200 ms</td><td>资源1 50 + 资源2 50 + 资源3 50 + 资源4 50 = 200 ms</td><td>400 ms = 8 RTT</td></tr>
+        <tr><td>长连接（1 条连接，发一个等一个）</td><td>1 × 50 = 50 ms</td><td>等响应1 50 + 等响应2 50 + 等响应3 50 + 等响应4 50 = 200 ms</td><td>250 ms = 5 RTT</td></tr>
+        <tr><td>流水线（1 条连接，请求连发、响应按序回）</td><td>1 × 50 = 50 ms</td><td>4 个请求背靠背发出约 0；4 个响应连续返回，最后一个约在 1 RTT 末到达 = 50 ms</td><td>100 ms = 2 RTT</td></tr>
+      </table>
+    </div>
+
+    <p>逐条解读这张表。<strong>短连接 8 RTT</strong>：每个资源都是「握手 50 + 传输 50」，4 个资源重复 4 遍，共 400 ms；即使浏览器并行开多条连接，每条仍逃不掉一次握手，且受并发连接数上限约束。<strong>长连接 5 RTT</strong>：握手只付一次 50 ms，省下 3 次握手共 150 ms；但 4 个请求仍是串行的，四个「等响应」的 RTT 一个都少不了，共 250 ms。<strong>流水线 2 RTT</strong>：握手 50 ms 加上最后一个响应回来的 50 ms，共 100 ms——相比长连接又省下 3 个「空等」的 RTT，收益来自把请求提前塞进网络。这就是三种模型「各自省了什么」的精确答案：<strong>长连接省握手，流水线省等待</strong>。</p>
+
+    <p>不过上表是理想值。MDN 强调流水线的实际改善取决于 RTT、带宽与资源大小，而且响应必须按序返回——这正是下面第二个例子要揭示的软肋。</p>
+
+    <p><strong>例子②：流水线队头阻塞的分步时序推演。</strong>设想一条流水线连接上，客户端一口气发出 4 个请求：R1 是一个要现算的慢资源（服务器要花 3 RTT 处理），R2、R3、R4 都是 CDN 边缘早已缓存好的快资源（服务器侧 0 处理，随时能回）。按请求顺序发出后，服务器的响应<strong>必须按 R1、R2、R3、R4 的顺序返回</strong>，哪怕 R2 早就准备好了。逐拍推演：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>时刻</th><th>客户端侧</th><th>服务器侧</th><th>关键点</th></tr>
+        <tr><td>t = 0</td><td>连续发出 R1 R2 R3 R4</td><td>尚未收到</td><td>请求全部进入管道，不用等</td></tr>
+        <tr><td>t = 0.5 RTT</td><td>等待</td><td>收到全部 4 个请求；R2/R3/R4 已就绪，R1 开始慢处理</td><td>快响应其实早就可发</td></tr>
+        <tr><td>t = 0.5 → 3.5 RTT</td><td>一直等待，看不到任何响应</td><td>R1 耗时 3 RTT 才产出结果</td><td>R2/R3/R4 只能干等</td></tr>
+        <tr><td>t = 3.5 RTT</td><td>继续等</td><td>R1 就绪，先发 R1</td><td>队首终于动了</td></tr>
+        <tr><td>t = 4 RTT</td><td>收到 R1</td><td>此刻才轮到发 R2</td><td>R2 被堵了整整 3.5 RTT</td></tr>
+        <tr><td>t = 4.5 RTT</td><td>收到 R2</td><td>发 R3</td><td>R3 依次解堵</td></tr>
+        <tr><td>t = 5 RTT</td><td>收到 R3</td><td>发 R4</td><td>—</td></tr>
+        <tr><td>t = 5.5 RTT</td><td>收到 R4</td><td>完成</td><td>4 个资源全部到齐</td></tr>
+      </table>
+    </div>
+
+    <p>看清问题的本质：R2、R3、R4 在服务器侧<strong>从 t = 0.5 RTT 起就准备好了</strong>，本可以在那一刻就发出、让客户端 t = 1 RTT 就拿到；只因为 HTTP/1.1 要求响应严格按请求顺序返回，它们被队首的 R1 一路拖到 4.5、5、5.5 RTT。这就是<span class="term">队头阻塞</span>（head-of-line blocking，HOL）：<strong>队首的一个慢元素，把后面所有已就绪元素全部堵住</strong>。更糟的是，如果 R1 的报文在网络中丢失需要 TCP 重传，整条连接上的所有响应都要跟着一起等重传——这叫 TCP 层的队头阻塞，比应用层的更顽固。</p>
+
+    <p>用流水线报文看一眼「请求连发、响应按序」的形态；注意服务端响应块严格对应请求的发出顺序：</p>
+
+    <div class="wire"><em>[同一条长连接上，四个请求背靠背发出，中间不等响应]</em>
+<b>GET /slow-report HTTP/1.1</b>
+<b>Host:</b> www.example.com
+<b>GET /logo.png HTTP/1.1</b>
+<b>Host:</b> www.example.com
+<b>GET /style.css HTTP/1.1</b>
+<b>Host:</b> www.example.com
+<b>GET /app.js HTTP/1.1</b>
+<b>Host:</b> www.example.com
+
+<i>HTTP/1.1 200 OK</i>  <em>（/slow-report，慢）</em>
+<i>Content-Length:</i> 90000
+
+<i>HTTP/1.1 200 OK</i>  <em>（/logo.png，已就绪但必须排在后面）</em>
+<i>Content-Length:</i> 2048
+
+<i>HTTP/1.1 200 OK</i>  <em>（/style.css）</em>
+<i>Content-Length:</i> 128
+
+<i>HTTP/1.1 200 OK</i>  <em>（/app.js）</em>
+<i>Content-Length:</i> 64</div>
+    <div class="wire-cap">流水线报文：请求可以连续写入管道，但响应必须按同样顺序写回。即使 logo.png 早已缓存，它的响应也只能排在慢报告之后。</div>
+
+    <p>再补一条限制，MDN 说得很清楚：<strong>不是所有请求都能进流水线</strong>。只有幂等方法——GET、HEAD、PUT、DELETE——能被安全地流水线化，因为一旦连接中途出故障，流水线里的内容要能被轻易重试而非造成重复副作用。POST 这类非幂等请求不应被塞进流水线，这也是流水线在真实 Web（大量表单提交与 API 写入）里施展不开的原因之一。</p>
+
+    <div class="box insight">
+      <span class="box-tag">✅ 判定规则</span>
+      <p>区分「长连接」与「流水线」只看一件事：<strong>第二个请求是否必须等第一个响应回来</strong>。必须等，就是普通长连接（发一个等一个）；不必等、连续发，才是流水线。再进一步：流水线有没有真正提速，取决于这些请求对应的响应是否「差不多同时就绪」。若队首响应明显更慢，流水线非但不省时，反而会让快资源跟着一起等——这就是判断队头阻塞是否发生的判据。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>「流水线把队头阻塞解决了」——错，它只是把请求提前发出，响应依旧按序返回，队头阻塞原封不动。真正解决应用层队头阻塞的是 HTTP/2 的多路复用（见 4.5 节）。另一个误区是「现代浏览器默认开启流水线」：MDN 明确指出并非如此，原因是有缺陷的代理、实现复杂以及收益有限。把流水线当成默认能力去依赖，会让你的性能优化方案在现实中落空。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front"><div class="q-tag">回忆 4.3-1</div><div class="q-text">RTT 为 50 ms 取 4 个小资源，短连接、长连接、流水线各耗多少？分别省了什么？</div><span class="tap">点击翻面 →</span></div>
+            <div class="flip-face flip-back"><div class="a-tag">参考答案</div>短连接 8 RTT 即 400 ms；长连接 5 RTT 即 250 ms；流水线 2 RTT 即 100 ms。长连接省掉 3 次握手，流水线再省掉 3 个空等响应的 RTT。</div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front"><div class="q-tag">回忆 4.3-2</div><div class="q-text">什么是队头阻塞？为什么只有幂等方法能进流水线？</div><span class="tap">点击翻面 →</span></div>
+            <div class="flip-face flip-back"><div class="a-tag">参考答案</div>响应必须按请求顺序返回，队首慢响应会堵住后面所有已就绪响应。连接中途故障时流水线内容需要重试，只有 GET/HEAD/PUT/DELETE 等幂等方法重试才无副作用，POST 不行。</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 4.4 ============ -->
+    <h2><span class="sec-no">4.4</span>逐跳首部：Connection 只说了这一跳，转发时必须剥掉重写</h2>
+
+    <p>前三节都在一条「客户端—服务器」的直连上讨论，可真实网络里两点之间往往夹着代理、网关、负载均衡。MDN 在开篇就抛出一行极其重要的提醒，也是本节的核心：<strong>HTTP 的连接管理适用于两个连续节点之间的连接，它是<span class="term">逐跳首部</span>（hop-by-hop header），而不是<span class="term">端到端首部</span>（end-to-end header）</strong>。同一套连接参数，用在「客户端到第一个代理」和「代理到目标服务器」两段连接上，效果可能完全不同。这句话把连接管理从「两端的事」升级成了「每一跳各自的事」。</p>
+
+    <p><strong>两类首部的分工：</strong>端到端首部（如 <code>Host</code>、<code>Content-Type</code>、<code>Authorization</code>）描述的是消息本身或最终意图，应当原样传到最终接收方，中间代理只能按规则有限的改写；逐跳首部（如 <code>Connection</code>、<code>Keep-Alive</code>、<code>Proxy-Connection</code>、<code>Transfer-Encoding</code>）只对<strong>当前这一跳的连接</strong>有意义，必须在离开这一跳时被消费掉，不能原封不动传给下一跳。MDN 特别点名：<code>Connection</code> 与 <code>Keep-Alive</code> 就是逐跳首部，<strong>它们的值是可以被中间节点修改的</strong>。</p>
+
+    <p><code>Connection</code> 首部还身兼二职，这是理解逐跳处理的关键。它既声明连接行为（如 <code>keep-alive</code> 或 <code>close</code>），又充当一份<strong>逐跳首部名单</strong>——凡是在 <code>Connection</code> 里列出的首部名，都被视为仅对这一跳有效。这一「自描述」机制让代理知道该剥离哪些字段。下面这个完整例子把整个过程走一遍。</p>
+
+    <p><strong>例子③：Connection 与 Keep-Alive 经过一个中间代理时如何被剥离并重新生成。</strong>设链路是「客户端 C → 代理 P → 源站 S」。客户端发给代理的请求如下，它在 <code>Connection</code> 里除了 <code>keep-alive</code> 还列了一个自定义的 <code>X-Debug</code>，等于声明「X-Debug 也是逐跳的」：</p>
+
+    <div class="wire"><em>【第 1 跳：客户端 C → 代理 P，客户端发出】</em>
+<b>GET /index.html HTTP/1.1</b>
+<b>Host:</b> www.example.com
+<b>Connection:</b> keep-alive, X-Debug
+<b>Keep-Alive:</b> timeout=5, max=100
+<b>X-Debug:</b> trace-me</div>
+    <div class="wire-cap">客户端到代理的这段连接上，客户端希望 keep-alive，且 timeout=5、max=100；X-Debug 被 Connection 列为逐跳首部。</div>
+
+    <p>代理 P 收到后，按规范执行三步：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>步骤</th><th>代理的动作</th><th>依据</th></tr>
+        <tr><td>① 解析名单</td><td>读 <code>Connection: keep-alive, X-Debug</code>，得出本跳的逐跳首部是 keep-alive 与 X-Debug</td><td>Connection 首部充当逐跳名单</td></tr>
+        <tr><td>② 剥离</td><td>删除 <code>Connection</code>、<code>Keep-Alive</code>、<code>X-Debug</code> 三个首部，不让它们越过这一跳</td><td>逐跳首部不得转发，值可由中间节点修改</td></tr>
+        <tr><td>③ 重建</td><td>按代理与源站之间自己的连接策略，重新写 <code>Connection</code> 与 <code>Keep-Alive</code>；追加 <code>Via</code> 记录自己这一跳</td><td>每一跳独立管理连接</td></tr>
+      </table>
+    </div>
+
+    <p>于是代理转发给源站的请求变成这样——注意参数完全换成了代理与源站之间的策略，X-Debug 也消失了：</p>
+
+    <div class="wire"><em>【第 2 跳：代理 P → 源站 S，代理重建后发出】</em>
+<b>GET /index.html HTTP/1.1</b>
+<b>Host:</b> www.example.com
+<b>Via:</b> 1.1 proxy-1.example.com
+<b>Connection:</b> keep-alive
+<b>Keep-Alive:</b> timeout=30, max=1000</div>
+    <div class="wire-cap">代理重建的连接首部：timeout 从 5 改成 30、max 从 100 改成 1000，因为这是代理与源站之间的连接策略；X-Debug 已被剥离，不再出现在新 Connection 名单里。</div>
+
+    <p><strong>如果误转发会发生什么？</strong>假设代理偷懒，把客户端那条 <code>Connection: keep-alive, X-Debug</code> 与 <code>Keep-Alive: timeout=5, max=100</code> 原样塞给源站，后果是连锁的：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>误转发的内容</th><th>源站的误解</th><th>实际故障</th></tr>
+        <tr><td><code>Keep-Alive: timeout=5</code> 被当作 P—S 连接的策略</td><td>以为这条连接闲置 5 秒就关</td><td>代理按 30 秒策略复用，源站却已关闭，代理写请求时收到 RST，用户请求失败</td></tr>
+        <tr><td>客户端的 <code>Connection: close</code> 被原样转发</td><td>源站关闭它与代理的连接</td><td>客户端—代理这一跳其实还开着，两跳状态不一致，连接池里留下一条半死的连接</td></tr>
+        <tr><td><code>X-Debug: trace-me</code> 被当成端到端首部转发</td><td>源站执行不该执行的调试逻辑</td><td>调试信息泄露到源站日志，或触发源站额外行为</td></tr>
+        <tr><td><code>Connection: Upgrade</code> 被误转发给不支持的下一跳</td><td>源站尝试协议切换</td><td>协议升级状态混乱，连接不可用（第 11 讲展开 Upgrade）</td></tr>
+      </table>
+    </div>
+
+    <p>一句话总结这个机制：<strong>逐跳首部描述的是「这一跳的连接怎么管」，它天生不能被继承</strong>。每一跳都是独立的一段连接，都必须自己消费旧值、按自己的情况生成新值。这也解释了课程主线里为什么把「连接管理」和「逐跳」紧紧绑在一起——连接模型作用范围就是逐跳的。</p>
+
+    <div class="figure">
+      <div class="mermaid">
+flowchart LR
+  C["客户端"] -->|"请求携带 Connection"| P["中间代理"]
+  P -->|"剥离逐跳首部并重建"| S["源站"]
+  P -->|"Connection 到此终止"| D["逐跳首部已消费"]
+  S -->|"按新首部响应"| P
+  P -->|"按另一套首部响应"| C
+      </div>
+      <div class="caption">图 4.4 逐跳首部在每一跳被消费并重新生成，不会跨越中间节点</div>
+    </div>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>把逐跳首部想成<strong>「交接班时的口头交代」</strong>：它对眼前这一班有意义，交接时必须由当前负责人重新交代给下一班，而不是把上上班的原话一路传下去。<code>Connection</code> 既是「交代内容」又是「交代清单」——它列出哪些话只属于这一班。理解了这个比喻，你就明白为什么 MDN 说这些首部的值「可以被中间节点修改」，以及为什么代理实现里处理 Connection 的代码总是最先执行、最先清理。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>「首部要么全是端到端，要么逐跳地原样转发」——错。逐跳首部不是「原样传下去」，而是「<strong>在此消费、按本跳重建</strong>」。另一个高频错误是把 <code>Via</code> 也当逐跳首部：<code>Via</code> 恰好相反，它是端到端地<strong>逐跳追加</strong>（每一跳把自己的标识加到列表末尾），用来追踪消息经过了哪些代理（第 11 讲展开）。一个被剥离重建，一个被追加保留，两者方向相反，别记混。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front"><div class="q-tag">回忆 4.4-1</div><div class="q-text">逐跳首部与端到端首部有何区别？为什么说连接管理是逐跳的？</div><span class="tap">点击翻面 →</span></div>
+            <div class="flip-face flip-back"><div class="a-tag">参考答案</div>端到端首部描述消息本身，应传到最终接收方；逐跳首部只对当前连接有效，须在离开这一跳时被剥离并由该跳重建。连接参数只管相邻两节点之间那一段，客户端—代理与代理—源站两段策略可以不同，所以是逐跳的。</div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front"><div class="q-tag">回忆 4.4-2</div><div class="q-text">代理处理 Connection 与 Keep-Alive 的三步是什么？误转发 Keep-Alive 会导致什么？</div><span class="tap">点击翻面 →</span></div>
+            <div class="flip-face flip-back"><div class="a-tag">参考答案</div>① 读 Connection 得出逐跳名单；② 剥离 Connection、Keep-Alive 及名单中的首部；③ 按本跳策略重建并追加 Via。误转发 timeout=5 会让源站按错误策略提前关连接，代理复用时收到 RST、请求失败；转发 close 还会造成两跳状态不一致。</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 4.5 ============ -->
+    <h2><span class="sec-no">4.5</span>延伸：规范怎么写：RFC 9112 把连接管理定成了哪些 MUST 和 SHOULD</h2>
+
+    <p>MDN 的《HTTP/1.x 的连接管理》是一篇工程指南：它告诉你三种模型各是什么、怎么选、有哪些坑。但当你要实现一个客户端连接池、写一个反向代理，或者判定「这个边界行为到底合不合规」时，工程口径的「通常」「建议」就不够用了，需要规范化措辞。2022 年 6 月 IETF 把 HTTP 规范重整为 RFC 9110 系列：<strong>RFC 9110 定义与版本无关的语义，RFC 9112 专门定义 HTTP/1.1 的线上格式与连接管理</strong>（本讲的主战场），RFC 9113、9114 分别定义 HTTP/2 与 HTTP/3。这套文档一次性取代了旧的 RFC 2616 与 RFC 7230–7235。下表把 MDN 的说法与规范口径对齐：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>MDN 的说法</th><th>RFC 怎么写</th><th>为什么值得知道</th></tr>
+        <tr><td>HTTP/1.1 默认就是长连接，除非写 Connection: close</td><td>RFC 9112 §9.6 规定：HTTP/1.1 默认持久，unless 请求或响应带 Connection: close；发送 close 的一方在该响应之后不得再复用连接</td><td>「close」是 MUST 级别的信号而非建议；连接池收到它就该立即回收连接，否则会在一条已被对端关闭的连接上写请求</td></tr>
+        <tr><td>Connection、Keep-Alive 是逐跳首部，值可被中间节点修改</td><td>RFC 9110 §7.6.1 定义逐跳首部并规定：代理必须解析 Connection、移除其中列出的所有首部，再为每一跳重新生成；Connection 本身也必须被移除</td><td>这是代理实现的强制步骤，不是可选优化；漏做剥离会把逐跳参数泄漏到下一跳，制造诡异的连接故障</td></tr>
+        <tr><td>连接在空闲一段时间后会被关闭，Keep-Alive 可指定保持时间</td><td>RFC 9112 §9.6 与 §9.6.1 允许用 Keep-Alive 的 timeout 与 max 传递预期，但明确它们是 advisory（建议性），接收方不保证遵守</td><td>不能把 Keep-Alive 当作精确契约；客户端必须有自己的空闲超时与重连逻辑，服务端也不能承诺无限期保持</td></tr>
+        <tr><td>响应必须按请求顺序返回，于是有队头阻塞</td><td>RFC 9112 §9.5.2 要求响应按请求被接收的顺序发送；流水线是 HTTP/1.1 特性，但因实现困难，RFC 9112 明确不推荐新实现启用流水线</td><td>「按序」是规范要求，所以队头阻塞在 HTTP/1.1 框架内无法绕过，只能靠换模型（HTTP/2 多路复用）解决</td></tr>
+        <tr><td>只有幂等方法能被安全地流水线化</td><td>RFC 9110 §9.2.2 定义幂等性；RFC 9112 §9.5.2 指出客户端不得对非幂等方法使用流水线</td><td>这把「幂等」从概念变成合规约束；设计写入型 API 时就不能假设它们能享受流水线的低时延</td></tr>
+      </table>
+    </div>
+
+    <p>读这张表要抓住一个方法：<strong>当 MDN 说「通常」「可以」而你需要确定的对错时，去 RFC 9110 系列找规范性措辞</strong>。RFC 里 MUST / MUST NOT 是不容妥协的强制，SHOULD 是「除非有正当理由否则应如此」，MAY 才是可选；MDN 作为工作文档刻意模糊了这层区分，而实现者恰恰要靠它判定边界行为。</p>
+
+    <p><strong>那么，HTTP/2 的多路复用为什么能解决队头阻塞？</strong>MDN 给出的答案是「用更好的算法取代流水线」，规范口径（RFC 9113）则揭示了机制。HTTP/1.1 的流水线之所以堵，根源在于它<strong>只有一条「字节流管道」，且响应必须按其对应请求的顺序写回</strong>——R2 的响应没法越过还没发完的 R1。HTTP/2 引入了<span class="term">流</span>（stream）与<span class="term">帧</span>（frame）两个新对象：每条请求—响应映射到一个独立的流，每个流有一个编号；消息被拆成一帧一帧，帧可以在同一条 TCP 连接上<strong>交错发送</strong>，接收方根据帧里的流编号把它们重新归位。于是 R2 的帧可以在 R1 还没发完时插进去发，客户端收到后按流编号组装，R2 不必再等 R1。用的还是同一条 TCP 连接，但「响应必须按序」这条束缚被打破了。</p>
+
+    <div class="figure">
+      <div class="mermaid">
+flowchart LR
+  A["流水线响应一 慢"] -->|"必须等它发完"| B["响应二 已就绪被堵"]
+  B -->|"依次排队"| C["响应三 被堵"]
+  D["HTTP2 流一 慢"] -->|"帧可交错"| E["HTTP2 流二 先行"]
+  E -->|"互不阻塞"| F["HTTP2 流三 先行"]
+      </div>
+      <div class="caption">图 4.5 流水线响应必须按序，造成队头阻塞；多路复用让不同流的帧交错，互不等待</div>
+    </div>
+
+    <p>这里有一个必须讲透的层次，否则容易走到另一个极端：<strong>HTTP/2 解决的是「应用层（HTTP 层）」的队头阻塞，没有解决「传输层（TCP 层）」的队头阻塞</strong>。因为 HTTP/2 所有流仍复用同一条 TCP 连接，一旦某个 TCP 包丢失，TCP 的按序交付会要求整条连接上的后续字节都等着重传，哪怕那些字节属于完全无关的流——于是所有流一起卡住。这个遗留问题正是 HTTP/3 换用 QUIC（基于 UDP）的动机：QUIC 在传输层就把流分开，一条流丢包不会拖累其他流。课程主线里把队头阻塞标成「HTTP/2 多路复用要解决的核心痛点」，指的就是应用层的那一次解放；而传输层的最后一次解放留到第 1 讲演进概览与第 11 讲协议层面再回望。</p>
+
+    <p>最后顺带解释 MDN 提到的另一个过时技巧——<span class="term">域名分片</span>（domain sharding）。既然 HTTP/1.x 请求是序列化的、每个域名的并发连接数受到限制（常见 6 条），过去有人把一个站点拆成 <code>www1</code>、<code>www2</code>、<code>www3</code> 等多个域名，让浏览器为每个域名各开 6 条连接，从而凑出更多并发。MDN 明确说这是过时技术：在 HTTP/2 里，一条连接就能很好地处理并发请求，域名分片不但没必要，还会妨碍 HTTP/2 的连接聚合、反而损害性能。理解了这个，你就明白为什么「升到 HTTP/2 之后应当减少而非增加域名」——因为多路复用已经把并发这件事在一条连接内解决了。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>三种模型的历史其实是一部「把约束一层层拆掉」的历史：短连接受制于反复建连 → 长连接拆掉了握手约束 → 流水线拆掉了「等响应」约束，却仍受制于「响应按序」 → HTTP/2 多路复用拆掉了应用层的按序约束 → HTTP/3 再拆掉 TCP 层的按序约束。每拆一层，性能就上一个台阶，但代价是实现更复杂、对中间层要求更高。看懂这条「约束—对策—新约束」的链条，你就能自己去推演任何一种新协议要解决什么问题，而不是死记版本特性。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>「HTTP/2 彻底消灭了队头阻塞」——不精确。它消灭的是应用层队头阻塞；TCP 层的队头阻塞仍在，要等 HTTP/3 的 QUIC 才解决。另一个误区是「升级 HTTP/2 后继续做域名分片、多多开连接」——正相反，HTTP/2 鼓励连接聚合，分片会削弱多路复用的收益。还有人拿旧文章里的 RFC 2616、RFC 7230 当现行规范；它们已被 2022 年的 RFC 9110 系列取代，查规范应先看 httpwg.org/specs 的现行列表。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front"><div class="q-tag">回忆 4.5-1</div><div class="q-text">RFC 如何规定 HTTP/1.1 的默认持久性与 Connection: close？逐跳首部在 RFC 里怎么处理？</div><span class="tap">点击翻面 →</span></div>
+            <div class="flip-face flip-back"><div class="a-tag">参考答案</div>RFC 9112 §9.6 规定 1.1 默认持久，带 close 的一方在该响应后不得复用连接。RFC 9110 §7.6.1 要求代理解析 Connection、移除列出的首部与 Connection 本身，并为每一跳重新生成，属强制步骤。</div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front"><div class="q-tag">回忆 4.5-2</div><div class="q-text">多路复用为什么能解决队头阻塞？它有没有解决 TCP 层的队头阻塞？</div><span class="tap">点击翻面 →</span></div>
+            <div class="flip-face flip-back"><div class="a-tag">参考答案</div>HTTP/2 把每条请求—响应映射到有编号的流，消息拆成可交错的帧，接收方按流编号重组，因此响应不必按序、快流不用等慢流。它只解决应用层队头阻塞；所有流仍共享一条 TCP，丢包仍会拖累全部流，那部分要等 HTTP/3 的 QUIC。</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===== 概念卡 ===== -->
+    <h2><span class="sec-no">🃏</span>概念卡：本讲概念的一分钟画像</h2>
+    <p>翻面前先自问：这个概念我能用一句话讲清楚吗？</p>
+    <div class="flip-grid">
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front"><div class="q-tag">概念卡 1</div><div class="q-text">短连接（Short-lived Connection）</div><span class="tap">点击翻面 →</span></div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">每条请求用一条独立 TCP，请求前握手、应答后立即关闭；HTTP/1.0 的默认模型。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">实现最简单，一条连接只服务一次事务，无需管理复用状态。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">每次买东西都新开一家店、用完就拆，成本全花在开张上。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为它更省资源；实际每条都重复握手与慢启动，成本最高。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">仅在兼容不支持长连接的古老系统时；1.1 下写明 Connection: close 才会触发。</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front"><div class="q-tag">概念卡 2</div><div class="q-text">长连接与 Keep-Alive（Persistent Connection）</div><span class="tap">点击翻面 →</span></div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">一条 TCP 保持一段时间，重复服务多条请求；HTTP/1.1 默认启用。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">省掉反复握手，让连接变热从而享受 TCP 性能增强。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">一条传送带连续送货，而不是每送一件就新搭一条。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为它永不关闭；空闲会超时、有 max 上限，且闲置也烧服务器资源。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">几乎所有现代 HTTP/1.1 通信；Connection 是开关，Keep-Alive 的 timeout/max 是旋钮。</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front"><div class="q-tag">概念卡 3</div><div class="q-text">HTTP 流水线（HTTP Pipelining）</div><span class="tap">点击翻面 →</span></div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">在同一条长连接上连续发多个请求而不等应答；响应仍按请求顺序返回。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">省掉「发一个等一个」的空等 RTT，请求可被打包进同一 TCP 段。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">把订单一次性全递进去，但厨房仍按收单顺序一道道出菜。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为它解决了队头阻塞，或以为浏览器默认开启；两者都错。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">仅幂等方法可进；实践中已被 HTTP/2 多路复用取代。</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front"><div class="q-tag">概念卡 4</div><div class="q-text">队头阻塞（Head-of-Line Blocking）</div><span class="tap">点击翻面 →</span></div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">响应必须按序返回，队首的慢元素堵住后面所有已就绪元素。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">它本身是问题不是方案；点明了流水线无法根除的瓶颈。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">单车道收费站，最前面那辆车慢，后面全排队。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为 HTTP/2 彻底解决；它只解决应用层，TCP 层仍在，要等 HTTP/3。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">判断「协议换模型是否真提速」的关键判据，见 4.3 与 4.5 节。</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front"><div class="q-tag">概念卡 5</div><div class="q-text">逐跳首部（Hop-by-hop Header）</div><span class="tap">点击翻面 →</span></div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">只对当前一跳连接有效的首部，须在离开该跳时被剥离并重建。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">让每一跳独立管理自己的连接，避免一段连接的参数污染另一段。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">交接班的口头交代，由当前负责人重新交代给下一班，不能原文照传。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">把 Via 当成逐跳；Via 恰好是端到端逐跳追加，方向相反。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">写代理或负载均衡时最先处理；Connection 既是开关又是逐跳名单。</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front"><div class="q-tag">概念卡 6</div><div class="q-text">慢启动与拥塞窗口（Slow Start / cwnd）</div><span class="tap">点击翻面 →</span></div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">cwnd 是发送方未被确认即可发出的数据量；慢启动让它每轮确认后翻倍。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">防止新连接一上来就用满带宽压垮网络，代价是冷连接前期传得慢。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">新车起步先小油门，确认路面安全再逐步加速。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为耗时只由带宽决定；慢启动阶段主要由 RTT 决定，与带宽无关。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">解释「短连接为什么贵」「长连接为什么热得更快」时的量化工具。</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===== 分层习题 ===== -->
+    <h2><span class="sec-no">✍️</span>分层习题：先自己写，再点开核对</h2>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>判断下列说法的正误并说明理由：①「HTTP/1.1 要在请求里写 Connection: keep-alive 才是长连接」；②「流水线让响应可以乱序返回，所以更快」；③「逐跳首部应当被代理原样转发到源站」。</div>
+      <details><summary>提示</summary><p>分别回到版本默认值、流水线的「按序」约束、逐跳首部的「消费并重建」三条口径。</p></details>
+      <details><summary>完整解答</summary><div class="ex-answer">① 错。HTTP/1.1 默认就是长连接，无需任何首部；只有写 <code>Connection: close</code> 才退回短连接。写上 keep-alive 只是为兼容可能退回 1.0 的中间层，属于保险做法而非必要条件。② 错。流水线只是让<strong>请求</strong>可以连续发出、不必等应答，<strong>响应仍必须按请求顺序返回</strong>，不能乱序；正因为按序，才留下队头阻塞。它更快是因为省掉了等待的 RTT，不是因为乱序。③ 错。逐跳首部只对当前一跳有效，代理必须解析 <code>Connection</code> 名单、剥离相关首部，再按自己与下一跳的策略<strong>重新生成</strong>，绝不能原样转发；否则会出现连接参数错配、连接被意外关闭等故障。</div></details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>有人说：「HTTP/2 既然用了多路复用，就再也不会队头阻塞了；而且它靠的是同时开很多条 TCP 连接。」指出这句话里的两处错误，并分别给出正确说法。</div>
+      <details><summary>提示</summary><p>想一想多路复用是「一条连接内拆流」还是「多条连接」，以及 TCP 层队头阻塞消没消失。</p></details>
+      <details><summary>完整解答</summary><div class="ex-answer">第一处错误：「再也不会队头阻塞」。HTTP/2 的多路复用只消除了<strong>应用层</strong>队头阻塞——流之间帧可交错，快响应不必等慢响应。但所有流仍共享同一条 TCP 连接，一旦发生丢包，TCP 的按序交付会让整条连接上的字节一起等重传，即<strong>传输层队头阻塞依然存在</strong>，要等 HTTP/3 的 QUIC 才解决。第二处错误：「靠同时开很多条 TCP 连接」。多路复用恰恰是在<strong>一条</strong> TCP 连接内把消息拆成带编号的帧、按流交错传输，它减少而非增加连接数；相反，靠多开连接来并发是 HTTP/1.x 时代域名分片的过时做法，在 HTTP/2 里还会妨碍连接聚合、损害性能。</div></details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>设 RTT = 40 ms，三次握手耗时 1 RTT，每个「请求—响应」往返耗时 1 RTT，服务器处理与主体传输时间忽略。用短连接、长连接（发一个等一个）、流水线三种模型依次取 5 个小资源，分别列出握手开销、传输开销与总耗时（用 RTT 和毫秒两种单位），并指出相邻两种模型之间的差值来自哪里。</div>
+      <details><summary>提示</summary><p>短连接每个资源一条连接；长连接握手一次；流水线握手一次且 5 个请求的发送几乎不额外占 RTT，最后一个响应约在 1 RTT 末到达。</p></details>
+      <details><summary>完整解答</summary><div class="ex-answer">① 短连接：每条连接 = 握手 1 RTT + 传输 1 RTT = 2 RTT；5 条共 <strong>10 RTT = 400 ms</strong>（握手 5×40=200 ms，传输 5×40=200 ms）。② 长连接：握手 1 RTT = 40 ms，加 5 个串行往返 5 RTT = 200 ms，共 <strong>6 RTT = 240 ms</strong>。③ 流水线：握手 1 RTT = 40 ms，5 个请求背靠背发出约 0，5 个响应按序连续返回、最后一个约在 1 RTT 末到达 = 40 ms，共 <strong>2 RTT = 80 ms</strong>。差值分析：短连接→长连接省了 (5−1)=4 次握手 = 4 RTT = 160 ms；长连接→流水线省了 (5−1)=4 个空等响应的 RTT = 160 ms。可见长连接省的是握手，流水线省的是等待，二者节省的来源不同。</div></details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>一条新连接的 RTT = 20 ms，MSS = 1000 字节，初始 cwnd = 10 MSS。服务器要在这条连接上返回一个 75000 字节的响应。按慢启动逐轮翻倍，列出每轮 cwnd、本轮可发字节、累计字节；求数据阶段需要几个 RTT，加上三次握手共多少毫秒？若这条连接已养热到 cwnd = 100 MSS，结果又如何？</div>
+      <details><summary>提示</summary><p>逐轮把 cwnd 翻倍：10、20、40、80 MSS，每轮可发 = 轮次 cwnd × 1000 字节，逐项累加直到覆盖 75000 字节。</p></details>
+      <details><summary>完整解答</summary><div class="ex-answer">第 1 轮：cwnd = 10 MSS，可发 10×1000 = 10000 字节，累计 10000。第 2 轮：cwnd = 20 MSS，可发 20000 字节，累计 30000。第 3 轮：cwnd = 40 MSS，可发 40000 字节，累计 70000。第 4 轮：cwnd = 80 MSS，还差 75000−70000 = 5000 字节，5 个段即可发完，累计 75000 完成。数据阶段共 4 RTT = 80 ms；三次握手再 1 RTT = 20 ms；合计约 <strong>5 RTT = 100 ms</strong>。若连接已养热到 cwnd = 100 MSS = 100000 字节，大于 75000 字节，则一个 RTT 就能发完整个响应，且无需握手，共约 <strong>1 RTT = 20 ms</strong>。冷连接比热连接慢约 4 RTT（80 ms），这正是短连接吃亏、长连接受益的量化根源。</div></details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l3">L3 建模应用</span>你负责一个图片站点的性能：页面含 1 个大图（服务器现生成，耗时 3 RTT）与 8 个小图（边缘缓存，随时可回），当前用 HTTP/1.1 长连接但浏览器默认不开流水线。请回答：① 为什么即使不开流水线，大图也可能拖慢小图？② 若贸然开启流水线，会怎样？③ 从连接模型的角度给出两条改进建议并说明原理。</div>
+      <details><summary>提示</summary><p>考虑浏览器并发连接数上限与「发一个等一个」的串行特性；再想流水线的按序约束与队头阻塞；最后回想 HTTP/2 多路复用的机制。</p></details>
+      <details><summary>完整解答</summary><div class="ex-answer">① 长连接下请求串行（发一个等一个），浏览器对同一域名并发连接数有上限（常见 6 条）。如果大图恰好先发且占住一条连接 3 RTT，那批在这条连接上排队的小图就只能等它回来才能发出；即便换到其他连接，并发数上限也意味着总有小图要排队等大图腾出连接。② 开启流水线后，请求虽可全部提前发出，但响应必须按请求顺序返回；若大图排在队首，8 个小图的响应即使早已就绪也被一路堵住，形成队头阻塞，用户看到的是「小图集体变慢」。加上有缺陷的代理与浏览器默认不启用，收益不稳定、故障难诊断。③ 建议一：升级到 HTTP/2 并启用多路复用——把每张图映射到独立的流、消息拆成可交错的帧，接收方按流编号重组，小图的帧不必等大图发完，从根上消除应用层队头阻塞；同时一条连接即可承载全部并发，不再需要域名分片。建议二：若短期只能用 HTTP/1.1，则可把资源按「快慢」分到不同域名做有限的域名分片，让慢大图不占用快小图的那批连接，并给小图设置长连接keep-alive复用；但这是过渡手段，MDN 明确不建议在 HTTP/2 下继续分片。</div></details>
+    </div>
+
+    <!-- ===== 自测 ===== -->
+    <h2><span class="sec-no">✅</span>本章自测：每题只选一个答案</h2>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 1</div>
+      <div class="q-stem">在 HTTP/1.1 中，要迫使连接使用短连接模型，应当怎么做？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 在请求里写 Connection: keep-alive</li>
+        <li data-opt="b">B. 在请求或响应里写 Connection: close</li>
+        <li data-opt="c">C. 什么都不写，因为 1.1 默认就是短连接</li>
+        <li data-opt="d">D. 把 Keep-Alive 的 timeout 设为 0</li>
+      </ul>
+      <div class="quiz-explain">解析：B 对。HTTP/1.1 默认长连接，只有显式 Connection: close 才退回短连接，RFC 9112 规定发送 close 的一方在该响应后不得再复用。A 恰相反，是维持长连接；C 与 1.1 默认长连接的事实不符；D 错在 Keep-Alive 的 timeout 只是建议性参数，设为 0 并不等于规范的关闭信号，不能替代 Connection: close。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="c">
+      <div class="q-no">自测 2</div>
+      <div class="q-stem">关于流水线，下列说法正确的是？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 响应可以乱序返回，因此彻底消除了队头阻塞</li>
+        <li data-opt="b">B. 所有方法包括 POST 都能安全地使用流水线</li>
+        <li data-opt="c">C. 请求可不依次发出，但响应仍按请求顺序返回</li>
+        <li data-opt="d">D. 现代浏览器默认开启流水线以获得最佳性能</li>
+      </ul>
+      <div class="quiz-explain">解析：C 对，正是流水线的定义。A 错在响应必须按序，队头阻塞仍在；B 错在只有 GET、HEAD、PUT、DELETE 等幂等方法可安全流水线化，POST 不行；D 错在 MDN 明确说多数现代浏览器不默认启用流水线，原因是有缺陷的代理、实现复杂且收益有限。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="a">
+      <div class="q-no">自测 3</div>
+      <div class="q-stem">代理转发请求时，对 Connection 与 Keep-Alive 这类逐跳首部的正确处理是？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 剥离它们，并按代理与下一跳之间的连接策略重新生成</li>
+        <li data-opt="b">B. 原样转发到源站，保证端到端语义一致</li>
+        <li data-opt="c">C. 只在请求方向剥离，响应方向保留原值</li>
+        <li data-opt="d">D. 把它们改名为端到端首部后再转发</li>
+      </ul>
+      <div class="quiz-explain">解析：A 对。逐跳首部只对当前一跳有效，代理必须解析 Connection 名单、移除相关首部（含 Connection 本身），再为每一跳重建，否则会出现连接参数错配、连接被意外关闭等故障。B 是典型的误转发，会造成两跳状态不一致；C 错在响应方向的逐跳首部同样属于这一跳、也需按本跳处理；D 无此机制，改名并不会改变首部的作用域。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="d">
+      <div class="q-no">自测 4</div>
+      <div class="q-stem">同样取 4 个小资源、RTT 相同且忽略处理时间，三种模型的耗时排序正确的是？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 流水线 > 长连接 > 短连接（流水线最慢）</li>
+        <li data-opt="b">B. 长连接 > 短连接 > 流水线</li>
+        <li data-opt="c">C. 三者相同，因为传输的字节数一样</li>
+        <li data-opt="d">D. 短连接 > 长连接 > 流水线（流水线最快）</li>
+      </ul>
+      <div class="quiz-explain">解析：D 对。以 RTT=50 ms 为例，短连接每条都握手、共 8 RTT；长连接握手一次但仍逐个等响应、共 5 RTT；流水线握手一次且请求连发、响应连续返回、仅 2 RTT。A、B 把顺序弄反；C 错在耗时由握手次数与等待的 RTT 主导，而非传输字节数——资源很小的时候这一点尤其明显。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="c">
+      <div class="q-no">自测 5</div>
+      <div class="q-stem">关于 HTTP/2 多路复用与队头阻塞，最准确的说法是？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 它靠同时开更多 TCP 连接实现并发</li>
+        <li data-opt="b">B. 它彻底消除了包括 TCP 层在内的所有队头阻塞</li>
+        <li data-opt="c">C. 它在一条连接内用带编号的流与可交错的帧消除应用层队头阻塞，TCP 层仍存在</li>
+        <li data-opt="d">D. 它是 HTTP/1.1 流水线的另一个名字</li>
+      </ul>
+      <div class="quiz-explain">解析：C 对。HTTP/2 把每条请求—响应映射到有编号的流，帧可交错发送并按流编号重组，快流不必等慢流，从而消除应用层队头阻塞；但所有流仍共享一条 TCP，丢包仍触发传输层队头阻塞，需 HTTP/3 的 QUIC 解决。A 错在它减少而非增加连接数、并妨碍域名分片以外的多连接做法；B 夸大了能力范围；D 错在二者机制完全不同，多路复用正是流水线的替代方案。</div>
+    </div>
+
+    <div class="retell">
+      <h3>🗣️ 用自己的话，三句话讲完本讲</h3>
+      <p>对着空气（或室友）说出这三句。说卡壳的那句，回去重读对应小节。</p>
+      <details><summary>句1：这讲解决什么问题？——</summary><div class="retell-answer">参考答案：算清「建一条连接有多贵」，并讲清 HTTP/1.x 用短连接、长连接、流水线三种模型把这笔成本摊薄，以及 Connection、Keep-Alive 这类逐跳首部如何在代理处被剥离重建。</div></details>
+      <details><summary>句2：核心机制是什么？——</summary><div class="retell-answer">参考答案：握手与慢启动让短连接成本最高；长连接复用一条 TCP 省握手，流水线连发请求省等待，但响应必须按序、留下队头阻塞；连接管理是逐跳的，每一跳自己消费并重建连接首部；HTTP/2 用流与帧的多路复用打破按序约束。</div></details>
+      <details><summary>句3：它和前后讲怎么分工？——</summary><div class="retell-answer">参考答案：第 3 讲讲「传什么」，本讲讲「怎么传」；第 5、6 讲转向另一种提速——少传字节的缓存与条件请求；逐跳首部与 Upgrade 的概念在第 11 讲代理、隧道与协议升级里继续展开，队头阻塞的传输层解法在第 1 讲演进概览与 HTTP/3 处回望。</div></details>
+    </div>
+
+    <div class="review-plan">
+      <h3>🔁 间隔复习计划</h3>
+      <p>回忆本身比重读有效 10 倍。到点只做一件事：翻卡 + 重做标记题。</p>
+      <table>
+        <tr><th>时间点</th><th>复习内容</th><th>预计用时</th></tr>
+        <tr><td>第 1 天</td><td>概念卡 1–6 + 回忆 4.1 / 4.2 / 4.3 / 4.4 / 4.5 各 2 张</td><td>12 分钟</td></tr>
+        <tr><td>第 3 天</td><td>重做自测 2、3、5 + 翻错的概念卡 3、4、5</td><td>8 分钟</td></tr>
+        <tr><td>第 7 天</td><td>三句话复述 + 重算 L2 两题（三种模型耗时对决、慢启动逐轮）+ 画逐跳首部剥离重建时序</td><td>15 分钟</td></tr>
+        <tr><td>第 15 天</td><td>只重做合上书挑战；能全过就毕业</td><td>15 分钟</td></tr>
+      </table>
+    </div>
+
+    <div class="final-challenge">
+      <h3>🚪 合上书挑战：能全写出来，这一讲才毕业</h3>
+      <ol id="challenge-list">
+        <li>用具体 RTT 算出短连接、长连接、流水线取 4 个资源的总耗时，并说清每一段省的是握手还是等待。</li>
+        <li>给出 RTT 与初始 cwnd，逐轮推演三次握手与慢启动，算出一条冷连接传一个大对象要几个 RTT。</li>
+        <li>画出流水线队头阻塞的时序：一个慢响应如何把后面已就绪的响应一一堵住，并说明 TCP 丢包为何更糟。</li>
+        <li>写出一条带 Connection 与 Keep-Alive 的请求经过代理后的变化，说明剥离重建的三步及误转发的后果。</li>
+        <li>说出 HTTP/1.1 下判断一条连接能否安全复用的三个条件，以及为什么只有幂等请求能自动重试。</li>
+        <li>对照 RFC 9112 说出默认持久性、Connection: close 与逐跳首部的规范口径，并解释多路复用为何能打破按序约束。</li>
+        <li>一句话回答本讲主线问题：三种连接模型各自省了什么，又留下了什么病？</li>
+      </ol>
+    </div>
+
+    <div class="complete-zone">
+      <button class="btn-complete" id="btn-complete" onclick="markDone()">✓ 我已完成本讲（含合上书挑战）</button>
+    </div>
+
+    <div class="chapter-nav">
+      <a href="chapter-03.html"><span class="nav-dir">← 上一讲</span>第3讲 内容协商、压缩与客户端提示</a>
+      <a href="chapter-05.html" class="next"><span class="nav-dir">下一讲 →</span>第5讲 HTTP 缓存</a>
+    </div>
+
+  </div>
+</div>
+
+<footer class="footer">
+  <div class="wrap">第4讲 HTTP/1.x 的连接管理 · HTTP 精通 · 依据 MDN Web Docs《HTTP 指南》整理，延伸板块对照 RFC 9110 系列 · 学习进度保存在本机浏览器中</div>
+</footer>
+
+<script src="assets/mermaid.min.js"></script>
+<script>
+mermaid.initialize({
+  startOnLoad: true,
+  theme: "base",
+  themeVariables: {
+    primaryColor: "#e3edf7",
+    primaryBorderColor: "#1d5f9e",
+    primaryTextColor: "#1d5f9e",
+    lineColor: "#5c554b",
+    secondaryColor: "#fbeedd",
+    tertiaryColor: "#f5f1e8",
+    fontFamily: "-apple-system, PingFang SC, sans-serif",
+    fontSize: "14px"
+  },
+  flowchart: { curve: "linear", htmlLabels: false }
+});
+</script>
+<script>
+document.querySelectorAll(".quiz-block").forEach(block => {
+  const answer = block.dataset.answer;
+  const explain = block.querySelector(".quiz-explain");
+  block.querySelectorAll(".quiz-opts li").forEach(li => {
+    li.addEventListener("click", () => {
+      const opts = block.querySelectorAll(".quiz-opts li");
+      opts.forEach(o => o.classList.add("disabled"));
+      if (li.dataset.opt === answer) {
+        li.classList.add("correct");
+      } else {
+        li.classList.add("wrong");
+        block.querySelector(`[data-opt="${answer}"]`).classList.add("correct");
+      }
+      explain.classList.add("show");
+    });
+  });
+});
+
+document.querySelectorAll("#challenge-list li").forEach(li => {
+  li.addEventListener("click", () => li.classList.toggle("checked"));
+});
+
+const KEY = "http_guide_progress_v1";
+function loadProgress() {
+  try { return JSON.parse(localStorage.getItem(KEY)) || {}; } catch (e) { return {}; }
+}
+const progress = loadProgress();
+const btn = document.getElementById("btn-complete");
+if (progress[4] && progress[4].done) {
+  btn.textContent = "✓ 已完成 · 再次点击重置";
+  btn.classList.add("done");
+}
+function markDone() {
+  const p = loadProgress();
+  if (p[4] && p[4].done) {
+    delete p[4];
+    btn.textContent = "✓ 我已完成本讲（含合上书挑战）";
+    btn.classList.remove("done");
+  } else {
+    p[4] = { done: true, completedAt: Date.now(), reviewsDone: 0 };
+    btn.textContent = "✓ 已完成 · 复习提醒已开启";
+    btn.classList.add("done");
+  }
+  localStorage.setItem(KEY, JSON.stringify(p));
+}
+</script>
+
+</body>
+</html>

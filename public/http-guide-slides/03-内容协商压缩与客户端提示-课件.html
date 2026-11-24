@@ -1,0 +1,685 @@
+<!DOCTYPE html>
+<!--
+  ======================================================================
+  HTTP 精通 · 课件外壳（deck-shell.html）
+  由 build-slides.mjs 把 slides/NN.html 注入幻灯片区域，
+  输出 public/http-guide-slides/NN-xxx-课件.html。
+  骨架来自站内通用 1280×720 课件模板；本套额外增加 .wire 协议报文块。
+  每页必须写 data-narration（180–280 字口语稿，禁半角双引号、禁换行、禁小于号）。
+  ======================================================================
+-->
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第3讲 内容协商、压缩与客户端提示 · HTTP 精通 课件</title>
+<script>
+window.MathJax = {
+  tex: {
+    inlineMath: [['$', '$'], ['\\(', '\\)']],
+    displayMath: [['$$', '$$'], ['\\[', '\\]']],
+    processEscapes: true,
+    tags: 'none'
+  },
+  svg: { fontCache: 'global', scale: 1.05 },
+  options: { skipHtmlTags: ['script','noscript','style','textarea','pre','code'] }
+};
+</script>
+<!-- MathJax 本地引用（tex-svg 单文件全量组件，约2MB，自带字体数据），file:// 与断网均可用 -->
+<script src="assets/tex-svg.js" async></script>
+<style>
+  :root{
+    --primary:#1a365d; --accent:#2b6cb0; --accent-light:#ebf8ff; --accent-border:#bee3f8;
+    --text:#2d3748; --muted:#718096; --border:#e2e8f0; --bg-light:#f7fafc;
+    --success:#38a169; --danger:#e53e3e; --warning:#dd6b20; --warn-bg:#fffaf0;
+  }
+  *{margin:0;padding:0;box-sizing:border-box;}
+  html,body{width:100%;height:100%;overflow:hidden;background:#0f172a;}
+  body{
+    font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Hiragino Sans GB","Microsoft YaHei","WenQuanYi Micro Hei",sans-serif;
+    color:var(--text);
+  }
+  #stage{
+    position:absolute; left:50%; top:50%;
+    width:1280px; height:720px;
+    transform:translate(-50%,-50%) scale(1);
+    transform-origin:center center;
+    background:#ffffff;
+    box-shadow:0 0 40px rgba(0,0,0,.4);
+    overflow:hidden;
+  }
+  .slide{
+    position:absolute; inset:0;
+    padding:36px 60px 52px;
+    display:none;
+    flex-direction:column;
+    background:#ffffff;
+    opacity:0;
+    transition:opacity .35s ease;
+  }
+  .slide.active{ display:flex; opacity:1; }
+
+  #progress{ position:absolute; top:0; left:0; height:6px; background:var(--accent); width:0; z-index:50; transition:width .35s; }
+
+  /* 封面 / 结束页 */
+  .slide-cover{ justify-content:center; align-items:center; text-align:center; }
+  .slide-cover{ background:linear-gradient(135deg,#1a365d 0%,#2b6cb0 100%); color:#fff; }
+  .slide-cover .kicker{ font-size:22px; letter-spacing:6px; opacity:.85; margin-bottom:18px;}
+  .slide-cover h1{ font-size:64px; font-weight:800; line-height:1.2; margin-bottom:22px; letter-spacing:2px;}
+  .slide-cover .sub{ font-size:26px; opacity:.92; margin-bottom:36px;}
+  .slide-cover .meta{ font-size:19px; opacity:.85; line-height:2;}
+  .slide-cover .divider{ width:160px;height:5px;background:#fff;opacity:.6;margin:0 auto 30px;border-radius:3px;}
+  .slide-cover .question{ font-size:24px; background:rgba(255,255,255,.12); border:1px solid rgba(255,255,255,.35); border-radius:12px; padding:12px 28px; margin-bottom:30px;}
+
+  /* 页头：结论式标题 */
+  .slide-head{ display:flex; align-items:baseline; gap:16px; border-bottom:3px solid var(--accent); padding-bottom:9px; margin-bottom:12px;}
+  .slide-head .sec{ font-size:17px; color:var(--accent); font-weight:700; background:var(--accent-light); padding:3px 11px; border-radius:6px; white-space:nowrap;}
+  .slide-head h3{ font-size:29px; color:var(--primary); font-weight:700;}
+  .slide-body{ flex:1; display:flex; flex-direction:column; justify-content:center; min-height:0; }
+
+  p{ font-size:21px; line-height:1.65; margin-bottom:8px;}
+  .lead{ font-size:23px; color:#374151; line-height:1.75;}
+  ul,ol{ margin:0 0 8px 26px; font-size:21px; line-height:1.7;}
+  li{ margin-bottom:5px;}
+  strong{ color:var(--primary); }
+
+  /* 公式块 */
+  .formula{ background:var(--accent-light); border-left:5px solid var(--accent); border-radius:0 10px 10px 0; padding:9px 22px; margin:9px 0; text-align:center; font-size:23px;}
+  .formula-concl{ background:#fffaf0; border-left:5px solid var(--warning);}
+  .MathJax{ font-size:1.05em !important; }
+  mjx-container[display="true"]{ margin:6px 0 !important; }
+
+  /* 表格 */
+  table{ width:100%; border-collapse:collapse; margin:10px 0; font-size:20px;}
+  th{ background:var(--accent); color:#fff; padding:8px 12px; text-align:center; font-weight:600;}
+  td{ padding:7px 12px; border:1px solid var(--border); text-align:center; vertical-align:middle;}
+  tr:nth-child(even) td{ background:var(--bg-light);}
+  td.l{ text-align:left; }
+  table.small{ font-size:18px; }
+  table.small td, table.small th{ padding:6px 10px; }
+
+  /* 组件 */
+  .card{ background:var(--accent-light); border:1px solid var(--accent-border); border-radius:12px; padding:12px 20px; margin:10px 0;}
+  .tip{ background:#ebf8ff; border-left:5px solid var(--accent); border-radius:0 10px 10px 0; padding:10px 20px; margin:10px 0; font-size:20px; color:#2c5282;}
+  .deep{ background:#f0fff4; border-left:5px solid var(--success); border-radius:0 10px 10px 0; padding:10px 20px; margin:10px 0; font-size:20px; color:#22543d;}
+  .warn{ background:var(--warn-bg); border-left:5px solid var(--warning); border-radius:0 10px 10px 0; padding:10px 20px; margin:10px 0; font-size:20px; color:#744210;}
+  .trap{ background:#fef2f2; border-left:5px solid var(--danger); border-radius:0 10px 10px 0; padding:10px 20px; margin:10px 0; font-size:20px; color:#7f1d1d;}
+
+  .pause{
+    background:var(--warn-bg); border:2px dashed var(--warning); border-radius:14px;
+    padding:10px 22px; margin:10px 0; display:flex; align-items:center; gap:16px;
+  }
+  .pause .icon{ font-size:36px; line-height:1; }
+  .pause .txt b{ color:var(--warning); font-size:21px; }
+  .pause .txt p{ font-size:18px; color:#744210; margin:3px 0 0; }
+
+  .cols{ display:flex; gap:28px; align-items:stretch; }
+  .col{ flex:1; min-width:0; }
+
+  /* 推导分步：仅互动模式隐藏，截图(autohide)模式全部可见——此规则不可删 */
+  .step{ opacity:0; transform:translateY(8px); transition:opacity .3s ease, transform .3s ease; }
+  .step.on{ opacity:1; transform:none; }
+  body.autohide .step{ opacity:1 !important; transform:none !important; }
+  .step-hint{ font-size:14px; color:var(--muted); margin-top:4px;}
+  body.autohide .step-hint{ display:none; }
+
+  /* HTTP 精通课件专用：协议报文原文块 */
+  .wire{background:#0f172a;color:#e2e8f0;border-radius:10px;padding:12px 18px;margin:8px 0;
+    font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:17px;line-height:1.55;
+    white-space:pre-wrap;overflow-wrap:anywhere;}
+  .wire b{color:#7dd3fc;font-weight:700;}
+  .wire i{color:#fde68a;font-style:normal;}
+  .wire em{color:#86efac;font-style:normal;}
+  .wire.sm{font-size:15px;line-height:1.45;}
+  .wire-cap{font-size:15px;color:var(--muted);margin:0 0 8px;}
+  .to-lec{color:#bee3f8;text-decoration:none;font-size:15px;margin-left:12px;}
+  .to-lec:hover{text-decoration:underline;}
+  .badge{display:inline-block;background:var(--accent-light);color:var(--accent);border:1px solid var(--accent-border);
+    border-radius:6px;padding:2px 10px;font-size:17px;font-weight:700;margin-right:8px;}
+
+  /* 因果链 */
+  .chain{ margin:6px 0; }
+  .chain .link{ display:flex; align-items:center; gap:14px; margin:6px 0;}
+  .chain .no{ width:34px; height:34px; border-radius:50%; background:var(--accent); color:#fff; font-size:18px; font-weight:700; display:flex; align-items:center; justify-content:center; flex-shrink:0;}
+  .chain .txt{ font-size:21px; line-height:1.5;}
+  .chain .txt strong{ color:var(--primary); }
+
+  /* mermaid 容器：高度封顶，防止溢出 720px 舞台 */
+  .mmd{ background:var(--bg-light); border:1px solid var(--border); border-radius:12px; padding:10px 14px; display:flex; justify-content:center; align-items:center; margin:8px 0;}
+  .mmd .mermaid{ display:flex; justify-content:center; width:100%; visibility:hidden; }
+  .mmd .mermaid[data-done]{ visibility:visible; }
+  .mmd .mermaid svg{ max-width:100%; height:auto; max-height:230px; }
+  .mmd.mmd-tall .mermaid svg{ max-height:330px; }
+  .mmd.mmd-sm svg{ max-height:150px; }
+  .mmd-row{ display:flex; gap:18px; }
+  .mmd-row .mmd{ flex:1; flex-direction:column; }
+  .mmd .cap{ font-size:17px; color:var(--muted); margin-top:6px; text-align:center;}
+  .mmd .cap b{ color:var(--text); }
+
+  #footer{ position:absolute; bottom:0; left:0; right:0; height:40px; display:flex; align-items:center; justify-content:space-between; padding:0 30px; font-size:15px; color:#94a3b8; background:rgba(247,250,252,.85); border-top:1px solid var(--border); z-index:40;}
+  #footer .brand{ font-weight:600; color:var(--accent); }
+
+  .nav{ position:absolute; bottom:48px; right:40px; display:flex; gap:12px; z-index:45;}
+  .nav button{ width:54px; height:54px; border-radius:50%; border:none; background:var(--accent); color:#fff; font-size:24px; cursor:pointer; box-shadow:0 3px 10px rgba(43,108,176,.4); display:flex; align-items:center; justify-content:center;}
+  .nav button:hover{ background:var(--primary); }
+  .nav button:disabled{ background:#cbd5d0; cursor:default; box-shadow:none;}
+
+  #hint{ position:absolute; bottom:48px; left:40px; font-size:14px; color:#94a3b8; z-index:45;}
+
+  body.autohide #progress, body.autohide #footer, body.autohide .nav, body.autohide #hint{ display:none !important; }
+</style>
+</head>
+<body>
+<div id="stage">
+
+  <div id="progress"></div>
+
+<!-- 第 3 讲：内容协商、压缩与客户端提示 -->
+<section class="slide slide-cover active" data-narration="欢迎回到 HTTP 精通第三讲。上一讲我们把报文逐行拆开，弄清了接收方凭什么知道这段字节是什么类型。这一讲处理一个更刁钻的问题：同一个网址，为什么有时返回 HTML、有时返回 JSON，有时是 gzip、有时是 Brotli。封面这句问话就是主线：同一个 URL 凭什么返回不同内容，这份选择权到底在谁手里。学完你要能用 q 值给候选表示打分择优，说清 gzip 与 chunked 的叠加顺序，推演 Vary 怎么进缓存键，并讲明为何要按能力而不是按浏览器做选择。我们先从本讲在全课里的位置看起。">
+  <div class="kicker">第 3 讲 · 第①组 基础与表示</div>
+  <h1>内容协商、压缩与客户端提示</h1>
+  <div class="sub">同一个 URL，凭什么返回不同内容</div>
+  <div class="question">同一个 URL 凭什么返回不同内容，这份选择权到底在谁手里？</div>
+  <div class="meta">
+    配套讲义：HTTP 精通 第 3 讲 · 依据 MDN《内容协商》《数据压缩》《客户端提示》《用户代理检测》<br>
+    ← → 翻页 · 推导页按空格逐步显示
+  </div>
+</section>
+
+<section class="slide" data-narration="看这一讲在十二讲主线上的位置。高亮的是第三讲，它属于第一组基础与表示的最后一讲：第一讲建立会话骨架，第二讲拆开报文与 MIME 类型，第三讲接着回答同一份资源怎么变成不同表示。往后的连接、缓存、认证、跨域各讲，都要用到这里埋下的两个概念，表示和 Vary。特别是第五讲缓存，会把本讲的 Vary 正式接过去算缓存键；第十一讲讲代理时也会回到内容编码。所以这一讲不是孤立的压缩技巧，而是给后面好几讲预备判据。图上那条用用户代理字符串猜能力的分支，是本讲末尾要纠正的老办法。下一页把主线摊开。">
+  <div class="slide-head"><span class="sec">定位</span><h3>第 3 讲给「表示」下定义，也替缓存埋伏笔</h3></div>
+  <div class="slide-body">
+    <div class="mmd mmd-sm">
+      <div class="mermaid">
+flowchart LR
+  A["第1讲 会话骨架"] --> B["第2讲 报文与MIME"] --> C["第3讲 内容协商与表示"]:::here --> D["第4到6讲 连接与缓存"] --> E["第7到10讲 状态与安全"] --> F["第11到12讲 中间层与重定向"]
+  C --> C1["表示 压缩 客户端提示"]
+  C --> C2["Vary 给缓存埋伏笔"]
+  classDef here fill:#2b6cb0,color:#ffffff,stroke:#1a365d,stroke-width:3px
+      </div>
+    </div>
+    <p style="text-align:center;">本讲解决「<strong>选哪种表示</strong>」：把一份资源的多副面孔摆到桌面上，再给缓存留好判据。</p>
+    <div class="tip">本讲对应的 MDN 原文：Content negotiation / Compression / Client hints / Browser detection using the user agent。</div>
+  </div>
+</section>
+
+<section class="slide" data-narration="本讲的主线是一条五环因果链，不是并列清单。第一环，一个 URL 对应的不是一份文件，而是一项资源，它可以有多种表示。第二环，请求用 Accept 系列首部带上 q 值，把客户端偏好说清楚。第三环，服务器据此给每个候选表示打分，选择权默认在它手里。第四环，选中的表示要配一个 Vary 首部，告诉缓存这次是按哪些请求首部挑的。第五环，这份表示再经过内容编码与传输编码，才作为主体发回。旁边还有一条支线：用用户代理字符串猜能力，那是会翻车的老路。这条链就是本讲的目录，下一页先用一个场景逼出为什么要谈它。">
+  <div class="slide-head"><span class="sec">主线</span><h3>从「一份资源多种表示」走到「编码后发回」</h3></div>
+  <div class="slide-body">
+    <div class="chain">
+      <div class="link"><span class="no">1</span><span class="txt"><strong>一个 URL 多种表示</strong>：资源与表示分离，先承认才有得选</span></div>
+      <div class="link"><span class="no">2</span><span class="txt"><strong>请求带 Accept 与 q 值</strong>：客户端把偏好声明清楚</span></div>
+      <div class="link"><span class="no">3</span><span class="txt"><strong>服务器给候选打分</strong>：选择权默认在服务器手里</span></div>
+      <div class="link"><span class="no">4</span><span class="txt"><strong>选出的表示加 Vary</strong>：让缓存按维度分副本，不串味</span></div>
+      <div class="link"><span class="no">5</span><span class="txt"><strong>编码后作为主体返回</strong>：内容编码与传输编码叠加</span></div>
+    </div>
+    <div class="tip">这条链就是本讲目录：资源与表示 → q 值择优 → 编码分层 → Vary → 客户端提示；支线是 UA 字符串猜能力。</div>
+  </div>
+</section>
+
+<section class="slide" data-narration="先用一个具体场景逼出问题。你在浏览器里请求同一个接口地址，桌面浏览器拿到的是 gzip 压过的 JSON，手机上的另一个客户端拿到的是未压缩的纯文本，抓包还看到同一网址有时回 HTML、有时回 JSON、有时是 Brotli。最常见的解释是一个网址对应一个文件，这套直觉在这里彻底失效，它没法回答同一份数据凭什么换了四副面孔，更没法解释为什么换个客户端就乱码。左边这张卡是过于简略的解释，右边是把它当黑盒会撞上的问题。本讲的方案是把选择权摆到桌面上：先分清资源与表示，再看请求里的偏好怎么驱动挑选。下一页给概念下准确定义。">
+  <div class="slide-head"><span class="sec">动机</span><h3>「一个网址一个文件」解释不了四副面孔</h3></div>
+  <div class="slide-body">
+    <div class="cols">
+      <div class="col"><div class="card">🙂 <strong>过于简略的解释</strong><br>一个 URL 对应一个文件，请求谁就回谁。能说通一次点击，仅此而已。</div></div>
+      <div class="col"><div class="card">🤔 <strong>解释不了的四个现象</strong><br>为何同网址回 HTML 又回 JSON；为何手机收到压缩版；为何有的客户端拿到纯文本；为何换个浏览器就乱码。</div></div>
+    </div>
+    <div class="tip">💡 本讲方案：把<strong>选择权</strong>摆到桌面 —— 资源与表示分开，偏好由请求首部驱动，选完用 Vary 交代清楚。</div>
+  </div>
+</section>
+
+<section class="slide" data-narration="先把三个概念钉牢。URL 命名的是资源，也就是一个被命名的对象；这一次响应真正发回来的字节是它的某种表示，可能是 HTML、JSON，也可能是压缩过的版本。关键在于资源与它的各种表示共享同一个 URL，所以一个网址对应一个文件是错的。内容协商就是在多个表示里选出该返回哪一个的机制。这张表把资源、表示、偏好三者和各自的首部对上：偏好由 Accept 系列请求首部声明，选中的表示由 Content-Type 与 Content-Encoding 描述。记住这个区分，第五讲缓存里 Vary 为什么存在才讲得通。下一页看选择权可以放在谁手里。">
+  <div class="slide-head"><span class="sec">定义</span><h3>URL 指向资源，响应发回的是表示</h3></div>
+  <div class="slide-body">
+    <div class="cols">
+      <div class="col"><div class="card">📦 <strong>资源</strong>（Resource）<br>URL 命名的对象，是一项被命名的资源；一个 URL 只指向一项资源。</div></div>
+      <div class="col"><div class="card">📄 <strong>表示</strong>（Representation）<br>这一次响应真正发回的字节，可能是 HTML、JSON，也可能是压缩过的版本。</div></div>
+    </div>
+    <div class="formula formula-concl">资源与它的各种表示共享同一个 URL —— 「一个网址对应一个文件」是错的</div>
+    <div class="deep"><strong>内容协商</strong>（Content Negotiation）就是从多个表示里选出该返回哪一个的机制；偏好由 Accept 系列请求首部声明，选中的表示由 Content-Type 与 Content-Encoding 描述。</div>
+  </div>
+</section>
+
+<section class="slide" data-narration="选择权放的位置不同，就有三种协商方式。服务器驱动协商是标准且最常用的：客户端发 Accept 系列首部，服务器用内部算法择优，代价是首部冗长、带来指纹识别与缓存效率下降。代理驱动协商把决定交给用户或脚本，服务器回 300、406 或 415 并给出可选链接，灵活但要多一次请求。透明协商想让缓存代选，靠 Alternates 这类首部，提案未被广泛采用，实际基本看不到。还要留意：规范没规定择优算法，你能判定哪种表示更符合要求，却别指望全互联网有统一公式。下一页看 q 值的规则。">
+  <div class="slide-head"><span class="sec">专题 · 协商方式</span><h3>三种协商方式：谁做选择，代价各是什么</h3></div>
+  <div class="slide-body">
+    <table class="small">
+      <thead><tr><th>协商方式</th><th>谁做选择</th><th>怎么表达偏好</th><th>代价</th></tr></thead>
+      <tbody>
+        <tr><td class="l"><strong>服务器驱动协商</strong>（Server-driven Negotiation）</td><td>服务器</td><td class="l">客户端发 Accept 系列，服务器择优</td><td class="l">标准、最常用；首部冗长，带来指纹识别与缓存效率下降</td></tr>
+        <tr><td class="l"><strong>代理驱动协商</strong>（Agent-driven Negotiation）</td><td>用户或脚本</td><td class="l">服务器回 300、406、415 并给可选链接</td><td class="l">灵活但要多一次请求，链接格式没标准</td></tr>
+        <tr><td class="l"><strong>透明协商</strong>（Transparent Negotiation）</td><td>缓存代选</td><td class="l">靠 Alternates 等首部</td><td class="l">提案未被广泛采用，实际基本看不到</td></tr>
+      </tbody>
+    </table>
+    <div class="tip">MDN 明确：<strong>服务器驱动</strong>是标准方式，代理驱动只是备选；300、406、415 属于后者。</div>
+    <div class="deep">规范并没规定服务器的择优算法，你能判定哪种表示更符合要求，却别指望全互联网有一套统一公式。</div>
+  </div>
+</section>
+
+<section class="slide" data-narration="三个 Accept 首部共用一个表达优先级的工具，叫质量因子，常写作 q 值。规则有五条，逐条记住。取值 0 到 1，最多三位小数，越大越优先；不写 q 时默认为 1；q 等于 0 表示不可接受，是明确拒绝，不是优先级最低；支持通配符，精确匹配优先于类型通配，类型通配优先于全通配；最要紧的一条，q 值只在同一个首部内部可比，不能拿 Accept 里的 1.0 去和 Accept-Language 里的 1.0 比大小，跨维度怎么合成由服务器算法决定，规范留白。这五条是下一页手算的尺子，先立规矩再算，才不会把分打错。">
+  <div class="slide-head"><span class="sec">专题 · q 值</span><h3>五条规则，一把只在本首部内部有效的尺子</h3></div>
+  <div class="slide-body">
+    <table class="small">
+      <thead><tr><th>q 值规则</th><th>含义</th><th>例子</th></tr></thead>
+      <tbody>
+        <tr><td class="l">取值 0 到 1，最多三位小数</td><td class="l">越大越优先，1 最高</td><td class="l">text/html;q=0.9</td></tr>
+        <tr><td class="l">不写 q 默认为 1</td><td class="l">没标 q 的项最优先</td><td class="l">de 等价于 de;q=1</td></tr>
+        <tr><td class="l">q=0 表示不可接受</td><td class="l">显式排除某一项</td><td class="l">image/webp;q=0</td></tr>
+        <tr><td class="l">支持通配符</td><td class="l">精确优先于类型通配，再优先于全通配</td><td class="l">text/* 与 */*</td></tr>
+        <tr><td class="l">只在同一个首部内部可比</td><td class="l">跨首部如何合成由服务器决定</td><td class="l">Accept 与 Accept-Language 的 q 不能比大小</td></tr>
+      </tbody>
+    </table>
+    <div class="formula formula-concl"><strong>质量因子</strong>（Quality Factor）常写作 q 值：一把只在同一首部内部有效的尺子</div>
+    <div class="tip">先立规矩再手算：q=0 是明确拒绝，不是优先级最低；没写 q 的项才是默认最优先。</div>
+  </div>
+</section>
+
+<section class="slide" data-narration="现在做第一个手算，带 q 值的多候选择优。先读请求 /api/report：Accept 里 text/html 是 0.9，application/json 是 1.0，text/plain 是 0.6，兜底项 0.1；Accept-Language 里 zh-CN 没写 q 默认 1.0，zh 是 0.8，en 是 0.5；Accept-Encoding 里 br 是 1.0，gzip 是 0.7，identity 是 0.2，星号是 0 表示其余编码不要。服务器备了 A 到 D 四种表示，表里列出媒体类型、语言和编码。记牢首部，下一页逐项打分。">
+  <div class="slide-head"><span class="sec">例子 · 报文</span><h3>一份带完整 q 值的请求与四种候选表示</h3></div>
+  <div class="slide-body">
+    <div class="wire sm"><b>GET /api/report HTTP/1.1</b>
+<b>Host:</b> example.com
+<i>Accept</i>: text/html;q=0.9, application/json;q=1.0, text/plain;q=0.6, */*;q=0.1
+<i>Accept-Language</i>: zh-CN,zh;q=0.8,en;q=0.5
+<i>Accept-Encoding</i>: br;q=1.0, gzip;q=0.7, identity;q=0.2, *;q=0
+
+<em>（空行：本请求无主体）</em></div>
+    <div class="wire-cap">三个 Accept 首部分别在媒体类型、自然语言、内容编码三个维度上声明偏好；开头的项没写 q，默认取 1。</div>
+    <table class="small">
+      <thead><tr><th>候选表示</th><th>Content-Type</th><th>语言</th><th>内容编码</th></tr></thead>
+      <tbody>
+        <tr><td>A</td><td class="l">text/html</td><td class="l">zh-CN</td><td class="l">br</td></tr>
+        <tr><td>B</td><td class="l">application/json</td><td class="l">en</td><td class="l">gzip</td></tr>
+        <tr><td>C</td><td class="l">text/plain</td><td class="l">zh-CN</td><td class="l">identity</td></tr>
+        <tr><td>D</td><td class="l">text/html</td><td class="l">en</td><td class="l">gzip</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section class="slide" data-narration="打分分三步，每步按最具体匹配优先去查。第一步媒体类型：A 和 D 的 text/html 命中 0.9，B 的 application/json 命中 1.0，C 的 text/plain 命中 0.6，四种类型都被精确列出，0.1 的兜底项用不上。第二步自然语言：zh-CN 命中首项默认 1.0，en 命中 0.5，zh 等于 0.8 本例搁着。第三步内容编码：br 得 1.0，gzip 得 0.7，identity 得 0.2，它即便不写也默认可接受、只是优先级最低。表里是四种表示三个维度的 q 值，下一页合成一个分数。">
+  <div class="slide-head"><span class="sec">例子 · 手算</span><h3>逐维取 q：最具体匹配优先</h3></div>
+  <div class="slide-body">
+    <p><strong>第一步 媒体类型</strong>：A 与 D 的 text/html 命中 0.9，B 的 application/json 命中 1.0，C 的 text/plain 命中 0.6；四种类型都被精确列出，兜底项 */*;q=0.1 用不上。</p>
+    <p><strong>第二步 自然语言</strong>：zh-CN 命中首项默认 1.0，en 命中 0.5；zh;q=0.8 用于纯中文不带地区的表示，本例没有。</p>
+    <p><strong>第三步 内容编码</strong>：br 得 1.0，gzip 得 0.7，identity 得 0.2；identity 即便不写也默认可接受，只是优先级最低。</p>
+    <table class="small">
+      <thead><tr><th>表示</th><th>媒体类型 q</th><th>语言 q</th><th>编码 q</th></tr></thead>
+      <tbody>
+        <tr><td class="l">A · HTML / 中文 / br</td><td>0.9</td><td>1.0</td><td>1.0</td></tr>
+        <tr><td class="l">B · JSON / 英文 / gzip</td><td>1.0</td><td>0.5</td><td>0.7</td></tr>
+        <tr><td class="l">C · 纯文本 / 中文 / identity</td><td>0.6</td><td>1.0</td><td>0.2</td></tr>
+        <tr><td class="l">D · HTML / 英文 / gzip</td><td>0.9</td><td>0.5</td><td>0.7</td></tr>
+      </tbody>
+    </table>
+    <div class="tip">三个维度的 q 各自只在本首部内部可比；表里的分数是下一页相乘的原料。</div>
+  </div>
+</section>
+
+<section class="slide" data-narration="规范没定义跨维度怎么合成，本讲把三个维度的 q 相乘当综合分。A 是 0.9 乘 1.0 乘 1.0 等于 0.900 排第一；B 是 1.0 乘 0.5 乘 0.7 等于 0.350 排第二；D 是 0.9 乘 0.5 乘 0.7 等于 0.315 排第三；C 是 0.6 乘 1.0 乘 0.2 等于 0.120 垫底。选中的是 A，HTML 加中文加 Brotli，Vary 交代按这三类首部挑的。注意 B 的媒体类型 q 是全场最高的 1.0 却不是最优，因为语言和编码只是次优，这正是多维度求满意的精髓。下一页看压缩。">
+  <div class="slide-head"><span class="sec">例子 · 结论</span><h3>相乘排序，选出 A 并写出响应</h3></div>
+  <div class="slide-body">
+    <table class="small">
+      <thead><tr><th>表示</th><th>综合分（相乘）</th><th>排序</th></tr></thead>
+      <tbody>
+        <tr><td class="l">A · HTML / 中文 / br</td><td class="l">0.9 × 1.0 × 1.0 = <strong>0.900</strong></td><td>1（最优）</td></tr>
+        <tr><td class="l">B · JSON / 英文 / gzip</td><td class="l">1.0 × 0.5 × 0.7 = <strong>0.350</strong></td><td>2</td></tr>
+        <tr><td class="l">D · HTML / 英文 / gzip</td><td class="l">0.9 × 0.5 × 0.7 = <strong>0.315</strong></td><td>3</td></tr>
+        <tr><td class="l">C · 纯文本 / 中文 / identity</td><td class="l">0.6 × 1.0 × 0.2 = <strong>0.120</strong></td><td>4</td></tr>
+      </tbody>
+    </table>
+    <div class="wire sm"><b>HTTP/1.1 200 OK</b>
+<i>Content-Type</i>: text/html; charset=utf-8
+<i>Content-Language</i>: zh-CN
+<i>Content-Encoding</i>: br
+<i>Vary</i>: Accept, Accept-Language, Accept-Encoding
+
+<em>（主体：经 Brotli 压缩后的字节）</em></div>
+    <div class="wire-cap">选中的表示 A：三个描述首部说清「是什么表示」「怎么压的」，Vary 告诉缓存下次按哪些请求首部匹配。</div>
+    <div class="tip">B 的媒体类型 q 是全场最高的 1.0 却不是最优：协商是多维度同时求满意，不是挑单项最高分。</div>
+  </div>
+</section>
+
+<section class="slide" data-narration="A 的响应里带着 Content-Encoding 等于 br，说明主体被压缩过。紧接着的问题是压缩后的字节怎么变成线上的块，这里要把两层分开。内容编码作用在资源主体上，是表示的一部分，端到端保持不变，中间节点不得插手，用 Accept-Encoding 协商，典型取值 gzip 和 br。传输编码作用在报文主体上，只管这一跳怎么承载，逐跳可解开再重编，用 TE 协商，最常见的取值是分块编码 chunked。图里把这两层的先后关系画成链，表把作用对象、范围、协商首部逐项对上。先记住一句，内容编码是里层，传输编码是外层。下一页看叠加后的完整报文。">
+  <div class="slide-head"><span class="sec">专题 · 编码分层</span><h3>内容编码是里层，传输编码是外层</h3></div>
+  <div class="slide-body">
+    <div class="mmd mmd-sm">
+      <div class="mermaid">
+flowchart LR
+  A["原始 HTML"] --> B["gzip 压缩 内容编码"] --> C["chunked 分块 传输编码"] --> D["线上传输"] --> E["先去块拼回"] --> F["再 gzip 解压"]
+      </div>
+    </div>
+    <table class="small">
+      <thead><tr><th>对比项</th><th><strong>内容编码</strong>（Content-Encoding）</th><th><strong>传输编码</strong>（Transfer-Encoding）</th></tr></thead>
+      <tbody>
+        <tr><td class="l"><strong>作用对象</strong></td><td class="l">资源主体，是表示本身的一部分</td><td class="l">报文主体，这一跳的承载形式</td></tr>
+        <tr><td class="l"><strong>作用范围</strong></td><td class="l">端到端，中间节点不得改变</td><td class="l">逐跳，每跳可解开再重新编码</td></tr>
+        <tr><td class="l"><strong>协商首部</strong></td><td class="l">Accept-Encoding</td><td class="l">TE</td></tr>
+        <tr><td class="l"><strong>典型取值</strong></td><td class="l">gzip、br、identity</td><td class="l"><strong>分块编码</strong>（Chunked Transfer Coding）即 chunked</td></tr>
+      </tbody>
+    </table>
+    <div class="tip">口诀：内容编码是里层、端到端；传输编码是外层、逐跳。压文本，跳过已压缩的图片与视频。</div>
+  </div>
+</section>
+
+<section class="slide" data-narration="看第二个例子，gzip 与 chunked 叠加的响应。源站先 gzip 压 HTML，长度未知，再用 chunked 把压缩字节切成块发。报文里 Content-Encoding 是 gzip，Transfer-Encoding 是 chunked，Vary 是 Accept-Encoding，没有 Content-Length，用了 chunked 就不靠长度定界，两者同时出现是错误配置。块长用十六进制：第一块 1A3F 等于 6719 字节，第二块 0C80 等于 3200 字节，共 9919 字节，最后一块长度为 0 收尾。下一页推导收发顺序。">
+  <div class="slide-head"><span class="sec">例子 · 报文</span><h3>gzip 与 chunked 叠加的完整响应</h3></div>
+  <div class="slide-body">
+    <div class="wire sm"><b>HTTP/1.1 200 OK</b>
+<i>Content-Type</i>: text/html; charset=utf-8
+<i>Content-Encoding</i>: gzip
+<i>Transfer-Encoding</i>: chunked
+<i>Vary</i>: Accept-Encoding
+
+<em>1A3F 十六进制块长 等于十进制 6719 字节</em>
+<em>第一块 gzip 字节流 后跟 CRLF</em>
+<em>0C80 十六进制块长 等于十进制 3200 字节</em>
+<em>第二块 gzip 字节流 后跟 CRLF</em>
+<em>0 最后一块 长度为零 表示数据结束</em></div>
+    <div class="wire-cap">gzip 与 chunked 叠加：没有 Content-Length，每块以十六进制长度开头，1A3F 是 6719、0C80 是 3200，共 9919 字节；长度为 0 的块收尾。</div>
+    <div class="tip">注意：Content-Length 与 chunked 同时出现是错误配置；发送端先 gzip 压缩再切块，接收端先去块拼回字节流再 gzip 解压，顺序正好镜像。</div>
+  </div>
+</section>
+
+<section class="slide" data-narration="第三个例子推演 Vary 怎么进缓存键。缓存里还没有副本，两个客户端先后要同一个 /page，A 支持 Brotli，B 只支持 gzip。第一步 A 带 br 和 gzip 到达，未命中转给源站；第二步源站选中 br，响应带 Content-Encoding 与 Vary，缓存读出键里要含这个首部；第三步按 URL 加 Vary 首部当前值登记，存下 br 表示；第四步 B 带 gzip 到达，算出的键不同，未命中；第五步 B 转发源站取回 gzip 并按自己的键存下，于是 A 命中 br、B 命中 gzip，互不串味。下一页把 Vary 抹掉看故障。">
+  <div class="slide-head"><span class="sec">例子 · 推演</span><h3>Vary 参与缓存键：正确情形五步</h3></div>
+  <div class="slide-body">
+    <div class="wire sm"><b>GET /page HTTP/1.1</b>
+<b>Host:</b> example.com
+<i>Accept-Encoding</i>: br, gzip
+
+<i>HTTP/1.1 200 OK</i>
+<i>Content-Encoding</i>: br
+<i>Vary</i>: Accept-Encoding
+<i>Cache-Control</i>: max-age=3600</div>
+    <div class="wire-cap">客户端 A 的请求与响应：源站选中 br，用 Vary: Accept-Encoding 声明这个选择依赖请求里的 Accept-Encoding。</div>
+    <table class="small">
+      <thead><tr><th>步骤</th><th>发生了什么</th><th>缓存键 / 结果</th></tr></thead>
+      <tbody>
+        <tr><td>① A 请求到达</td><td class="l">带 br, gzip，缓存里无副本</td><td class="l">未命中，转发源站</td></tr>
+        <tr><td>② 源站返回</td><td class="l">选 br，带 Content-Encoding 与 Vary</td><td class="l">缓存读出 Vary，键要含该首部</td></tr>
+        <tr><td>③ 缓存存副本</td><td class="l">按 URL 加 Vary 首部当前值登记</td><td class="l">键 =（/page, br, gzip）存 br</td></tr>
+        <tr><td>④ B 请求到达</td><td class="l">只带 gzip</td><td class="l">键不同 → 未命中</td></tr>
+        <tr><td>⑤ 各取所需</td><td class="l">B 转发源站取 gzip 并按自己的键存</td><td class="l">A 命中 br，B 命中 gzip</td></tr>
+      </tbody>
+    </table>
+    <div class="deep"><strong>缓存键</strong>（Cache Key）原本常只用 URL；有了 Vary，键变成「URL + 该请求在 Vary 首部上的取值」。</div>
+  </div>
+</section>
+
+<section class="slide" data-narration="把 Vary 抹掉看故障链：源站给 A 返回 br 表示却漏写 Vary，随后只认 identity 的客户端 C 来要同一网址。① 源站出错，缓存不知道表示依赖 Accept-Encoding；② 缓存只按 URL 当键，把 br 登记成唯一答案；③ C 明说只接受 identity，算出的键仍是 /page，命中那份 br；④ 把 br 发给不认识 br 的客户端，C 无法解压、页面乱码；⑤ 错误副本在 max-age 内一直被命中，所有不接受 br 的用户都中招。漏写 Vary 不是少个首部，是正确性缺陷。下一页转到客户端提示。">
+  <div class="slide-head"><span class="sec">例子 · 故障链</span><h3>漏写 Vary：把 br 响应错发给只认 identity 的客户端</h3></div>
+  <div class="slide-body">
+    <div class="wire sm"><b>GET /page HTTP/1.1</b>
+<b>Host:</b> example.com
+<i>Accept-Encoding</i>: identity
+
+<i>HTTP/1.1 200 OK</i>
+<i>Content-Encoding</i>: br
+<i>Cache-Control</i>: max-age=3600
+
+<em>（这份响应的 Vary 首部缺失）</em></div>
+    <div class="wire-cap">客户端 C 只声明接受 identity，却从缓存拿到一份 Content-Encoding: br 的响应，因为它对不上该用哪一版。</div>
+    <table class="small">
+      <thead><tr><th>故障步骤</th><th>发生了什么</th><th>后果</th></tr></thead>
+      <tbody>
+        <tr><td>① 源站出错</td><td class="l">返回 br 表示却不写 Vary</td><td class="l">缓存不知道它依赖 Accept-Encoding</td></tr>
+        <tr><td>② 按 URL 存</td><td class="l">键只有 /page，没有编码维度</td><td class="l">br 被登记成唯一答案</td></tr>
+        <tr><td>③ C 请求到达</td><td class="l">只认 identity，明说不会解 br</td><td class="l">算出键命中那份 br 副本</td></tr>
+        <tr><td>④ 错发给 C</td><td class="l">把 br 字节流发给不认识 br 的客户端</td><td class="l">无法解压，页面乱码或报错</td></tr>
+        <tr><td>⑤ 污染持续</td><td class="l">错误副本在 max-age 内一直被命中</td><td class="l">所有不接受 br 的用户都中招</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section class="slide" data-narration="前三节的协商都靠客户端主动声明的首部，看起来圆满，可还有一个老办法阴魂不散：服务器去解析用户代理字符串，猜这是 Chrome 还是 Safari、是手机还是电脑，再据此发内容。MDN 开篇就泼冷水，为不同浏览器提供不同网页通常是坏主意。这条字符串里 Chrome 同时含 Chrome 与 Safari，WebKit 又写着像 Gecko，互相劫持标记、可被伪造、还会被浏览器冻结精简，靠它判断能力是在跟历史包袱博弈。这张判定表把 UA 字符串检测、特性检测与客户端提示摆在一起，逐行给出推荐做法。结论先说：问你能干什么，别问你是谁。下一页看一条具体请求。">
+  <div class="slide-head"><span class="sec">专题 · 判定表</span><h3>UA 检测 vs 特性检测 vs 客户端提示</h3></div>
+  <div class="slide-body">
+    <table class="small">
+      <thead><tr><th>要解决的问题</th><th>UA 字符串检测</th><th>特性检测</th><th>客户端提示</th><th>推荐做法</th></tr></thead>
+      <tbody>
+        <tr><td class="l">浏览器是否支持某 API</td><td class="l">猜版本，极易误判</td><td class="l">直接探测能力，最准</td><td class="l">不适用</td><td class="l">特性检测</td></tr>
+        <tr><td class="l">按屏幕宽度或 DPR 选图</td><td class="l">猜机型，不可靠</td><td class="l">脚本晚一步</td><td class="l">Width、DPR 精确可用</td><td class="l">Client Hints</td></tr>
+        <tr><td class="l">用户偏好减少动画</td><td class="l">完全猜不到</td><td class="l">能查但太晚</td><td class="l">Sec-CH-Prefers-Reduced-Motion</td><td class="l">Client Hints 加 Critical-CH</td></tr>
+        <tr><td class="l">网络慢、想省流</td><td class="l">猜不到</td><td class="l">不适用</td><td class="l">Save-Data、ECT、Downlink</td><td class="l">Client Hints</td></tr>
+        <tr><td class="l">修某版本特定 bug</td><td class="l">唯一勉强合理处</td><td class="l">未必可行</td><td class="l">不针对 bug</td><td class="l">UA 检测，尽快淘汰</td></tr>
+        <tr><td class="l">区分手机与桌面</td><td class="l">找 Mobi，有假阳性</td><td class="l">不适用</td><td class="l">Sec-CH-UA-Mobile 更干净</td><td class="l">响应式优先，其次 Client Hints</td></tr>
+      </tbody>
+    </table>
+    <div class="deep"><strong>用户代理</strong>（User-Agent）字符串会互相劫持标记、可被伪造、还会被冻结精简；<strong>特性检测</strong>（Feature Detection）只回答能不能用，不回答你是谁；<strong>客户端提示</strong>（Client Hints）让服务器按能力索取。</div>
+    <div class="tip">判定顺序：先问是不是探测功能，再问是不是服务器响应前就要的能力信息，最后才考虑 UA 检测。</div>
+  </div>
+</section>
+
+<section class="slide" data-narration="看第四个例子，一条请求怎么按能力而非按浏览器选择。服务器先前用 Accept-CH 声明想要 Width、DPR、Sec-CH-UA-Mobile，客户端下一轮带了回来：Width 是 400，占 400 个 CSS 像素；DPR 是 2，设备像素比；Sec-CH-UA-Mobile 是问号一，表示移动设备。整条请求没有一句我是某品牌某浏览器。服务器算 400 乘 2 等于 800 物理像素，挑出 800 像素宽的 WebP 返回，带上 Vary 让缓存分版本存。决策没读浏览器名，换个品牌只要能力值相同结果就一样。下一页收成推导。">
+  <div class="slide-head"><span class="sec">例子 · 报文</span><h3>Client Hints：按能力而不是按浏览器选图</h3></div>
+  <div class="slide-body">
+    <div class="wire sm"><b>GET /hero.webp HTTP/1.1</b>
+<b>Host:</b> shop.example
+<i>Width</i>: 400
+<i>DPR</i>: 2
+<i>Sec-CH-UA-Mobile</i>: ?1
+
+<em>Width 是 CSS 像素下的资源宽度，DPR 是设备像素比，问号一表示是移动设备</em></div>
+    <div class="wire-cap">客户端按上一轮的 Accept-CH 带回能力提示：没有一句我是某品牌某浏览器，只报出这次要展示的资源宽度与屏幕像素密度。</div>
+    <div class="formula formula-concl">400 CSS 像素 × DPR 2 = 800 物理像素 → 选 800 像素宽的 WebP</div>
+    <div class="tip">响应带 Vary: Accept, Width, DPR 让缓存分版本存；换个品牌只要能力值相同结果就一样。Downlink、RTT 这类变化频繁的网络提示不宜放进 Vary。</div>
+  </div>
+</section>
+
+<section class="slide" data-narration="把前面四组例子收成一条可复用的推导，按空格逐步展开，每步都问为什么可以这样变。第一步，为什么不能按网址直接取固定文件，因为资源与表示分离，同一网址有多种表示，先承认才有得选。第二步，为什么可用各维度 q 相乘择优，因为偏好分三个首部各自声明、只在内部可比，相乘把多维度满意度压成可排序分数。第三步，为什么 Vary 必须进缓存键，因为缓存只认键，键里不含协商首部就会把一种表示错发给另一种客户端。第四步，为什么先去块再解压，因为传输编码是最外层包装，没拼回连续字节流就无法 gzip 解压。合起来就是发送端从里向外包、接收端从外向里拆。">
+  <div class="slide-head"><span class="sec">推导</span><h3>四步为什么：从选表示到拆包装</h3></div>
+  <div class="slide-body">
+    <div class="step"><p><strong>① 为什么不能按网址直接取一份固定文件</strong>：资源与表示分离，同一 URL 对应多种表示，先承认这一点才有得选。</p></div>
+    <div class="step"><p><strong>② 为什么可用各维度 q 相乘择优</strong>：偏好分三个首部各自声明、只在内部可比，相乘把多维度满意度压成一个可排序分数。</p></div>
+    <div class="step"><p><strong>③ 为什么 Vary 必须进缓存键</strong>：缓存只认键，键里不含协商首部就会把一种表示错发给另一种客户端。</p></div>
+    <div class="step"><div class="formula formula-concl">④ 为什么先去块再解压：传输编码是最外层包装，没拼回连续字节流就无法 gzip 解压</div></div>
+    <p class="step-hint">按空格 / → 逐步展开推导 · 发送端从里向外包，接收端从外向里拆</p>
+  </div>
+</section>
+
+<section class="slide" data-narration="轮到你了。屏幕给了一道择优题：请求 /data，三个 Accept 首部的 q 值和四种候选都列在下面，有 application/json 0.9、text/html 0.7 这一组，也有 fr 0.8、gzip 1.0 这些。先暂停视频自己推一遍。推出来了吗？好，对答案。逐维取 q 再相乘：A 得 0.450，B 得 0.072，C 得 0.560，D 得 0.200。排序 C 大于 A 大于 D 大于 B，最优是 C，HTML 加法文加 gzip，它媒体类型 q 不是最高却综合胜出。算错就回看打分那页。下一页对规范。">
+  <div class="slide-head"><span class="sec">演练</span><h3>自己推一遍：一次新的 q 值择优</h3></div>
+  <div class="slide-body">
+    <div class="wire sm"><b>GET /data HTTP/1.1</b>
+<i>Accept</i>: application/json;q=0.9, text/html;q=0.7, text/plain;q=0.4
+<i>Accept-Language</i>: fr;q=0.8, en;q=0.5
+<i>Accept-Encoding</i>: gzip;q=1.0, identity;q=0.1
+
+<em>候选：A JSON/英/gzip　B JSON/法/identity　C HTML/法/gzip　D 纯文本/英/gzip</em></div>
+    <div class="step"><p>① 逐维取 q：媒体类型 JSON 0.9、HTML 0.7、纯文本 0.4；语言 en 0.5、fr 0.8；编码 gzip 1.0、identity 0.1。</p></div>
+    <div class="step"><p>② 相乘：A = 0.9 × 0.5 × 1.0 = <strong>0.450</strong>；B = 0.9 × 0.8 × 0.1 = <strong>0.072</strong>；C = 0.7 × 0.8 × 1.0 = <strong>0.560</strong>；D = 0.4 × 0.5 × 1.0 = <strong>0.200</strong>。</p></div>
+    <div class="step"><p>③ 排序 C 大于 A 大于 D 大于 B，最优是 <strong>C · HTML + 法文 + gzip</strong>，它媒体类型 q 不是最高却综合胜出。</p></div>
+    <div class="pause"><div class="icon">✍️</div><div class="txt"><b>暂停推导</b><p>合上答案，自己把四个候选的三维 q 相乘，写出排序与最优表示。</p></div></div>
+    <p class="step-hint">按空格 / → 逐步揭示答案</p>
+  </div>
+</section>
+
+<section class="slide" data-narration="按固定动作，把 MDN 的工程口径与 RFC 的规范口径对一次。内容协商选一种表示，RFC 9110 第 12 节给框架，12.1 节区分资源与表示；q 值与 q 等于 0 不接受，对应 12.4 节质量值与 12.5.1 最具体优先；identity 默认可接受写 12.5.3，Content-Encoding 写 8.4。Vary 的缓存判据在 RFC 9111 第 4.1 节，只有选定首部值与副本一致才命中。客户端提示框架另立 RFC 8942，chunked 字节格式在 RFC 9112。平时查 MDN 更快，要判合规就回规范。下一页扫几个雷。">
+  <div class="slide-head"><span class="sec">规范对照</span><h3>MDN 的说法 → RFC 怎么写 → 为什么值得知道</h3></div>
+  <div class="slide-body">
+    <table class="small">
+      <thead><tr><th>MDN 的说法</th><th>RFC 怎么写</th><th>为什么值得知道</th></tr></thead>
+      <tbody>
+        <tr><td class="l">内容协商为同一 URI 选一种表示，服务器驱动是标准方式</td><td class="l">RFC 9110 §12 总体框架，§12.1 区分资源与表示</td><td class="l">资源可有多种表示是协议层事实，不是某服务器特性</td></tr>
+        <tr><td class="l">Accept 系列用 q 值表达偏好，q=0 表示不接受</td><td class="l">RFC 9110 §12.4 质量值，§12.5.1 媒体范围匹配与通配优先</td><td class="l">最具体者优先是规范要求，实现算法要照它定次序</td></tr>
+        <tr><td class="l">identity 默认可接受，Content-Encoding 声明怎么解码</td><td class="l">RFC 9110 §12.5.3 与 §8.4</td><td class="l">解释不写 identity 也不会拒收不压缩的表示</td></tr>
+        <tr><td class="l">Vary 列出参与协商的请求首部，缓存分版本存副本</td><td class="l">RFC 9111 §4.1 用 Vary 计算缓存键</td><td class="l">漏写 Vary 在规范层面就是不完整的键，属正确性缺陷</td></tr>
+        <tr><td class="l">客户端提示让服务器用 Accept-CH 按需索取信息</td><td class="l">RFC 8942 定义 Accept-CH 与提示首部框架</td><td class="l">知道哪些提示需索取、哪些默认可发，理解隐私权衡</td></tr>
+        <tr><td class="l">chunked 在长度未知时按块传输，不与 Content-Length 同用</td><td class="l">RFC 9112 §6.1 与 §7，TE 优先于 Content-Length</td><td class="l">分块边界问题去 HTTP/1.1 语法文档找规则</td></tr>
+      </tbody>
+    </table>
+    <div class="deep">MDN 说怎么做，RFC 说什么算对；语义写在 9110 与 9111、与版本无关，chunked 的字节格式写在 9112。</div>
+  </div>
+</section>
+
+<section class="slide" data-narration="扫三个最常见的雷。第一，以为 q 值能跨首部比较、q 等于 0 是优先级最低，其实 q 只在同一首部内部有意义，q 等于 0 是明确拒绝。第二，以为 gzip 和 chunked 都是压缩，或者让 Content-Length 与 chunked 同时出现，其实前者端到端改表示字节，后者逐跳只管定界，两个定界方式都写自相矛盾。第三，以为 Vary 是请求首部、漏写只是优化不足，其实它是响应首部，漏写会让缓存用不完整的键错发表示，是正确性缺陷。把三件事分开，才不会把语义差异当成配置小事。下一页说分工。">
+  <div class="slide-head"><span class="sec">避坑</span><h3>三个把层次混为一谈的误解</h3></div>
+  <div class="slide-body">
+    <div class="trap">❌ <strong>q 值可跨首部比较，q=0 是优先级最低</strong><br>✅ q 只在同一个首部内部有意义，q=0 是明确拒绝，服务器不该返回该表示。</div>
+    <div class="trap">❌ <strong>gzip 与 chunked 都是压缩，作用一样</strong><br>✅ gzip 是内容编码、端到端改表示字节；chunked 是传输编码、逐跳只管定界；Content-Length 与 chunked 同时出现自相矛盾。</div>
+    <div class="trap">❌ <strong>Vary 是客户端发的请求首部，漏写只是优化不足</strong><br>✅ Vary 是响应首部，由服务器发出；漏写会让缓存用不完整的键错发表示，是正确性缺陷。</div>
+  </div>
+</section>
+
+<section class="slide" data-narration="这一讲和下一讲怎么分工，说清才不会重复用功。本讲解决传什么：同一份资源怎么在多语言、多格式、多编码里挑出该返回的表示，压缩怎么叠加，Vary 怎么标识，客户端提示怎么按能力选图，抽象层次在表示与选择。第 4 讲把目光从传什么转向怎么传，钻进 HTTP/1.x 的连接管理，算清建一条连接到底多贵，持久连接与流水线省下什么，队头阻塞为何挥之不去。所以本讲埋下的两笔账，缓存键与按能力选择，分别要等第 5 讲正式展开 Vary 与缓存判断，以及后面安全话题里的指纹识别伏笔。钩子是：表示选好了，下一讲看这些字节怎么被送出去。下一页收束。">
+  <div class="slide-head"><span class="sec">接口</span><h3>第 3 讲讲「传什么」，第 4 讲讲「怎么传」</h3></div>
+  <div class="slide-body">
+    <table>
+      <thead><tr><th></th><th>第 3 讲</th><th>第 4 讲</th></tr></thead>
+      <tbody>
+        <tr><td class="l"><strong>回答什么</strong></td><td class="l">传什么：选哪种表示</td><td class="l">怎么传：连接怎么建、怎么复用</td></tr>
+        <tr><td class="l"><strong>核心对象</strong></td><td class="l">资源与表示、q 值、内容编码、Vary、客户端提示</td><td class="l">短连接、持久连接、流水线、队头阻塞、Connection</td></tr>
+        <tr><td class="l"><strong>留下的账</strong></td><td class="l">Vary 与缓存键、按能力选择</td><td class="l">连接成本算清，队头阻塞留到 HTTP/2</td></tr>
+        <tr><td class="l"><strong>交给谁</strong></td><td class="l">第 5、6 讲接走 Vary 与条件请求</td><td class="l">第 11 讲代理再回到逐跳首部</td></tr>
+      </tbody>
+    </table>
+    <div class="tip">钩子：表示选好了，下一讲把目光从传什么转向怎么传，看这些字节怎么被送出去。</div>
+  </div>
+</section>
+
+<section class="slide" data-narration="用三句话收束第三讲。解决什么：把同一个 URL 凭什么返回不同内容，从玄学变成可判定的问题，选择权默认在服务器、偏好由客户端用 Accept 系列与 q 值声明。核心机制：资源有多种表示并共享一个 URL，内容编码 gzip 端到端压缩主体、传输编码 chunked 逐跳分块承载，解码先去块再解压，Vary 把影响选择的请求首部纳入缓存键，客户端提示让服务器按能力而非按浏览器做选择。承上启下：第 2 讲拆了报文，本讲讲传什么，第 4 讲转向怎么传，第 5、6 讲接走 Vary 与缓存、条件请求。请记住口诀，问能干什么，别问是谁。下一页是毕业挑战。">
+  <div class="slide-head"><span class="sec">小结</span><h3>三句话讲完第 3 讲</h3></div>
+  <div class="slide-body">
+    <div class="chain">
+      <div class="link"><span class="no">1</span><span class="txt"><strong>解决什么</strong>：把同一 URL 返回不同内容，变成可判定的选择权分配</span></div>
+      <div class="link"><span class="no">2</span><span class="txt"><strong>核心机制</strong>：资源多种表示 + q 值择优 + gzip 与 chunked 分层 + Vary 进缓存键 + 按能力选图</span></div>
+      <div class="link"><span class="no">3</span><span class="txt"><strong>承上启下</strong>：第 2 讲拆报文，本讲讲传什么，第 4 讲讲怎么传，第 5、6 讲接走 Vary 与缓存</span></div>
+    </div>
+    <div class="formula formula-concl">问能干什么，别问是谁 —— 合上书也要能默写</div>
+  </div>
+</section>
+
+<section class="slide slide-cover" data-narration="第三讲到这儿结束。留四项毕业挑战，合上书拿一张纸完成：第一，默写三个 Accept 首部与 q 值五条规则，独立手算一次带 q 值的多候选择优；第二，写出 gzip 与 chunked 叠加时收发两端的处理顺序，说明为何不能与 Content-Length 共存；第三，画出 Vary 参与缓存键的五步，复述漏写 Vary 把 br 响应错发给只认 identity 客户端的故障链；第四，说出 UA 检测不可靠的原因，用一轮 Accept-CH 与 Width、DPR 说明怎样按能力选图。全做出来再点完成按钮。下一讲，看字节怎么被送出去。">
+  <div class="kicker">第 3 讲 结束</div>
+  <h1>问能干什么，别问是谁</h1>
+  <div class="sub">毕业挑战：合上书，拿一张纸</div>
+  <div class="divider"></div>
+  <div class="meta">
+    ☑ 默写三个 Accept 首部与 q 值规则，并手算一次择优　　☑ 写出 gzip 与 chunked 的收发顺序<br>
+    ☑ 画出 Vary 参与缓存键的五步与漏写故障链　　☑ 用 Accept-CH 与 Width、DPR 说明按能力选图<br><br>
+    下一讲 · 第 4 讲 HTTP/1.x 的连接管理：把字节怎么被送出去讲清楚
+  </div>
+</section>
+
+  <!-- 页脚：brand 改为本章标题；总页数改 pagenum 初值 -->
+  <div id="footer">
+    <span class="brand">第3讲 内容协商、压缩与客户端提示 · HTTP 精通 课件　<a class="to-lec" href="../http-guide/index.html">讲义首页 ↗</a></span>
+    <span id="pagenum">1 / 1</span>
+  </div>
+
+  <!-- 导航 -->
+  <div class="nav">
+    <button id="prev" title="上一页 (←)">‹</button>
+    <button id="next" title="下一页 (→ / 空格)">›</button>
+  </div>
+  <div id="hint">← → 翻页 · 空格下一页 · 推导页逐步显示 · 点击左右半屏翻页</div>
+
+</div>
+
+<!-- mermaid 本地引用，保证离线可用；初始化参数全套课件统一，勿改 -->
+<script src="assets/mermaid.min.js"></script>
+<script>
+mermaid.initialize({
+  startOnLoad: false,   // 必须为 false：display:none 的隐藏页渲染会得到 0 宽高的退化 SVG，
+                        // 改为页面激活时懒渲染（见 renderMermaid）
+  theme: "base",
+  themeVariables: {
+    primaryColor: "#ebf8ff",
+    primaryBorderColor: "#2b6cb0",
+    primaryTextColor: "#1a365d",
+    lineColor: "#718096",
+    fontFamily: "-apple-system, PingFang SC, sans-serif",
+    fontSize: "15px"
+  },
+  flowchart: { curve: "linear", htmlLabels: false }
+});
+</script>
+<script>
+(function(){
+  const slides = Array.from(document.querySelectorAll('.slide'));
+  const total = slides.length;
+  let idx = 0;
+
+  const params = new URLSearchParams(location.search);
+  const startSlide = parseInt(params.get('slide'), 10);
+  if (params.get('autohide') === '1') document.body.classList.add('autohide');
+  if (!isNaN(startSlide) && startSlide >= 1 && startSlide <= total) idx = startSlide - 1;
+
+  const progress = document.getElementById('progress');
+  const pagenum = document.getElementById('pagenum');
+  const prevBtn = document.getElementById('prev');
+  const nextBtn = document.getElementById('next');
+
+  // 推导分步：每页记住已展开的步数；autohide（截图）模式下 CSS 强制全显
+  const stepState = new Map();
+  function stepsOf(i){ return Array.from(slides[i].querySelectorAll('.step')); }
+  function applySteps(){
+    stepsOf(idx).forEach((el, k)=> el.classList.toggle('on', k < (stepState.get(idx) || 0)));
+  }
+  // 前进一步：先展开本页下一步，全部展开后才翻页
+  function forward(){
+    const steps = stepsOf(idx);
+    const shown = stepState.get(idx) || 0;
+    if (shown < steps.length){ stepState.set(idx, shown + 1); applySteps(); return; }
+    go(idx + 1);
+  }
+  // 后退一步：先收起本页最后一步，收完才回上一页
+  function backward(){
+    const steps = stepsOf(idx);
+    const shown = stepState.get(idx) || 0;
+    if (shown > 0){ stepState.set(idx, shown - 1); applySteps(); return; }
+    go(idx - 1);
+  }
+
+  // mermaid 懒渲染：只在页面激活（有真实宽高）时渲染该页的图，渲染后打 data-done 防重复
+  function renderMermaid(slide){
+    if (typeof mermaid === 'undefined') return;
+    const nodes = Array.from(slide.querySelectorAll('.mermaid:not([data-done])'));
+    if (!nodes.length) return;
+    nodes.forEach(n => n.setAttribute('data-done', ''));
+    mermaid.run({ nodes }).catch(err => {
+      nodes.forEach(n => n.removeAttribute('data-done'));
+      console.error('mermaid 渲染失败：', err);
+    });
+  }
+
+  function render(){
+    slides.forEach((s,i)=> s.classList.toggle('active', i===idx));
+    progress.style.width = ((idx+1)/total*100) + '%';
+    pagenum.textContent = (idx+1) + ' / ' + total;
+    prevBtn.disabled = (idx===0);
+    nextBtn.disabled = (idx===total-1);
+    applySteps();
+    renderMermaid(slides[idx]);
+  }
+  function go(n){ idx = Math.max(0, Math.min(total-1, n)); render(); }
+
+  prevBtn.addEventListener('click', e=>{ e.stopPropagation(); backward(); });
+  nextBtn.addEventListener('click', e=>{ e.stopPropagation(); forward(); });
+
+  document.addEventListener('keydown', e=>{
+    if(e.key==='ArrowRight'||e.key===' '||e.key==='PageDown'){ e.preventDefault(); forward(); }
+    else if(e.key==='ArrowLeft'||e.key==='PageUp'){ e.preventDefault(); backward(); }
+    else if(e.key==='Home'){ stepState.set(idx, 0); go(0); }
+    else if(e.key==='End'){ go(total-1); }
+  });
+
+  document.getElementById('stage').addEventListener('click', e=>{
+    if(e.target.closest('.nav') || e.target.closest('a')) return;
+    const x = e.clientX;
+    if(x < window.innerWidth*0.5) backward(); else forward();
+  });
+
+  function fit(){
+    const s = Math.min(window.innerWidth/1280, window.innerHeight/720);
+    document.getElementById('stage').style.transform = 'translate(-50%,-50%) scale(' + s + ')';
+  }
+  window.addEventListener('resize', fit);
+  fit();
+  render();
+})();
+</script>
+</body>
+</html>

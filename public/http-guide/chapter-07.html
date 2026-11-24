@@ -1,0 +1,821 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第7讲 Cookie：给无状态协议加上记忆 · HTTP 精通</title>
+<link rel="stylesheet" href="assets/style.css">
+<style>
+/* 本套专用：协议报文原文展示与 MDN 来源条 */
+.wire{background:var(--bg-deep);border:1px solid var(--line);border-left:4px solid var(--accent);border-radius:8px;padding:14px 18px;margin:14px 0;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:13.5px;line-height:1.78;white-space:pre-wrap;overflow-wrap:anywhere;color:var(--ink-soft);}
+.wire b{color:var(--accent);font-weight:700;}
+.wire i{color:var(--orange);font-style:normal;}
+.wire em{color:var(--ink-faint);font-style:normal;}
+.wire.sm{font-size:12.5px;}
+.wire-cap{font-size:13px;color:var(--ink-faint);margin:-8px 0 16px;}
+.mdn-src{background:var(--bg-deep);border:1px solid var(--line);border-left:4px solid var(--accent);border-radius:8px;padding:12px 18px;margin:16px 0 0;font-size:13px;line-height:1.8;color:var(--ink-soft);}
+.mdn-src strong{color:var(--accent);}
+.mdn-src a{color:var(--accent);text-decoration:none;border-bottom:1px dashed var(--line);}
+.mdn-src a:hover{border-bottom-style:solid;}
+.to-slide{font-size:13px;color:var(--accent);text-decoration:none;border:1px solid var(--line);border-radius:6px;padding:4px 11px;white-space:nowrap;}
+.to-slide:hover{background:var(--bg-deep);}
+</style>
+</head>
+<body>
+
+<nav class="topbar">
+  <div class="topbar-inner">
+    <span class="brand"><a href="index.html" style="color:inherit">← HTTP 精通 · 学习地图</a></span>
+    <span class="crumb">第③组 · 状态与安全 / 第7讲</span>
+    <a class="to-slide" href="../http-guide-slides/07-Cookie-%E8%AF%BE%E4%BB%B6.html" target="_blank" rel="noopener noreferrer">配套课件 ↗</a>
+  </div>
+</nav>
+
+<div class="wrap">
+
+  <div class="lecture-head">
+    <span class="ch-label">GUIDE 07 · 状态与安全</span>
+    <h1>Cookie：给无状态协议加上记忆</h1>
+    <p class="lead">第 1 讲留下一笔账：无状态协议怎么记住一个用户？本讲正式偿还——cookie 的属性、作用域与安全边界。</p>
+    <div class="mdn-src"><strong>本讲对应的 MDN 指南：</strong><a href="https://developer.mozilla.org/zh-CN/docs/Web/HTTP/Guides/Cookies" target="_blank" rel="noopener">HTTP Cookie</a></div>
+  </div>
+
+  <!-- 本章定位 -->
+  <div class="position-bar">
+    <strong>本讲在主线上的位置：</strong>第 6 讲的条件请求与范围请求 → <u>本讲：Cookie：给无状态协议加上记忆</u> → 第 8 讲讲认证：证明「你确实是你」。<br>
+    第7讲回答主线上的第7个问题：<strong>cookie 是怎么让无状态协议记住一个用户的，它又为什么成了安全重灾区？</strong>
+    <div class="map-inline">
+      <span class="node">第6讲 条件请求与范围请求</span><span class="arrow">→</span>
+      <span class="node here">第7讲 Cookie：给无状态协议加上记忆</span><span class="arrow">→</span>
+      <span class="node">第8讲 HTTP 身份验证</span><span class="arrow">→</span>
+      <span class="node">第11–12讲 中间层与分发</span>
+    </div>
+  </div>
+
+  <!-- 学习目标 -->
+  <div class="objectives">
+    <h4>🎯 学完本讲，合上书你应该能：</h4>
+    <ol>
+      <li>走通 Set-Cookie 到 Cookie 的完整往返</li>
+      <li>用 Domain 与 Path 逐条判定某请求是否携带某 cookie</li>
+      <li>区分会话 cookie 与持久 cookie 的生存期</li>
+      <li>解释 Secure / HttpOnly / SameSite 各自挡住哪类攻击</li>
+      <li>说出 cookie 与认证、与本地存储的职责差别</li>
+    </ol>
+  </div>
+
+  <!-- 视频卡插槽：后面录制 B 站讲解时在此插入 <details class="video-card" id="video-card">…</details> -->
+  <!-- VIDEO_CARD_SLOT -->
+
+  <div class="lecture">
+
+    <!-- 推导主线图 -->
+    <div class="figure">
+      <div class="mermaid">
+flowchart LR
+  A["服务器下发 Set-Cookie"]
+  B["浏览器保存 cookie"]
+  C["后续请求带 Cookie"]
+  D["作用域匹配决定是否发"]
+  E["服务器恢复用户状态"]
+  F["属性配置错误的安全风险"]
+  A --> B
+  B --> C
+  C --> D
+  D --> E
+  B --> F
+  classDef hot fill:#fbeedd,stroke:#c4651f,stroke-width:2.5px,color:#c4651f;
+  classDef danger fill:#fae9e7,stroke:#b03a2e,stroke-width:2.5px,color:#b03a2e;
+  class E hot;
+  class F danger;
+      </div>
+      <div class="caption">cookie 的主线：状态从服务器转移到客户端并在每次请求显式带回；红色节点是属性配置不当时，这套记忆机制反过来变成攻击面。</div>
+    </div>
+
+<!-- ============ 7.1 ============ -->
+    <h2><span class="sec-no">7.1</span>服务器把一小段状态托付给浏览器保管</h2>
+
+    <p>第 1 讲在拆会话三阶段时留下一笔账：HTTP 是无状态协议，服务器处理完一条请求就"忘干净"了，可 Web 应用偏偏能认出老用户、保住购物车。第 6 讲把条件请求与范围请求讲完，是时候回头偿还这笔账了。MDN 把偿还这笔账的机制叫作 <span class="term">Cookie</span>（Cookie，也叫 Web Cookie 或浏览器 Cookie）——它的定义只有一句话：<strong>服务器发送到用户浏览器并保存在本地的一小块数据，浏览器会存储它，并在下次向同一服务器发起请求时把它带上</strong>。</p>
+
+    <p>这句话里藏着一个反直觉的转折。既然服务器"忘干净"了，那"认出你"这件事由谁来做？答案是浏览器。服务器在下发响应时，把一小段数据写进 <span class="term">Set-Cookie</span>（Set-Cookie）响应首部，相当于开了一张写着身份编号的凭条递给浏览器；浏览器把凭条收好，此后每一次朝同一服务器发出的请求，都主动把凭条夹在 <span class="term">Cookie</span>（Cookie）请求首部里交回去。服务器不必记得任何人，只要每次读一读凭条上的编号，就能把散落的请求重新串成同一个用户。</p>
+
+    <p>先看一组最短的往返，把这个过程钉死。假设用户第一次访问一个需要登录的面板，服务器还不知道他是谁：</p>
+
+    <div class="wire"><b>GET /dashboard HTTP/1.1</b>
+<b>Host:</b> app.example.com
+<b>Accept:</b> text/html
+
+<i>HTTP/1.1 200 OK</i>
+<i>Content-Type:</i> text/html; charset=utf-8
+<i>Set-Cookie:</i> sid=9f3a2b; Path=/; HttpOnly
+<i>Content-Length:</i> 96
+
+请登录。</div>
+    <div class="wire-cap">第一次请求：服务器在 200 响应里用 Set-Cookie 下发一枚会话标识 sid=9f3a2b，回复"请登录"。协议没有要求服务器记住这次下发动作。</div>
+
+    <div class="wire"><b>POST /login HTTP/1.1</b>
+<b>Host:</b> app.example.com
+<b>Cookie:</b> sid=9f3a2b
+<b>Content-Type:</b> application/x-www-form-urlencoded
+<b>Content-Length:</b> 27
+
+user=alice&amp;pass=correct</div>
+    <div class="wire-cap">第二次请求：浏览器主动把 sid=9f3a2b 放进 Cookie 首部带回。服务器读到它，才知道这次登录尝试属于刚才那位访客；主体里的表单数据用 &amp; 连接两个字段。</div>
+
+    <p>请盯住这两条请求的关系：<strong>状态不在服务器的连接记忆里，而在浏览器手上，并由浏览器在每次请求里显式带回</strong>。这正是无状态协议维持状态的通用套路——Web 应用自己造出一层"记忆"，HTTP 协议本身一点没变。MDN 明确写道，Cookie 让基于无状态 HTTP 协议记录稳定状态信息成为可能；换言之，Cookie 是架在 HTTP 之上的能力，不是 HTTP 语义的一部分。</p>
+
+    <div class="figure"><div class="mermaid">
+flowchart LR
+  A["服务器下发 Set-Cookie"] --> B["浏览器收好 cookie"]
+  B --> C["后续请求自动带 Cookie"]
+  C --> D["服务器读出标识恢复状态"]
+  D --> E["无状态协议有了记忆"]
+  B -.-> F["属性配置不当变成攻击面"]
+</div><div class="caption">图 7.1 cookie 往返的主线：状态从服务器转移到客户端并在每次请求显式带回；虚线是属性配置不当时，这套记忆机制反向变成的攻击面。</div></div>
+
+    <p>MDN 把 Cookie 的用途归纳成三类，理解这三类，就明白它为什么既无所不在又备受争议：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>MDN 归纳的用途</th><th>典型例子</th><th>为什么需要"记住"</th></tr>
+        <tr><td>会话状态管理</td><td>登录状态、购物车、游戏分数、表单草稿</td><td>把同一浏览器发出的多次请求归到同一个会话</td></tr>
+        <tr><td>个性化设置</td><td>深浅色主题、语言偏好、布局选择</td><td>让站点下次打开时呈现用户上次选过的样子</td></tr>
+        <tr><td>浏览器行为跟踪</td><td>广告画像、访问路径分析、转化率统计</td><td>跨多个页面甚至多个站点拼出用户的浏览习惯</td></tr>
+      </table>
+    </div>
+
+    <p>前两类是"帮忙"，第三类却是隐私争议的源头。同一套技术既能让你免于重复登录，也能让广告网络跨站追踪你——区别只在于谁在设置、设置了什么、发往哪里。这个双重身份，就是本讲主线里"为什么它又成了安全重灾区"的伏笔。</p>
+
+    <p>按生存期，Cookie 还分两大家族。<span class="term">会话 cookie</span>（session cookie）不设过期时间，浏览器关闭当前会话时就删除——但要注意 MDN 的提醒：一些浏览器重启时会用"会话恢复"把会话续上，导致会话 cookie 被无限延长。<span class="term">持久 cookie</span>（persistent cookie）则靠 <code>Expires</code>（绝对日期）或 <code>Max-Age</code>（相对秒数）指定寿命，到期后由浏览器清除：</p>
+
+    <div class="wire"><i>Set-Cookie:</i> theme=dark; Path=/
+<i>Set-Cookie:</i> id=a3fWa; Expires=Wed, 21 Oct 2026 07:28:00 GMT; Path=/</div>
+    <div class="wire-cap">两条 Set-Cookie 首部并列放在同一响应里：第一条是没有过期时间的会话 cookie，关掉会话就没；第二条带 Expires，是持久 cookie，会一直留到指定日期。一条响应可以同时下发多个 Set-Cookie。</div>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>Cookie 不是服务器"记住用户"，而是服务器"把记忆的载体交给用户保管"。状态被压缩成一小段键值，放在浏览器里，每次请求再由浏览器显式交回。理解了"载体在客户端、服务器只校验"这个分工，后面所有属性（Domain、Path、Secure、HttpOnly、SameSite）就都只是在回答同一个问题：<strong>这段托付出去的状态，谁能看、发往哪里、发多久、跨不跨站</strong>。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>"Cookie 是加密的，所以能存密码这类敏感信息"——错。Cookie 只是普通文本，浏览器能看到、终端用户也能改；它既不加密，也不防篡改。MDN 特别提醒：不能在 Cookie 里存储或传输敏感信息，正确做法是放一个服务器可查的<strong>不透明标识符</strong>（opaque identifier），真实数据留在服务端。此外，Cookie 曾一度是唯一的客户端存储手段，今天已被 Web Storage API（<code>localStorage</code> / <code>sessionStorage</code>）与 IndexedDB 取代——因为浏览器每次请求都自动带 Cookie，会带来额外开销。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front"><div class="q-tag">回忆 7.1-1</div><div class="q-text">用一句话给 Cookie 下定义，并说清"认出用户"这件事到底由谁完成。</div><span class="tap">点击翻面 →</span></div>
+            <div class="flip-face flip-back"><div class="a-tag">参考答案</div>Cookie 是服务器经 Set-Cookie 下发、由浏览器保存并在后续请求里自动带回的一小块数据。"认出用户"由浏览器完成：它把标识放进 Cookie 首部交回，服务器读到标识才恢复状态；服务器本身不保存请求之间的记忆。</div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front"><div class="q-tag">回忆 7.1-2</div><div class="q-text">会话 cookie 与持久 cookie 的区别是什么？MDN 对会话 cookie 提了什么提醒？</div><span class="tap">点击翻面 →</span></div>
+            <div class="flip-face flip-back"><div class="a-tag">参考答案</div>会话 cookie 不设过期时间，会话结束即删；持久 cookie 靠 Expires 或 Max-Age 指定寿命、到期清除。MDN 提醒：某些浏览器重启时用"会话恢复"续上会话，可能让会话 cookie 被无限延长。</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 7.2 ============ -->
+    <h2><span class="sec-no">7.2</span>一条 Set-Cookie 的七个开关，各自把住一道关</h2>
+
+    <p>上一节证明了"存一个键值对"就能让无状态协议记住用户。但紧接着的问题是：这枚凭条谁能读？会发给哪台主机、哪条路径？活多久？会不会跟着跨站请求跑出去？光有 <code>sid=9f3a2b</code> 这样赤裸裸的键值远远不够——它像一张没写有效期、没写使用范围、谁都能捡去用的白条。MDN 把 Set-Cookie 设计成"键值 + 一串属性"，每个属性都是一道可拨动的开关。</p>
+
+    <p>把最常见的七个属性和键名放在一起，一条完整的 Set-Cookie 长这样。这是本讲第一个必须逐字读懂的报文：</p>
+
+    <div class="wire"><i>HTTP/1.1 200 OK</i>
+<i>Date:</i> Mon, 16 Nov 2026 00:30:00 GMT
+<i>Content-Type:</i> text/html; charset=utf-8
+<i>Set-Cookie:</i> sid=9f3a2b; Domain=app.example.com; Path=/account; Expires=Wed, 21 Oct 2026 07:28:00 GMT; Max-Age=604800; Secure; HttpOnly; SameSite=Lax
+<i>Cache-Control:</i> no-store
+<i>Content-Length:</i> 214
+
+登录成功，这是你的账户首页。</div>
+    <div class="wire-cap">例子① 完整 Set-Cookie：键值 sid=9f3a2b 之后紧跟 Domain、Path、Expires、Max-Age、Secure、HttpOnly、SameSite 七个属性，每个属性用分号分隔。浏览器据此决定把它存在哪、发给谁、发多久、跨不跨站。</div>
+
+    <p>浏览器收好这条 cookie 后，之后每一次匹配的请求都会自动把它夹带回来：</p>
+
+    <div class="wire"><b>GET /account/profile HTTP/1.1</b>
+<b>Host:</b> app.example.com
+<b>Cookie:</b> sid=9f3a2b
+<b>Accept:</b> text/html
+<b>Sec-Fetch-Site:</b> same-origin
+
+<i>HTTP/1.1 200 OK</i>
+<i>Set-Cookie:</i> sid=7c81de; Domain=app.example.com; Path=/account; Max-Age=604800; Secure; HttpOnly; SameSite=Lax
+<i>Cache-Control:</i> no-store
+
+个人资料页。</div>
+    <div class="wire-cap">后续请求：Cookie 首部只带"名字=值"，所有属性都不会出现在 Cookie 首部里——属性是浏览器存Cookie 时的规则，不随报文回传。响应里再次下发新 sid，是 MDN 推荐的防会话固定做法（每次认证都重新生成会话 cookie）。</div>
+
+    <p>现在逐属性拆解这七个开关。它们各自回答一个独立的问题，互不替代：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>属性</th><th>回答的问题</th><th>取值与含义</th><th>不设会怎样</th></tr>
+        <tr><td><code>Domain</code></td><td>哪些主机可以收这枚 cookie</td><td>指定主机名，如 app.example.com；一旦指定，通常连子域一起包含</td><td>默认为设置它的同一主机，且不含子域</td></tr>
+        <tr><td><code>Path</code></td><td>请求路径里必须出现什么才发送</td><td>如 /account，以 / 作分隔符，子路径一并匹配</td><td>默认取设置它的请求路径的目录</td></tr>
+        <tr><td><code>Expires</code></td><td>绝对过期时间是哪一天</td><td>一个 GMT 日期，只与客户端时钟相关</td><td>不设则该维度不产生过期，配合 Max-Age 判断</td></tr>
+        <tr><td><code>Max-Age</code></td><td>从现在起还能活多少秒</td><td>相对秒数，如 604800 表示 7 天；优先级高于 Expires</td><td>与 Expires 都不设即为会话 cookie</td></tr>
+        <tr><td><code>Secure</code></td><td>能不能走明文传输</td><td>无取值，写上即生效：只在 HTTPS 请求里发送</td><td>http: 页面无法设置；明文请求可能把 cookie 暴露给中间人</td></tr>
+        <tr><td><code>HttpOnly</code></td><td>JavaScript 能不能读</td><td>无取值，写上即生效：Document.cookie 读不到它</td><td>脚本可读，XSS 攻击可窃取会话标识</td></tr>
+        <tr><td><code>SameSite</code></td><td>跨站请求要不要带</td><td>Strict / Lax / None；未设置按 Lax 处理</td><td>按新的默认行为当 Lax，挡下大部分跨站携带</td></tr>
+      </table>
+    </div>
+
+    <p>先说寿命，这里有个容易踩的坑。<code>Expires</code> 给的是<strong>绝对时间</strong>，MDN 强调它设定的日期和时间<strong>只与客户端相关，而不是服务端</strong>——用户把本机时钟调快，就能让一枚本该过期的 cookie 提前或延后失效。<code>Max-Age</code> 给的是<strong>相对秒数</strong>，从浏览器收到响应的那一刻开始倒数，不依赖时钟，因此更可靠。两者同时出现时，<code>Max-Age</code> 优先。上例里 <code>Expires</code> 写的是 2026 年 10 月 21 日，而 <code>Max-Age=604800</code> 是 7 天，从 11 月 16 日算起应到 11 月 23 日——真正生效的是后者，浏览器按 7 天寿命保存。</p>
+
+    <p>再说两个"无取值"的安全开关，它们各挡住一类攻击，切勿混用：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>开关</th><th>挡住的攻击</th><th>作用机理</th><th>挡不住什么</th></tr>
+        <tr><td><code>Secure</code></td><td>明文窃听、中间人（man-in-the-middle）篡改</td><td>只在 HTTPS 加密请求里发送，http: 请求不带（本地主机除外）</td><td>挡不住能读硬盘或能用脚本读取的人</td></tr>
+        <tr><td><code>HttpOnly</code></td><td>跨站脚本（XSS, Cross-Site Scripting）窃取会话</td><td>Document.cookie API 无法访问带此属性的 cookie，它只对服务器可见</td><td>挡不住网络窃听，也挡不住 CSRF</td></tr>
+      </table>
+    </div>
+
+    <p>MDN 举的典型用法是：承载服务器端会话的 cookie 不需要对 JavaScript 可用，就应加上 HttpOnly。这样即使页面被注入恶意脚本，脚本也读不到那枚会话标识。而 Secure 挡的是另一个方向——它保证凭条不会在去往服务器的路上以明文裸奔。<strong>一个管"路上不被偷看"，一个管"到了页面不被脚本偷走"，两者缺一不可。</strong></p>
+
+    <p>还有一个 MDN 特别强调的运维细节：如果站点对用户进行身份验证，那么<strong>每次</strong>认证时都应重新生成并重新发送会话 cookie，哪怕用户已经带着一枚旧的。这一步防的是<span class="term">会话固定攻击</span>（session fixation attack）——第三方若能事先塞给你一个他知道值的会话标识，而你登录后站点继续沿用这个值，他就能拿同一个值冒充你。上面第二条报文里响应再次下发新 sid，正是这个动作的体现。</p>
+
+    <div class="box insight">
+      <span class="box-tag">✅ 判定规则</span>
+      <p>读一条 Set-Cookie，按固定顺序问七个问题：键名是什么、发给哪些主机（Domain）、哪些路径（Path）、活到何时（Expires / Max-Age）、是否只走 HTTPS（Secure）、是否禁脚本读取（HttpOnly）、跨站带不带（SameSite）。属性名写在 Set-Cookie 里，但回传的 Cookie 首部只有键值——别在 Cookie 首部里去找 Secure 或 Path，它们从来不随请求回传。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>"Expires 和 Max-Age 都写了，以 Expires 为准"——错，Max-Age 优先。另一个误区是以为 Secure 能保护 cookie 的内容：MDN 明说 Secure 不会阻止对敏感信息的访问，能接触客户端硬盘或能用脚本的人照样可以读取和修改；它只保证传输通道是加密的。还有人以为给 cookie 加 HttpOnly 就万事大吉——它挡 XSS，却对 CSRF 无能为力，后者要靠下一节的 SameSite 来治。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front"><div class="q-tag">回忆 7.2-1</div><div class="q-text">默写一条含七个属性的 Set-Cookie，并说出 Domain、Path、Secure、HttpOnly、SameSite 各自回答什么问题。</div><span class="tap">点击翻面 →</span></div>
+            <div class="flip-face flip-back"><div class="a-tag">参考答案</div>形如 sid=x; Domain=…; Path=…; Expires=…; Max-Age=…; Secure; HttpOnly; SameSite=Lax。Domain 管哪些主机收、Path 管哪些路径收、Secure 管是否只走 HTTPS、HttpOnly 管脚本能否读、SameSite 管跨站是否携带。</div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front"><div class="q-tag">回忆 7.2-2</div><div class="q-text">Expires 与 Max-Age 谁优先？为什么 MDN 说每次认证都应重新生成会话 cookie？</div><span class="tap">点击翻面 →</span></div>
+            <div class="flip-face flip-back"><div class="a-tag">参考答案</div>Max-Age 优先，它是相对秒数、不依赖客户端时钟，而 Expires 只与客户端相关。每次认证重发新会话 cookie 是为了防会话固定攻击：不让第三方预先塞入的会话标识在用户登录后继续生效。</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 7.3 ============ -->
+    <h2><span class="sec-no">7.3</span>Domain、Path 与 SameSite 是三道闸门，决定 cookie 发往何处</h2>
+
+    <p>上一节把七个属性拆成了开关，但真正决定一枚 cookie"会不会出现在某条请求的 Cookie 首部里"的，是三道串联的闸门：Domain 管主机、Path 管路径、SameSite 管跨站。三者是<strong>与</strong>的关系——任何一道拦下，cookie 就不发。本节用两张判定表把这些规则算清楚；这两张表是本讲的第二、第三个完整例子，也是排查"cookie 怎么没带上"这类线上问题的标准动作。</p>
+
+    <p>先看 Domain 与 Path。MDN 的定义很干脆：<span class="term">作用域</span>（scope）就是"允许 Cookie 应该发送给哪些 URL"，由这两个属性共同界定。Domain 指定哪些主机可以接受 Cookie：不指定时默认为设置它的同一主机、<strong>不含子域</strong>；指定了就一般<strong>包含子域</strong>。Path 指定请求路径中必须出现的字符串：以 <code>/</code> 作分隔符，子路径也会被匹配。规范底层对应两个算法——<span class="term">域名匹配</span>（domain-match）与<span class="term">路径匹配</span>（path-match），我们在 7.5 节对照 RFC 6265 时再拆算法细节，这里先按 MDN 的口径判定。</p>
+
+    <p><strong>例子②：Domain 与 Path 的分步判定表。</strong>假设浏览器保存了这样一枚 cookie：</p>
+
+    <div class="wire"><i>Set-Cookie:</i> sid=9f3a2b; Domain=shop.example.com; Path=/docs; Secure</div>
+    <div class="wire-cap">待判定的 cookie：主机限定 shop.example.com 及其子域，路径限定 /docs 及其子路径，且只在 HTTPS 下发送。下面对八个候选 URL 逐一过三道闸门。</div>
+
+    <p>判定方法固定为三步：① 主机是否是 shop.example.com 或其子域（Domain 闸门）；② 路径是否落在 /docs 作用域内（Path 闸门）；③ 是否走 HTTPS（Secure 闸门）。三步全过才发送：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>候选请求 URL</th><th>① Domain 闸门</th><th>② Path 闸门</th><th>③ Secure 闸门</th><th>结果</th></tr>
+        <tr><td>https://shop.example.com/docs</td><td>通过：主机与 Domain 完全相同</td><td>通过：/docs 与 Path 精确相等</td><td>通过：HTTPS</td><td><strong>发送</strong></td></tr>
+        <tr><td>https://shop.example.com/docs/Web/HTTP</td><td>通过：主机完全相同</td><td>通过：/docs/Web/HTTP 以 /docs/ 开头，属子路径</td><td>通过：HTTPS</td><td><strong>发送</strong></td></tr>
+        <tr><td>https://www.shop.example.com/docs</td><td>通过：www.shop.example.com 是 shop.example.com 的子域，指定 Domain 后包含子域</td><td>通过：路径精确等于 /docs</td><td>通过：HTTPS</td><td><strong>发送</strong></td></tr>
+        <tr><td>https://shop.example.com/docsets</td><td>通过：主机完全相同</td><td>拦截：/docsets 不以 /docs/ 开头，也不是 /docs 本身，只是字符串前缀相同</td><td>不判定</td><td><strong>不发</strong></td></tr>
+        <tr><td>https://shop.example.com/fr/docs</td><td>通过：主机完全相同</td><td>拦截：/fr/docs 不以 /docs 开头</td><td>不判定</td><td><strong>不发</strong></td></tr>
+        <tr><td>https://shop.example.com/</td><td>通过：主机完全相同</td><td>拦截：根路径 / 不在 /docs 作用域内</td><td>不判定</td><td><strong>不发</strong></td></tr>
+        <tr><td>https://example.com/docs</td><td>拦截：example.com 是父域，不等于也不以 .shop.example.com 结尾</td><td>不判定</td><td>不判定</td><td><strong>不发</strong></td></tr>
+        <tr><td>http://shop.example.com/docs</td><td>通过：主机完全相同</td><td>通过：路径精确相等</td><td>拦截：明文 HTTP，Secure 要求加密请求</td><td><strong>不发</strong></td></tr>
+      </table>
+    </div>
+
+    <p>这张表里有三个最值得记住的判定。第一，<code>/docsets</code> 不发：Path 匹配是按路径分段走的，<code>/docs</code> 后面必须跟上 <code>/</code> 才算子路径，单纯的字符串前缀相同不算。第二，<code>www.shop.example.com</code> 会发：因为显式指定了 Domain，子域被包含进来；如果当初省略 Domain，这一行就会被拦下。第三，父域 <code>example.com</code> 拿不到子域的 cookie——作用域只向下包含，不向上冒泡。MDN 给出的 Path 例子与此完全一致：<code>Path=/docs</code> 匹配 <code>/docs</code>、<code>/docs/</code>、<code>/docs/Web/</code>、<code>/docs/Web/HTTP</code>，却不匹配 <code>/</code>、<code>/docsets</code>、<code>/fr/docs</code>。</p>
+
+    <p>接下来是第三道闸门 SameSite。MDN 说它让服务器指定"是否/何时通过跨站请求发送"，提供的正是针对<span class="term">跨站请求伪造</span>（CSRF, Cross-Site Request Forgery）的一层保护。要判定跨站，先得知道"站"是什么：MDN 的口径是<strong>站由注册的域和方案（http 或 https）共同定义</strong>。这意味着 <code>http://example.com</code> 与 <code>https://example.com</code> 因为方案不同，已经不算同一站点——这是 MDN 特别点出的新变化。SameSite 取三个值：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>取值</th><th>MDN 的口径</th><th>典型用途</th></tr>
+        <tr><td><code>Strict</code></td><td>cookie 只发送到它来源的站点，最严格</td><td>高敏感操作，宁可让用户多点一次也不跨站带</td></tr>
+        <tr><td><code>Lax</code></td><td>与 Strict 类似，但用户"导航"到源站点时发送，如从外站点链接进来</td><td>主流默认，兼顾安全与正常的链接跳转体验</td></tr>
+        <tr><td><code>None</code></td><td>同站、跨站都发送，但仅在安全上下文中，必须同时设置 Secure</td><td>需要跨站携带的嵌入式场景，如第三方登录回调</td></tr>
+      </table>
+    </div>
+
+    <p><strong>例子③：三种取值在四类跨站场景下的携带判定。</strong>设用户已在 <code>https://shop.example.com</code> 站点登录并拿到认证 cookie，下表判断这枚 cookie 会不会随各类请求发出：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>请求场景</th><th>是否跨站</th><th>Strict</th><th>Lax</th><th>None（配 Secure）</th></tr>
+        <tr><td>站点内 fetch：<code>fetch('/api/cart')</code>，从 shop.example.com 页面发起</td><td>同站</td><td>发送：同站请求一律带</td><td>发送：同站请求一律带</td><td>发送：同站请求一律带</td></tr>
+        <tr><td>外站链接跳转：在 news.other.org 点击链接进入 shop.example.com 的顶层 GET 导航</td><td>跨站，安全方法 GET，顶层导航</td><td><strong>不发</strong>：Strict 连导航跳转也拦，用户会看到未登录</td><td>发送：Lax 正是为这种安全导航放行</td><td>发送：跨站也带</td></tr>
+        <tr><td>跨站 POST 表单：evil.other.org 上的表单提交到 shop.example.com/transfer</td><td>跨站，非安全方法 POST</td><td><strong>不发</strong>：跨站即拦</td><td><strong>不发</strong>：POST 不是 Lax 放行的安全导航</td><td>发送：这正是 CSRF 要防的场景，故 None 风险最高</td></tr>
+        <tr><td>跨站子资源：evil.other.org 页面用图片或脚本引用 shop.example.com 的资源</td><td>跨站，子资源请求</td><td><strong>不发</strong></td><td><strong>不发</strong>：子资源加载不是顶层导航</td><td>发送：跨站携带，故第三方跟踪得以实现</td></tr>
+      </table>
+    </div>
+
+    <p>从这张表能读出一条清晰的安全梯度：<strong>Strict 最保守，连从外站点进来的正常跳转都不带 cookie，用户可能明明登录了却显示未登录；Lax 放宽到"安全的顶层导航"，既挡住跨站 POST 表单这类 CSRF，又不破坏点链接进站的体验；None 全放开，是唯一会在跨站 POST 与子资源里携带的取值，因此风险最高</strong>。MDN 记录的"新默认行为"是：如果压根没设置 SameSite，浏览器按 <code>Lax</code> 处理。这个默认值是近年浏览器与规范共同推动的结果——过去缺省是全发送，如今缺省已是 Lax，等于替所有没配SameSite 的站点自动挡下了大部分 CSRF。</p>
+
+    <p>而 <code>None</code> 有一条不可讨价还价的硬约束：<strong>必须同时设置 <code>Secure</code></strong>。MDN 明确写：如果 <code>SameSite=None</code>，还必须设置 Secure 属性，即它只能在安全上下文里工作。少了 Secure 的 None 会被现代浏览器直接拒绝保存：</p>
+
+    <div class="wire"><em>错误：None 少了 Secure，浏览器拒绝这枚 cookie</em>
+<i>Set-Cookie:</i> sid=9f3a2b; SameSite=None
+
+<em>正确：None 必须搭配 Secure，且页面本身需为 HTTPS</em>
+<i>Set-Cookie:</i> sid=9f3a2b; SameSite=None; Secure</div>
+    <div class="wire-cap">SameSite=None 与 Secure 是捆绑关系。第一行会被丢弃；第二行才会在跨站场景里正常携带。这也是为什么本地 http: 开发环境常常调不通跨站 cookie——缺了安全上下文。</div>
+
+    <div class="box insight">
+      <span class="box-tag">✅ 判定规则</span>
+      <p>排查"cookie 没带上"，按 Domain → Path → SameSite → Secure 四步逐闸门过：主机对不对、路径落不落在作用域、是不是跨站请求、是不是明文。四步都过才发送。尤其记住两个反直觉点：显式 Domain 会向下包含子域但不向上冒泡到父域；Path 匹配要按路径分段，<code>/docs</code> 不匹配 <code>/docsets</code>。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>"SameSite=Lax 就能防住所有 CSRF"——过于乐观。Lax 只放行安全的顶层导航，挡住了跨站 POST 表单，但对某些顶层 GET 触发的状态改变仍无能为力，因此敏感操作还要配合 CSRF 令牌与二次确认。另一个误区是把 <code>None</code> 单独写上：不带 Secure 的 None 会被直接丢弃，且 http: 页面根本无法设置 Secure，导致本地开发环境跨站 cookie 频频"失效"——这不是代码 bug，而是安全上下文的硬性要求。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front"><div class="q-tag">回忆 7.3-1</div><div class="q-text">cookie 为 sid; Domain=shop.example.com; Path=/docs; Secure，为什么 /docsets 与父域 example.com 都拿不到它？</div><span class="tap">点击翻面 →</span></div>
+            <div class="flip-face flip-back"><div class="a-tag">参考答案</div>/docsets 被 Path 闸门拦下：/docs 后须跟 / 才算子路径，纯字符串前缀相同不算。父域 example.com 被 Domain 闸门拦下：作用域只向下包含子域，不向上冒泡。另外明文 http 请求还会被 Secure 拦下。</div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front"><div class="q-tag">回忆 7.3-2</div><div class="q-text">Strict / Lax / None 在"外站链接跳转"和"跨站 POST 表单"下各带不带 cookie？未设置 SameSite 按什么处理？</div><span class="tap">点击翻面 →</span></div>
+            <div class="flip-face flip-back"><div class="a-tag">参考答案</div>外站链接跳转：Strict 不发、Lax 发、None 发。跨站 POST 表单：Strict 不发、Lax 不发（非安全导航）、None 发。未设置 SameSite 按新的默认行为当 Lax 处理。None 必须配 Secure，否则被拒绝。</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 7.4 ============ -->
+    <h2><span class="sec-no">7.4</span>cookie 不是认证，也不是本地存储：别让会话标识爬进 URL</h2>
+
+    <p>前三节把 cookie 的机制讲透了，最后一节要划清它的职责边界。实践中最常见的两类混淆是：把 cookie 当成"认证本身"，以及把 cookie 与 <code>localStorage</code> 当成可以互换的存储。这两类混淆一旦落到代码里，就会催生本讲主线里"安全重灾区"的具体事故。MDN 在《在浏览器中存储信息的其他方式》一节里，恰好给了我们把三者摆在一起比较的线索。</p>
+
+    <p>先把概念掰开：<strong>cookie 是"认出你"的载体，认证是"证明你是你"的过程</strong>。cookie 里通常只装一枚会话标识，它本身不证明任何身份；真正的校验发生在服务器拿着这枚标识查会话存储、确认它对应一个已登录用户时。第 8 讲会专门讲认证框架——cookie 与认证是搭挡，不是同一件事。而 <code>localStorage</code> 属于 Web 存储 API，是浏览器本地的键值仓库，它<strong>永远不会自动发往服务器</strong>，这与 cookie 的"每次请求自动携带"形成根本区别。</p>
+
+    <p><strong>例子④：cookie、认证凭据与 localStorage 的对照。</strong></p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>维度</th><th>Cookie</th><th>认证凭据（Authorization 首部）</th><th>localStorage</th></tr>
+        <tr><td>存在哪里</td><td>浏览器 cookie 罐，按域与路径组织</td><td>由客户端代码掌握，放进请求首部</td><td>浏览器本地，按源隔离</td></tr>
+        <tr><td>谁写入</td><td>服务器 Set-Cookie，或脚本 Document.cookie</td><td>客户端代码显式设置</td><td>JavaScript 显式写入</td></tr>
+        <tr><td>是否自动随请求发送</td><td><strong>是</strong>，按 Domain / Path / SameSite / Secure 规则自动带</td><td>否，每次请求都要显式加首部</td><td><strong>否</strong>，永不自动进网络请求</td></tr>
+        <tr><td>脚本能否读取</td><td>能，除非加了 HttpOnly</td><td>取决于代码如何保管</td><td>能</td></tr>
+        <tr><td>能否设 HttpOnly</td><td>能</td><td>不适用</td><td>不能</td></tr>
+        <tr><td>容量量级</td><td>很小，约 4 KB</td><td>无存储容量概念，但首部受服务器大小限制</td><td>大得多，通常 5 MB 以上</td></tr>
+        <tr><td>典型用途</td><td>会话标识、偏好设置</td><td>API 的 Bearer Token 等认证信息</td><td>本地缓存、离线数据</td></tr>
+        <tr><td>主要风险</td><td>CSRF、跨站跟踪、属性配错</td><td>令牌泄露到日志或前端代码</td><td>XSS 可直接读走其中的数据</td></tr>
+      </table>
+    </div>
+
+    <p>这张表给出一条选择原则：需要在服务器与浏览器之间<strong>自动往返</strong>的小段状态（如会话标识），用 cookie 并配好 HttpOnly、Secure、SameSite；只在本机使用、不该进入网络请求的数据，放 <code>localStorage</code>；API 认证则倾向用显式的 Authorization 首部，让凭据的出现时机由代码控制。MDN 指出，把数据放进 Cookie 会带来每次请求都携带的性能开销，尤其在移动环境下——这正是"别把 cookie 当存储用"的性能理由。</p>
+
+    <p><strong>例子④的第二半：推演"把会话标识写进 URL"的泄露链与缓存失效链。</strong>假设有人图省事，不用 cookie，而把会话标识拼进每个链接：<code>https://shop.example.com/cart?sid=9f3a2b</code>。先看泄露是怎么一步步发生的：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>环节</th><th>发生了什么</th><th>谁能看到会话标识</th></tr>
+        <tr><td>① 浏览器历史</td><td>带 sid 的完整 URL 被记进历史记录</td><td>共用这台电脑的下一位使用者</td></tr>
+        <tr><td>② 服务器访问日志</td><td>服务器把请求行连同 query 参数写进日志</td><td>运维、日志采集与分析系统</td></tr>
+        <tr><td>③ Referer 首部</td><td>页面里的外链或子资源请求把当前 URL 放进 Referer 发给第三方</td><td>第三方站点、广告与分析服务</td></tr>
+        <tr><td>④ 复制分享</td><td>用户把地址栏里的 URL 贴进聊天或邮件</td><td>任何收到链接的人</td></tr>
+      </table>
+    </div>
+
+    <p>四步走完，一枚本该保密的会话标识就散落在历史、日志、第三方服务器和聊天记录里。任何拿到它的人都能把它拼进同样的 URL，冒充该用户登录——这就是<span class="term">会话劫持</span>（session hijacking）。第 1 讲已把这种"把状态塞进 URL"的做法作为反面例子，今天它已基本弃用；正确做法是把标识放进带 HttpOnly 的 cookie，或放进显式的认证首部，让它不出现在 URL 里。</p>
+
+    <p>再看缓存失效链，这条链把本讲与第 5 讲的缓存知识接了起来：</p>
+
+    <div class="wire"><em>情形 A：用 cookie，URL 稳定，共享缓存可复用一份响应</em>
+<b>GET /cart HTTP/1.1</b>
+<b>Host:</b> shop.example.com
+<b>Cookie:</b> sid=9f3a2b
+
+<i>HTTP/1.1 200 OK</i>
+<i>Cache-Control:</i> private, no-store
+
+<em>情形 B：把 sid 拼进 URL，缓存键被每个人的标识污染</em>
+<b>GET /cart?sid=9f3a2b HTTP/1.1</b>
+<b>Host:</b> shop.example.com
+
+<i>同一份 /cart 被拆成 /cart?sid=9f3a2b、/cart?sid=7c81de…… 无数个缓存键</i></div>
+    <div class="wire-cap">对照：cookie 让 URL 保持稳定，缓存键只认资源本身（个性化响应用 private / no-store 排除出共享缓存）；把 sid 拼进 URL 则让每个用户都产生一个新的缓存键。</div>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>缓存环节</th><th>把 sid 放进 URL 后的后果</th></tr>
+        <tr><td>① 缓存键</td><td>URL 是缓存键的核心，sid 不同则键不同；同一份 /cart 被拆成成千上万个键</td></tr>
+        <tr><td>② 命中率</td><td>共享缓存（CDN / 代理）本可复用一份响应，现在人人一份，命中率暴跌，回源量激增</td></tr>
+        <tr><td>③ 串号风险</td><td>若缓存配置忽略了应区分的维度，可能把 A 用户带 sid 的页面缓存后发给 B 用户</td></tr>
+        <tr><td>④ 陈旧凭据</td><td>响应一旦被缓存，里面的 sid 可能是早已失效或已被他人拿到的旧值，缓存反而放大了泄露</td></tr>
+      </table>
+    </div>
+
+    <p>两条链合起来给出同一条结论：<strong>会话标识属于"状态"，不该成为"资源地址"的一部分</strong>。地址用来标识资源、参与缓存与分享；标识用来认出用户、必须与地址分离。把它塞进 URL，等于同时踩爆机密性与缓存两颗雷。</p>
+
+    <p>最后补上 MDN 里与隐私相关的两个话题，它们解释了"重灾区"的另一面。其一是<span class="term">第三方 cookie</span>（third-party cookie）：如果 cookie 的域和方案与当前页面相同，就是<span class="term">第一方 cookie</span>（first-party cookie）；不同则是第三方 cookie。页面里来自其他域的广告或脚本可以设置第三方 cookie，从而跨站点拼出用户画像——Firefox 默认会阻止已知的跟踪类第三方 cookie，其他浏览器与扩展也提供拦截。其二是法规：GDPR、欧盟电子隐私权指令、加州消费者隐私法等要求站点告知用户 cookie 的使用、允许拒绝、并尽量在不接受 cookie 时仍提供主要服务。技术上还有所谓<span class="term">僵尸 cookie</span>（zombie cookie）——在被删除后自我重建的技术，它违反用户控制原则，可能触犯隐私法规。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>Cookie、认证凭据、localStorage 不是三选一的竞争关系，而是分工：cookie 负责在浏览器与服务器之间自动往返小段状态；认证凭据由代码在需要时显式出示，用来证明身份；localStorage 只在本机存放、永不进网络。把"认出你"（cookie）和"证明你是你"（认证）分开，再把状态从 URL 里请出去，是避免本讲大多数安全事故的总原则。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>"用 localStorage 存会话标识比 cookie 更安全，因为 HttpOnly 的 cookie 会被自动发送"——两个判断都站不住。localStorage 里的值脚本随时可读，XSS 一来直接被端走；HttpOnly cookie 恰恰是防 XSS 窃取会话的武器，而它带来的 CSRF 风险由 SameSite 去挡，这是分工而非缺陷。真正的错误是把标识写进 URL：既不加密也不私密，还顺手毁掉缓存。安全不是选一个"最安全的容器"，而是让每类数据在正确的通道里流动。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front"><div class="q-tag">回忆 7.4-1</div><div class="q-text">从"是否自动随请求发送""脚本能否读取""能否设 HttpOnly"三方面对比 cookie 与 localStorage。</div><span class="tap">点击翻面 →</span></div>
+            <div class="flip-face flip-back"><div class="a-tag">参考答案</div>cookie 按作用域规则自动随请求发送，默认脚本可读、加 HttpOnly 后不可读，支持 HttpOnly；localStorage 永不自动进网络请求，脚本总可读，不支持 HttpOnly。前者适合服务器与浏览器间往返的状态，后者适合本地数据。</div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front"><div class="q-tag">回忆 7.4-2</div><div class="q-text">把会话标识写进 URL 会引发哪两条链？各自的关键环节是什么？</div><span class="tap">点击翻面 →</span></div>
+            <div class="flip-face flip-back"><div class="a-tag">参考答案</div>泄露链：浏览器历史、服务器日志、Referer 首部、复制分享，四散后他人可拿标识冒充登录（会话劫持）。缓存失效链：sid 污染缓存键、命中率暴跌、可能串号、缓存放大旧凭据泄露。结论是标识必须与地址分离。</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 7.5 ============ -->
+    <h2><span class="sec-no">7.5</span>延伸：规范怎么写：从 RFC 6265 看 cookie 的规范口径</h2>
+
+    <p>MDN 是面向开发者的工程文档，它告诉你"该怎么做"，却刻意省略了"规范上到底怎么定义"。当你需要实现浏览器、写 cookie 库，或者判定一个边界行为（比如路径匹配的精确算法、cookie 前缀的校验条件），就得去看 IETF 的规范。cookie 的规范是 <strong>RFC 6265</strong>，以及正在取代它的 <strong>RFC 6265bis</strong> 草案；本讲出现的 SameSite、cookie 前缀、新默认行为，大多是 6265bis 相对原始 6265 的增补。下面这张表把 MDN 的工程口径与 RFC 的规范口径对齐。</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>MDN 的说法</th><th>RFC 怎么写</th><th>为什么值得知道</th></tr>
+        <tr><td>服务器用 Set-Cookie 下发 cookie，浏览器用 Cookie 首部带回</td><td>RFC 6265 §3 定义 Set-Cookie 与 Cookie 两套语法；§5 定义"存储模型"，规定用户代理如何接收、保存与回送 cookie，属性只出现在 Set-Cookie，不随 Cookie 首部回传</td><td>理解"属性是存储规则、不是回传内容"是规范结论，而非浏览器习惯；写客户端/服务器时别去 Cookie 首部里解析属性</td></tr>
+        <tr><td>未设置 SameSite 时按 Lax 处理；None 必须配 Secure</td><td>原始 RFC 6265（2011）根本没有 SameSite；SameSite 由 RFC 6265bis 引入，并规定缺省按 Lax、<code>SameSite=None</code> 必须有 Secure，否则忽略该 cookie</td><td>"新默认行为"是规范演进的结果。老浏览器与旧文档里缺省是全发送，移植老代码时必须显式写 SameSite 才能得到确定的跨站行为</td></tr>
+        <tr><td>Domain 指定主机、包含子域；Path 指定必须出现的路径，子路径也匹配；<code>/docs</code> 不匹配 <code>/docsets</code></td><td>RFC 6265 §5.1.3 定义 domain-match：主机相同或主机以点加 domain 结尾且非 IP；§5.1.4 定义 path-match：路径相等，或 cookie-path 以 / 结尾且请求路径以其为前缀，或请求路径以 cookie-path 加 / 开头；缺省路径按 §5.1.4 的 default-path 算法从设置请求推导</td><td>path-match 的"加斜杠"规则正是 <code>/docs</code> 不匹配 <code>/docsets</code> 的规范根源；实现匹配算法时照抄这两节，别用简单的字符串前缀比较</td></tr>
+        <tr><td>用 __Host- 与 __Secure- 前缀作为深度防御，断言 cookie 来自安全来源</td><td>RFC 6265bis 定义前缀校验：__Secure- 要求有 Secure 且来自安全来源；__Host- 更严，还要求不含 Domain 且 Path 为 /；不符合则用户代理拒绝该 cookie</td><td>前缀把"这枚 cookie 必须怎样设置"变成浏览器强制校验的规则，而不仅是应用约定；__Host- 因锁死 Domain 而被称为 domain-locked</td></tr>
+        <tr><td>站点由注册域和方案定义；第一方/第三方 cookie 据此区分</td><td>RFC 6265bis 引入 "site for cookies" 与可注册域（registrable domain，依赖公共后缀列表）判定，并把方案纳入同一站点的判断</td><td>因为方案也算站点的一部分，http 与 https 的同名主机不再同站；这解释了为什么跨站 cookie 在混合内容或本地 http 环境里行为诡异</td></tr>
+      </table>
+    </div>
+
+    <p>这张表的价值不在让你去背 RFC 章节号，而在给你一个判断依据：<strong>当 MDN 说"通常""建议"而你需要一个确定的对错时，去 RFC 找规范性措辞</strong>。RFC 里 MUST、SHOULD、MAY 有严格区别——比如"None 必须配 Secure"是带强制意味的要求，浏览器据此直接丢弃违规 cookie，而不是"建议"。同样，cookie 前缀不符合条件时被"拒绝保存"，也是规范层面的硬性动作。</p>
+
+    <p>把两个前缀再展开一点，因为它们是 MDN 明确推荐、却常被忽视的防御手段。<code>__Secure-</code> 只要求两件事：带 Secure、来自安全来源。<code>__Host-</code> 在这之上再加两道锁：不许带 Domain、Path 必须精确到 <code>/</code>。效果是——子域想伪造一枚 __Host- cookie 时，要么被限制在它自己的子域里，要么因为带了 Domain 而被整个丢弃，无法冒充父域的会话 cookie。应用服务器检查时必须比对<strong>完整 cookie 名（含前缀）</strong>，因为用户代理在发送 Cookie 首部时不会把前缀剥掉。</p>
+
+    <div class="wire"><em>__Secure-：带 Secure 且来自安全来源即可</em>
+<i>Set-Cookie:</i> __Secure-sid=9f3a2b; Secure; Path=/account; SameSite=Lax
+
+<em>__Host-：还要求不带 Domain、Path 精确为 /，是与主机锁死的写法</em>
+<i>Set-Cookie:</i> __Host-sid=9f3a2b; Secure; Path=/; SameSite=Lax</div>
+    <div class="wire-cap">两条合规的前缀 cookie：__Host- 因锁死主机（无 Domain、Path=/）而更安全；任何一条不满足各自条件，浏览器都会拒绝保存。</div>
+
+    <div class="box insight">
+      <span class="box-tag">✅ 判定规则</span>
+      <p>遇到 cookie 的边界行为争议，按三层找答案：MDN 给工程结论，Set-Cookie / Cookie 参考页给各属性的浏览器兼容与取值细节，RFC 6265 与 6265bis 给规范性算法与强制要求。尤其记住规范演进带来的差异：原始 6265 没有 SameSite，缺省 Lax、None 配 Secure、cookie 前缀都是 6265bis 才系统化的能力。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>别把 __Host- 与 __Secure- 当成"自动防住一切攻击"的护身符。它们只是深度防御：帮助浏览器确保 cookie 确实来自安全来源、没有被子域用 Domain 越权设置，但应用服务器仍必须校验完整 cookie 名、校验登录态与 CSRF 令牌。另一个误区是照搬旧教程里"缺省全发送"的 SameSite 说法——那是老行为；现行规范与浏览器缺省已是 Lax，写代码时要显式指定以避免歧义。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front"><div class="q-tag">回忆 7.5-1</div><div class="q-text">cookie 的原始规范是哪个 RFC？SameSite、缺省 Lax、cookie 前缀属于哪一代规范？</div><span class="tap">点击翻面 →</span></div>
+            <div class="flip-face flip-back"><div class="a-tag">参考答案</div>原始规范是 RFC 6265（2011），它没有 SameSite。SameSite、未设置按 Lax、None 必须配 Secure、__Host-/__Secure- 前缀、站点定义等都是 RFC 6265bis 相对原始 6265 的增补与系统化。</div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front"><div class="q-tag">回忆 7.5-2</div><div class="q-text">__Secure- 与 __Host- 前缀各要求什么？为什么说 __Host- 是 domain-locked？</div><span class="tap">点击翻面 →</span></div>
+            <div class="flip-face flip-back"><div class="a-tag">参考答案</div>__Secure- 要求带 Secure 且来自安全来源；__Host- 在此之上还要求不带 Domain 且 Path 精确为 /。因锁死了主机、子域无法用 Domain 越权设置它，故称 domain-locked；不符合条件的前缀 cookie 会被浏览器拒绝。</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===== 概念卡 ===== -->
+    <h2><span class="sec-no">🃏</span>概念卡：本讲概念的一分钟画像</h2>
+    <p>翻面前先自问：这个概念我能用一句话讲清楚吗？</p>
+    <div class="flip-grid">
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front"><div class="q-tag">概念卡 1</div><div class="q-text">Cookie 与 Set-Cookie / Cookie</div><span class="tap">点击翻面 →</span></div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">服务器经 Set-Cookie 下发、由浏览器保存并在后续请求里经 Cookie 首部自动带回的一小块数据。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">让无状态 HTTP 能记录稳定状态：把状态标识交给客户端保管、每次请求显式带回。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">服务器开一张身份凭条交给浏览器，浏览器每次来都把凭条递回去。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为 cookie 加密、能存密码；它只是可被用户读改的普通文本。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">会话标识、偏好、跟踪；本讲全程，第 8 讲与认证配对。</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front"><div class="q-tag">概念卡 2</div><div class="q-text">会话 cookie 与持久 cookie</div><span class="tap">点击翻面 →</span></div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">会话 cookie 不设过期时间、会话结束即删；持久 cookie 靠 Expires 或 Max-Age 指定寿命。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">区分"临时记忆"与"长期记忆"，让登录态与偏好各按需要的时长存活。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">会话 cookie 像纸条，散会即弃；持久 cookie 像写了到期日的会员卡。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为关掉浏览器会话 cookie 必删；会话恢复可能让它被无限延长。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">Expires 与 Max-Age 同时出现时 Max-Age 优先；都不设即会话 cookie。</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front"><div class="q-tag">概念卡 3</div><div class="q-text">作用域 Domain / Path</div><span class="tap">点击翻面 →</span></div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">Domain 决定哪些主机可收 cookie，指定则含子域；Path 决定哪些请求路径可带，含子路径。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">限制 cookie 的发送范围，避免它被发到无关的主机或路径。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">Domain 是收件小区，Path 是楼栋门牌，两人同时吻合才投递。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为 Domain 向上冒泡到父域；其实只向下含子域。/docs 也不匹配 /docsets。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">排查"cookie 没带上"时先过 Domain 再过 Path；规范算法在 RFC 6265 §5.1.3/5.1.4。</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front"><div class="q-tag">概念卡 4</div><div class="q-text">Secure 与 HttpOnly</div><span class="tap">点击翻面 →</span></div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">Secure 让 cookie 只在 HTTPS 请求发送；HttpOnly 让脚本 Document.cookie 读不到它。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">Secure 挡明文窃听与中间人，HttpOnly 挡 XSS 窃取会话标识。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">Secure 管路上不被偷看，HttpOnly 管到页面后不被脚本偷走。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为 Secure 加密了 cookie 内容；它只保证通道加密，且挡不住 CSRF。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">承载会话的 cookie 应两者都加；http: 页面无法设置 Secure。</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front"><div class="q-tag">概念卡 5</div><div class="q-text">SameSite 与 CSRF</div><span class="tap">点击翻面 →</span></div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">约束跨站请求是否携带 cookie，取 Strict / Lax / None；未设置按 Lax 处理。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">为跨站请求伪造 CSRF 提供一层保护，控制认证 cookie 是否随跨站请求发出。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">Strict 闭门不出，Lax 只给安全导航开门，None 门户大开但须 Secure 把关。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">把 None 单独写上会被丢弃；以为 Lax 能防住所有 CSRF，敏感操作仍需令牌。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">默认 Lax；仅跨站嵌入场景用 None 且必须配 Secure。</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front"><div class="q-tag">概念卡 6</div><div class="q-text">cookie 前缀 __Host- / __Secure-</div><span class="tap">点击翻面 →</span></div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">名称带前缀的 cookie 须满足额外条件才被接受：__Secure- 要 Secure 与安全来源，__Host- 还要无 Domain 且 Path 为 /。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">作为深度防御，防止子域用 Domain 越权设置会话 cookie，抵御会话固定与劫持。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">给重要凭条盖一个"必须这样开"的钢印，浏览器见到不合规就拒收。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为前缀自动防住一切；应用服务器仍须校验完整 cookie 名与登录态。发送时前缀不会被剥掉。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">为认证类 cookie 加前缀；属 RFC 6265bis 能力，不符合条件即被拒绝。</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front"><div class="q-tag">概念卡 7</div><div class="q-text">cookie / 认证 / localStorage 的分工</div><span class="tap">点击翻面 →</span></div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">cookie 自动往返小段状态；认证凭据由代码显式出示证明身份；localStorage 只存本地、永不进请求。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">划清"认出你""证明你是你""本地存放"三件事，避免把标识塞进 URL 或用错容器。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">cookie 是通行证，认证是验明正身，localStorage 是自家抽屉。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">把会话标识写进 URL：泄露到历史、日志、Referer、分享链接，还毁掉缓存键。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">会话标识放 HttpOnly cookie 或认证首部；本地数据放 Web Storage；第 8、9 讲展开。</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===== 分层习题 ===== -->
+    <h2><span class="sec-no">✍️</span>分层习题：先自己写，再点开核对</h2>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>判断下列说法的正误并说明理由：①「cookie 是无状态协议的一部分，HTTP 规范里定义了它」；②「给 cookie 加 HttpOnly 后，跨站脚本就偷不走它，也顺带防住了 CSRF」；③「会话 cookie 关掉浏览器一定会被删除」。</div>
+      <details><summary>提示</summary><p>逐句抓住被混淆的那对关系：协议核心 vs 扩展能力、XSS vs CSRF、会话结束 vs 会话恢复。</p></details>
+      <details><summary>完整解答</summary><div class="ex-answer">① 错。cookie 是架在 HTTP 之上的能力，让无状态协议能记录状态；HTTP 核心语义并不包含它，它由独立的 RFC 6265 系列定义（本讲 7.5 节）。② 前半对、后半错。HttpOnly 让 Document.cookie 读不到该 cookie，确实缓解 XSS 窃取；但 CSRF 借用的是浏览器"自动携带"的机制，脚本根本不需要读到值，HttpOnly 挡不住，要靠 SameSite 与 CSRF 令牌。③ 错。MDN 提醒某些浏览器重启时会用"会话恢复"把会话续上，导致会话 cookie 被无限延长，并非"一定删除"。</div></details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>有人说：「我把会话标识从 cookie 挪到 localStorage，就不用管 Secure 和 SameSite 了，更安全。」指出这句话里对 localStorage 特性的正确之处，以及它忽略的两个致命问题。</div>
+      <details><summary>提示</summary><p>先确认 localStorage 是否自动随请求发送；再想脚本能否读取它，以及"自动携带"消失后换来的是什么风险。</p></details>
+      <details><summary>完整解答</summary><div class="ex-answer">正确之处：localStorage 属于 Web Storage API，它的数据永不自动发往服务器，所以确实不再有 cookie 那种"每次请求自动携带"带来的 Secure / SameSite 配置问题。但忽略了两件事：其一，localStorage 里的值脚本随时可读，一旦发生 XSS，攻击者用一行 JavaScript 就能把会话标识端走，而 HttpOnly cookie 恰恰能挡住这种窃取；其二，若改用 Authorization 首部显式携带令牌，凭据仍可能泄露到前端代码或日志，需要另行管理。安全不是换个容器就成立，而是让数据在正确通道里流动：会话标识通常放带 HttpOnly、Secure、SameSite 的 cookie，或由代码显式管理的认证首部。</div></details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>浏览器保存了一枚 cookie：<code>Set-Cookie: sid=k9; Domain=app.example.com; Path=/docs; Secure</code>。请对下列五个请求逐一判定是否携带该 cookie，并写出每一步的判定理由：① <code>https://app.example.com/docs/a</code>；② <code>https://app.example.com/docsets</code>；③ <code>https://sub.app.example.com/docs</code>；④ <code>https://example.com/docs</code>；⑤ <code>http://app.example.com/docs</code>。</div>
+      <details><summary>提示</summary><p>按 Domain → Path → Secure 三道闸门顺序判定，任一拦下即不发。注意子域、父域与 /docs 对 /docsets 的关系。</p></details>
+      <details><summary>完整解答</summary><div class="ex-answer">① 发送。Domain：主机 app.example.com 与 Domain 完全相同，过；Path：/docs/a 以 /docs/ 开头，属子路径，过；Secure：HTTPS，过。② 不发。Domain 过；Path 拦下——/docsets 不以 /docs/ 开头，也不是 /docs 本身，只是字符串前缀相同，path-match 要求按路径分段匹配。③ 发送。Domain：sub.app.example.com 是 app.example.com 的子域，显式 Domain 向下包含子域，过；Path：/docs 精确相等，过；Secure：HTTPS，过。④ 不发。Domain 拦下——example.com 是父域，作用域不向上冒泡；后面无需再判。⑤ 不发。Domain 过、Path 过，但 Secure 闸门拦下：明文 HTTP 请求不发送 Secure cookie。结论：只有 ① 和 ③ 携带。</div></details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>用户在 <code>https://shop.example.com</code> 登录，拿到认证 cookie。请就 SameSite 的三种取值，判定下列场景是否携带该 cookie，并说明理由：① 从 <code>https://news.other.org</code> 点链接进入 shop.example.com（顶层 GET 导航）；② news.other.org 上的表单以 POST 提交到 shop.example.com/transfer；③ shop.example.com 页面内的 <code>fetch('/api/cart')</code>。再回答：若想让场景 ② 也携带 cookie，该把 SameSite 设成什么、必须搭配什么属性？</div>
+      <details><summary>提示</summary><p>先分清哪个场景是同站、哪些跨站；跨站里再分"安全方法顶层导航"与"非安全方法 POST"；最后回忆 None 的硬性搭配。</p></details>
+      <details><summary>完整解答</summary><div class="ex-answer">场景 ③ 是同站请求（fetch 从 shop.example.com 页面发往自身），三种取值一律携带。场景 ① 是跨站、但为安全的顶层 GET 导航：Strict 不发（连导航也拦，用户会看到未登录）、Lax 发（正是为安全导航放行）、None 发。场景 ② 是跨站 POST（非安全方法）：Strict 不发、Lax 不发（POST 不属于放行的安全导航）、None 发——这正是 CSRF 想利用的场景。若要让场景 ② 也携带，需设 SameSite=None，且<strong>必须同时设置 Secure</strong>（仅在 HTTPS 安全上下文生效）；单独写 None 会被浏览器拒绝保存。补充：未设置 SameSite 时按新默认行为当 Lax 处理。</div></details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l3">L3 建模应用</span>你负责一个电商站点的登录与购物车：主站 app.example.com，图片与脚本托管在 cdn.example.net，还要接入第三方登录回调。请综合本讲给出一套 cookie 策略：① 会话 cookie 应配哪些属性、各挡什么风险？② 子域需要共享一个"主题偏好" cookie，Domain 该怎么设，与会话 cookie 的 Domain 策略有何不同？③ 第三方登录回调需要在跨站 POST 后读到 cookie，SameSite 该怎么选、有什么代价、如何补偿？④ 为什么绝不能把会话标识拼进 URL？给出至少四个要点。</div>
+      <details><summary>提示</summary><p>把"属性开关""作用域向下不向上""SameSite 安全梯度""标识与地址分离"四组概念分别套到四个问题上。</p></details>
+      <details><summary>完整解答</summary><div class="ex-answer">① 会话 cookie 取形如 <code>Set-Cookie: sid=…; Path=/; Secure; HttpOnly; SameSite=Lax</code>；可再加 <code>__Host-</code> 前缀（无 Domain、Path=/）锁死主机。Secure 挡明文窃听与中间人，HttpOnly 挡 XSS 窃取，SameSite=Lax 挡大部分跨站 CSRF 又不破坏从外站点链接进站的体验，每次认证重发新值防会话固定。② 主题偏好若要子域共享，应显式设 <code>Domain=example.com</code>（向下包含所有子域）；而会话 cookie 应<strong>省略 Domain</strong>，把它锁在 app.example.com 本机，缩小被其他子域越权读取的面——两者策略相反，正体现"按敏感度收紧作用域"。③ 跨站 POST 回调要携带，只能用 <code>SameSite=None; Secure</code>，代价是这类 cookie 也会跟随其他跨站请求，CSRF 风险升高；补偿手段是校验 state 参数、使用一次性 CSRF 令牌、校验完整 cookie 名并缩短存活期。④ 会话标识进 URL 会经浏览器历史、服务器日志、Referer 与复制分享四路泄露导致会话劫持，同时污染缓存键、拉低命中率、可能串号并放大旧凭据泄露；标识必须与地址分离，放 HttpOnly cookie 或显式认证首部。</div></details>
+    </div>
+
+    <!-- ===== 自测 ===== -->
+    <h2><span class="sec-no">✅</span>本章自测：每题只选一个答案</h2>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 1</div>
+      <div class="q-stem">服务器把会话标识写进 Set-Cookie 后，是谁在后续请求里把它带回服务器的？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 服务器凭连接记忆自动关联</li>
+        <li data-opt="b">B. 浏览器把它放进 Cookie 首部自动带回</li>
+        <li data-opt="c">C. 用户在每次请求里手动输入</li>
+        <li data-opt="d">D. DNS 服务器在解析时附带</li>
+      </ul>
+      <div class="quiz-explain">解析：B 对。这正是无状态协议维持状态的核心：客户端自动携带。A 与无状态事实相反，服务器不保留请求之间的连接记忆；C 错在携带是浏览器自动完成的，无需用户输入；D 错在 DNS 只做域名到 IP 的解析，与 cookie 无关。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="c">
+      <div class="q-no">自测 2</div>
+      <div class="q-stem">某 cookie 设为 Path=/docs，下列哪个请求路径会携带它？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. /docsets</li>
+        <li data-opt="b">B. /fr/docs</li>
+        <li data-opt="c">C. /docs/Web/HTTP</li>
+        <li data-opt="d">D. /</li>
+      </ul>
+      <div class="quiz-explain">解析：C 对。path-match 按路径分段匹配，/docs 后跟 / 再接子路径即命中，/docs/Web/HTTP 符合。A 的 /docsets 只是字符串前缀相同、并非 /docs 的子路径；B 的 /fr/docs 不以 /docs 开头；D 的根路径不在作用域内——这三项 MDN 都明确列为不匹配。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="a">
+      <div class="q-no">自测 3</div>
+      <div class="q-stem">关于 Secure 与 HttpOnly，下列说法正确的是？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. Secure 让 cookie 只在 HTTPS 请求发送，HttpOnly 让脚本读不到它</li>
+        <li data-opt="b">B. Secure 会加密 cookie 的值，HttpOnly 会阻止跨站请求携带</li>
+        <li data-opt="c">C. HttpOnly 能防住 CSRF，Secure 能防住 XSS</li>
+        <li data-opt="d">D. 两者都必须搭配 SameSite=None 才生效</li>
+      </ul>
+      <div class="quiz-explain">解析：A 对。B 错在 Secure 只保证传输通道加密，并不加密 cookie 内容；HttpOnly 也不管跨站携带。C 把防护对象搞反了：HttpOnly 挡 XSS 窃取，CSRF 靠 SameSite 与令牌，Secure 挡明文窃听。D 错在三个属性彼此独立，Secure 与 HttpOnly 不需 None 就能生效，反倒是 None 必须配 Secure。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="d">
+      <div class="q-no">自测 4</div>
+      <div class="q-stem">一个人从外站链接（顶层 GET 导航）进入你的站点，你希望他携带认证 cookie，但不想让跨站 POST 表单携带。应把 SameSite 设成什么？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. Strict</li>
+        <li data-opt="b">B. None（配 Secure）</li>
+        <li data-opt="c">C. 不设置，用默认行为</li>
+        <li data-opt="d">D. Lax</li>
+      </ul>
+      <div class="quiz-explain">解析：D 对。Lax 放行安全的顶层导航、拦下跨站 POST，正好匹配需求。A 的 Strict 连链接跳转也不带，会让刚进站的用户显示未登录；B 的 None 连跨站 POST 都带，CSRF 风险最高，不符合"不想携带"；C 的缺省行为恰好也是 Lax，虽然效果相同，但显式写 Lax 才是不依赖默认、意图清晰的正确做法，题目问"应设成什么"，故选 D。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="c">
+      <div class="q-no">自测 5</div>
+      <div class="q-stem">把会话标识写进 URL（如 /cart?sid=9f3a2b）主要会带来哪两类问题？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 只影响页面加载速度，没有安全问题</li>
+        <li data-opt="b">B. 会让 cookie 的 HttpOnly 属性失效</li>
+        <li data-opt="c">C. 会话标识经历史、日志、Referer 等泄露导致劫持，并污染缓存键破坏缓存</li>
+        <li data-opt="d">D. 会让 SameSite 自动变成 None</li>
+      </ul>
+      <div class="quiz-explain">解析：C 对。URL 会出现在浏览器历史、服务器日志、Referer 和分享链接里，任何人拿到标识即可冒充登录；同时 sid 使缓存键爆炸、命中率骤降并可能串号。A 低估了危害；B 错在 URL 携带与 cookie 的 HttpOnly 无关，是两种不同通道；D 错在 SameSite 是 Set-Cookie 的属性，与标识是否写在 URL 毫无关系。</div>
+    </div>
+
+    <div class="retell">
+      <h3>🗣️ 用自己的话，三句话讲完本讲</h3>
+      <p>对着空气（或室友）说出这三句。说卡壳的那句，回去重读对应小节。</p>
+      <details><summary>句1：这讲解决什么问题？——</summary><div class="retell-answer">参考答案：偿还第 1 讲留下的"无状态如何记住用户"这笔账——讲清 cookie 的定义与往返、七个属性、作用域与安全边界，以及它为何既是状态救星又是安全重灾区。</div></details>
+      <details><summary>句2：核心机制是什么？——</summary><div class="retell-answer">参考答案：服务器用 Set-Cookie 把状态标识交给浏览器，浏览器在后续请求里用 Cookie 首部自动带回；Domain、Path、SameSite 三道闸门决定发往何处，Secure、HttpOnly 分别挡窃听与脚本窃取，Expires、Max-Age 决定寿命。</div></details>
+      <details><summary>句3：它和前后讲怎么分工？——</summary><div class="retell-answer">参考答案：本讲回答"认出你"（cookie 记忆），第 8 讲回答"证明你是你"（认证），第 9 讲讲跨源读取边界（CORS），第 10 讲讲页面能做什么（CSP）；第 5 讲的缓存知识在本讲被用来分析 URL 泄露链。</div></details>
+    </div>
+
+    <div class="review-plan">
+      <h3>🔁 间隔复习计划</h3>
+      <p>回忆本身比重读有效 10 倍。到点只做一件事：翻卡 + 重做标记题。</p>
+      <table>
+        <tr><th>时间点</th><th>复习内容</th><th>预计用时</th></tr>
+        <tr><td>第 1 天</td><td>概念卡 1–7 + 回忆 7.1 / 7.2 / 7.3 / 7.4 / 7.5 各 2 张</td><td>15 分钟</td></tr>
+        <tr><td>第 3 天</td><td>重做自测 2、3、4 + 翻错的概念卡 3、4、5</td><td>10 分钟</td></tr>
+        <tr><td>第 7 天</td><td>三句话复述 + L2 两题（Domain/Path 五请求判定、SameSite 三场景判定）重做</td><td>14 分钟</td></tr>
+        <tr><td>第 15 天</td><td>只重做合上书挑战；能全过就毕业</td><td>15 分钟</td></tr>
+      </table>
+    </div>
+
+    <div class="final-challenge">
+      <h3>🚪 合上书挑战：能全写出来，这一讲才毕业</h3>
+      <ol id="challenge-list">
+        <li>默写一条含 Domain / Path / Expires / Max-Age / Secure / HttpOnly / SameSite 的 Set-Cookie，并逐属性说出它把住哪道关。</li>
+        <li>给定 cookie 的 Domain 与 Path，对若干候选 URL 按 Domain → Path → Secure 三闸门逐步判定是否携带，写全理由。</li>
+        <li>列出 SameSite 三值在"外站链接跳转、跨站 POST 表单、站点内 fetch"下的携带情况，并说明 None 为何必须配 Secure。</li>
+        <li>对比 cookie、认证凭据与 localStorage，说清"认出你"与"证明你是你"的分工。</li>
+        <li>推演会话标识写进 URL 的泄露链与缓存失效链，各说出至少三个环节。</li>
+        <li>说出 RFC 6265 与 6265bis 的分工，以及 __Host- 与 __Secure- 前缀各自的校验条件。</li>
+        <li>一句话回答本讲主线问题：cookie 是怎么让无状态协议记住一个用户的，它又为什么成了安全重灾区？</li>
+      </ol>
+    </div>
+
+    <div class="complete-zone">
+      <button class="btn-complete" id="btn-complete" onclick="markDone()">✓ 我已完成本讲（含合上书挑战）</button>
+    </div>
+
+    <div class="chapter-nav">
+      <a href="chapter-06.html"><span class="nav-dir">← 上一讲</span>第6讲 条件请求与范围请求</a>
+      <a href="chapter-08.html" class="next"><span class="nav-dir">下一讲 →</span>第8讲 HTTP 身份验证</a>
+    </div>
+
+  </div>
+</div>
+
+<footer class="footer">
+  <div class="wrap">第7讲 Cookie：给无状态协议加上记忆 · HTTP 精通 · 依据 MDN Web Docs《HTTP 指南》整理，延伸板块对照 RFC 9110 系列 · 学习进度保存在本机浏览器中</div>
+</footer>
+
+<script src="assets/mermaid.min.js"></script>
+<script>
+mermaid.initialize({
+  startOnLoad: true,
+  theme: "base",
+  themeVariables: {
+    primaryColor: "#e3edf7",
+    primaryBorderColor: "#1d5f9e",
+    primaryTextColor: "#1d5f9e",
+    lineColor: "#5c554b",
+    secondaryColor: "#fbeedd",
+    tertiaryColor: "#f5f1e8",
+    fontFamily: "-apple-system, PingFang SC, sans-serif",
+    fontSize: "14px"
+  },
+  flowchart: { curve: "linear", htmlLabels: false }
+});
+</script>
+<script>
+document.querySelectorAll(".quiz-block").forEach(block => {
+  const answer = block.dataset.answer;
+  const explain = block.querySelector(".quiz-explain");
+  block.querySelectorAll(".quiz-opts li").forEach(li => {
+    li.addEventListener("click", () => {
+      const opts = block.querySelectorAll(".quiz-opts li");
+      opts.forEach(o => o.classList.add("disabled"));
+      if (li.dataset.opt === answer) {
+        li.classList.add("correct");
+      } else {
+        li.classList.add("wrong");
+        block.querySelector(`[data-opt="${answer}"]`).classList.add("correct");
+      }
+      explain.classList.add("show");
+    });
+  });
+});
+
+document.querySelectorAll("#challenge-list li").forEach(li => {
+  li.addEventListener("click", () => li.classList.toggle("checked"));
+});
+
+const KEY = "http_guide_progress_v1";
+function loadProgress() {
+  try { return JSON.parse(localStorage.getItem(KEY)) || {}; } catch (e) { return {}; }
+}
+const progress = loadProgress();
+const btn = document.getElementById("btn-complete");
+if (progress[7] && progress[7].done) {
+  btn.textContent = "✓ 已完成 · 再次点击重置";
+  btn.classList.add("done");
+}
+function markDone() {
+  const p = loadProgress();
+  if (p[7] && p[7].done) {
+    delete p[7];
+    btn.textContent = "✓ 我已完成本讲（含合上书挑战）";
+    btn.classList.remove("done");
+  } else {
+    p[7] = { done: true, completedAt: Date.now(), reviewsDone: 0 };
+    btn.textContent = "✓ 已完成 · 复习提醒已开启";
+    btn.classList.add("done");
+  }
+  localStorage.setItem(KEY, JSON.stringify(p));
+}
+</script>
+
+</body>
+</html>

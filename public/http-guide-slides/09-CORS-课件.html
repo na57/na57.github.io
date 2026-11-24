@@ -1,0 +1,690 @@
+<!DOCTYPE html>
+<!--
+  ======================================================================
+  HTTP 精通 · 课件外壳（deck-shell.html）
+  由 build-slides.mjs 把 slides/NN.html 注入幻灯片区域，
+  输出 public/http-guide-slides/NN-xxx-课件.html。
+  骨架来自站内通用 1280×720 课件模板；本套额外增加 .wire 协议报文块。
+  每页必须写 data-narration（180–280 字口语稿，禁半角双引号、禁换行、禁小于号）。
+  ======================================================================
+-->
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第9讲 跨源资源共享 CORS · HTTP 精通 课件</title>
+<script>
+window.MathJax = {
+  tex: {
+    inlineMath: [['$', '$'], ['\\(', '\\)']],
+    displayMath: [['$$', '$$'], ['\\[', '\\]']],
+    processEscapes: true,
+    tags: 'none'
+  },
+  svg: { fontCache: 'global', scale: 1.05 },
+  options: { skipHtmlTags: ['script','noscript','style','textarea','pre','code'] }
+};
+</script>
+<!-- MathJax 本地引用（tex-svg 单文件全量组件，约2MB，自带字体数据），file:// 与断网均可用 -->
+<script src="assets/tex-svg.js" async></script>
+<style>
+  :root{
+    --primary:#1a365d; --accent:#2b6cb0; --accent-light:#ebf8ff; --accent-border:#bee3f8;
+    --text:#2d3748; --muted:#718096; --border:#e2e8f0; --bg-light:#f7fafc;
+    --success:#38a169; --danger:#e53e3e; --warning:#dd6b20; --warn-bg:#fffaf0;
+  }
+  *{margin:0;padding:0;box-sizing:border-box;}
+  html,body{width:100%;height:100%;overflow:hidden;background:#0f172a;}
+  body{
+    font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Hiragino Sans GB","Microsoft YaHei","WenQuanYi Micro Hei",sans-serif;
+    color:var(--text);
+  }
+  #stage{
+    position:absolute; left:50%; top:50%;
+    width:1280px; height:720px;
+    transform:translate(-50%,-50%) scale(1);
+    transform-origin:center center;
+    background:#ffffff;
+    box-shadow:0 0 40px rgba(0,0,0,.4);
+    overflow:hidden;
+  }
+  .slide{
+    position:absolute; inset:0;
+    padding:36px 60px 52px;
+    display:none;
+    flex-direction:column;
+    background:#ffffff;
+    opacity:0;
+    transition:opacity .35s ease;
+  }
+  .slide.active{ display:flex; opacity:1; }
+
+  #progress{ position:absolute; top:0; left:0; height:6px; background:var(--accent); width:0; z-index:50; transition:width .35s; }
+
+  /* 封面 / 结束页 */
+  .slide-cover{ justify-content:center; align-items:center; text-align:center; }
+  .slide-cover{ background:linear-gradient(135deg,#1a365d 0%,#2b6cb0 100%); color:#fff; }
+  .slide-cover .kicker{ font-size:22px; letter-spacing:6px; opacity:.85; margin-bottom:18px;}
+  .slide-cover h1{ font-size:64px; font-weight:800; line-height:1.2; margin-bottom:22px; letter-spacing:2px;}
+  .slide-cover .sub{ font-size:26px; opacity:.92; margin-bottom:36px;}
+  .slide-cover .meta{ font-size:19px; opacity:.85; line-height:2;}
+  .slide-cover .divider{ width:160px;height:5px;background:#fff;opacity:.6;margin:0 auto 30px;border-radius:3px;}
+  .slide-cover .question{ font-size:24px; background:rgba(255,255,255,.12); border:1px solid rgba(255,255,255,.35); border-radius:12px; padding:12px 28px; margin-bottom:30px;}
+
+  /* 页头：结论式标题 */
+  .slide-head{ display:flex; align-items:baseline; gap:16px; border-bottom:3px solid var(--accent); padding-bottom:9px; margin-bottom:12px;}
+  .slide-head .sec{ font-size:17px; color:var(--accent); font-weight:700; background:var(--accent-light); padding:3px 11px; border-radius:6px; white-space:nowrap;}
+  .slide-head h3{ font-size:29px; color:var(--primary); font-weight:700;}
+  .slide-body{ flex:1; display:flex; flex-direction:column; justify-content:center; min-height:0; }
+
+  p{ font-size:21px; line-height:1.65; margin-bottom:8px;}
+  .lead{ font-size:23px; color:#374151; line-height:1.75;}
+  ul,ol{ margin:0 0 8px 26px; font-size:21px; line-height:1.7;}
+  li{ margin-bottom:5px;}
+  strong{ color:var(--primary); }
+
+  /* 公式块 */
+  .formula{ background:var(--accent-light); border-left:5px solid var(--accent); border-radius:0 10px 10px 0; padding:9px 22px; margin:9px 0; text-align:center; font-size:23px;}
+  .formula-concl{ background:#fffaf0; border-left:5px solid var(--warning);}
+  .MathJax{ font-size:1.05em !important; }
+  mjx-container[display="true"]{ margin:6px 0 !important; }
+
+  /* 表格 */
+  table{ width:100%; border-collapse:collapse; margin:10px 0; font-size:20px;}
+  th{ background:var(--accent); color:#fff; padding:8px 12px; text-align:center; font-weight:600;}
+  td{ padding:7px 12px; border:1px solid var(--border); text-align:center; vertical-align:middle;}
+  tr:nth-child(even) td{ background:var(--bg-light);}
+  td.l{ text-align:left; }
+  table.small{ font-size:18px; }
+  table.small td, table.small th{ padding:6px 10px; }
+
+  /* 组件 */
+  .card{ background:var(--accent-light); border:1px solid var(--accent-border); border-radius:12px; padding:12px 20px; margin:10px 0;}
+  .tip{ background:#ebf8ff; border-left:5px solid var(--accent); border-radius:0 10px 10px 0; padding:10px 20px; margin:10px 0; font-size:20px; color:#2c5282;}
+  .deep{ background:#f0fff4; border-left:5px solid var(--success); border-radius:0 10px 10px 0; padding:10px 20px; margin:10px 0; font-size:20px; color:#22543d;}
+  .warn{ background:var(--warn-bg); border-left:5px solid var(--warning); border-radius:0 10px 10px 0; padding:10px 20px; margin:10px 0; font-size:20px; color:#744210;}
+  .trap{ background:#fef2f2; border-left:5px solid var(--danger); border-radius:0 10px 10px 0; padding:10px 20px; margin:10px 0; font-size:20px; color:#7f1d1d;}
+
+  .pause{
+    background:var(--warn-bg); border:2px dashed var(--warning); border-radius:14px;
+    padding:10px 22px; margin:10px 0; display:flex; align-items:center; gap:16px;
+  }
+  .pause .icon{ font-size:36px; line-height:1; }
+  .pause .txt b{ color:var(--warning); font-size:21px; }
+  .pause .txt p{ font-size:18px; color:#744210; margin:3px 0 0; }
+
+  .cols{ display:flex; gap:28px; align-items:stretch; }
+  .col{ flex:1; min-width:0; }
+
+  /* 推导分步：仅互动模式隐藏，截图(autohide)模式全部可见——此规则不可删 */
+  .step{ opacity:0; transform:translateY(8px); transition:opacity .3s ease, transform .3s ease; }
+  .step.on{ opacity:1; transform:none; }
+  body.autohide .step{ opacity:1 !important; transform:none !important; }
+  .step-hint{ font-size:14px; color:var(--muted); margin-top:4px;}
+  body.autohide .step-hint{ display:none; }
+
+  /* HTTP 精通课件专用：协议报文原文块 */
+  .wire{background:#0f172a;color:#e2e8f0;border-radius:10px;padding:12px 18px;margin:8px 0;
+    font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:17px;line-height:1.55;
+    white-space:pre-wrap;overflow-wrap:anywhere;}
+  .wire b{color:#7dd3fc;font-weight:700;}
+  .wire i{color:#fde68a;font-style:normal;}
+  .wire em{color:#86efac;font-style:normal;}
+  .wire.sm{font-size:15px;line-height:1.45;}
+  .wire-cap{font-size:15px;color:var(--muted);margin:0 0 8px;}
+  .to-lec{color:#bee3f8;text-decoration:none;font-size:15px;margin-left:12px;}
+  .to-lec:hover{text-decoration:underline;}
+  .badge{display:inline-block;background:var(--accent-light);color:var(--accent);border:1px solid var(--accent-border);
+    border-radius:6px;padding:2px 10px;font-size:17px;font-weight:700;margin-right:8px;}
+
+  /* 因果链 */
+  .chain{ margin:6px 0; }
+  .chain .link{ display:flex; align-items:center; gap:14px; margin:6px 0;}
+  .chain .no{ width:34px; height:34px; border-radius:50%; background:var(--accent); color:#fff; font-size:18px; font-weight:700; display:flex; align-items:center; justify-content:center; flex-shrink:0;}
+  .chain .txt{ font-size:21px; line-height:1.5;}
+  .chain .txt strong{ color:var(--primary); }
+
+  /* mermaid 容器：高度封顶，防止溢出 720px 舞台 */
+  .mmd{ background:var(--bg-light); border:1px solid var(--border); border-radius:12px; padding:10px 14px; display:flex; justify-content:center; align-items:center; margin:8px 0;}
+  .mmd .mermaid{ display:flex; justify-content:center; width:100%; visibility:hidden; }
+  .mmd .mermaid[data-done]{ visibility:visible; }
+  .mmd .mermaid svg{ max-width:100%; height:auto; max-height:230px; }
+  .mmd.mmd-tall .mermaid svg{ max-height:330px; }
+  .mmd.mmd-sm svg{ max-height:150px; }
+  .mmd-row{ display:flex; gap:18px; }
+  .mmd-row .mmd{ flex:1; flex-direction:column; }
+  .mmd .cap{ font-size:17px; color:var(--muted); margin-top:6px; text-align:center;}
+  .mmd .cap b{ color:var(--text); }
+
+  #footer{ position:absolute; bottom:0; left:0; right:0; height:40px; display:flex; align-items:center; justify-content:space-between; padding:0 30px; font-size:15px; color:#94a3b8; background:rgba(247,250,252,.85); border-top:1px solid var(--border); z-index:40;}
+  #footer .brand{ font-weight:600; color:var(--accent); }
+
+  .nav{ position:absolute; bottom:48px; right:40px; display:flex; gap:12px; z-index:45;}
+  .nav button{ width:54px; height:54px; border-radius:50%; border:none; background:var(--accent); color:#fff; font-size:24px; cursor:pointer; box-shadow:0 3px 10px rgba(43,108,176,.4); display:flex; align-items:center; justify-content:center;}
+  .nav button:hover{ background:var(--primary); }
+  .nav button:disabled{ background:#cbd5d0; cursor:default; box-shadow:none;}
+
+  #hint{ position:absolute; bottom:48px; left:40px; font-size:14px; color:#94a3b8; z-index:45;}
+
+  body.autohide #progress, body.autohide #footer, body.autohide .nav, body.autohide #hint{ display:none !important; }
+</style>
+</head>
+<body>
+<div id="stage">
+
+  <div id="progress"></div>
+
+<!-- 第 9 讲：跨源资源共享 CORS -->
+<section class="slide slide-cover active" data-narration="欢迎回到 HTTP 精通第九讲，跨源资源共享 CORS。上一讲我们把认证与凭据装进了请求，可那些请求都发生在同一个站点内部；一旦脚本伸手去读另一个站点的数据，浏览器会先拦一道。这一讲要回答封面上的问题：浏览器凭什么允许一个源读取另一个源的资源，预检请求到底在问什么。学完你应该能用协议、主机、端口三元组判定两个网址是否同源，能区分简单请求与需要预检的请求，能走通一次 OPTIONS 预检的完整报文，并说清带凭据时为什么通配符会失灵。对应的 MDN 原文是跨源资源共享 CORS 一篇。我们先从本讲在十二讲主线上的位置说起。">
+  <div class="kicker">第 9 讲 · 第③组 状态与安全</div>
+  <h1>跨源资源共享 CORS</h1>
+  <div class="sub">同源策略设默认拒绝，服务器首部逐个开口子</div>
+  <div class="question">浏览器凭什么允许一个源读取另一个源的资源，预检请求到底在问什么？</div>
+  <div class="meta">
+    配套讲义：HTTP 精通 第 9 讲 · 依据 MDN《跨源资源共享 CORS》<br>
+    学完能：判同源 · 分简单与预检 · 走通 OPTIONS 报文 · 定位三类 CORS 报错<br>
+    承接第 8 讲的认证与凭据 · 下一讲转向页面自身能做什么<br>
+    ← → 翻页 · 推导页按空格逐步显示
+  </div>
+</section>
+
+<section class="slide" data-narration="看这一讲在十二讲主线上的位置。第③组是状态与安全，第七讲让无状态协议记住用户，第八讲用挑战响应证明你是你，这两讲都还局限在站点内部。第九讲也就是本讲，第一次把边界画到站点之外：同源策略默认禁止脚本跨源读取，CORS 就是给这道墙有组织地开一个口子。图上高亮的是第九讲，它往回接着第八讲的凭据，往前把第十讲的话题引出来，第十讲反过来限制页面自己能加载什么、能调用什么能力，再往后第十一、十二讲处理请求经过中间层和改道。所以本讲的位置很关键：它是同源策略这组边界里专门管「读」的那一块。接下来先把本讲的因果主线摆出来。">
+  <div class="slide-head"><span class="sec">定位</span><h3>第 9 讲是状态与安全组里的「读取边界」</h3></div>
+  <div class="slide-body">
+    <div class="mmd mmd-sm">
+      <div class="mermaid">
+flowchart LR
+  A["第1到6讲 基础连接与缓存"] --> B["第7讲 Cookie"] --> I["第9讲 CORS 跨源边界"]:::here
+  C["第8讲 认证与凭据"] --> I
+  I --> D["第10讲 浏览器侧策略"] --> E["第11到12讲 中间层与重定向"]
+  classDef here fill:#2b6cb0,color:#ffffff,stroke:#1a365d,stroke-width:3px
+      </div>
+    </div>
+    <p style="text-align:center;">本讲处在第③组状态与安全：前面几讲解决服务器怎么认出用户，本讲划出浏览器允许跨源读取的边界。</p>
+    <div class="tip">本讲对应的 MDN 原文：CORS；规范落点在 Fetch 标准与 RFC 9110 的 origin 定义。</div>
+  </div>
+</section>
+
+<section class="slide" data-narration="本讲的主线是一条五环因果链。第一环，页面里的脚本发起一次跨源请求，想读另一个源的数据。第二环，浏览器先判断它是不是简单请求，把方法、人为首部和媒体类型逐项过一遍筛子。第三环，若是简单请求，就带上 Origin 直接发出，不预检，等响应回来再按 ACAO 检查。第四环，若不是简单请求，就先发一趟 OPTIONS 预检，问清楚方法和首部被不被允许，放行之后才发真实请求，这是全讲最该盯住的一步。第五环，一旦请求里带了 Cookie 这类身份凭据，通配符规则就会失灵，ACAO 必须写成具体源并且 ACAC 为 true。这条链就是本讲的目录，先用一个具体场景把它逼出来。">
+  <div class="slide-head"><span class="sec">主线</span><h3>一条五环因果链：默认拒绝，再逐个开口子</h3></div>
+  <div class="slide-body">
+    <div class="chain">
+      <div class="link"><span class="no">1</span><span class="txt"><strong>页面发起跨源请求</strong>：脚本想读另一个源的数据</span></div>
+      <div class="link"><span class="no">2</span><span class="txt"><strong>浏览器判断是否简单请求</strong>：方法、首部、媒体类型逐项过筛</span></div>
+      <div class="link"><span class="no">3</span><span class="txt"><strong>简单请求直接带 Origin</strong>：不预检，在响应阶段检查 ACAO</span></div>
+      <div class="link"><span class="no">4</span><span class="txt"><strong>非简单请求先发 OPTIONS 预检</strong>：问方法与首部，放行才发真实请求</span></div>
+      <div class="link"><span class="no">5</span><span class="txt"><strong>凭据与通配符冲突</strong>：带 Cookie 时 ACAO 必须具体且 ACAC 为 true</span></div>
+    </div>
+    <div class="tip">主线一句话：先用同源策略设默认拒绝，再由服务器首部逐个开口子；红色节点是带凭据场景里通配符失效的陷阱。</div>
+  </div>
+</section>
+
+<section class="slide" data-narration="先用一个具体场景逼出问题。页面在 app.shop.example 打开，脚本用 fetch 去读 api.weather.example 的天气接口。很多人以为请求发过去、拿到 JSON、渲染出来就完了，可实际是：请求真的抵达了服务器，服务器也回了 JSON，浏览器却不肯把字节交给脚本，控制台只留下一行模糊报错。MDN 给的根因是，出于安全，浏览器限制脚本发起的跨源请求，Fetch API 和 XMLHttpRequest 都遵守同源策略。请注意分寸：请求没被挡在门口，被拦的是把响应交给脚本的最后一步。想把这个口子开对，得先把源画准，下一页就做这件事。">
+  <div class="slide-head"><span class="sec">动机</span><h3>请求到了、响应也回了，脚本却读不到</h3></div>
+  <div class="slide-body">
+    <div class="cols">
+      <div class="col"><div class="card">🙂 <strong>你以为会发生</strong><br>在 app.shop.example 的页面里 fetch 天气接口，拿到 JSON 直接渲染到页面上。</div></div>
+      <div class="col"><div class="card">🤔 <strong>实际发生</strong><br>请求真的发到了 api.weather.example，服务器也回了 JSON，控制台却只留下一行模糊的报错。</div></div>
+    </div>
+    <div class="tip">💡 根因：出于安全，浏览器限制脚本发起的跨源 HTTP 请求，Fetch API 与 XMLHttpRequest 都遵循<strong>同源策略</strong>（Same-origin policy）。</div>
+    <div class="deep">请求没有被挡在门口，被挡的是「把响应交给脚本」这最后一步，这个区分是本讲的地基。</div>
+  </div>
+</section>
+
+<section class="slide" data-narration="给核心概念拆成部件。第一个是源，两个网址的协议、主机、端口三项全相同才算同源，合称协议主机端口元组，路径、查询串、片段一律不参与。第二个是同源策略，浏览器用它限制一个源的脚本怎么和另一个源交互；它把跨源交互分三类，只在一类上较真：跨源写一般允许，比如表单提交；跨源嵌入一般也允许，比如 img、script 标签；唯独跨源读取默认被拦住。第三个是跨源资源共享 CORS，一套基于 HTTP 首部的机制，服务器借它声明哪些源有资格读取自己的资源。CORS 就是替第三类开的那扇门。概念立住了，先来做第一张手算，同源判定表。">
+  <div class="slide-head"><span class="sec">定义</span><h3>源是三元组，CORS 只为「读」开一扇门</h3></div>
+  <div class="slide-body">
+    <div class="cols">
+      <div class="col"><div class="card">🧱 <strong>源</strong>（Origin）<br>两个 URL 的协议、主机、端口三项都相同才同源，合称协议主机端口元组；路径、查询串、片段一律不参与。</div></div>
+      <div class="col"><div class="card">🚪 <strong>跨源资源共享</strong>（Cross-Origin Resource Sharing，CORS）<br>基于 HTTP 首部的机制，服务器声明哪些源可以加载自己的资源，浏览器据此决定是否共享响应。</div></div>
+    </div>
+    <div class="formula formula-concl">跨源写一般允许 · 跨源嵌入一般允许 · 跨源读取默认被同源策略拦截</div>
+    <div class="deep"><strong>同源策略</strong>（Same-origin policy）只在一类交互上较真：脚本把另一个源响应的字节读进内存。CORS 正是为这一类开的受控口子。</div>
+  </div>
+</section>
+
+<section class="slide" data-narration="来看第一张手算，同源判定表。基准源写成三元组就是协议 http、主机 store.company.com、端口 80；每个候选网址归一成同样形式，三项逐一对照，全等才同源。归一化三步：协议主机都转小写，空端口补默认值，http 补 80，https 补 443。挑表里最容易错的几行看：换成 https 的跨源，默认端口也跟着变 443；写 81 端口的跨源，81 不等于 80；大写 STORE 的反而同源，主机大小写不敏感；结尾多挂一段 evil.net 的跨源，那是另一台主机。只改路径的两条都同源，路径不参与判定。这里最容易混的是另一套规则，cookie 的 Domain 判定，下一页对照。">
+  <div class="slide-head"><span class="sec">例子 · 判定表</span><h3>以 store.company.com 为基准，逐行比对三元组</h3></div>
+  <div class="slide-body">
+    <table class="small">
+      <thead><tr><th>候选 URL</th><th>归一化元组</th><th>判定</th><th>逐项说明</th></tr></thead>
+      <tbody>
+        <tr><td class="l">http://store.company.com/dir2/other.html</td><td class="l">{http, store.company.com, 80}</td><td>同源</td><td class="l">只有路径不同，路径不参与判定</td></tr>
+        <tr><td class="l">http://store.company.com/dir/inner/another.html</td><td class="l">{http, store.company.com, 80}</td><td>同源</td><td class="l">查询串与片段也同样不影响</td></tr>
+        <tr><td class="l">https://store.company.com/secure.html</td><td class="l">{https, store.company.com, 443}</td><td>跨源</td><td class="l">协议不同，默认端口随之变 443</td></tr>
+        <tr><td class="l">http://store.company.com:81/dir/etc.html</td><td class="l">{http, store.company.com, 81}</td><td>跨源</td><td class="l">端口不同，81 ≠ 80</td></tr>
+        <tr><td class="l">http://news.company.com/dir/other.html</td><td class="l">{http, news.company.com, 80}</td><td>跨源</td><td class="l">主机不同，news 与 store 是两个名字</td></tr>
+        <tr><td class="l">http://store.company.com:80/dir/page.html</td><td class="l">{http, store.company.com, 80}</td><td>同源</td><td class="l">显式 80 就是 http 默认端口，与省略等价</td></tr>
+        <tr><td class="l">http://STORE.company.com/dir/page.html</td><td class="l">{http, store.company.com, 80}</td><td>同源</td><td class="l">主机大小写不敏感，归一后小写再比</td></tr>
+        <tr><td class="l">http://store.company.com.evil.net/x</td><td class="l">{http, store.company.com.evil.net, 80}</td><td>跨源</td><td class="l">主机是完整字符串，多了 evil.net 就是另一台</td></tr>
+      </tbody>
+    </table>
+    <div class="tip">基准元组 {http, store.company.com, 80}；三步归一：协议小写、主机小写、空端口补默认值（http=80，https=443）。</div>
+  </div>
+</section>
+
+<section class="slide" data-narration="这张表还牵出一个必须分清的对照：cookie 用的是另一套源定义。MDN 写，cookie 允许页面为本域及父域设置，只要父域不是公共后缀，还能用 Domain、Path、Secure 限定范围。逐行对：主机上同源要求完全相等，cookie 却能放宽到合法父域；协议上同源严格比较，cookie 的 Domain 根本不看协议；端口上同源严格比，cookie 没有端口概念；路径上同源完全不管，cookie 却有 Path 属性。压成一句话：同源是三元组严格相等，cookie 的 Domain 是本域或合法父域的包含关系。所以两个子域共享 cookie 完全不等于两个子域同源。记牢这条分界，下一页进入第一个完整报文。">
+  <div class="slide-head"><span class="sec">例子 · 对照</span><h3>同源三元组 vs cookie 的 Domain 判定</h3></div>
+  <div class="slide-body">
+    <table class="small">
+      <thead><tr><th>比较维度</th><th>同源判定</th><th>cookie 的 Domain 判定</th></tr></thead>
+      <tbody>
+        <tr><td class="l"><strong>主机</strong></td><td class="l">必须完全相等，子域与父域不同源</td><td class="l">可放宽到父域，shop.example.com 可设 Domain=example.com</td></tr>
+        <tr><td class="l"><strong>协议</strong></td><td class="l">严格比较，http 与 https 不同源</td><td class="l">不参与；不设 Secure 时 http 下发的 cookie 可能被 https 读到</td></tr>
+        <tr><td class="l"><strong>端口</strong></td><td class="l">严格比较，80 与 8080 不同源</td><td class="l">完全不参与，cookie 没有端口概念</td></tr>
+        <tr><td class="l"><strong>路径</strong></td><td class="l">完全不参与</td><td class="l">有独立的 Path 属性可缩小发送范围</td></tr>
+        <tr><td class="l"><strong>父域边界</strong></td><td class="l">无父域概念，一律不等</td><td class="l">受公共后缀列表约束，不能给 com 这种后缀设 cookie</td></tr>
+      </tbody>
+    </table>
+    <div class="deep">一句话：<strong>同源是三元组严格相等，cookie 的 Domain 是本域或合法父域的包含关系</strong>；共享 cookie 不等于同源。</div>
+  </div>
+</section>
+
+<section class="slide" data-narration="来看第一个完整报文，一条最简单的跨源 GET。页面用 fetch 读另一个源，没有自定义首部、没有请求体，符合全部简单条件。浏览器发出的请求，最关键的是最后一行 Origin，它由浏览器自动加上，只有协议主机端口、不带路径，脚本伪造不了也改不了。服务器照样执行这个 GET，回 200，主体二十九字节的 JSON，城市深圳、气温二十六度；真正决定命运的是那行 ACAO，值是星号，表示任意源可读，前提是请求没带凭据。关键分寸是：请求从没被拦在门口，服务器已执行完、响应也生成了，被卡住的是要不要把响应交给脚本。浏览器究竟怎么决定放不放行？下一页拆成四步看。">
+  <div class="slide-head"><span class="sec">例子 · 报文</span><h3>一个带 Origin 的简单跨源 GET 与它的响应</h3></div>
+  <div class="slide-body">
+    <div class="wire sm"><b>GET /v1/today HTTP/1.1</b>
+<i>Host</i>: api.weather.example
+<i>User-Agent</i>: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)
+<i>Accept</i>: */*
+<i>Accept-Language</i>: zh-CN,zh;q=0.9
+<i>Accept-Encoding</i>: gzip, deflate, br
+<i>Connection</i>: keep-alive
+<em>Origin: https://app.shop.example</em>
+
+<em>（空行：首部结束，GET 无主体）</em></div>
+    <div class="wire-cap">简单跨源 GET：最关键的是 Origin，由浏览器自动加上，只有协议主机端口、不带路径，脚本无法伪造。这类<strong>简单请求</strong>（simple request）不预检，直接抵达服务器。</div>
+    <div class="wire sm"><b>HTTP/1.1 200 OK</b>
+<i>Date</i>: Mon, 16 Nov 2026 01:05:00 GMT
+<i>Server</i>: nginx
+<em>Access-Control-Allow-Origin: *</em>
+<i>Content-Type</i>: application/json
+<i>Content-Length</i>: 29
+<i>Connection</i>: keep-alive
+
+<em>{"city":"shenzhen","temp":26}</em></div>
+    <div class="wire-cap">服务器用 Access-Control-Allow-Origin 回答「谁可以读这份响应」。这里用 * 表示任意源，前提是请求不携带身份凭据。</div>
+  </div>
+</section>
+
+<section class="slide" data-narration="回答上个例子的核心问题，浏览器拿到响应后怎么决定放行，四步走。第一步识别跨源，主机不同就自动附加 Origin。第二步判定是否预检，方法 GET、首部都在安全列表、无 Content-Type，不预检，请求已抵达服务器。第三步做 CORS 检查，读响应 ACAO：星号且不带凭据就成功；具体源须与 Origin 逐字符相等；缺失或不匹配即失败。第四步决定交给谁，成功响应体才交给脚本，读到那二十九字节；失败就丢弃，只收到笼统网络错误。表里五行列全了各种取值，注意最后一行：一旦带凭据，星号反而失败。另外脚本看不到失败细节只能查控制台，返回具体源还要补 Vary。下一个例子升级，看触发预检的 PUT。">
+  <div class="slide-head"><span class="sec">例子 · 逐行</span><h3>浏览器放行脚本的四步，与一张 ACAO 判定表</h3></div>
+  <div class="slide-body">
+    <ol>
+      <li><strong>识别跨源</strong>：比较页面源与目标源，主机不同即跨源，自动附加 Origin。</li>
+      <li><strong>判定是否预检</strong>：方法 GET、首部全在安全列表、无 Content-Type，不预检，请求直接抵达服务器。</li>
+      <li><strong>做 CORS 检查</strong>：读响应 ACAO，星号且无凭据匹配成功；具体源须与 Origin 逐字符相等；缺失或不匹配即失败。</li>
+      <li><strong>决定交给谁</strong>：成功才把响应体交给 fetch 的 Promise，脚本拿到 29 字节；失败则丢弃，脚本只收到笼统网络错误。</li>
+    </ol>
+    <table class="small">
+      <thead><tr><th>ACAO 响应值</th><th>是否带凭据</th><th>CORS 检查</th><th>脚本能否读到</th></tr></thead>
+      <tbody>
+        <tr><td>*</td><td>否</td><td class="l">匹配成功</td><td>能</td></tr>
+        <tr><td class="l">https://app.shop.example</td><td>否</td><td class="l">与 Origin 相等，成功</td><td>能</td></tr>
+        <tr><td class="l">https://other.example</td><td>否</td><td class="l">与 Origin 不等，失败</td><td>不能</td></tr>
+        <tr><td>首部缺失</td><td>否</td><td class="l">无可匹配值，失败</td><td>不能</td></tr>
+        <tr><td>*</td><td>是</td><td class="l">失败，凭据与通配符冲突</td><td>不能</td></tr>
+      </tbody>
+    </table>
+    <div class="deep">脚本层看不到失败细节，唯一办法是查浏览器控制台；返回具体源时还要带 Vary: Origin，否则中间缓存会把给 A 源的响应端给 B 源。</div>
+  </div>
+</section>
+
+<section class="slide" data-narration="第二个例子升级。页面要用 PUT 更新配置，带自定义首部，请求体是 JSON。方法不是 GET、HEAD、POST，首部超出安全列表，application/json 也不在三种表单值之内，任意一条命中就先预检。浏览器先发 OPTIONS，两行新首部是核心：ACRM 报告将用 PUT，ACRH 报告将带的非安全首部，Content-Type 也入列，因为值不是安全值。服务器回一条没有主体的 204，一次答齐源、方法、首部、缓存时长：ACAO 是具体源，Max-Age 给 86400 秒即 24 小时，默认只有 5 秒。这两问四答各什么意思，下一页逐行拆。">
+  <div class="slide-head"><span class="sec">例子 · 报文</span><h3>OPTIONS 预检请求与它的 204 响应</h3></div>
+  <div class="slide-body">
+    <div class="wire sm"><b>OPTIONS /v1/forecast HTTP/1.1</b>
+<i>Host</i>: api.weather.example
+<i>User-Agent</i>: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)
+<i>Accept</i>: */*
+<i>Accept-Language</i>: zh-CN,zh;q=0.9
+<i>Accept-Encoding</i>: gzip, deflate, br
+<i>Connection</i>: keep-alive
+<em>Origin: https://app.shop.example</em>
+<em>Access-Control-Request-Method: PUT</em>
+<em>Access-Control-Request-Headers: X-API-Key, Content-Type</em>
+
+<em>（空行：预检请求没有主体）</em></div>
+    <div class="wire-cap">这趟 <strong>预检请求</strong>（preflight request）用 OPTIONS 先问方法与首部是否被允许；两行新首部是整场问答的核心，真实请求的路径只用于定位资源。</div>
+    <div class="wire sm"><b>HTTP/1.1 204 No Content</b>
+<i>Date</i>: Mon, 16 Nov 2026 01:06:00 GMT
+<i>Server</i>: nginx
+<em>Access-Control-Allow-Origin: https://app.shop.example</em>
+<em>Access-Control-Allow-Methods: PUT, GET, OPTIONS</em>
+<em>Access-Control-Allow-Headers: X-API-Key, Content-Type</em>
+<em>Access-Control-Max-Age: 86400</em>
+<i>Vary</i>: Origin, Access-Control-Request-Method, Access-Control-Request-Headers
+<i>Connection</i>: keep-alive
+
+<em>（204 响应无主体）</em></div>
+    <div class="wire-cap">预检响应把「源、方法、首部、缓存时长」四项一次答齐。Max-Age 是 86400 秒即 24 小时，默认只有 5 秒；ACAO 给具体源而不是 *，因为真实请求要带自定义首部。</div>
+  </div>
+</section>
+
+<section class="slide" data-narration="把预检报文逐行拆开，按两问四答记最省事。两问都在预检请求里：ACRM 只问真实请求要用 PUT，ACRH 用逗号分隔的列表问会带哪些非安全首部。四答都在预检响应里：ACAO 把可读的源限定成具体那个页面源；Allow-Methods 列出允许的方法，类似 Allow 首部但带访问控制含义；Allow-Headers 正好是对 ACRH 的回答，把那些首部逐个列出来；Max-Age 给出可缓存秒数，本例 86400 秒即 24 小时，默认只有 5 秒，浏览器自己还有上限。表里还有 Vary 把 Origin 写进缓存键。请记住：这两个 ACR 首部只出现在预检里，真实请求一行都不带。下一页看真实请求长什么样。">
+  <div class="slide-head"><span class="sec">例子 · 逐行</span><h3>两问四答：把预检的每个首部对上号</h3></div>
+  <div class="slide-body">
+    <table class="small">
+      <thead><tr><th>首部</th><th>出现在</th><th>问什么 / 答什么</th></tr></thead>
+      <tbody>
+        <tr><td class="l"><strong>Access-Control-Request-Method</strong></td><td class="l">预检请求</td><td class="l">问：真实请求将用 PUT，语法是单个方法值</td></tr>
+        <tr><td class="l"><strong>Access-Control-Request-Headers</strong></td><td class="l">预检请求</td><td class="l">问：将带哪些非安全首部，逗号分隔，此处 X-API-Key 与 Content-Type</td></tr>
+        <tr><td class="l"><strong>Access-Control-Allow-Origin</strong></td><td class="l">预检响应</td><td class="l">答：可读的源限定为 https://app.shop.example</td></tr>
+        <tr><td class="l"><strong>Access-Control-Allow-Methods</strong></td><td class="l">预检响应</td><td class="l">答：允许 PUT、GET、OPTIONS，类似 Allow 但带访问控制含义</td></tr>
+        <tr><td class="l"><strong>Access-Control-Allow-Headers</strong></td><td class="l">预检响应</td><td class="l">答：正是对 ACRH 的回应，列出 X-API-Key 与 Content-Type</td></tr>
+        <tr><td class="l"><strong>Access-Control-Max-Age</strong></td><td class="l">预检响应</td><td class="l">答：结果可缓存 86400 秒，默认 5 秒，且受浏览器上限约束</td></tr>
+        <tr><td class="l"><strong>Vary</strong></td><td class="l">预检响应</td><td class="l">把 Origin 与两项请求首部写进缓存键，避免串味</td></tr>
+      </tbody>
+    </table>
+    <div class="deep">读预检记「两问四答」：两问是 ACRM 与 ACRH，四答是 ACAO、Allow-Methods、Allow-Headers、Max-Age。缺一项或不匹配，真实请求就不会发出。</div>
+  </div>
+</section>
+
+<section class="slide" data-narration="预检比对通过，浏览器才发真实请求。看这趟 PUT：方法、Content-Type 为 application/json、Content-Length 28 字节的 JSON 主体、自定义首部全原样发出，Origin 依然在；但那两个 ACR 首部一行都不见了，它们只属于预检。服务器回 200，主体二十三字节的确认结果。注意响应里同样带 ACAO 且与 Origin 匹配，脚本这才能读到结果。这里有个高频误区：预检通过不等于真实响应自动放行，预检判断方法与首部被不被允许，真实响应还得按 ACAO 再单独做一次检查，两道各做各的。把两条路径并到一起看更清楚，下一页用流程图收拢。另外预检失败时真实请求根本不会发出。">
+  <div class="slide-head"><span class="sec">例子 · 报文</span><h3>预检放行后的真实 PUT 与它的响应</h3></div>
+  <div class="slide-body">
+    <div class="wire sm"><b>PUT /v1/forecast HTTP/1.1</b>
+<i>Host</i>: api.weather.example
+<i>User-Agent</i>: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)
+<i>Accept</i>: */*
+<i>Accept-Language</i>: zh-CN,zh;q=0.9
+<em>Content-Type: application/json</em>
+<i>Content-Length</i>: 28
+<em>Origin: https://app.shop.example</em>
+<em>X-API-Key: demo-7f3a</em>
+
+<em>{"city":"shenzhen","days":3}</em></div>
+    <div class="wire-cap">预检通过后的真实 PUT：方法、自定义首部与 JSON 主体原样发出，Origin 仍在，但两个 Access-Control-Request 首部已消失。</div>
+    <div class="wire sm"><b>HTTP/1.1 200 OK</b>
+<i>Date</i>: Mon, 16 Nov 2026 01:06:01 GMT
+<i>Server</i>: nginx
+<em>Access-Control-Allow-Origin: https://app.shop.example</em>
+<i>Vary</i>: Origin
+<i>Content-Type</i>: application/json
+<i>Content-Length</i>: 23
+<i>Connection</i>: keep-alive
+
+<em>{"ok":true,"updated":3}</em></div>
+    <div class="wire-cap">真实请求的响应同样要做一次 CORS 检查：ACAO 与 Origin 匹配，脚本才能读到结果。预检放行不等于真实响应自动放行，两道检查各做各的。</div>
+  </div>
+</section>
+
+<section class="slide" data-narration="把前面两个例子并到一张流程图。入口是页面发起跨源请求，第一道分岔判断是否命中预检条件：不是，就是简单请求，直接携带 Origin 发送；是，就先发一趟 OPTIONS 预检。预检这一支再看响应有没有放行方法与首部：没放行，真实请求根本不发出；放行了，才发真实请求。而两支最终都汇到同一个判定，ACAO 是否匹配 Origin：不匹配落到笼统错误，匹配响应体才交给脚本。这张图正好回答封面半个问题，预检在问什么：我接下来要用的方法与首部你认不认，认了才放行真实请求。另一个看点是拦截位置，简单请求在响应阶段才被丢弃，预检失败则更早卡住真实请求。接下来加一个变量，请求带上凭据，规则再收紧一格。">
+  <div class="slide-head"><span class="sec">例子 · 流程</span><h3>CORS 两条路径：一个在响应阶段拦，一个更早拦住真实请求</h3></div>
+  <div class="slide-body">
+    <div class="mmd mmd-tall">
+      <div class="mermaid">
+flowchart LR
+  A["页面发起跨源请求"] --> B{"是否命中预检条件"}
+  B -->|否 简单请求| C["直接发送并携带 Origin"]
+  B -->|是 非简单请求| D["先发 OPTIONS 预检"]
+  D --> E{"预检响应是否放行方法与首部"}
+  E -->|否| F["真实请求不发出 脚本收到笼统错误"]
+  E -->|是| G["发送真实请求"]
+  C --> H{"ACAO 是否匹配 Origin"}
+  G --> H
+  H -->|否| F
+  H -->|是| I["响应体交给脚本"]
+      </div>
+    </div>
+    <div class="cap">图 9.3 CORS 两条路径：简单请求在响应阶段检查，非简单请求多一道 OPTIONS 关卡；任一检查失败，脚本都只能看到笼统错误。</div>
+  </div>
+</section>
+
+<section class="slide" data-narration="现在多加一个变量：请求带上 Cookie 这类身份凭据。跨源请求默认不发凭据，要显式把 credentials 设成 include 才会附上；页面用这条简单 GET 读账户接口，带上 Cookie。因为是简单 GET，不预检，直达服务器。服务器回 200，主体十四字节，是某个登录用户的数据。关键在响应首部：ACAO 写的是具体源不再是星号，而且多了 ACAC 为 true。浏览器会拒绝任何不带这行 true 的响应，两样必须同时给齐，少一项这十四字节都会被丢掉。还有个细节，预检请求本身不能带凭据，预检响应却要写明 ACAC 为 true。那星号为什么失灵先留个悬念，排错时更常撞见三类报错，下一页给定位步骤。">
+  <div class="slide-head"><span class="sec">例子 · 报文</span><h3>带凭据的跨源 GET：具体源 ACAO 加 ACAC 为 true</h3></div>
+  <div class="slide-body">
+    <div class="wire sm"><b>GET /v1/account HTTP/1.1</b>
+<i>Host</i>: api.weather.example
+<i>Accept</i>: */*
+<i>Connection</i>: keep-alive
+<i>Referer</i>: https://app.shop.example/
+<em>Origin: https://app.shop.example</em>
+<em>Cookie: session=abc123</em>
+
+<em>（空行：GET 无主体）</em></div>
+    <div class="wire-cap">带凭据的跨源 GET：Cookie 是浏览器在 credentials 设为 include 时附上的，Origin 仍在。这类<strong>附带身份凭证的请求</strong>（credentialed request）默认不发凭据，要显式表达意图。</div>
+    <div class="wire sm"><b>HTTP/1.1 200 OK</b>
+<i>Date</i>: Mon, 16 Nov 2026 01:07:00 GMT
+<i>Server</i>: nginx
+<em>Access-Control-Allow-Origin: https://app.shop.example</em>
+<em>Access-Control-Allow-Credentials: true</em>
+<i>Cache-Control</i>: no-cache
+<i>Set-Cookie</i>: session=def456; Path=/; HttpOnly; Secure
+<i>Vary</i>: Origin
+<i>Content-Type</i>: application/json
+<i>Content-Length</i>: 14
+
+<em>{"user":"ada"}</em></div>
+    <div class="wire-cap">服务器必须同时给出「具体源的 ACAO」与「ACAC 为 true」，浏览器才把这 14 字节交给脚本；少任何一项，响应都会被忽略。</div>
+  </div>
+</section>
+
+<section class="slide" data-narration="带凭据讲完，把三类最常见的 CORS 报错定位过一遍。总原则：脚本拿不到失败细节，只会笼统报错，确定原因只能看控制台的 Reason 字段。第一类 ACAO missing：去 Network 查响应有无 ACAO，分清看的是预检还是真实请求，预检缺它真实请求根本不发，补时连错误分支也要带。第二类 does not match 带一个 xyz：xyz 就是发出的 Origin，逐字符比对 ACAO，再看是不是冒出两条 ACAO。第三类 Credential 或 expected true：把星号改具体源，预检与真实响应都补 ACAC true，最后并查第三方 cookie 策略。通配符为何与凭据互斥，下一页推导讲清楚。">
+  <div class="slide-head"><span class="sec">例子 · 判定</span><h3>三类常见 CORS 报错的定位步骤</h3></div>
+  <div class="slide-body">
+    <table class="small">
+      <thead><tr><th>控制台 Reason 关键字</th><th>先查哪个首部</th><th>定位步骤</th></tr></thead>
+      <tbody>
+        <tr><td class="l">'Access-Control-Allow-Origin' missing</td><td class="l">ACAO 是否存在</td><td class="l">① 控制台重现；② Network 逐字查响应有无 ACAO；③ 分清看的是 OPTIONS 预检还是真实请求；④ 端点补 ACAO，4xx/5xx 分支也要补；⑤ 动态源补 Vary: Origin</td></tr>
+        <tr><td class="l">does not match 'xyz'</td><td class="l">ACAO 与 Origin 是否逐字符相等</td><td class="l">① 抄下 xyz 即发出的 Origin；② 逐字符比对，留意斜杠与大小写；③ 按三元组查协议与端口；④ 查是否出现两条 ACAO；⑤ 清缓存再试</td></tr>
+        <tr><td class="l">Credential is not supported / expected 'true'</td><td class="l">ACAO 是否为星号、ACAC 是否为 true</td><td class="l">① 确认是否设了 credentials include 或带 Authorization；② ACAO 由星号改具体源；③ 预检与真实响应都补 ACAC true；④ 查 Allow-* 是否误用星号；⑤ 并查第三方 cookie 策略与 SameSite</td></tr>
+      </tbody>
+    </table>
+    <div class="deep">总原则：JavaScript 拿不到 CORS 出错的详细信息，确定原因唯一办法是看控制台的 Reason；另需并查 Vary、重复首部与第三方 cookie 策略。</div>
+  </div>
+</section>
+
+<section class="slide" data-narration="按空格逐步展开，把最容易被死记硬背的问题推清楚：带凭据时 ACAO 为什么不能是星号。第一步，星号的语义是任意源都能读这份响应。第二步，带凭据让响应变成用户相关的内容，本例是登录用户的私人信息，不再是公开天气数据。第三步，把两步合起来：任意站点发一条带 Cookie 的跨源请求，就能读到已登录用户的数据，等于让 CORS 推翻自己要守的边界。第四步，规范把两件事拆成独立的肯定，ACAC 为 true 只确认凭据，ACAO 必须用具体源点名读取者。星号合法的前提始终是不带凭据，一旦带上浏览器直接判失败。MDN 还把限制扩展到另外三个首部，它们在凭据响应里都不能通配。道理讲透，轮到你动手推一遍。">
+  <div class="slide-head"><span class="sec">推导</span><h3>四步推出：带凭据时通配符为什么失灵</h3></div>
+  <div class="slide-body">
+    <div class="step"><p><strong>① ACAO 为星号的语义</strong>：任意源都可以读取这份响应。</p></div>
+    <div class="step"><p><strong>② 带凭据让响应变成用户相关</strong>：本例返回某个登录用户的私人信息，不再是公开的天气数据。</p></div>
+    <div class="step"><p><strong>③ 两者叠加的后果</strong>：任意站点发一条带 Cookie 的跨源请求，就能读到已登录用户的数据，等于让 CORS 推翻自己的边界。</p></div>
+    <div class="step"><p><strong>④ 规范的取舍</strong>：把「允许带凭据」与「允许读」拆成两道独立肯定，ACAC 为 true 只确认凭据，ACAO 用具体源点名读取者。</p></div>
+    <div class="formula formula-concl">星号表达「一律允许」，与凭据场景要求的「逐一确认」语义互斥</div>
+    <p class="step-hint">按空格 / → 逐步展开推导</p>
+  </div>
+</section>
+
+<section class="slide" data-narration="轮到你了。题目：页面向另一个源发一条 DELETE 请求，带自定义首部与 application/json。先判断是否预检，写出预检里 Origin、ACRM、ACRH 三行的值；若响应给 Max-Age 1200 秒，10 分钟后重发还要不要再预检；漏掉 Allow-Headers 会怎样。先暂停视频自己推一遍。推出来了吗？好，对答案。DELETE 不在 GET、HEAD、POST 之列，application/json 也非安全类型，两条都命中必须预检。1200 秒是 20 分钟，10 分钟还不到，复用缓存不再预检。漏掉 Allow-Headers，首部未获允许，真实请求发不出去。下一页把 MDN 与规范两套口径对一次。">
+  <div class="slide-head"><span class="sec">演练</span><h3>推一条 DELETE 请求：预检、三行首部、缓存与漏配</h3></div>
+  <div class="slide-body">
+    <div class="step"><p>① DELETE 不在 GET / HEAD / POST 之列，application/json 也非安全值，<strong>命中预检</strong>，先发 OPTIONS。</p></div>
+    <div class="step"><p>② 预检三行：<strong>Origin: https://web.example</strong>；<strong>ACRM: DELETE</strong>；<strong>ACRH: X-Trace-Id, Content-Type</strong>；Content-Type 因非安全值也要入列。</p></div>
+    <div class="step"><p>③ Max-Age 1200 秒是 20 分钟，10 分钟还不到且未超浏览器上限，<strong>不再预检</strong>，直接发真实请求。</p></div>
+    <div class="step"><p>④ 漏掉 Allow-Headers，ACRH 的首部未获允许，CORS 检查失败，<strong>真实请求不发出</strong>，脚本只收到笼统错误。</p></div>
+    <div class="pause"><div class="icon">✍️</div><div class="txt"><b>暂停推导</b><p>合上答案，自己判断是否预检，写出预检三行首部，并算一算 10 分钟后再发还需不需要预检。</p></div></div>
+    <p class="step-hint">按空格 / → 逐步揭示答案</p>
+  </div>
+</section>
+
+<section class="slide" data-narration="按本课固定动作，把 MDN 与规范口径对一次。三列是 MDN 的说法、RFC 怎么写、为什么值得知道。MDN 说同源是三元组，RFC 9110 把 origin 定义成 scheme、host、port，还要求默认端口归一，比较函数得先归一再逐项比。MDN 说 Origin 首部总随请求发送，但 RFC 9110 根本不定义它，它由 RFC 6454 定义。MDN 沿用简单请求这个旧词，Fetch 标准已改用安全列表首部与预检算法，Vary 缓存键来自 RFC 9111。最后一行最要紧：Fetch 标准把 CORS 建模成用户代理在读取响应环节的检查。这就带出定性，CORS 是浏览器约束不是服务器约束，避坑页接着说。">
+  <div class="slide-head"><span class="sec">规范对照</span><h3>MDN 的说法 → RFC 怎么写 → 为什么值得知道</h3></div>
+  <div class="slide-body">
+    <table class="small">
+      <thead><tr><th>MDN 的说法</th><th>RFC 怎么写</th><th>为什么值得知道</th></tr></thead>
+      <tbody>
+        <tr><td class="l">同源 = 协议、主机、端口三者都相同</td><td class="l">RFC 9110 第 4.3.1 节把 origin 定义为 scheme、host、port 三元组；第 4.2.3 节规定大小写与默认端口归一</td><td class="l">比较函数要先归一化再逐项比，不能做字符串相等</td></tr>
+        <tr><td class="l">Origin 首部总随访问控制请求发送，值可为 null</td><td class="l">RFC 9110 不定义 Origin 请求首部；它由 RFC 6454 第 7 节定义，现行由 Fetch 标准维护</td><td class="l">到 9110 里翻 CORS 首部会一无所获，找准规范才算找对答案</td></tr>
+        <tr><td class="l">把请求分为简单请求与需要预检的请求</td><td class="l">Fetch 标准不再用「简单请求」，改用 CORS 安全列表首部判定，并定义预检与 CORS check 算法</td><td class="l">按安全列表与算法逐步判定，别按「简单」二字望文生义</td></tr>
+        <tr><td class="l">预检用 OPTIONS，服务器回 Allow-Methods 与 Allow-Headers</td><td class="l">Fetch 标准规定预检响应须逐项通过方法与首部检查，任一未获允许即失败，真实请求不发出</td><td class="l">实现网关要按算法顺序查全部项，不能只验 ACAO</td></tr>
+        <tr><td class="l">ACAO 为具体源时带 Vary: Origin；带凭据不能通配</td><td class="l">缓存键由 RFC 9111 第 4.1 节 Vary 机制决定；凭据场景 Fetch 标准把星号判为不匹配</td><td class="l">CORS 与缓存是两套规范的交点，漏配会让正确首部在 CDN 上失效</td></tr>
+        <tr><td class="l">跨源请求由浏览器施加限制，脚本看不到失败细节</td><td class="l">Fetch 标准把 CORS 建模为用户代理在读取响应环节执行的检查，服务器侧始终按普通 HTTP 处理</td><td class="l">用 curl 拿到 200 不能证明浏览器可读，能读也不代表服务器做了授权</td></tr>
+      </tbody>
+    </table>
+    <div class="deep"><strong>CORS 是浏览器约束，不是服务器约束</strong>：服务器照常执行请求并生成响应，是用户代理在把响应交给脚本前执行 CORS check，不通过就丢弃；curl 不受此限。</div>
+  </div>
+</section>
+
+<section class="slide" data-narration="扫三个最常见的雷。第一个，以为同源看域名就够，其实 http 与 https 不同源；把 cookie 的 Domain 和同源混用更是高频错，子域能共享 cookie 靠的是另一套父域包含规则。第二个，以为报了 CORS 错就说明服务器没收到请求，这对简单请求完全错：请求照常抵达、副作用可能已发生，被卡住的是把响应交给脚本，反过来 curl 能拿到 200，正因它不检查 CORS。第三个，把 CORS 当成服务器防跨站攻击的安全功能不准确：服务器用 ACAO 只是声明是否共享响应，执行拦截的是浏览器，防写还得靠 CSRF 令牌。三个雷都指向同一件事，CORS 是浏览器侧读取约束。理清边界，看本讲与下一讲怎么分工。">
+  <div class="slide-head"><span class="sec">避坑</span><h3>三个把「谁在拦、拦在哪」搞混的误解</h3></div>
+  <div class="slide-body">
+    <div class="trap">❌ <strong>同源就是同一个站，看域名就够</strong><br>✅ http 与 https 不同源，显式 8443 与省略端口也不同源；子域共享 cookie 用的是另一套 Domain 规则，不等于同源。</div>
+    <div class="trap">❌ <strong>报了 CORS 错，说明服务器没收到请求</strong><br>✅ 简单请求照常抵达、副作用可能已发生，被拦的是「把响应交给脚本」；curl 能拿到 200，正因为它不执行 CORS 检查。</div>
+    <div class="trap">❌ <strong>CORS 是服务器用来防跨站攻击的安全功能</strong><br>✅ 服务器用 ACAO 只做「是否共享响应」的声明，执行拦截的是浏览器；对不遵守的客户端毫无强制力，防写仍靠 CSRF 令牌。</div>
+  </div>
+</section>
+
+<section class="slide" data-narration="这一讲和下一讲怎么分工。本讲回答一个源能不能读另一个源的资源，约束跨源读取，由服务器声明、浏览器执行，核心首部是 Origin、ACAO、预检一组和 ACAC，往回接着第 8 讲的凭据。第 10 讲转向另一个问题：页面加载后允许它做什么，用 CSP 限制能加载什么，用权限策略限制能调用的 API，用 Fetch 元数据首部让请求自证来源。所以本讲只管同源策略里读这一块，其余边界交给第 10 讲。还有两笔账要认：预检缓存与 Vary 依赖第 5 讲，cookie 的 Domain 与 SameSite 属第 7 讲。钩子留这儿：本讲管别人家资源能不能读进来，下一讲反过来管自己页面能做什么。最后用三句话收束。">
+  <div class="slide-head"><span class="sec">接口</span><h3>第 9 讲划跨源读取边界，第 10 讲管页面自身能做什么</h3></div>
+  <div class="slide-body">
+    <table>
+      <thead><tr><th></th><th>第 9 讲 CORS</th><th>第 10 讲 CSP、权限策略与 Fetch 元数据</th></tr></thead>
+      <tbody>
+        <tr><td class="l"><strong>回答什么</strong></td><td class="l">一个源能不能读另一个源的资源</td><td class="l">页面加载之后允许它做什么</td></tr>
+        <tr><td class="l"><strong>约束方向</strong></td><td class="l">跨源读取，服务器声明、浏览器执行</td><td class="l">页面自身能加载什么、能调用什么 API</td></tr>
+        <tr><td class="l"><strong>核心首部</strong></td><td class="l">Origin、ACAO、预检、ACAC</td><td class="l">Content-Security-Policy、Permissions-Policy、Sec-Fetch 系列</td></tr>
+        <tr><td class="l"><strong>承接</strong></td><td class="l">接着第 8 讲的凭据，划出跨源边界</td><td class="l">接着本讲，补上同源策略其余边界</td></tr>
+      </tbody>
+    </table>
+    <div class="tip">钩子：本讲管「别人家的资源能不能读进来」，第 10 讲反过来管「自己这张页面能加载什么、能用什么能力、怎么自证来源」；预检缓存借第 5 讲，cookie 归第 7 讲。</div>
+  </div>
+</section>
+
+<section class="slide" data-narration="用三句话收束第九讲。解决什么：给浏览器为什么挡住跨站读取、又怎么放开一个可判定的答案，先用三元组划准源的边界，再用 Origin、ACAO、预检、凭据规则把口子的开法讲清楚。核心机制：同源策略默认拒绝跨源读取；简单请求带 Origin 直达服务器，响应按 ACAO 决定是否交给脚本；非简单请求先 OPTIONS 问方法与首部，放行才发真实请求；带凭据时 ACAO 必须具体、ACAC 必须为 true，星号失效。承上启下：接着第 8 讲凭据，预检缓存借第 5 讲，cookie 归第 7 讲，页面能做什么交给第 10 讲。记住定性，CORS 是浏览器在读取响应环节的约束，不是服务器的安全开关。合上书前还有四项毕业挑战。">
+  <div class="slide-head"><span class="sec">小结</span><h3>三句话讲完第 9 讲</h3></div>
+  <div class="slide-body">
+    <div class="chain">
+      <div class="link"><span class="no">1</span><span class="txt"><strong>解决什么</strong>：给「为什么挡住跨站读取、又怎么放开」一个可机械判定的答案</span></div>
+      <div class="link"><span class="no">2</span><span class="txt"><strong>核心机制</strong>：同源默认拒绝；简单请求按 ACAO 共享；非简单请求先 OPTIONS；带凭据 ACAO 具体且 ACAC 为 true</span></div>
+      <div class="link"><span class="no">3</span><span class="txt"><strong>承上启下</strong>：接着第 8 讲凭据，预检缓存借第 5 讲，cookie 归第 7 讲，页面侧边界交给第 10 讲</span></div>
+    </div>
+    <div class="formula formula-concl">CORS 是浏览器在「读取响应」环节的约束，不是服务器的安全开关</div>
+  </div>
+</section>
+
+<section class="slide slide-cover" data-narration="第九讲到这儿结束，留四项毕业挑战，合上书拿一张纸完成。第一，默写同源三元组，判完五个网址对，说出它和 cookie 的 Domain 判定的两点差别。第二，徒手写一条带 Origin 的简单跨源 GET 和一条带 ACAO 的响应，按四步讲清浏览器怎么决定把响应交给脚本。第三，写出 OPTIONS 预检请求与响应的关键首部，逐个解释 ACRM、ACRH、Allow-Methods、Allow-Headers、Max-Age，别忘了预检不带凭据。第四，用四步说明带凭据时星号为什么失灵，再针对三类报错各写出定位动作。全做出来再点讲义底部的完成按钮。下一讲换方向，第 10 讲看服务器如何反过来约束页面能做什么。">
+  <div class="kicker">第 9 讲 结束</div>
+  <h1>默认拒绝，逐个开口子</h1>
+  <div class="sub">毕业挑战：合上书，拿一张纸</div>
+  <div class="divider"></div>
+  <div class="meta">
+    ☑ 默写同源三元组并判完 5 个 URL 对，说清与 cookie Domain 的两点差别<br>
+    ☑ 徒手写带 Origin 的简单 GET 与带 ACAO 的响应，说出放行四步<br>
+    ☑ 写出 OPTIONS 预检请求与响应的关键首部，逐项解释两问四答<br>
+    ☑ 用四步说明带凭据时星号为何失灵，并列出三类报错的定位动作<br><br>
+    下一讲 · 第 10 讲 CSP、权限策略与 Fetch 元数据：反过来限制页面自身能做什么
+  </div>
+</section>
+
+  <!-- 页脚：brand 改为本章标题；总页数改 pagenum 初值 -->
+  <div id="footer">
+    <span class="brand">第9讲 跨源资源共享 CORS · HTTP 精通 课件　<a class="to-lec" href="../http-guide/index.html">讲义首页 ↗</a></span>
+    <span id="pagenum">1 / 1</span>
+  </div>
+
+  <!-- 导航 -->
+  <div class="nav">
+    <button id="prev" title="上一页 (←)">‹</button>
+    <button id="next" title="下一页 (→ / 空格)">›</button>
+  </div>
+  <div id="hint">← → 翻页 · 空格下一页 · 推导页逐步显示 · 点击左右半屏翻页</div>
+
+</div>
+
+<!-- mermaid 本地引用，保证离线可用；初始化参数全套课件统一，勿改 -->
+<script src="assets/mermaid.min.js"></script>
+<script>
+mermaid.initialize({
+  startOnLoad: false,   // 必须为 false：display:none 的隐藏页渲染会得到 0 宽高的退化 SVG，
+                        // 改为页面激活时懒渲染（见 renderMermaid）
+  theme: "base",
+  themeVariables: {
+    primaryColor: "#ebf8ff",
+    primaryBorderColor: "#2b6cb0",
+    primaryTextColor: "#1a365d",
+    lineColor: "#718096",
+    fontFamily: "-apple-system, PingFang SC, sans-serif",
+    fontSize: "15px"
+  },
+  flowchart: { curve: "linear", htmlLabels: false }
+});
+</script>
+<script>
+(function(){
+  const slides = Array.from(document.querySelectorAll('.slide'));
+  const total = slides.length;
+  let idx = 0;
+
+  const params = new URLSearchParams(location.search);
+  const startSlide = parseInt(params.get('slide'), 10);
+  if (params.get('autohide') === '1') document.body.classList.add('autohide');
+  if (!isNaN(startSlide) && startSlide >= 1 && startSlide <= total) idx = startSlide - 1;
+
+  const progress = document.getElementById('progress');
+  const pagenum = document.getElementById('pagenum');
+  const prevBtn = document.getElementById('prev');
+  const nextBtn = document.getElementById('next');
+
+  // 推导分步：每页记住已展开的步数；autohide（截图）模式下 CSS 强制全显
+  const stepState = new Map();
+  function stepsOf(i){ return Array.from(slides[i].querySelectorAll('.step')); }
+  function applySteps(){
+    stepsOf(idx).forEach((el, k)=> el.classList.toggle('on', k < (stepState.get(idx) || 0)));
+  }
+  // 前进一步：先展开本页下一步，全部展开后才翻页
+  function forward(){
+    const steps = stepsOf(idx);
+    const shown = stepState.get(idx) || 0;
+    if (shown < steps.length){ stepState.set(idx, shown + 1); applySteps(); return; }
+    go(idx + 1);
+  }
+  // 后退一步：先收起本页最后一步，收完才回上一页
+  function backward(){
+    const steps = stepsOf(idx);
+    const shown = stepState.get(idx) || 0;
+    if (shown > 0){ stepState.set(idx, shown - 1); applySteps(); return; }
+    go(idx - 1);
+  }
+
+  // mermaid 懒渲染：只在页面激活（有真实宽高）时渲染该页的图，渲染后打 data-done 防重复
+  function renderMermaid(slide){
+    if (typeof mermaid === 'undefined') return;
+    const nodes = Array.from(slide.querySelectorAll('.mermaid:not([data-done])'));
+    if (!nodes.length) return;
+    nodes.forEach(n => n.setAttribute('data-done', ''));
+    mermaid.run({ nodes }).catch(err => {
+      nodes.forEach(n => n.removeAttribute('data-done'));
+      console.error('mermaid 渲染失败：', err);
+    });
+  }
+
+  function render(){
+    slides.forEach((s,i)=> s.classList.toggle('active', i===idx));
+    progress.style.width = ((idx+1)/total*100) + '%';
+    pagenum.textContent = (idx+1) + ' / ' + total;
+    prevBtn.disabled = (idx===0);
+    nextBtn.disabled = (idx===total-1);
+    applySteps();
+    renderMermaid(slides[idx]);
+  }
+  function go(n){ idx = Math.max(0, Math.min(total-1, n)); render(); }
+
+  prevBtn.addEventListener('click', e=>{ e.stopPropagation(); backward(); });
+  nextBtn.addEventListener('click', e=>{ e.stopPropagation(); forward(); });
+
+  document.addEventListener('keydown', e=>{
+    if(e.key==='ArrowRight'||e.key===' '||e.key==='PageDown'){ e.preventDefault(); forward(); }
+    else if(e.key==='ArrowLeft'||e.key==='PageUp'){ e.preventDefault(); backward(); }
+    else if(e.key==='Home'){ stepState.set(idx, 0); go(0); }
+    else if(e.key==='End'){ go(total-1); }
+  });
+
+  document.getElementById('stage').addEventListener('click', e=>{
+    if(e.target.closest('.nav') || e.target.closest('a')) return;
+    const x = e.clientX;
+    if(x < window.innerWidth*0.5) backward(); else forward();
+  });
+
+  function fit(){
+    const s = Math.min(window.innerWidth/1280, window.innerHeight/720);
+    document.getElementById('stage').style.transform = 'translate(-50%,-50%) scale(' + s + ')';
+  }
+  window.addEventListener('resize', fit);
+  fit();
+  render();
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,780 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第8讲 HTTP 身份验证 · HTTP 精通</title>
+<link rel="stylesheet" href="assets/style.css">
+<style>
+/* 本套专用：协议报文原文展示与 MDN 来源条 */
+.wire{background:var(--bg-deep);border:1px solid var(--line);border-left:4px solid var(--accent);border-radius:8px;padding:14px 18px;margin:14px 0;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:13.5px;line-height:1.78;white-space:pre-wrap;overflow-wrap:anywhere;color:var(--ink-soft);}
+.wire b{color:var(--accent);font-weight:700;}
+.wire i{color:var(--orange);font-style:normal;}
+.wire em{color:var(--ink-faint);font-style:normal;}
+.wire.sm{font-size:12.5px;}
+.wire-cap{font-size:13px;color:var(--ink-faint);margin:-8px 0 16px;}
+.mdn-src{background:var(--bg-deep);border:1px solid var(--line);border-left:4px solid var(--accent);border-radius:8px;padding:12px 18px;margin:16px 0 0;font-size:13px;line-height:1.8;color:var(--ink-soft);}
+.mdn-src strong{color:var(--accent);}
+.mdn-src a{color:var(--accent);text-decoration:none;border-bottom:1px dashed var(--line);}
+.mdn-src a:hover{border-bottom-style:solid;}
+.to-slide{font-size:13px;color:var(--accent);text-decoration:none;border:1px solid var(--line);border-radius:6px;padding:4px 11px;white-space:nowrap;}
+.to-slide:hover{background:var(--bg-deep);}
+</style>
+</head>
+<body>
+
+<nav class="topbar">
+  <div class="topbar-inner">
+    <span class="brand"><a href="index.html" style="color:inherit">← HTTP 精通 · 学习地图</a></span>
+    <span class="crumb">第③组 · 状态与安全 / 第8讲</span>
+    <a class="to-slide" href="../http-guide-slides/08-HTTP%E8%BA%AB%E4%BB%BD%E9%AA%8C%E8%AF%81-%E8%AF%BE%E4%BB%B6.html" target="_blank" rel="noopener noreferrer">配套课件 ↗</a>
+  </div>
+</nav>
+
+<div class="wrap">
+
+  <div class="lecture-head">
+    <span class="ch-label">GUIDE 08 · 状态与安全</span>
+    <h1>HTTP 身份验证</h1>
+    <p class="lead">cookie 解决「认出你」，认证解决「证明你是你」——这两件事经常被混为一谈，本讲讲清 HTTP 的通用认证框架。</p>
+    <div class="mdn-src"><strong>本讲对应的 MDN 指南：</strong><a href="https://developer.mozilla.org/zh-CN/docs/Web/HTTP/Guides/Authentication" target="_blank" rel="noopener">HTTP 身份验证</a></div>
+  </div>
+
+  <!-- 本章定位 -->
+  <div class="position-bar">
+    <strong>本讲在主线上的位置：</strong>第 7 讲的 cookie 与会话 → <u>本讲：HTTP 身份验证</u> → 第 9 讲转向跨源访问的边界。<br>
+    第8讲回答主线上的第8个问题：<strong>一次 401 挑战—响应是怎么走完的，为什么说认证和识别不是一回事？</strong>
+    <div class="map-inline">
+      <span class="node">第7讲 Cookie：给无状态协议加上记忆</span><span class="arrow">→</span>
+      <span class="node here">第8讲 HTTP 身份验证</span><span class="arrow">→</span>
+      <span class="node">第9讲 跨源资源共享 CORS</span><span class="arrow">→</span>
+      <span class="node">第11–12讲 中间层与分发</span>
+    </div>
+  </div>
+
+  <!-- 学习目标 -->
+  <div class="objectives">
+    <h4>🎯 学完本讲，合上书你应该能：</h4>
+    <ol>
+      <li>区分识别、认证与授权三个概念</li>
+      <li>走通 401 挑战到 Authorization 的完整报文</li>
+      <li>手工完成一组 user:pass 的 Base64 编码并说明它为何不是加密</li>
+      <li>解释 realm 如何界定凭据的适用范围</li>
+      <li>对比 401 与 407，并说明 Basic 为何必须搭配 TLS</li>
+    </ol>
+  </div>
+
+  <!-- 视频卡插槽：后面录制 B 站讲解时在此插入 <details class="video-card" id="video-card">…</details> -->
+  <!-- VIDEO_CARD_SLOT -->
+
+  <div class="lecture">
+
+    <!-- 推导主线图 -->
+    <div class="figure">
+      <div class="mermaid">
+flowchart LR
+  A["请求受保护资源"]
+  B["服务器返回 401 挑战"]
+  C["客户端带凭据重试"]
+  D["校验通过返回资源"]
+  E["realm 决定复用哪份凭据"]
+  F["明文或弱凭据的风险"]
+  A --> B
+  B --> C
+  C --> D
+  C --> E
+  B --> F
+  classDef hot fill:#fbeedd,stroke:#c4651f,stroke-width:2.5px,color:#c4651f;
+  classDef danger fill:#fae9e7,stroke:#b03a2e,stroke-width:2.5px,color:#b03a2e;
+  class D hot;
+  class F danger;
+      </div>
+      <div class="caption">认证的主线：挑战—响应把凭据的传递推迟到确有必要之时；红色节点提醒 Basic 的 Base64 只是编码，离开 TLS 就是明文。</div>
+    </div>
+
+<!-- ============ 8.1 ============ -->
+    <h2><span class="sec-no">8.1</span>认出你、证明你是你、允许你做什么，是三件不同的事</h2>
+
+    <p>上一讲的 cookie 解决了一个具体问题：让无状态协议「认出」这是同一个浏览器。但认出来之后，服务器还会追问两个更硬的问题——「你凭什么说你是 alice？」以及「就算你是 alice，你能看这份报表吗？」本讲就把这三件事拆开，再讲 HTTP 用来回答前两件事的通用框架。</p>
+
+    <p>先立三个概念，它们天天被混着用。第一个是<span class="term">识别</span>（Identification）：你声称自己是谁，报出一个用户名或工号就好，它只是一句「我是 alice」的声明，谁都能说。第二个是<span class="term">认证</span>（Authentication）：你要<strong>证明</strong>这句声明成立，通常靠口令、令牌或生物特征——「我是 alice，这是只有 alice 才知道的口令」。第三个是<span class="term">授权</span>（Authorization）：确认身份之后，决定你能访问什么——「alice 可以看报表，但不能改报表」。MDN 这一页标题叫「HTTP 身份验证」，其通用框架主要解决的是中间那一环：<strong>用一套标准化流程把凭据从客户端送到服务器去校验</strong>。</p>
+
+    <p>用一个生活场景把它们钉牢。你走进一栋写字楼：在前台报出「我是 alice」是识别；前台核对你的工牌和身份证是认证；刷卡后电梯只让你上 3 楼、进不了 12 楼的机房，是授权。cookie 类似于前台发给你的访客手环——它让保安「认出」你，但手环本身不能证明你没把它借给别人。HTTP 认证要做的，是每次进门前让你出示一次真正的凭证，而不是只戴着手环。</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>概念</th><th>它回答的问题</th><th>典型载体</th><th>本讲是否展开</th></tr>
+        <tr><td>识别 Identification</td><td>你是谁？（一句声明）</td><td>用户名、账号、工号</td><td>仅作为概念区分</td></tr>
+        <tr><td>认证 Authentication</td><td>你凭什么证明自己就是那个人？</td><td>口令、令牌、签名</td><td>本讲主线</td></tr>
+        <tr><td>授权 Authorization</td><td>确认身份后你能做什么？</td><td>角色、权限表、scope</td><td>404 / 403 处点到</td></tr>
+      </table>
+    </div>
+
+    <p>接下来是 MDN 反复强调的通用框架。它本质上是一个<strong>质询—响应</strong>（challenge–response）的握手：<strong>服务器先拒绝，并说明「你要用什么方式证明自己」；客户端据此提供凭据，再请求一次</strong>。注意一个反直觉的设计——客户端<strong>不会主动在第一条请求就带上凭据</strong>，而是先发一条裸请求，等服务器挑战后再带。这么做的直接好处是：凭据不必在每次访问每个 URL 时都无谓地出现，只在确实需要保护的页面上才传递。</p>
+
+    <div class="figure">
+      <div class="mermaid">
+flowchart LR
+  A["请求受保护资源"] --> B["服务器返回 401"]
+  B --> C["附带 WWW-Authenticate 挑战"]
+  C --> D["客户端提示用户输入凭据"]
+  D --> E["带 Authorization 重试"]
+  E --> F{"凭据是否有效"}
+  F -->|是| G["返回 200 与资源"]
+  F -->|否| H["再次 401 或返回 403"]
+      </div>
+      <div class="caption">图 8.1 通用认证框架的质询—响应主线：先由服务器发起挑战，客户端才提供凭据；校验失败时可能重复挑战或直接禁止访问。</div>
+    </div>
+
+    <p>把这条主线落到真实报文上，看得最清楚。下面是完整的一次交互，也是本讲第一个必须掌握的亲手例子：<strong>从 401 挑战到带凭据重试的全过程</strong>。</p>
+
+    <p><strong>第 1 步：客户端先发一条不带凭据的请求。</strong></p>
+
+    <div class="wire"><b>GET /admin/report HTTP/1.1</b>
+<b>Host:</b> app.example.com
+<b>User-Agent:</b> DemoClient/1.0
+<b>Accept:</b> text/html
+
+<em>（空行：本请求没有任何凭据首部）</em></div>
+    <div class="wire-cap">裸请求：客户端不知道这个路径受保护，所以没有 Authorization 首部。它并不知道自己马上会被挑战。</div>
+
+    <p><strong>第 2 步：服务器拒绝并挑战。</strong>返回 401 状态码，并用 <code>WWW-Authenticate</code> 首部告诉客户端「用 Basic 方案，realm 叫 Admin Area」。</p>
+
+    <div class="wire"><i>HTTP/1.1 401 Unauthorized</i>
+<i>Date:</i> Mon, 16 Nov 2026 00:30:00 GMT
+<i>WWW-Authenticate:</i> Basic realm="Admin Area"
+<i>Content-Length:</i> 63
+<i>Content-Type:</i> text/html; charset=utf-8
+
+&lt;html&gt;&lt;body&gt;&lt;h1&gt;401 Unauthorized&lt;/h1&gt;&lt;/body&gt;&lt;/html&gt;</div>
+    <div class="wire-cap">401 挑战：状态码 401 说明「未提供有效凭据」，WWW-Authenticate 说明用哪种方案以及哪个保护区域。注意主体里的尖括号已按 HTML 规则转义为 &amp;lt; 与 &amp;gt;。</div>
+
+    <p><strong>第 3 步：客户端提示用户，.compute 出凭据并重试。</strong>浏览器弹出登录框，用户输入 <code>user</code> / <code>pass</code>。客户端把它们拼成 <code>user:pass</code>，做 Base64 编码（下一节手算）得到 <code>dXNlcjpwYXNz</code>，放进 Authorization 首部重发：</p>
+
+    <div class="wire"><b>GET /admin/report HTTP/1.1</b>
+<b>Host:</b> app.example.com
+<b>User-Agent:</b> DemoClient/1.0
+<b>Authorization:</b> Basic dXNlcjpwYXNz
+<b>Accept:</b> text/html
+
+<em>（空行：凭据已随本次请求发出）</em></div>
+    <div class="wire-cap">重试请求：Authorization 首部的格式是「方案名 + 空格 + 凭据」。Basic 后面那串就是 Base64(user:pass)。</div>
+
+    <p><strong>第 4 步：服务器校验通过，返回资源。</strong></p>
+
+    <div class="wire"><i>HTTP/1.1 200 OK</i>
+<i>Date:</i> Mon, 16 Nov 2026 00:30:01 GMT
+<i>Content-Type:</i> text/html; charset=utf-8
+<i>Content-Length:</i> 42
+
+&lt;html&gt;&lt;body&gt;季度报表数据…&lt;/body&gt;&lt;/html&gt;</div>
+    <div class="wire-cap">校验成功返回 200。整个交互用了两条请求、两条响应——这就是通用框架的最小完整闭环。</div>
+
+    <p>这里要顺带记住一个状态码家族的分工，它是 401 的「邻居」：<strong>401 Unauthorized 表示「你没证明身份，请再试」</strong>；<strong>403 Forbidden 表示「我知道你是谁，但你没权限，别再试了」</strong>。MDN 特别指出，服务器常常干脆用 404 来回应无权限请求，以隐藏页面的存在——对攻击者来说，「404 不存在」比「403 你没权限」泄露的信息更少。把 401、403、404 放进同一张判定表，排障时才不会混：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>状态码</th><th>服务器想表达什么</th><th>客户端会怎么做</th><th>是否带挑战首部</th></tr>
+        <tr><td>401 Unauthorized</td><td>未提供或提供了无效凭据</td><td>提示用户重新输入，可重试</td><td>必须带 WWW-Authenticate</td></tr>
+        <tr><td>403 Forbidden</td><td>凭据有效，但权限不足</td><td>不再尝试，直接告知失败</td><td>不需要</td></tr>
+        <tr><td>404 Not Found</td><td>可能真实不存在，也可能是刻意隐藏</td><td>当作资源不存在</td><td>不需要</td></tr>
+      </table>
+    </div>
+
+    <div class="box insight">
+      <span class="box-tag">✅ 判定规则</span>
+      <p>看到响应先分两类：<code>401</code> 是「身份认证没过」——去找 WWW-Authenticate，看它要求什么方案；<code>403</code> 是「认证过了但授权没过」——提示用户换账号或申请权限，重试无意义。若你明明带了正确凭据却一直收到 401，要怀疑编码是否出错、realm 是否对得上、或是否被中间代理拦下，而不是继续傻等。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>「HTTP 认证 = 登录表单」——错。登录表单是应用层自己设计的流程：你 POST 用户名口令到 <code>/login</code>，服务器返回一个 cookie，之后靠 cookie 识别你（上一讲的机制）。而本讲的 HTTP 认证是<strong>协议内置</strong>的质询—响应框架，凭据走的是专门的 Authorization 首部，由浏览器或客户端自动处理。二者可以并存但机制完全不同：前者把状态放进 cookie，后者每条请求都显式携带凭据。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front"><div class="q-tag">回忆 8.1-1</div><div class="q-text">识别、认证、授权分别回答什么问题？HTTP 通用框架主要解决哪一个？</div><span class="tap">点击翻面 →</span></div>
+            <div class="flip-face flip-back"><div class="a-tag">参考答案</div>识别＝你是谁（一句声明）；认证＝如何证明你就是那个人；授权＝确认后你能做什么。HTTP 通用认证框架主要解决<strong>认证</strong>——用质询—响应把凭据送到服务器校验；授权通常由应用自己按角色处理。</div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front"><div class="q-tag">回忆 8.1-2</div><div class="q-text">默写 401 挑战到成功的最小报文闭环，并说出 WWW-Authenticate 与 Authorization 各出现在哪一步。</div><span class="tap">点击翻面 →</span></div>
+            <div class="flip-face flip-back"><div class="a-tag">参考答案</div>① 裸请求；② 响应 <code>401</code> + <code>WWW-Authenticate: Basic realm="..."</code>（服务器挑战）；③ 重试请求带 <code>Authorization: Basic &lt;凭据&gt;</code>（客户端提供凭据）；④ 校验通过返回 <code>200</code>。挑战首部出现在第②步的响应里，凭据首部出现在第③步的请求里。</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 8.2 ============ -->
+    <h2><span class="sec-no">8.2</span>Basic 把「用户名:口令」做了一次 Base64——编码不是加密</h2>
+
+    <p>上一节我们看到重试请求里那串 <code>Authorization: Basic dXNlcjpwYXNz</code>。这一节把那串字符彻底拆开：它怎么算出来、为什么人人都能算、以及这为什么是一个安全陷阱。MDN 说得很直白——<strong>「Basic」方案对凭据进行编码，但并不加密；除非通过 HTTPS/TLS 的安全连接，否则极其不安全</strong>。</p>
+
+    <p>先给 <span class="term">方案</span>（Scheme）一个定义。通用框架只规定了「401 挑战 + Authorization 凭据」的骨架，具体「凭据长什么样、怎么编码」由不同的认证方案决定。MDN 列出了 Basic、Bearer、Digest、HOBA、Mutual、Negotiate/NTLM、VAPID、SCRAM、AWS4-HMAC-SHA256 等一长串。<span class="term">Basic</span>（Basic authentication scheme）由 RFC 7617 定义，是其中<strong>最不安全但支持最广、最容易配置</strong>的一个：它把「用户名:口令」用 <span class="term">Base64</span>（Base64 encoding）编码后放进首部。</p>
+
+    <p>这里必须立刻纠正一个致命误解：Base64 是<span class="term">编码</span>（Encoding），不是<span class="term">加密</span>（Encryption）。编码是把数据换成另一种表示形式以便安全传输，<strong>不需要密钥，任何人都能反向还原</strong>；加密需要密钥，没有密钥的第三方无法还原。Base64 的字母表是公开的、算法是公开的，把 <code>dXNlcjpwYXNz</code> 贴到任何一个在线工具里，一秒就能还原成 <code>user:pass</code>。所以 Basic 的凭据在网络上<strong>等价于明文</strong>——MDN 的原话是「用户 ID 与密码以明文形式在网络中传输（尽管采用了 Base64 编码，但 Base64 算法是可逆的）」。</p>
+
+    <p>现在做本讲第二个必会例子：<strong>手工把 user:pass 编码成 Base64</strong>。分三步走，一步步都能用纸笔完成。</p>
+
+    <p><strong>第一步：逐字符查 ASCII 字节。</strong>把 <code>user:pass</code> 的每个字符换成 ASCII 码（注意中间的冒号是 ASCII 58，不是字母）：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>字符</th><th>u</th><th>s</th><th>e</th><th>r</th><th>:</th><th>p</th><th>a</th><th>s</th><th>s</th></tr>
+        <tr><td>十进制</td><td>117</td><td>115</td><td>101</td><td>114</td><td>58</td><td>112</td><td>97</td><td>115</td><td>115</td></tr>
+        <tr><td>十六进制</td><td>75</td><td>73</td><td>65</td><td>72</td><td>3A</td><td>70</td><td>61</td><td>73</td><td>73</td></tr>
+        <tr><td>8 位二进制</td><td>01110101</td><td>01110011</td><td>01100101</td><td>01110010</td><td>00111010</td><td>01110000</td><td>01100001</td><td>01110011</td><td>01110011</td></tr>
+      </table>
+    </div>
+
+    <p>一共 9 个字节，正好是 3 的倍数，可以分成 3 组，每组 3 字节。<strong>第二步：每 3 字节（24 位）拆成 4 组 6 位。</strong>Base64 的字母表是：<code>A–Z</code> 对应索引 0–25，<code>a–z</code> 对应 26–51，<code>0–9</code> 对应 52–61，<code>+</code> 对应 62，<code>/</code> 对应 63。每 6 位的值就是这个索引。</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>分组</th><th>3 字节的 24 位串</th><th>拆成 4 个 6 位</th><th>十进制索引</th><th>对应字符</th></tr>
+        <tr><td>use</td><td>01110101 01110011 01100101</td><td>011101 / 010111 / 001101 / 100101</td><td>29 / 23 / 13 / 37</td><td>d / X / N / l</td></tr>
+        <tr><td>r:p</td><td>01110010 00111010 01110000</td><td>011100 / 100011 / 101001 / 110000</td><td>28 / 35 / 41 / 48</td><td>c / j / p / w</td></tr>
+        <tr><td>ass</td><td>01100001 01110011 01110011</td><td>011000 / 010111 / 001101 / 110011</td><td>24 / 23 / 13 / 51</td><td>Y / X / N / z</td></tr>
+      </table>
+    </div>
+
+    <p><strong>第三步：把三组结果顺次拼接。</strong>第一组 <code>dXNl</code>，第二组 <code>cjpw</code>，第三组 <code>YXNz</code>，合起来就是 <code>dXNlcjpwYXNz</code>——和上一节报文里的那串完全一致。这个过程反过来就是解码：把每 4 个字符还原成 3 个字节，所以任何人都能还原，没有任何秘密可言。</p>
+
+    <p>补齐规则的边界也值得知道。Base64 每次处理 3 字节输出 4 个字符；如果原文长度不是 3 的倍数，末尾会用 <code>=</code> 补位：剩 2 字节时补 1 个 <code>=</code>，剩 1 字节时补 2 个 <code>=</code>。比如 <code>alice:s3cr3t</code> 是 12 字节（3 的倍数），编码结果是 <code>YWxpY2U6czNjcjN0</code>，没有补位；而一个 11 字节的口令串就会以单个 <code>=</code> 结尾。看到 <code>=</code> 就知道原文长度不能被 3 整除，仅此而已，它不提供任何安全性。</p>
+
+    <p>MDN 还提到一个容易被忽略的细节：<strong>字符编码</strong>。浏览器用 UTF-8 编码用户名和密码（Firefox 早年用 ISO-8859-1，后来为了与其他浏览器一致也改为 UTF-8）。这意味着用户名或口令里若有中文，先按 UTF-8 变成多字节，再做 Base64——这也解释了为什么有些老服务器面对非 ASCII 口令会对不上：两端的字符编码假设不一致。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>把「编码」和「加密」分家，是理解所有认证方案安全性的钥匙。Base64、URL 编码、十六进制都是编码——可逆、无密钥、只为传输方便；真正保护口令要靠 TLS 在传输层加密整条报文，或靠 Digest 这类方案用哈希挑战避免口令直接上线。Basic 之所以「安全性很差」，正是因为它把可逆编码当成了唯一的保护，把全部安全责任推给了 TLS。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>「Base64 之后是一堆看不懂的字符，所以口令被藏起来了」——错得最典型的一条。看不懂不等于不可读：Base64 是纯可逆变换，还原不需要任何密钥，抓包后一行命令就能解出口令。同理，MDN 明确反对在 URL 里写 <code>https://username:password@host/</code> 这类凭据：它已被弃用，Chrome 会移除这部分，Firefox 会警告「该站点并不需要认证」，因为这种写法既泄露口令到历史记录与日志，又常被钓鱼页面利用。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front"><div class="q-tag">回忆 8.2-1</div><div class="q-text">手写 user:pass 的 Base64 编码，给出三组的 6 位分组与最终结果。</div><span class="tap">点击翻面 →</span></div>
+            <div class="flip-face flip-back"><div class="a-tag">参考答案</div>ASCII：u=75 s=73 e=65 r=72 :=3A p=70 a=61 s=73 s=73。分组 use→dXNl，r:p→cjpw，ass→YXNz，拼接得 <code>dXNlcjpwYXNz</code>。9 字节正好 3 组，无需补位。</div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front"><div class="q-tag">回忆 8.2-2</div><div class="q-text">为什么说 Basic 的凭据等价于明文？Base64 与加密的本质区别是什么？</div><span class="tap">点击翻面 →</span></div>
+            <div class="flip-face flip-back"><div class="a-tag">参考答案</div>Base64 是公开算法的可逆编码，不需要密钥，任何人抓包后都能还原出原始用户名口令。加密需要密钥、无密钥不可还原。因此 Basic 必须搭配 TLS，靠传输层加密保护凭据，而不是靠 Base64。</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 8.3 ============ -->
+    <h2><span class="sec-no">8.3</span>realm 不是一枚标签，它和源站一起圈定了凭据的复用范围</h2>
+
+    <p>上一节解决了「凭据怎么编码」，但浏览器什么时候该自动带上它、什么时候该重新弹框？答案藏在 401 挑战的 <code>realm</code> 参数里。MDN 的说法是：realm 用来描述进行保护的区域或范围，让用户知道自己正在访问哪个空间，例如 <code>Access to the staging site</code>。这一节把它从一个「提示文字」升级成一个「缓存判据」。</p>
+
+    <p>先明确语法。MDN 给出挑战首部的形式是 <code>WWW-Authenticate: &lt;type&gt; realm=&lt;realm&gt;</code>，凭据首部的形式是 <code>Authorization: &lt;type&gt; &lt;credentials&gt;</code>。这里的 <code>&lt;type&gt;</code> 就是方案名（Basic、Bearer 等），<code>realm</code> 是一个区分大小写的字符串。一个真实挑战长这样：</p>
+
+    <div class="wire"><i>HTTP/1.1 401 Unauthorized</i>
+<i>WWW-Authenticate:</i> Basic realm="Admin Area"
+<i>Content-Length:</i> 0
+
+<em>（主体为空，关键信息全在首部里）</em></div>
+    <div class="wire-cap">挑战里的 realm="Admin Area" 既是给用户看的提示，也是浏览器缓存凭据时要记录的键的一部分。</div>
+
+    <p>关键问题来了：<span class="term">保护空间</span>（Protection Space）到底由什么决定？规范口径是——<strong>realm 值与「规范化根 URI」（即 scheme、host、port）共同定义一个保护空间</strong>。换句话说，浏览器缓存凭据时的键，是「协议 + 主机名 + 端口 + realm」这个四元组，<strong>路径不在键里</strong>。这一点极反直觉：很多人以为 <code>/admin/a</code> 的凭据不会发给 <code>/admin/b</code>，其实只要 realm 相同、源站相同，浏览器就会自动带上；反过来，即便路径相同，只要 realm 不同，浏览器也会当作另一个保护空间，重新挑战。</p>
+
+    <p>现在做本讲第三个必会例子：<strong>realm 与凭据缓存范围的判定</strong>。设定场景如下：用户在 <code>https://app.example.com/admin/login</code> 被 <code>realm="Admin Area"</code> 挑战并输入了 alice 的口令，浏览器因此缓存了保护空间 <code>(https, app.example.com, 443, "Admin Area")</code> → alice 的凭据。同一台服务器的 <code>/docs/</code> 目录则用 <code>realm="Docs Area"</code> 保护。现在逐个判定后续请求会不会自动带上 Admin Area 的凭据：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>后续请求 URL</th><th>该路径的挑战 realm</th><th>与已缓存四元组是否相同</th><th>是否自动带 Admin 凭据</th></tr>
+        <tr><td>https://app.example.com/admin/page2</td><td>Admin Area</td><td>scheme/host/port/realm 全同</td><td>会，直接带上</td></tr>
+        <tr><td>https://app.example.com/admin/deep/report</td><td>Admin Area</td><td>同四元组（路径更深不影响）</td><td>会，路径不是键的一部分</td></tr>
+        <tr><td>https://app.example.com/docs/api</td><td>Docs Area</td><td>realm 不同</td><td>不会，视为另一保护空间，另行挑战</td></tr>
+        <tr><td>https://app.example.com:8443/admin/page2</td><td>Admin Area</td><td>port 8443 ≠ 443</td><td>不会，端口不同即不同源站</td></tr>
+        <tr><td>http://app.example.com/admin/page2</td><td>Admin Area</td><td>scheme http ≠ https</td><td>不会，协议不同即不同源站</td></tr>
+        <tr><td>https://other.example.com/admin/page2</td><td>Admin Area</td><td>host 不同</td><td>不会，主机名不同即不同源站</td></tr>
+      </table>
+    </div>
+
+    <p>逐行看判据：第 1、2 行只看 realm 与源站四元组，路径深浅完全不影响，所以自动带上；第 3 行 realm 变了，浏览器把它当另一个「房间」，Admin 的钥匙开不了 Docs 的门；第 4、5、6 行分别改了端口、协议、主机名，任何一个变化都会改变「规范化根 URI」，于是保护空间不同，凭据不会复用。记住一句口诀：<strong>同源 + 同 realm 才复用，路径无关</strong>。</p>
+
+    <p>MDN 还提醒了一个与凭据自动发送相关的安全修复：<strong>跨源图片的认证</strong>。过去，如果页面里嵌入了来自另一个源的图片，加载该图片可能触发 HTTP 认证对话框，攻击者若能把你想要的图片塞进第三方页面，就可能诱导你输入凭据、造成泄露。从 Firefox 59 起，跨源加载图片不再触发 HTTP 认证对话框，正是为了堵住这条路。这提醒我们：浏览器对「什么时候允许自动发送凭据/弹认证框」的控制，本身就是安全边界的一部分。</p>
+
+    <div class="box insight">
+      <span class="box-tag">✅ 判定规则</span>
+      <p>判断凭据是否复用，只画一张四元组表：scheme、host、port、realm。四项全等，浏览器自动带；任一不同，重新挑战。别被路径迷惑——<code>/a</code> 与 <code>/b</code> 只要 realm 同名，就属于同一保护空间。排障时若「凭什么这次没带凭据」，第一反应就是核对这四项中到底哪一项变了。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>「realm 只是给用户看的提示文字，没有技术含义」——错。它确实会显示在登录框里，但它同时是凭据缓存键的一部分，直接决定浏览器会不会把口令发给某个请求。把 realm 当成纯装饰，就会在拆分后台与文档站时误用同一个 realm 字符串，导致本应隔离的两套凭据被浏览器混用；给不同安全等级的区域起同一个 realm 名，等于主动拆掉隔离。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front"><div class="q-tag">回忆 8.3-1</div><div class="q-text">保护空间由哪四部分决定？为什么路径不算在内？</div><span class="tap">点击翻面 →</span></div>
+            <div class="flip-face flip-back"><div class="a-tag">参考答案</div>由 scheme、host、port 与 realm 四元组决定（即规范化根 URI + realm）。规范把 realm 与源站绑定来界定一组受保护资源，路径不影响归属；所以同 realm 同站点的不同路径会复用同一份凭据。</div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front"><div class="q-tag">回忆 8.3-2</div><div class="q-text">同一路径下 realm 从 Admin Area 改成 Docs Area，浏览器会怎么做？为什么？</div><span class="tap">点击翻面 →</span></div>
+            <div class="flip-face flip-back"><div class="a-tag">参考答案</div>会重新挑战、弹出登录框，而不是沿用旧凭据。因为 realm 是缓存键的一部分，realm 变化意味着换了保护空间；不同区域应有不同凭据，浏览器不能拿 A 区域的口令去 B 区域。</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 8.4 ============ -->
+    <h2><span class="sec-no">8.4</span>401 属于源站，407 属于代理：两条平行的挑战链，与明文口令的代价</h2>
+
+    <p>前三节默认「挑战你的就是目标服务器」。但真实网络里，客户端和源站之间常常还夹着代理——公司网关、学校出口、抓包调试工具都可能要求你先证明身份。MDN 专门指出：<strong>资源认证与代理认证可以并存，它们用不同的首部和不同的状态码</strong>。这一节把两条链并列，再推演 Basic 凭据离开 TLS 后会发生什么。</p>
+
+    <p>代理认证遵循完全相同的质询—响应原理，只是换了一组「车道」：源站用 401 和 WWW-Authenticate / Authorization，代理用 407 和 Proxy-Authenticate / Proxy-Authorization。两套首部互不干扰——代理只关心 Proxy- 系列，源站只关心不带前缀的那一套，因此一条请求可以同时满足「向代理证明我是员工」和「向源站证明我是 alice」。</p>
+
+    <p>下面是本讲第四个必会例子的第一半：<strong>401 源站认证与 407 代理认证的对照表</strong>。</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>维度</th><th>401 源站认证</th><th>407 代理认证</th></tr>
+        <tr><td>挑战方</td><td>目标源服务器</td><td>路径上的代理服务器</td></tr>
+        <tr><td>状态码</td><td>401 Unauthorized</td><td>407 Proxy Authentication Required</td></tr>
+        <tr><td>挑战首部（响应）</td><td>WWW-Authenticate</td><td>Proxy-Authenticate</td></tr>
+        <tr><td>凭据首部（请求）</td><td>Authorization</td><td>Proxy-Authorization</td></tr>
+        <tr><td>凭据挑战语法</td><td>Basic realm="..."</td><td>Basic realm="..."</td></tr>
+        <tr><td>典型场景</td><td>登录网站后台、受保护接口</td><td>公司/学校出网代理、调试代理</td></tr>
+        <tr><td>能否并存</td><td colspan="2">可以：两者首部独立，一次请求可分别向代理与源站证明身份</td></tr>
+      </table>
+    </div>
+
+    <p>用两条报文对照看，差异一目了然。先是代理发起的 407 挑战：</p>
+
+    <div class="wire"><i>HTTP/1.1 407 Proxy Authentication Required</i>
+<i>Proxy-Authenticate:</i> Basic realm="Corporate Proxy"
+<i>Content-Length:</i> 0
+
+<em>（由代理返回，要求先向代理证明身份）</em></div>
+    <div class="wire-cap">407 挑战：注意首部名带 Proxy- 前缀，表明这是代理而非源站的要求。</div>
+
+    <p>客户端随后在请求里同时带上两套凭据：</p>
+
+    <div class="wire"><b>GET http://example.com/report HTTP/1.1</b>
+<b>Host:</b> example.com
+<b>Proxy-Authorization:</b> Basic YWxpY2U6czNjcjN0
+<b>Authorization:</b> Basic dXNlcjpwYXNz
+
+<em>（前者给代理，后者给源站，互不混淆）</em></div>
+    <div class="wire-cap">两套凭据并存：Proxy-Authorization 交给代理，Authorization 由代理转发给源站。这也是为什么代理不能随意吞掉或错转这些首部。</div>
+
+    <p>接下来是第四个例子的第二半：<strong>推演 Basic 凭据在没有 TLS 时被中间人窃取的完整攻击链</strong>。这是本讲最重要的安全结论，请一步步跟住。</p>
+
+    <p><strong>前置条件。</strong>用户访问的是 <code>http://intranet.example.com/report</code>——注意是 http，没有 TLS。攻击者位于客户端与服务器之间（同一个不可信 WiFi 的恶意热点、被控制的路由器、或链路上的任意节点），能够被动监听并主动转发流量。源站用 Basic 保护该路径。</p>
+
+    <p><strong>攻击链推演：</strong></p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>步骤</th><th>发生了什么</th><th>攻击者获得什么</th></tr>
+        <tr><td>1</td><td>客户端发裸 GET 到明文 http 地址</td><td>看到请求路径与目标，可确认有受保护资源</td></tr>
+        <tr><td>2</td><td>源站返回 401 + WWW-Authenticate: Basic realm="Intranet"</td><td>知道需要 Basic 凭据</td></tr>
+        <tr><td>3</td><td>浏览器弹框，用户输入 alice / s3cr3t</td><td>用户毫无察觉，以为只是普通登录</td></tr>
+        <tr><td>4</td><td>客户端计算 Base64 并发送 Authorization: Basic YWxpY2U6czNjcjN0</td><td>抓到整条报文，读到那一串 Base64</td></tr>
+        <tr><td>5</td><td>攻击者对 Base64 做逆向，还原出 alice:s3cr3t</td><td>拿到明文用户名与口令，无需任何密钥</td></tr>
+        <tr><td>6</td><td>攻击者用该凭据直接向源站重放请求，或去其他系统撞库</td><td>完全冒充 alice，访问、篡改数据，横向扩大战果</td></tr>
+      </table>
+    </div>
+
+    <p>整条链要成立，只需一个条件：<strong>凭据在链路上以可被监听的形式传输</strong>。Base64 可逆，等于把口令写在明信片背面——邮递员和沿途每个人都能翻过来看。攻击者甚至不必主动伪造任何东西，只要「听」就够了；这一步叫被动窃听，成本低、不留痕迹。</p>
+
+    <p>把 TLS 加进来，链条在第 4 步就断了。HTTPS 下，Authorization 首部连同整条 HTTP 报文被封装进 TLS 记录，用协商出的会话密钥加密；链路上的观察者只能看到目标 IP、端口，以及握手阶段暴露的域名（SNI），但<strong>看不到首部里的任何内容，更还原出口令</strong>。同时，TLS 的证书校验让客户端能确认「对面确实是 app.example.com，而不是伪装成它的中间人」，从而挡住主动冒充。这正是 MDN 那句警告的落点：<strong>Basic 必须搭配 HTTPS/TLS，没有这层保护就不该用它保护敏感或有价值的信息</strong>。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>分清「谁在挑战」和「谁在保护」：407 只是把 401 的问法换成了代理版本，安全性质一点没变——Basic 在代理链上同样是明文凭据。所以无论是发给源站还是发给代理，只要方案是 Basic，就必须假设整条路径都不可信，用 TLS 把凭据关进加密通道。想不依赖 TLS 又避免口令上线，就得换方案（如 Digest 用哈希挑战、Bearer 用短期令牌），而不是指望 Base64。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>「内网/局域网用 http 就没事，Basic 也安全」——错。攻击面往往就在「你以为可信」的那段链路上：共享 WiFi、被攻陷的路由器、恶意代理都在内网这一跳。MDN 的态度很明确：Basic 应当与 HTTPS/TLS 搭配使用，缺乏这些增强时不该用来保护敏感或高价值信息。另一个误区是以为「407 是 401 的笔误」——它们是两套首部、两个挑战方，混用会导致代理或源站收不到本该属于自己的凭据。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front"><div class="q-tag">回忆 8.4-1</div><div class="q-text">列出 401 与 407 在状态码、挑战首部、凭据首部上的对应差异，并说明它们能否并存。</div><span class="tap">点击翻面 →</span></div>
+            <div class="flip-face flip-back"><div class="a-tag">参考答案</div>401（源站）配 WWW-Authenticate / Authorization；407（代理）配 Proxy-Authenticate / Proxy-Authorization。两组首部独立，可并存：一条请求能同时向代理和源站各证明一次身份。</div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front"><div class="q-tag">回忆 8.4-2</div><div class="q-text">口述 Basic 凭据在无 TLS 时被窃取的攻击链，并指出 TLS 在哪一步截断它。</div><span class="tap">点击翻面 →</span></div>
+            <div class="flip-face flip-back"><div class="a-tag">参考答案</div>裸请求→401 挑战→用户输入口令→客户端发 Base64 凭据→攻击者旁路抓包→可逆解码还原明文口令→重放或撞库冒充。TLS 在第 4 步截断：整条报文被加密，攻击者看不到 Authorization 首部，也无法冒充服务器。</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 8.5 ============ -->
+    <h2><span class="sec-no">8.5</span>延伸：规范怎么写：MDN 的认证框架对应 RFC 的哪一段</h2>
+
+    <p>前面四节按 MDN 的工程口径讲清了「怎么用」。但如果你想实现客户端、写服务器，或判定某个边界行为的对错，就得看规范。这里做本讲的「延伸：规范怎么写」——把 MDN 的每段话对齐到具体的 RFC。认证这一块有三份关键文档：<strong>认证框架在 RFC 9110，Basic 在 RFC 7617，Bearer Token 在 RFC 6750</strong>。要注意 MDN 页面正文仍写着「RFC 7235 定义了 HTTP 身份验证框架」——那是被 RFC 9110 取代的旧文档，2022 年 IETF 重整 HTTP 规范后，原来的 RFC 7235 已并入 RFC 9110 的第 11 章。这正是延伸板块要补的口径差。</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>MDN 的说法</th><th>RFC 怎么写</th><th>为什么值得知道</th></tr>
+        <tr><td>RFC 7235 定义了 HTTP 身份验证框架，服务器质询、客户端提供凭据</td><td>现行框架在 RFC 9110 §11：challenge 与 credentials 是抽象模型，WWW-Authenticate / Authorization 是其 HTTP 首部表达；401 = §15.5.2，403 = §15.5.4，407 = §15.5.3</td><td>MDN 引用的 RFC 7235 已被 9110 取代。写实现要查现行编号，否则对着作废文档写代码；「质询—响应」在规范里是一组可复用的抽象，不只服务 Basic</td></tr>
+        <tr><td>Basic 用 base64 编码凭据，不安全，应与 HTTPS/TLS 搭配</td><td>RFC 7617 定义 Basic：凭据 = base64(user-id ":" password)，user-id 不得含冒号；realm 用引号包裹且区分大小写；可用 charset 参数声明编码（实际约定为 UTF-8）</td><td>「用户名里不能有冒号」「realm 区分大小写」这类边界只有规范写死。实现解析器时按 RFC 处理，才能和别的客户端互通</td></tr>
+        <tr><td>realm 描述受保护的区域或范围</td><td>RFC 7617 §2 与 RFC 9110 §11.5：realm 值大小写敏感，与规范化根 URI（scheme/authority）共同定义 protection space；客户端可在同空间内复用凭据</td><td>MDN 只说「提示文字」，规范才给出缓存键的精确定义。这解释了为什么改端口或 realm 就会重新挑战，是 8.3 节判定表的规范依据</td></tr>
+        <tr><td>Bearer 令牌通过 OAuth 2.0 保护资源</td><td>RFC 6750 定义 Bearer：凭据是「持有即有权」的令牌，形式为 Authorization: Bearer &lt;token&gt;；可由首部、form body 或 URI 查询携带（后者不推荐）</td><td>Bearer 与 Basic 的关键差异是凭据从「用户名口令」换成「短期令牌」，且同样强制要求 TLS。理解这一点才能接上后续的 OAuth / API 鉴权</td></tr>
+        <tr><td>凭据有效但权限不足返回 403；服务器也可能返回 404 隐藏页面</td><td>RFC 9110 §15.5.4 定义 403 为「理解请求但拒绝授权」；§15.5.2 要求 401 响应必须发送 WWW-Authenticate；隐藏资源用 404 是安全实践而非规范要求</td><td>「401 必须带挑战首部」是 MUST 级别的规范约束，不是可选优化；而 404 隐藏属于工程权衡。分清「规范要求」与「实践建议」，排障与评审才有依据</td></tr>
+      </table>
+    </div>
+
+    <p>这张表想传达的核心，和前几讲的延伸板块一致：<strong>MDN 告诉你「通常怎么做」，RFC 告诉你「到底必须怎么做」</strong>。RFC 里的 MUST / SHOULD / MAY 是有严格区别的——比如「401 必须带 WWW-Authenticate」是 MUST，缺少它服务器就是不合规范；而「用 404 隐藏资源」只是推荐的安全实践，你可以选择不用。当 MDN 说「通常」「建议」，而你需要一个确定的对错时，就去 RFC 找规范性措辞。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>把三份文档按职责摆好，整块认证知识就立住了：RFC 9110 定义<strong>通用框架</strong>（挑战—响应的抽象与状态码语义），RFC 7617 填进 <strong>Basic 方案</strong>的具体编码与 realm 规则，RFC 6750 填进 <strong>Bearer 方案</strong>的令牌规则。框架与方案是「插槽与插件」的关系——MDN 那串长长的方案列表，本质都是往同一个 9110 框架里插不同的插件。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>别把「Basic 必须搭配 TLS」记成「Basic 自带加密」。RFC 7617 全文没有给 Basic 定义任何加密或哈希保护，它只规定了一次可逆的 Base64 编码；保密性完全依赖外部 TLS。也别再引用 RFC 2617 或 RFC 7235 当现行认证规范——它们分别已被 RFC 7617 系列与 RFC 9110 取代。查规范先认清编号与章节，是写对实现的第一步。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front"><div class="q-tag">回忆 8.5-1</div><div class="q-text">认证框架、Basic、Bearer 各由哪份 RFC 定义？MDN 页面里过时的编号是哪一个？</div><span class="tap">点击翻面 →</span></div>
+            <div class="flip-face flip-back"><div class="a-tag">参考答案</div>框架＝RFC 9110 §11（旧 RFC 7235 已被取代）；Basic＝RFC 7617；Bearer＝RFC 6750。MDN 正文仍引用 RFC 7235，属过时编号，实现应对齐 RFC 9110。</div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front"><div class="q-tag">回忆 8.5-2</div><div class="q-text">从规范角度说出两条：401 响应对首部的硬性要求，以及 realm 与什么共同定义保护空间。</div><span class="tap">点击翻面 →</span></div>
+            <div class="flip-face flip-back"><div class="a-tag">参考答案</div>RFC 9110 要求 401 响应<strong>必须</strong>发送 WWW-Authenticate（MUST）；RFC 7617 规定 realm 值区分大小写，与规范化根 URI（scheme + authority）共同定义 protection space，同一空间内凭据可复用。</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===== 概念卡 ===== -->
+    <h2><span class="sec-no">🃏</span>概念卡：本讲概念的一分钟画像</h2>
+    <p>翻面前先自问：这个概念我能用一句话讲清楚吗？</p>
+    <div class="flip-grid">
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front"><div class="q-tag">概念卡 1</div><div class="q-text">识别 / 认证 / 授权（Identification / Authentication / Authorization）</div><span class="tap">点击翻面 →</span></div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">识别是声称身份，认证是证明身份，授权是确认身份后决定可访问的范围。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">把「你是谁」「凭什么信」「能做什么」三个常被混淆的问题分开处理。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">报名字是识别，查工牌是认证，刷卡只开 3 楼是授权。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">把 cookie「认出你」当成认证；持有会话 cookie 并不能证明操作者就是原用户。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">本讲主线讲认证；403 / 404 处涉及授权；第 7 讲 cookie 属于识别与会话维持。</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front"><div class="q-tag">概念卡 2</div><div class="q-text">质询—响应框架（Challenge–Response Framework）</div><span class="tap">点击翻面 →</span></div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">服务器先用 401 + WWW-Authenticate 发起挑战，客户端再用 Authorization 提供凭据的通用流程。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">让凭据只在确有必要时才传递，并把「用什么方式证明」的决定权交给服务器。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">门卫先问「出示证件」，你才掏证件；而不是见门就先把证件递出去。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为客户端会在首条请求就主动带凭据；标准流程是先裸请求、被挑战后再带。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">所有 HTTP 认证方案的共同骨架，规范在 RFC 9110 §11。</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front"><div class="q-tag">概念卡 3</div><div class="q-text">WWW-Authenticate / Authorization</div><span class="tap">点击翻面 →</span></div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">前者是 401 响应首部，声明方案与 realm；后者是请求首部，携带方案名与凭据。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">把挑战说什么、凭据怎么送，用两个标准首部固定下来，客户端服务器得以互通。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">一个是考卷上的题目，一个是答卷上的答案。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为凭据首部叫 Authentication；正确的是 Authorization，且 401 响应必须带 WWW-Authenticate。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">8.1 报文闭环与 8.4 代理对照里成对出现，代理版本加 Proxy- 前缀。</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front"><div class="q-tag">概念卡 4</div><div class="q-text">Basic 与 Base64</div><span class="tap">点击翻面 →</span></div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">Basic 是 RFC 7617 的认证方案，把「用户名:口令」做 Base64 编码后放进 Authorization。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">支持最广、配置最简单，能快速给目录加一道口令门。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">把「alice:口令」写成可逆的暗号，人人都能译回原文。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为 Base64 是加密、凭据被藏住了；它可逆无密钥，等价于明文，必须配 TLS。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">内部工具、临时保护；涉及敏感数据时只在 HTTPS 下使用，或改用更强方案。</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front"><div class="q-tag">概念卡 5</div><div class="q-text">realm 与保护空间（Realm / Protection Space）</div><span class="tap">点击翻面 →</span></div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">realm 是挑战里的区分大小写字符串，与规范化根 URI 共同定义一组凭据可复用的保护空间。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">让同一站点能划分多个独立保护区，并决定浏览器何时自动带凭据。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">realm 是房间名，源站是楼；同一间房的钥匙通用，换房或换楼就得重新领钥匙。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为 realm 只是登录框上的提示语，或以为路径不同凭据就不复用；路径不在缓存键里。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">8.3 判定表按 scheme/host/port/realm 四元组判断凭据复用。</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front"><div class="q-tag">概念卡 6</div><div class="q-text">401 / 403 / 404 / 407</div><span class="tap">点击翻面 →</span></div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">401 认证未过并附挑战，403 认证过但授权拒绝，404 隐藏存在，407 是代理版 401。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">用不同状态码区分「再试一次」与「别试了」，并把代理与源站的挑战分开。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">401 是「证件不合格请重出示」，403 是「证件没错但这层不让你进」。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">把 401 与 403 都当「登录失败」；也别把 407 当成 401 的笔误，它属于代理。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">排障时先分流：看状态码与挑战首部，再决定重试、换账号还是查代理配置。</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front"><div class="q-tag">概念卡 7</div><div class="q-text">Bearer Token 与 TLS</div><span class="tap">点击翻面 →</span></div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">Bearer 用「持有即有权」的令牌作凭据，形式 Authorization: Bearer &lt;token&gt;，由 RFC 6750 定义；TLS 提供传输层加密与身份认证。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">用短期令牌替代口令直接上线，配合 OAuth 2.0 做 API 鉴权；TLS 保护任何方案的首部不被窃听。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">Basic 交的是身份证复印件，Bearer 交的是限时通行证；TLS 是密封的运钞车。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为 Bearer 令牌泄露也无所谓，或以为 Basic 自带加密；令牌同样机密，Basic 同样依赖 TLS。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">现代 API 与开放平台鉴权多用 Bearer；任何在公网传凭据的场景都必须先上 TLS。</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===== 分层习题 ===== -->
+    <h2><span class="sec-no">✍️</span>分层习题：先自己写，再点开核对</h2>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>判断下列说法的正误并说明理由：①「HTTP 认证就是登录表单」；②「401 和 403 都表示登录失败，处理方式一样」；③「Base64 是一种加密，所以 Basic 的口令是安全的」。</div>
+      <details><summary>提示</summary><p>逐句找出被混淆的那对概念：协议框架 vs 应用层表单、认证未过 vs 授权拒绝、编码 vs 加密。</p></details>
+      <details><summary>完整解答</summary><div class="ex-answer">① 错。登录表单是应用层自己设计的流程（POST 到 /login，换回 cookie），靠 cookie 识别用户；HTTP 认证是协议内置的质询—响应框架，凭据走 Authorization 首部，由浏览器自动处理，两者机制不同。② 错。401 是认证未过，响应必须带 WWW-Authenticate，客户端应重新提供凭据并重试；403 是凭据有效但权限不足，重试没有意义，应换账号或申请权限；服务器还可能用 404 隐藏页面存在。③ 错。Base64 是公开可逆的编码，不是加密，不需要密钥就能还原。Basic 的凭据等价于明文，只有搭配 HTTPS/TLS 才安全，MDN 明确称 Basic 安全性很差。</div></details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>有人说：「realm 只是登录框上给用户看的一句话，浏览器发不发凭据跟它没关系。」这句话错在哪？请说出凭据缓存键的构成，并举出两种会让浏览器重新挑战的变化。</div>
+      <details><summary>提示</summary><p>回到 8.3 的四元组口诀：同源 + 同 realm 才复用。想哪些字段一变就不再「同源同 realm」。</p></details>
+      <details><summary>完整解答</summary><div class="ex-answer">realm 不只是提示文字，它是凭据缓存键的一部分。按 RFC 7617，保护空间由「规范化根 URI（scheme、host、port）+ realm」共同定义，四项全等浏览器才自动复用凭据。会让浏览器重新挑战的变化例如：① 把 realm 从 Admin Area 改成 Docs Area（realm 不同，另一保护空间）；② 把访问从 https 改成 http，或把端口从 443 改成 8443，或换到另一个主机名（根 URI 变化）。注意路径深浅不在键里——同 realm 的 /a 与 /b 会复用同一份凭据。</div></details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>请手工把字符串 <code>alice:s3cr3t</code> 编码成 Base64，写出每组 3 字节的 ASCII 十六进制、24 位二进制、拆成 4 组 6 位及最终字符。并回答：结果末尾有没有补位符 <code>=</code>？为什么？</div>
+      <details><summary>提示</summary><p>先数字符个数、判断是否 3 的倍数；再逐字符查 ASCII，按 3 字节一组、每 24 位拆 4 个 6 位，对照字母表 A–Z=0–25、a–z=26–51、0–9=52–61。</p></details>
+      <details><summary>完整解答</summary><div class="ex-answer">alice:s3cr3t 共 12 个字符，是 3 的倍数，可分 4 组，故末尾<strong>没有</strong>补位符（只有长度不被 3 整除时才补 =）。ASCII：a=61 l=6C i=69 / c=63 e=65 :=3A / s=73 3=33 c=63 / r=72 3=33 t=74。四组 24 位与 6 位拆分：<br>ali → 01100001 01101100 01101001 → 011000/010110/110001/101001 → 24/22/49/41 → Y/W/x/p → YWxp<br>ce: → 01100011 01100101 00111010 → 011000/110110/010100/111010 → 24/54/20/58 → Y/2/U/6 → Y2U6<br>s3c → 01110011 00110011 01100011 → 011100/110011/001101/100011 → 28/51/13/35 → c/z/N/j → czNj<br>r3t → 01110010 00110011 01110100 → 011100/100011/001101/110100 → 28/35/13/52 → c/j/N/0 → cjN0<br>拼接结果：<code>YWxpY2U6czNjcjN0</code>。这正是 8.4 节代理报文里 Proxy-Authorization 所用的那串值。</div></details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>用户在 <code>https://shop.example.com:443/account/</code> 被 <code>realm="Member Area"</code> 挑战并输入了凭据。对下列每个请求，判断浏览器是否自动带上凭据，并写出判据：① <code>https://shop.example.com/account/orders</code>；② <code>https://shop.example.com:443/admin/</code>（假定返回 realm="Staff Area"）；③ <code>http://shop.example.com/account/</code>；④ <code>https://shop.example.com:8443/account/</code>。</div>
+      <details><summary>提示</summary><p>逐项对比四元组 (scheme, host, port, realm) 是否与缓存的 (https, shop.example.com, 443, Member Area) 完全相同；默认端口 443 与省略端口等价。</p></details>
+      <details><summary>完整解答</summary><div class="ex-answer">缓存的保护空间是 (https, shop.example.com, 443, Member Area)。<br>① 自动带上：scheme、host、port 全同，路径 /account/orders 更深不影响，realm 未变（隐含仍为 Member Area），四元组一致。<br>② 不带：虽 scheme/host/port 相同，但该路径挑战的 realm 是 Staff Area，与缓存的 Member Area 不同，属另一保护空间，浏览器会重新挑战。<br>③ 不带：scheme 从 https 变成 http，规范化根 URI 变化，保护空间不同；而且明文传输凭据有安全风险。<br>④ 不带：port 从 443 变成 8443，源站不同，保护空间不同。结论——四项完全一致才复用，任一变化（含 realm 与端口）都要重新提供凭据。</div></details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l3">L3 建模应用</span>你要给一个内部系统做认证方案评审：一部分是给员工用的网页后台（有用户名口令），一部分是给合作伙伴调用的 API（发放短期令牌），链路经过一台公司出网代理。请综合本讲回答：① 两处分别适合用哪种认证方案，凭据首部怎么写？② 代理那一跳用什么状态码与首部，会不会和源站认证冲突？③ 从威胁建模角度，列出至少三条必须落实的安全约束，并说明它们各自挡住哪类攻击。</div>
+      <details><summary>提示</summary><p>把「方案选择」「401/407 并存」「Base64 明文风险与 realm 缓存」三个维度分别套进去；安全约束优先考虑 TLS、令牌时效、凭据不进 URL。</p></details>
+      <details><summary>完整解答</summary><div class="ex-answer">① 员工后台可用 Basic，凭据首部写 <code>Authorization: Basic &lt;base64(user:pass)&gt;</code>，但必须全程 HTTPS；合作伙伴 API 更适合 Bearer，写 <code>Authorization: Bearer &lt;token&gt;</code>，令牌短期有效、可撤销，同样依赖 TLS。② 代理那一跳用 407 + Proxy-Authenticate 挑战、Proxy-Authorization 提供凭据；它与源站的 401/Authorization 是两套独立首部，不会冲突，一条请求可同时带 Proxy-Authorization 和 Authorization 分别向代理与源站证明身份。③ 安全约束示例：(a) 全链路强制 HTTPS/TLS——挡住被动窃听与中间人冒充，因为 Basic 与 Bearer 凭据都不能明文上线；(b) API 令牌短期有效并支持吊销——即使令牌泄露也限制可用窗口，降低重放与撞库损失；(c) 禁止把用户名口令或令牌写进 URL（弃用的 user:password@ 形式、或查询参数）——避免凭据进入浏览器历史、服务器日志与 Referer；(d) 不同安全等级区域使用不同 realm——防止浏览器在同源下把高权限凭据复用到低信任区域；(e) 有效凭据但权限不足返回 403、必要时用 404 隐藏资源存在——减少信息泄露。这些约束共同弥补 Basic 本身不提供机密性的短板。</div></details>
+    </div>
+
+    <!-- ===== 自测 ===== -->
+    <h2><span class="sec-no">✅</span>本章自测：每题只选一个答案</h2>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 1</div>
+      <div class="q-stem">关于 HTTP 通用认证框架，下列说法正确的是？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 客户端在首条请求就主动带上凭据，服务器只需校验</li>
+        <li data-opt="b">B. 服务器先用 401 + WWW-Authenticate 挑战，客户端再用 Authorization 提供凭据</li>
+        <li data-opt="c">C. 认证框架是 Basic 方案特有的，其他方案不用</li>
+        <li data-opt="d">D. 401 表示凭据有效但权限不足</li>
+      </ul>
+      <div class="quiz-explain">解析：B 对。A 错在标准流程是先裸请求、被挑战后才带凭据；C 错在框架是通用的（RFC 9110 §11），Basic、Bearer、Digest 等都往同一框架里插；D 错在 401 是认证未过，权限不足是 403。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 2</div>
+      <div class="q-stem">字符串 <code>user:pass</code> 的 Base64 编码结果是？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. dXNlcnBhc3M=</li>
+        <li data-opt="b">B. dXNlcjpwYXNz</li>
+        <li data-opt="c">C. dXNlcjpwYXNz=</li>
+        <li data-opt="d">D. dXNlcjpwdHNz==</li>
+      </ul>
+      <div class="quiz-explain">解析：B 对。user:pass 共 9 字节、可被 3 整除，分组 use→dXNl、r:p→cjpw、ass→YXNz，拼接得 dXNlcjpwYXNz，且无补位符。A 是漏掉冒号、按 userpass 编码的结果（dXNlcnBhc3M=），是最容易混淆的干扰项；C 凭空多出一个 =，长度能被 3 整除时不应补位；D 的末组字符算错且错加两个 =，既算错了 ass 的 6 位分组，也误判了补位。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="a">
+      <div class="q-no">自测 3</div>
+      <div class="q-stem">浏览器在下列哪种情况下会自动带上已缓存的 Basic 凭据？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 同 scheme、同 host、同 port、同 realm，但路径更深</li>
+        <li data-opt="b">B. realm 从 Admin Area 改为 Docs Area，其余不变</li>
+        <li data-opt="c">C. 从 https 改为 http，其余不变</li>
+        <li data-opt="d">D. 端口从 443 改为 8443，其余不变</li>
+      </ul>
+      <div class="quiz-explain">解析：A 对。保护空间由规范化根 URI 与 realm 四元组决定，路径不在键里，所以同源同 realm 的更深路径会复用凭据。B 改 realm、C 改 scheme、D 改 port 都会改变保护空间，浏览器将重新挑战，故都不带。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="d">
+      <div class="q-no">自测 4</div>
+      <div class="q-stem">关于代理认证，下列说法正确的是？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 代理认证用 401 和 WWW-Authenticate</li>
+        <li data-opt="b">B. 代理认证与源站认证互相冲突，只能二选一</li>
+        <li data-opt="c">C. 代理凭据放在 Authorization 首部里发给源站</li>
+        <li data-opt="d">D. 代理用 407 和 Proxy-Authenticate 挑战，凭据放 Proxy-Authorization</li>
+      </ul>
+      <div class="quiz-explain">解析：D 对。A 把代理说成源站（401/WWW-Authenticate 属于源站）；B 错在两套首部独立、可以并存；C 错在代理凭据应放 Proxy-Authorization，Authorization 是给源站的。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="c">
+      <div class="q-no">自测 5</div>
+      <div class="q-stem">Basic 认证凭据被中间人窃取的根本原因是？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 用户名里含冒号导致解析出错</li>
+        <li data-opt="b">B. realm 字符串区分大小写</li>
+        <li data-opt="c">C. Base64 编码可逆且无密钥，凭据在明文链路上等价于明文</li>
+        <li data-opt="d">D. 浏览器缓存凭据时把路径也算进键</li>
+      </ul>
+      <div class="quiz-explain">解析：C 对。Basic 把用户名口令做可逆 Base64 编码，无 TLS 时任何旁路监听者都能还原明文口令并重用——这是必须搭配 HTTPS/TLS 的原因。A 是编码时的格式约束（用户名不得含冒号），不是被窃原因；B 是 realm 的正常属性；D 说法本身错误，路径并不进缓存键。</div>
+    </div>
+
+    <div class="retell">
+      <h3>🗣️ 用自己的话，三句话讲完本讲</h3>
+      <p>对着空气（或室友）说出这三句。说卡壳的那句，回去重读对应小节。</p>
+      <details><summary>句1：这讲解决什么问题？——</summary><div class="retell-answer">参考答案：把「认出你、证明你是你、允许你做什么」三件事分开，讲清 HTTP 用通用质询—响应框架完成认证：服务器用 401 挑战，客户端用 Authorization 带凭据，代理用 407 那一套。</div></details>
+      <details><summary>句2：核心机制是什么？——</summary><div class="retell-answer">参考答案：401 + WWW-Authenticate 发起挑战，客户端把「用户名:口令」做 Base64 后放 Authorization 重试；realm 与源站四元组决定凭据能否复用；Basic 编码可逆、等价明文，所以必须靠 TLS 保护。</div></details>
+      <details><summary>句3：它和前后讲怎么分工？——</summary><div class="retell-answer">参考答案：第 7 讲的 cookie 负责「认出你」，本讲负责「证明你是你」；第 9 讲转向跨源访问的边界；规范上本讲对齐 RFC 9110 框架、RFC 7617 Basic 与 RFC 6750 Bearer。</div></details>
+    </div>
+
+    <div class="review-plan">
+      <h3>🔁 间隔复习计划</h3>
+      <p>回忆本身比重读有效 10 倍。到点只做一件事：翻卡 + 重做标记题。</p>
+      <table>
+        <tr><th>时间点</th><th>复习内容</th><th>预计用时</th></tr>
+        <tr><td>第 1 天</td><td>概念卡 1–7 全翻 + 回忆 8.1 / 8.2 / 8.3 / 8.4 / 8.5 各 2 张</td><td>14 分钟</td></tr>
+        <tr><td>第 3 天</td><td>重做自测 2、3、5 + 翻错的概念卡 4、5、6</td><td>9 分钟</td></tr>
+        <tr><td>第 7 天</td><td>三句话复述 + L2 两题（Base64 手算、realm 凭据判定）+ 概念卡 2、7</td><td>14 分钟</td></tr>
+        <tr><td>第 15 天</td><td>只重做合上书挑战；重点口述 401 报文闭环与 MITM 攻击链，能全过就毕业</td><td>16 分钟</td></tr>
+      </table>
+    </div>
+
+    <div class="final-challenge">
+      <h3>🚪 合上书挑战：能全写出来，这一讲才毕业</h3>
+      <ol id="challenge-list">
+        <li>区分识别、认证、授权，各举一个生活中的例子，并说出 HTTP 通用框架解决哪一个。</li>
+        <li>默写从 401 挑战到 200 成功的四条报文，标出 WWW-Authenticate 与 Authorization 分别在哪一步、格式是什么。</li>
+        <li>手写 user:pass 的 Base64 编码，写出逐字符 ASCII、3 字节分组、4 组 6 位与最终结果 dXNlcjpwYXNz。</li>
+        <li>说出保护空间的四元组，并对两个不同 realm 与多个 URL 判断浏览器是否自动带凭据。</li>
+        <li>列出 401 与 407 在状态码、挑战首部、凭据首部上的对应关系，并说明两者可并存。</li>
+        <li>口述 Basic 凭据在无 TLS 时被中间人窃取的完整攻击链，指出 TLS 在哪一步截断，并说出框架、Basic、Bearer 各由哪份 RFC 定义。</li>
+        <li>一句话回答本讲主线问题：一次 401 挑战—响应是怎么走完的，为什么说认证和识别不是一回事？</li>
+      </ol>
+    </div>
+
+    <div class="complete-zone">
+      <button class="btn-complete" id="btn-complete" onclick="markDone()">✓ 我已完成本讲（含合上书挑战）</button>
+    </div>
+
+    <div class="chapter-nav">
+      <a href="chapter-07.html"><span class="nav-dir">← 上一讲</span>第7讲 Cookie：给无状态协议加上记忆</a>
+      <a href="chapter-09.html" class="next"><span class="nav-dir">下一讲 →</span>第9讲 跨源资源共享 CORS</a>
+    </div>
+
+  </div>
+</div>
+
+<footer class="footer">
+  <div class="wrap">第8讲 HTTP 身份验证 · HTTP 精通 · 依据 MDN Web Docs《HTTP 指南》整理，延伸板块对照 RFC 9110 系列 · 学习进度保存在本机浏览器中</div>
+</footer>
+
+<script src="assets/mermaid.min.js"></script>
+<script>
+mermaid.initialize({
+  startOnLoad: true,
+  theme: "base",
+  themeVariables: {
+    primaryColor: "#e3edf7",
+    primaryBorderColor: "#1d5f9e",
+    primaryTextColor: "#1d5f9e",
+    lineColor: "#5c554b",
+    secondaryColor: "#fbeedd",
+    tertiaryColor: "#f5f1e8",
+    fontFamily: "-apple-system, PingFang SC, sans-serif",
+    fontSize: "14px"
+  },
+  flowchart: { curve: "linear", htmlLabels: false }
+});
+</script>
+<script>
+document.querySelectorAll(".quiz-block").forEach(block => {
+  const answer = block.dataset.answer;
+  const explain = block.querySelector(".quiz-explain");
+  block.querySelectorAll(".quiz-opts li").forEach(li => {
+    li.addEventListener("click", () => {
+      const opts = block.querySelectorAll(".quiz-opts li");
+      opts.forEach(o => o.classList.add("disabled"));
+      if (li.dataset.opt === answer) {
+        li.classList.add("correct");
+      } else {
+        li.classList.add("wrong");
+        block.querySelector(`[data-opt="${answer}"]`).classList.add("correct");
+      }
+      explain.classList.add("show");
+    });
+  });
+});
+
+document.querySelectorAll("#challenge-list li").forEach(li => {
+  li.addEventListener("click", () => li.classList.toggle("checked"));
+});
+
+const KEY = "http_guide_progress_v1";
+function loadProgress() {
+  try { return JSON.parse(localStorage.getItem(KEY)) || {}; } catch (e) { return {}; }
+}
+const progress = loadProgress();
+const btn = document.getElementById("btn-complete");
+if (progress[8] && progress[8].done) {
+  btn.textContent = "✓ 已完成 · 再次点击重置";
+  btn.classList.add("done");
+}
+function markDone() {
+  const p = loadProgress();
+  if (p[8] && p[8].done) {
+    delete p[8];
+    btn.textContent = "✓ 我已完成本讲（含合上书挑战）";
+    btn.classList.remove("done");
+  } else {
+    p[8] = { done: true, completedAt: Date.now(), reviewsDone: 0 };
+    btn.textContent = "✓ 已完成 · 复习提醒已开启";
+    btn.classList.add("done");
+  }
+  localStorage.setItem(KEY, JSON.stringify(p));
+}
+</script>
+
+</body>
+</html>

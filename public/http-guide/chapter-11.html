@@ -1,0 +1,824 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第11讲 代理、隧道与协议升级 · HTTP 精通</title>
+<link rel="stylesheet" href="assets/style.css">
+<style>
+/* 本套专用：协议报文原文展示与 MDN 来源条 */
+.wire{background:var(--bg-deep);border:1px solid var(--line);border-left:4px solid var(--accent);border-radius:8px;padding:14px 18px;margin:14px 0;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:13.5px;line-height:1.78;white-space:pre-wrap;overflow-wrap:anywhere;color:var(--ink-soft);}
+.wire b{color:var(--accent);font-weight:700;}
+.wire i{color:var(--orange);font-style:normal;}
+.wire em{color:var(--ink-faint);font-style:normal;}
+.wire.sm{font-size:12.5px;}
+.wire-cap{font-size:13px;color:var(--ink-faint);margin:-8px 0 16px;}
+.mdn-src{background:var(--bg-deep);border:1px solid var(--line);border-left:4px solid var(--accent);border-radius:8px;padding:12px 18px;margin:16px 0 0;font-size:13px;line-height:1.8;color:var(--ink-soft);}
+.mdn-src strong{color:var(--accent);}
+.mdn-src a{color:var(--accent);text-decoration:none;border-bottom:1px dashed var(--line);}
+.mdn-src a:hover{border-bottom-style:solid;}
+.to-slide{font-size:13px;color:var(--accent);text-decoration:none;border:1px solid var(--line);border-radius:6px;padding:4px 11px;white-space:nowrap;}
+.to-slide:hover{background:var(--bg-deep);}
+</style>
+</head>
+<body>
+
+<nav class="topbar">
+  <div class="topbar-inner">
+    <span class="brand"><a href="index.html" style="color:inherit">← HTTP 精通 · 学习地图</a></span>
+    <span class="crumb">第④组 · 中间层与分发 / 第11讲</span>
+    <a class="to-slide" href="../http-guide-slides/11-%E4%BB%A3%E7%90%86%E9%9A%A7%E9%81%93%E4%B8%8E%E5%8D%8F%E8%AE%AE%E5%8D%87%E7%BA%A7-%E8%AF%BE%E4%BB%B6.html" target="_blank" rel="noopener noreferrer">配套课件 ↗</a>
+  </div>
+</nav>
+
+<div class="wrap">
+
+  <div class="lecture-head">
+    <span class="ch-label">GUIDE 11 · 中间层与分发</span>
+    <h1>代理、隧道与协议升级</h1>
+    <p class="lead">客户端与源站之间还夹着中间层：本讲讲代理如何代人发请求、隧道如何透传字节，以及把一条连接升级成另一种协议。</p>
+    <div class="mdn-src"><strong>本讲对应的 MDN 指南：</strong><a href="https://developer.mozilla.org/zh-CN/docs/Web/HTTP/Guides/Proxy_servers_and_tunneling" target="_blank" rel="noopener">代理服务器与隧道</a> · <a href="https://developer.mozilla.org/zh-CN/docs/Web/HTTP/Guides/Protocol_upgrade_mechanism" target="_blank" rel="noopener">协议升级机制</a></div>
+  </div>
+
+  <!-- 本章定位 -->
+  <div class="position-bar">
+    <strong>本讲在主线上的位置：</strong>第 10 讲的浏览器侧策略 → <u>本讲：代理、隧道与协议升级</u> → 第 12 讲以重定向收束全程。<br>
+    第11讲回答主线上的第11个问题：<strong>代理与隧道各在什么层级工作，Upgrade 又是怎样把 HTTP 连接改成 WebSocket 的？</strong>
+    <div class="map-inline">
+      <span class="node">第10讲 CSP、权限策略与 Fetch 元数据</span><span class="arrow">→</span>
+      <span class="node here">第11讲 代理、隧道与协议升级</span><span class="arrow">→</span>
+      <span class="node">第12讲 HTTP 重定向</span><span class="arrow">→</span>
+      <span class="node">终点：分发与重定向</span>
+    </div>
+  </div>
+
+  <!-- 学习目标 -->
+  <div class="objectives">
+    <h4>🎯 学完本讲，合上书你应该能：</h4>
+    <ol>
+      <li>对比正向代理与反向代理的位置与用途</li>
+      <li>写出经代理的请求为何使用绝对 URI</li>
+      <li>说明 Via 首部如何逐跳追加</li>
+      <li>走通 CONNECT 建立隧道的报文交互</li>
+      <li>解释 Upgrade 握手与逐跳首部为何不能乱转发</li>
+    </ol>
+  </div>
+
+  <!-- 视频卡插槽：后面录制 B 站讲解时在此插入 <details class="video-card" id="video-card">…</details> -->
+  <!-- VIDEO_CARD_SLOT -->
+
+  <div class="lecture">
+
+    <!-- 推导主线图 -->
+    <div class="figure">
+      <div class="mermaid">
+flowchart LR
+  A["客户端请求经代理"]
+  B["代理改写并转发"]
+  C["Via 逐跳追加"]
+  D["CONNECT 建立隧道"]
+  E["Upgrade 切换协议"]
+  F["逐跳首部被误转发"]
+  A --> B
+  B --> C
+  C --> D
+  D --> E
+  B --> F
+  classDef hot fill:#fbeedd,stroke:#c4651f,stroke-width:2.5px,color:#c4651f;
+  classDef danger fill:#fae9e7,stroke:#b03a2e,stroke-width:2.5px,color:#b03a2e;
+  class D hot;
+  class F danger;
+      </div>
+      <div class="caption">中间层的主线：代理在应用语义层插手，隧道在字节层透传，Upgrade 则在两者之间切换协议；红色节点是逐跳首部越过一跳后引发的故障。</div>
+    </div>
+
+<!-- ============ 11.1 ============ -->
+    <h2><span class="sec-no">11.1</span>中间人已经进场：代理同时对两边说谎，却让整条链路成立</h2>
+
+    <p>前面十讲始终把 HTTP 画成一条直线上的两个端点——客户端发请求，服务器回响应。但从这一讲起，要把<strong>中间人</strong>请进画面。你在公司内网点开一个外网页面，请求未必直接从浏览器飞到目标服务器；它先到公司出口的一台机器，再由那台机器转发出去。你在手机上浏览网页，响应也未必来自网站自己的机房，而可能来自离你几十公里的一个缓存节点。这些夹在中间的机器，MDN 统称为<span class="term">代理</span>（proxy）。</p>
+
+    <p>代理之所以能存在，靠的是一个有点「两面派」的事实：它对着客户端时<strong>扮演服务器</strong>，接受请求、回响应；它对着目标服务器时又<strong>扮演客户端</strong>，发出请求、等待响应。两端都以为自己在跟真正的对端说话，中间那台机器却把两条连接缝在了一起。MDN 的《代理服务器与隧道》正是从这个视角切入：代理位于用户本地机器与目标服务器之间的<strong>任何位置</strong>，它替某一方做事，也因此改变了「谁被隐藏、谁能看见什么」。</p>
+
+    <p>MDN 把代理分成两大类，判据只有一条——<strong>它代表谁</strong>。代表客户端的叫<span class="term">正向代理</span>（forward proxy），代表服务器的叫<span class="term">反向代理</span>（reverse proxy）。注意 MDN 在括号里还给了正向代理两个别名：隧道、网关；这不是随口一提，而是预告了本讲后两节——隧道（11.3）正是正向代理的一种高级形态。</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>对比维度</th><th>正向代理（forward proxy）</th><th>反向代理（reverse proxy）</th></tr>
+        <tr><td>代表谁</td><td>代表客户端，替客户端去访问互联网</td><td>代表服务器，替服务器接住客户端请求</td></tr>
+        <tr><td>隐藏谁</td><td>隐藏客户端身份，目标站点看不到真实访客 IP</td><td>隐藏服务器身份，访客看不到后端机器的存在</td></tr>
+        <tr><td>谁主动配置</td><td>通常由客户端或网络管理员配置</td><td>由站点运维部署，客户端往往毫无察觉</td></tr>
+        <tr><td>MDN 列出的用途</td><td>存储转发以节省与控制带宽、匿名访问（如 TOR 洋葱路由）</td><td>负载均衡、缓存静态内容、压缩与优化内容</td></tr>
+        <tr><td>典型位置</td><td>公司出口、学校网关、VPN 节点</td><td>网站入口的 CDN 边缘、Nginx / 网关层</td></tr>
+        <tr><td>客户端是否知道</td><td>多半知道（浏览器里配了代理）</td><td>多半不知道（以为反向代理就是目标站）</td></tr>
+      </table>
+    </div>
+
+    <p>把这张表读成一句话：<strong>正向代理替客户端「出去」，反向代理替服务器「进来」</strong>。MDN 特别点出正向代理可以是匿名的——它把请求的地址改写成自己的 IP，于是目标站点只能看到代理，看不到真正的访客；TOR 就是把流量在多个代理之间反复转发来隐藏来源的极端例子。反过来，反向代理站在网站最前面，访客以为自己连的就是 example.com，实际上连的是反向代理，后端可能有十台机器在分担流量。</p>
+
+    <p>反向代理的三项用途，MDN 一条条列得很清楚，值得展开成具体场景。<strong>负载均衡</strong>：把请求按轮询或最少连接分发到多台后端，任何一台挂了就摘掉，访客无感。<strong>缓存静态内容</strong>：图片、样式表这些不常变的东西放在反向代理本地，命中就直接回，不必每次都回源，这正是后面缓存讲义里「共享缓存」的落地形态。<strong>压缩</strong>：在离用户更近的地方压缩和优化内容，减少传输字节。你会发现这三项都不是改 HTTP 语义，而是把同一条请求—响应事务<strong>换个地方处理</strong>——这与第 1 讲「变的是承载，不变的是事务模型」完全一致。</p>
+
+    <p>代理夹在中间，带来一个直接的副作用：<strong>原始请求的信息会丢</strong>。正向代理把请求地址改写成自己的 IP，目标服务器就看不见真正的客户端了。可这份信息对调试、统计、按地区生成内容又很关键。MDN 因此列出一组专门用来「把被代理抹掉的信息补回来」的首部，并明确区分了标准与事实标准：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>首部</th><th>作用</th><th>地位</th></tr>
+        <tr><td>Forwarded</td><td>携带代理参与路径时被更改或丢失的信息，如原始客户端 IP、原始主机、原始协议</td><td>标准首部</td></tr>
+        <tr><td>X-Forwarded-For</td><td>标识经由代理或负载均衡连到服务器的客户端源 IP</td><td>事实标准</td></tr>
+        <tr><td>X-Forwarded-Host</td><td>标识客户端原本请求连接的主机</td><td>事实标准</td></tr>
+        <tr><td>X-Forwarded-Proto</td><td>标识客户端连代理时用的协议，HTTP 还是 HTTPS</td><td>事实标准</td></tr>
+        <tr><td>Via</td><td>提供<strong>代理自己</strong>的信息（而非客户端的），请求与响应中都可出现，由代理逐跳追加</td><td>标准首部</td></tr>
+      </table>
+    </div>
+
+    <p>这里最关键的一行是 Via。前面四个 X-Forwarded-* 与 Forwarded 回答的是「客户端本来是谁」，而 Via 回答的是「请求经过了哪些代理」。MDN 特别强调它同时出现在请求首部与响应首部里，且由正向、反向代理都会添加。11.2 节会亲手推演它逐跳追加的全过程。</p>
+
+    <p>客户端怎么知道该直连还是走代理？MDN 提到一个配置选项：<span class="term">代理自动配置</span>（Proxy Auto-Configuration，PAC）文件。它是一个 JavaScript 函数，扩展名 <code>.pac</code>，MIME 类型为 <code>application/x-ns-proxy-autoconfig</code>，核心是一个叫 <code>FindProxyForURL</code> 的函数，返回 <code>DIRECT</code>（直连）或 <code>PROXY 主机:端口</code>。MDN 给的例子里，内部 DNS 能解析的主机就直连，解析不了的才走代理：</p>
+
+    <div class="wire"><b>function FindProxyForURL(url, host) {</b>
+  if (isResolvable(host)) {
+    return "DIRECT";
+  }
+  return "PROXY proxy.mydomain.com:8080";
+<b>}</b></div>
+    <div class="wire-cap">MDN 的 PAC 示例：能解析的内部主机直连，其余交给代理。注意这是浏览器配置层面的逻辑，与 HTTP 报文本身无关。</div>
+
+    <p>下面这张拓扑图把本讲要反复用到的四个角色摆在一起。看清每条箭头属于哪一段：客户端到正向代理、正向代理到互联网、互联网到反向代理、反向代理到源服务器。</p>
+
+    <div class="figure">
+      <div class="mermaid">
+flowchart LR
+    C["客户端浏览器"] -->|"发请求"| F["正向代理"]
+    F -->|"代替客户端转发"| N["互联网"]
+    N -->|"到达站点入口"| R["反向代理"]
+    R -->|"分发请求"| S["源服务器组"]
+      </div>
+      <div class="caption">图 11.1 一次访问里可能同时出现正向代理与反向代理：前者替客户端出去，后者替服务器进来。</div>
+    </div>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>代理不是「多了一跳」这么简单，而是<strong>把一条端到端连接拆成了两条各自独立的连接</strong>。正因为被拆开，代理才有机会在中间做缓存、压缩、改写首部，也才有必要用 Via、Forwarded 之类的首部把被切断的信息重新串起来。11.3 的隧道与 11.4 的升级，本质上都是在回答「连接被拆开之后，怎么让两端重新建立某种端到端的关系」。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>「代理就是中转站，两端完全感知不到」——这句话错。正向代理客户端通常知道（浏览器里配了），反向代理客户端通常不知道；更关键的是，很多 HTTP 首部是<strong>只对本跳有效</strong>的（11.4 会系统讲逐跳首部），代理必须正确处理它们，否则连接行为会被意外改变。把代理当成透明管道，是后面所有故障推演的根源。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front"><div class="q-tag">回忆 11.1-1</div><div class="q-text">判据只有一条：正向代理与反向代理分别代表谁、隐藏谁？各举一个 MDN 列出的用途。</div><span class="tap">点击翻面 →</span></div>
+            <div class="flip-face flip-back"><div class="a-tag">参考答案</div>正向代理代表客户端、隐藏客户端身份，用途如节省带宽、匿名访问（TOR）；反向代理代表服务器、隐藏服务器身份，用途如负载均衡、缓存静态内容、压缩优化。正向代理替客户端「出去」，反向代理替服务器「进来」。</div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front"><div class="q-tag">回忆 11.1-2</div><div class="q-text">代理改写请求地址会丢掉哪类信息？Forwarded / X-Forwarded-* 与 Via 各自补回的是什么？</div><span class="tap">点击翻面 →</span></div>
+            <div class="flip-face flip-back"><div class="a-tag">参考答案</div>丢掉的是原始客户端信息（IP、主机、协议）。Forwarded 与 X-Forwarded-For / Host / Proto 补的是「客户端本来是谁」；Via 补的是「请求经过了哪些代理」，记录代理自身信息，且请求与响应中都可出现，由代理逐跳追加。</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 11.2 ============ -->
+    <h2><span class="sec-no">11.2</span>请求目标为何变形：连的是代理，就得把完整地址写进请求行</h2>
+
+    <p>上一节把代理的定位讲清了，但还留着一个具体的报文问题：客户端一旦把请求发给<strong>正向代理</strong>而不是源服务器，请求行该怎么写？这不是格式洁癖，而是代理能不能正确转发的前提。先看一个最朴素的反例。</p>
+
+    <p>客户端直连源服务器时，TCP 连接已经确定了「跟谁说话」，所以请求行只需要给出资源在这台服务器上的路径。这就是 MDN 与规范里说的<span class="term">源点形式</span>（origin-form）：只带路径与查询串，不带域名。</p>
+
+    <div class="wire"><b>GET /index.html HTTP/1.1</b>
+<b>Host:</b> www.example.com
+<b>Accept:</b> text/html
+
+<em>（直连：请求目标是 origin-form，只有路径）</em></div>
+    <div class="wire-cap">直连源服务器的请求：TCP 已锁定对端，请求目标用 origin-form，域名放在 Host 首部里就够了。</div>
+
+    <p>现在把场景换成「客户端配置了正向代理」。浏览器发出请求时，它建立 TCP 连接的对象是代理，而不是 www.example.com。如果请求行还是 <code>GET /index.html</code>，代理收到后根本无从判断这个 <code>/index.html</code> 属于哪台服务器——它可能服务成千上万个域名。于是客户端必须把<strong>完整 URL</strong> 写进请求行，这叫<span class="term">绝对形式</span>（absolute-form）：</p>
+
+    <div class="wire"><b>GET http://www.example.com/index.html HTTP/1.1</b>
+<b>Host:</b> www.example.com
+<b>Accept:</b> text/html
+
+<em>（经正向代理：请求目标升级为 absolute-form，带 scheme 与主机）</em></div>
+    <div class="wire-cap">经正向代理的请求：请求目标从路径变成完整 URL，代理据此知道要把请求转发到哪里。Host 依然保留。</div>
+
+    <p>两条报文对照，结论就出来了：<strong>请求目标从 origin-form 变成 absolute-form，根本原因是「TCP 对端」和「URI 权威」不再是同一个对象</strong>。直连时二者合一，路径足够；经代理时二者分离，必须把 scheme、主机、端口写全，代理才知道下一步往哪连。这也解释了为什么 Host 首部不能省——它依旧标识「这个请求属于哪个虚拟主机」，绝对形式只是把选择权也交给了代理。</p>
+
+    <p>请求目标的另外两种形式也一并记全，它们会在本讲后面反复出现：<span class="term">权威形式</span>（authority-form）只写 <code>主机:端口</code>，是 CONNECT 方法专用（11.3 展开）；星号形式（asterisk-form）写单个 <code>*</code>，用于 <code>OPTIONS *</code> 这种针对服务器整体而非某个资源的问题。</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>请求目标形式</th><th>长什么样</th><th>什么时候用</th></tr>
+        <tr><td>origin-form（源点形式）</td><td><code>/index.html?q=1</code></td><td>直连源服务器时的绝大多数请求</td></tr>
+        <tr><td>absolute-form（绝对形式）</td><td><code>http://www.example.com/index.html</code></td><td>向正向代理发请求时</td></tr>
+        <tr><td>authority-form（权威形式）</td><td><code>www.example.com:443</code></td><td>CONNECT 方法专用</td></tr>
+        <tr><td>asterisk-form（星号形式）</td><td><code>*</code></td><td><code>OPTIONS *</code>，询问服务器整体能力</td></tr>
+      </table>
+    </div>
+
+    <p>接下来是本节的重头戏：<strong>Via 首部如何逐跳追加</strong>。MDN 说它由代理添加、可出现在请求与响应里，但没有展开格式。Via 的每一段记录两件事——这一跳用的<strong>协议版本</strong>和<strong>对端标识</strong>，形如 <code>1.1 proxy-a.example.com</code>。代理转发报文时，把自己这一段<strong>追加到列表末尾</strong>。我们用一条经过两个正向代理的请求来全程推演。</p>
+
+    <p><strong>第 0 跳 · 客户端发出。</strong>客户端直连代理 A，请求里还没有 Via：</p>
+
+    <div class="wire"><b>GET http://www.example.com/index.html HTTP/1.1</b>
+<b>Host:</b> www.example.com
+<em>（此时还没有 Via 首部）</em></div>
+    <div class="wire-cap">客户端 → 代理 A：请求刚发出，Via 为空。</div>
+
+    <p><strong>第 1 跳 · 代理 A 转发。</strong>代理 A 以 HTTP/1.1 收到请求，决定转发给代理 B。它把自己的一段 <code>1.1 proxy-a.example.com</code> 追加进去，于是转发报文里出现 Via：</p>
+
+    <div class="wire"><b>GET http://www.example.com/index.html HTTP/1.1</b>
+<b>Host:</b> www.example.com
+<b>Via:</b> 1.1 proxy-a.example.com
+<em>（代理 A 追加了自己的标识）</em></div>
+    <div class="wire-cap">代理 A → 代理 B：Via 第一次出现，只有 A 这一段。</div>
+
+    <p><strong>第 2 跳 · 代理 B 转发。</strong>代理 B 同样以 HTTP/1.1 收到，转发给源服务器时<strong>不是覆盖</strong>，而是在已有列表后面追加自己的一段。于是列表变成两段，顺序记录了真实路径：</p>
+
+    <div class="wire"><b>GET http://www.example.com/index.html HTTP/1.1</b>
+<b>Host:</b> www.example.com
+<b>Via:</b> 1.1 proxy-a.example.com, 1.1 proxy-b.example.net
+<em>（代理 B 在末尾追加，A 在前、B 在后）</em></div>
+    <div class="wire-cap">代理 B → 源服务器：Via 变成两段，从客户端往服务器方向依次是 A、B。源服务器据此知道请求途经了谁。</div>
+
+    <p>把三步连起来看，Via 的追加规律有三条：① 每次转发<strong>追加</strong>而不是覆盖，所以列表是路径的历史记录；② 顺序是「离客户端近的在前，离服务器近的在后」，读起来就是报文走过的方向；③ 每段带上协议版本，因此 <code>1.0 old-proxy</code> 与 <code>1.1 new-proxy</code> 并列时，还能看出哪一跳是旧设备。响应沿原路返回时，Via 同样由沿途代理追加，让客户端也能看到回程路径——这正是 MDN 说它「请求与响应中都可出现」的含义。Via 有两个实用价值：排查「请求到底经过了哪些代理」，以及让代理检测环路（看到自己的标识再次出现，就知道报文绕了回来）。</p>
+
+    <div class="box insight">
+      <span class="box-tag">✅ 判定规则</span>
+      <p>要判断一条请求该用哪种请求目标，只问一句：<strong>请求行的接收者，和 URI 里的权威（主机），是不是同一个？</strong>是同一个（直连源站），用 origin-form；不是同一个（发给正向代理），用 absolute-form。至于 CONNECT，接收的是代理、要连的是权威，但语义是「建管道」而非「取资源」，所以规范单独给了 authority-form。这条判据能覆盖本讲所有请求目标问题。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>「经代理时有了 absolute-form，Host 就多余了」——错。absolute-form 解决的是「代理往哪转」，Host 解决的是「目标主机上哪个虚拟主机」，两者维度不同，规范都要求带上。另一个误区是以为 Via 只加一次或会被后面的代理覆盖；事实上每一跳都追加，列表长度等于经过的代理数。抓包时看到 Via 有五六段，说明请求穿过了长长的代理链，而不是配置错误。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front"><div class="q-tag">回忆 11.2-1</div><div class="q-text">为什么经正向代理的请求要把请求目标从 origin-form 换成 absolute-form？</div><span class="tap">点击翻面 →</span></div>
+            <div class="flip-face flip-back"><div class="a-tag">参考答案</div>直连时 TCP 对端就是 URI 权威，路径足够；经代理时 TCP 对端是代理、URI 权威是目标站，二者分离，必须把 scheme、主机、端口写全，代理才知道往哪转。Host 仍要保留以区分虚拟主机。</div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front"><div class="q-tag">回忆 11.2-2</div><div class="q-text">请求经过代理 A 再到代理 B，Via 首部怎么变？顺序说明什么？</div><span class="tap">点击翻面 →</span></div>
+            <div class="flip-face flip-back"><div class="a-tag">参考答案</div>A 追加 <code>1.1 proxy-a</code>，B 在末尾再追加 <code>1.1 proxy-b</code>，得到 <code>Via: 1.1 proxy-a, 1.1 proxy-b</code>。每次追加不覆盖；顺序从客户端到服务器，就是报文走过的路径；带协议版本可识别旧设备、也能用于环路检测。</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 11.3 ============ -->
+    <h2><span class="sec-no">11.3</span>CONNECT 与隧道：把 TCP 借给 HTTPS，代理从此只看得见字节</h2>
+
+    <p>上一节解决了明文的转发，但马上撞上一堵墙。HTTPS 的 TLS 是<strong>端到端</strong>的：加密连接建立在浏览器和目标网站之间，中间的正向代理手里没有会话密钥，既不能解密，也不能改写里面的请求行。可代理的工作恰恰是「改写并转发 HTTP」。矛盾出现了：客户端想通过代理访问一个 HTTPS 站点，代理却连请求要发往哪里、请求里写了什么都读不到，怎么转发？</p>
+
+    <p>MDN 给出的答案是<span class="term">隧道</span>（tunneling）：「通过封装数据，在公共网络中传输专用网络数据和协议信息」，而 HTTP 隧道就是「用高层协议 HTTP 去传输低层协议 TCP」。更具体地说，HTTP 定义了一个专门的请求方法 <span class="term">CONNECT</span>，MDN 的描述是「启动与请求资源的双向通信，可用于打开隧道」。这就是「HTTP 代理后面的客户端如何用 SSL（即 HTTPS，端口 443）访问网站」的标准做法。MDN 同时提醒：并非所有代理都支持 CONNECT，有的还把它限制在 443 端口。</p>
+
+    <p>现在把交互拆成完整报文。设想浏览器要通过正向代理访问 <code>www.example.com:443</code>。第一步，浏览器不发送 GET，而是向代理发一条 CONNECT，请求目标用上一节说的 authority-form，只写 <code>主机:端口</code>：</p>
+
+    <div class="wire"><b>CONNECT www.example.com:443 HTTP/1.1</b>
+<b>Host:</b> www.example.com:443
+<b>Proxy-Connection:</b> Keep-Alive
+
+<em>（客户端 → 代理：请为我连到 www.example.com:443）</em></div>
+    <div class="wire-cap">第一步：客户端向代理发 CONNECT，请求目标是权威形式。语义不是「给我资源」，而是「替我建立一条到该主机的 TCP 连接」。</div>
+
+    <p>第二步，代理解析出目标主机与端口，自己<strong>新建一条到 www.example.com:443 的 TCP 连接</strong>。如果连得上，代理回一条 <code>200 Connection established</code>：</p>
+
+    <div class="wire"><i>HTTP/1.1 200 Connection established</i>
+<i>Proxy-Agent:</i> ProxyGateway/1.0
+
+<em>（代理 → 客户端：隧道已建立，接下来的字节请直接透传）</em></div>
+    <div class="wire-cap">第二步：代理返回 200 Connection established。注意这不是普通的 200 OK 响应——它表示「从现在起这条连接变成管道」，后面不再有 HTTP 响应主体。</div>
+
+    <p>第三步是关键。代理不再解析这条连接上的任何 HTTP，它只做一件事：<strong>把客户端发来的字节原样转发给目标服务器，把目标服务器返回的字节原样转发给客户端</strong>。于是浏览器开始在这条管道里跟目标网站做真正的 TLS 握手：</p>
+
+    <div class="wire"><em>客户端 → 代理 → 目标站（字节透传，代理不解析）</em>
+<b>→ TLS ClientHello</b>  ...随机数与加密套件...
+<b>← TLS ServerHello + Certificate</b>  ...证书链...
+<b>→ TLS Finished</b>
+<em>隧道内随后才是加密后的 HTTP：</em>
+<b>→ [加密] GET /index.html HTTP/1.1</b>
+<b>← [加密] HTTP/1.1 200 OK ...</b></div>
+    <div class="wire-cap">第三步：TLS 握手及之后的 HTTP 全部在隧道内以密文字节流通过。代理只搬运字节，看不到明文请求行、首部或网页内容。</div>
+
+    <p>把这条链路上「代理能看到什么、看不到什么」列成表，隧道的价值与边界就一目了然：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>信息项</th><th>正向代理能否看到</th><th>原因</th></tr>
+        <tr><td>CONNECT 的目标主机与端口</td><td>能看到</td><td>它在 CONNECT 请求行的权威形式里，是明文</td></tr>
+        <tr><td>客户端真实 IP</td><td>能看到</td><td>客户端与代理直连，TCP 对端就是客户端</td></tr>
+        <tr><td>TLS 握手是否发生、流量大小与时序</td><td>能看到</td><td>这些是密文字节的长度和时间特征，无需解密</td></tr>
+        <tr><td>隧道内的 HTTP 方法与路径</td><td>看不到</td><td>被 TLS 加密，代理没有会话密钥</td></tr>
+        <tr><td>请求首部、Cookie、网页正文</td><td>看不到</td><td>被 TLS 加密，代理没有会话密钥，无法解读</td></tr>
+      </table>
+    </div>
+
+    <p>这张表说明一件重要的事：<strong>隧道不是「代理升级成了透明管道」，而是代理主动放弃了应用层解析权</strong>。它只保留最外层的连接管理（建立到目标的 TCP、转发字节、最后关闭），把 HTTP 语义原封不动地交还给两端。这也解释了 MDN 为什么把隧道归在正向代理名下——它仍代表客户端出去，只是这次「出去」的方式是借一条 TCP 给客户端自己用。</p>
+
+    <p>MDN 还提到 CONNECT 的一个现实约束：有的代理只允许连 443 端口。原因不难理解——隧道一旦建立，代理就看不到里面跑的是什么协议，如果允许连任意端口，代理就可能沦为绕过网络策略的通用通道。因此很多企业代理把 CONNECT 白名单化，只放行 443，把「看不见内容」的风险限制在 HTTPS 这一个已知场景里。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>把 11.2 与 11.3 对照：普通代理是「代理替你解析并改写 HTTP」，CONNECT 隧道是「代理只替你建立 TCP，HTTP 由你自己端到端地谈」。前者的代价是代理看得见明文、也改得动；后者的代价是代理无法缓存、无法压缩、无法按内容做策略，但换来了端到端的机密性。选哪种，取决于你要的是「中间可优化」还是「两端可加密」。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>「200 Connection established 之后代理仍在转发 HTTP 报文」——错。这条响应之后，连接已经不是 HTTP 连接，而是一对 raw TCP 字节流；代理再按 HTTP 去解析 TLS 记录只会出错。另一个误区是把 CONNECT 当成「取资源的方法」：它不取任何资源，请求目标是 <code>主机:端口</code> 而不是路径，成功状态码虽是 2xx，语义却是「管道已就绪」。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front"><div class="q-tag">回忆 11.3-1</div><div class="q-text">按顺序列出 CONNECT 建隧道的三步，并写出代理成功时返回的状态行。</div><span class="tap">点击翻面 →</span></div>
+            <div class="flip-face flip-back"><div class="a-tag">参考答案</div>① 客户端发 <code>CONNECT 主机:端口 HTTP/1.1</code>（authority-form）；② 代理建立到目标的 TCP 连接，回 <code>HTTP/1.1 200 Connection established</code>；③ 之后代理只做字节透传，客户端与目标站在此管道内完成 TLS 握手与加密 HTTP。成功状态码是 200 但语义是「管道就绪」。</div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front"><div class="q-tag">回忆 11.3-2</div><div class="q-text">隧道建立后，代理能看到什么、看不到什么？为什么说它「放弃解析权」？</div><span class="tap">点击翻面 →</span></div>
+            <div class="flip-face flip-back"><div class="a-tag">参考答案</div>看得到 CONNECT 的目标主机端口、客户端 IP、密文流量大小与时序；看不到隧道内的 HTTP 方法、路径、首部、Cookie 与正文，因为 TLS 端到端加密。代理只保留连接管理（建 TCP、转发字节、关闭），不再解析 HTTP，把语义交还两端。</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 11.4 ============ -->
+    <h2><span class="sec-no">11.4</span>就地换协议：一条 HTTP/1.1 连接如何变成 WebSocket 双向管道</h2>
+
+    <p>上一节的隧道解决的是「HTTPS 怎么穿过代理」，手段是把 HTTP 藏进 TCP。本节处理一个不同但相关的问题：有些应用（聊天、实时推送、在线游戏）需要<strong>双向长连接</strong>，而 HTTP 的请求—响应模型是客户端问一句、服务器答一句，服务端无法主动推。有没有办法不新开端口、就在已经建立的那条 HTTP/1.1 连接上，把它切换成另外一种协议？MDN 的《协议升级机制》给出的答案就是<span class="term">协议升级</span>（protocol upgrade）。</p>
+
+    <p>MDN 的开场定义很精确：HTTP/1.1 提供一种用 <code>Upgrade</code> 首部字段的<strong>特殊机制</strong>，允许把一条已建立的连接升级成新的、不相容的协议。这句话里三个词要点出来：「已建立」——先有普通 HTTP 连接；「不相容」——新协议不是 HTTP 的小改版，而是另一套规则；「特殊机制」——它是可选的、不能强制，且通常由客户端发起。MDN 还明确加了一条警告：<strong>HTTP/2 明确禁止使用此机制，它只属于 HTTP/1.1</strong>。实践中它主要用来引导 WebSocket。</p>
+
+    <p>先看通用流程。客户端在请求里列出想切换到的协议，按优先级从高到低排列；服务器若同意，回 <code>101 Switching Protocols</code> 并在响应里带上 <code>Upgrade</code> 首部确认切换到哪一个；服务器若不同意，就忽略 <code>Upgrade</code>，返回一个常规响应（例如 <code>200 OK</code>）。发出 101 之后，服务器就开始使用新协议，连接变成一条<strong>双向管道</strong>。MDN 强调，一旦升级完成，连启动升级的那条请求也会被新协议接管——HTTP 至此退场。</p>
+
+    <p>现在看本节第一个完整例子：<code>Upgrade: websocket</code> 的握手。客户端先发一条普通的 HTTP/1.1 GET，但带上四个关键首部：</p>
+
+    <div class="wire"><b>GET /chat HTTP/1.1</b>
+<b>Host:</b> server.example.com
+<b>Upgrade:</b> websocket
+<b>Connection:</b> Upgrade
+<b>Sec-WebSocket-Key:</b> dGhlIHNhbXBsZSBub25jZQ==
+<b>Sec-WebSocket-Version:</b> 13
+
+<em>（客户端 → 服务器：请把这条连接升级到 WebSocket）</em></div>
+    <div class="wire-cap">WebSocket 升级请求：Upgrade 指明目标协议，Connection 声明 Upgrade 逐跳，Sec-WebSocket-Key 是校验用的随机密钥，Version 为 13。</div>
+
+    <p>服务器同意后，返回 101 响应，并回一个由密钥算出的 <code>Sec-WebSocket-Accept</code>：</p>
+
+    <div class="wire"><i>HTTP/1.1 101 Switching Protocols</i>
+<i>Upgrade:</i> websocket
+<i>Connection:</i> Upgrade
+<i>Sec-WebSocket-Accept:</i> s3pPLMBiTxaQ9kYGzzhZRbK+xOo=
+
+<em>（服务器 → 客户端：从现在起是 WebSocket 帧，不再是 HTTP 报文）</em></div>
+    <div class="wire-cap">101 响应：状态行宣告切换，Upgrade 与 Connection 必须同时出现，Accept 是客户端密钥经固定算法算出的应答值。</div>
+
+    <p>这里有两个必须讲透的细节。<strong>第一，Sec-WebSocket-Key 与 Sec-WebSocket-Accept 的关系。</strong>MDN 说得很直白：这个密钥「不提供安全性」，它的作用是确认「是的，我真的是要打开一个 WebSocket 连接」，防止非 WebSocket 客户端无意或滥用请求 WebSocket。计算过程由 WebSocket 规范定义：取客户端密钥值，与固定字符串 <code>258EAFA5-E914-47DA-95CA-C5AB0DC85B11</code> 拼接，对拼接结果取 SHA-1 散列，再把得到的 20 字节做 base64 编码，结果就是 Accept。用上面的密钥走一遍：</p>
+
+    <div class="wire"><em>① 客户端密钥</em>
+dGhlIHNhbXBsZSBub25jZQ==
+<em>② 拼接固定 GUID</em>
+dGhlIHNhbXBsZSBub25jZQ==258EAFA5-E914-47DA-95CA-C5AB0DC85B11
+<em>③ 取 SHA-1（20 字节）</em>
+b3 7a 4f 32 65 82 f6 3f 27 98 a1 44 3b 7c f9 8a 3e 2c 3f 0a
+<em>④ base64 编码 → Sec-WebSocket-Accept</em>
+s3pPLMBiTxaQ9kYGzzhZRbK+xOo=</div>
+    <div class="wire-cap">Sec-WebSocket-Accept 的四步推导（这是 RFC 6455 给出的标准示例值）。注意算法是公开固定的，它证明「握手方懂 WebSocket」，不是加密，也不认证身份。</div>
+
+    <p><strong>第二，Upgrade 与 Connection 为什么必须同时出现。</strong>MDN 给出的理由只有一句，但分量很重：<code>Upgrade</code> 是一个<strong>逐跳</strong>（hop-by-hop）首部，因此还必须在 <code>Connection</code> 首部里把它列出来。这句话把两个首部的分工讲清了：<code>Upgrade</code> 说「我想切到什么协议」，<code>Connection: Upgrade</code> 说「这个 Upgrade 首部只在本跳有效，请中间节点消费掉、别往下传」。缺了 Connection 这一行，中间代理可能把 <code>Upgrade</code> 当作端到端首部原样转发给下一跳，而下一跳并没有参与这次升级协商，行为就不可控了。</p>
+
+    <p>这就引出本节第二个完整例子：<strong>逐跳首部的处理推演，以及一个代理错误转发导致的故障链</strong>。先把待判定的五个首部摆上桌，逐个判断是不是逐跳首部：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>首部</th><th>是否逐跳首部</th><th>说明</th></tr>
+        <tr><td>Connection</td><td>是</td><td>逐跳首部的「总开关」，它自己也是逐跳的，并列出本跳的其他逐跳首部</td></tr>
+        <tr><td>Keep-Alive</td><td>是</td><td>描述本跳连接的保活参数，只对本跳有意义</td></tr>
+        <tr><td>Proxy-Authenticate</td><td>是</td><td>代理发给客户端的认证挑战，只在客户端—代理这一跳之间使用</td></tr>
+        <tr><td>Transfer-Encoding</td><td>是</td><td>描述本跳消息主体如何分块定界，下一跳要用自己的方式重新编码</td></tr>
+        <tr><td>Upgrade</td><td>是</td><td>MDN 明确指出它是逐跳首部，必须在 Connection 中列出</td></tr>
+      </table>
+    </div>
+
+    <p>答案是<strong>五个全是逐跳首部</strong>。这一点常被答错，尤其是 Transfer-Encoding——很多人以为它跟着主体端到端传递，其实它只描述「这一跳的主体怎么定界」，代理转发时必须按下一跳的情况重新编码（比如把 chunked 换成定长）。判据可以浓缩成一句：<strong>凡是描述「这一跳怎么传」的首部，都是逐跳的；凡是描述「资源本身是什么」的首部，才是端到端的</strong>。</p>
+
+    <p>现在推演故障链。场景是客户端通过正向代理访问源站，客户端在本跳请求里带了 <code>Connection: close</code>，意图是「我这一跳用完就关」。正确的做法应该是：<strong>代理消费掉客户端的 Connection 首部，按自己与源站之间的连接策略重新生成</strong>（比如对自己复用的源站连接用 keep-alive）。但假设这个代理实现有 bug，把 <code>Connection: close</code> 原样转发给了源站：</p>
+
+    <div class="wire"><em>客户端 → 代理（本跳想关闭）</em>
+<b>GET /page HTTP/1.1</b>
+<b>Host:</b> www.example.com
+<b>Connection:</b> close
+
+<em>代理 → 源站（错误：原样转发了逐跳首部）</em>
+<b>GET /page HTTP/1.1</b>
+<b>Host:</b> www.example.com
+<b>Connection:</b> close   <em>← 本该被消费并重新生成</em></div>
+    <div class="wire-cap">故障起点：代理把只对本跳有效的 Connection: close 原样转发，源站误以为「代理这条连接用完要关」。</div>
+
+    <p><strong>故障链逐步展开：</strong></p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>步骤</th><th>发生了什么</th><th>后果</th></tr>
+        <tr><td>① 客户端发请求</td><td>带 <code>Connection: close</code>，只想关闭「客户端—代理」这一跳</td><td>意图本身没错，只作用于第一跳</td></tr>
+        <tr><td>② 代理错误转发</td><td>未消费该逐跳首部，原样写进「代理—源站」请求</td><td>把第一跳的意图误植到第二跳</td></tr>
+        <tr><td>③ 源站照做</td><td>源站把 close 当作针对自己的指令，响应后关闭到代理的 TCP 连接</td><td>代理复用的源站连接池被无故拆掉一条</td></tr>
+        <tr><td>④ 客户端意图落空</td><td>代理因为只顾转发、没在本跳执行 close，反而没按客户端要求关闭客户端连接</td><td>客户端以为会关闭的连接还开着，语义错乱</td></tr>
+        <tr><td>⑤ 连锁反应</td><td>代理下次想复用那条源站连接时，发现它已被源站关闭</td><td>请求失败或被迫重连，出现延迟抖动与偶发错误</td></tr>
+      </table>
+    </div>
+
+    <p>把这条链看到底，你会明白为什么逐跳首部必须由每一跳「消费并重新生成」：<strong>它们描述的是本跳的连接状态，一旦跨跳，语义就会落到错误的连接上</strong>。同样的机制如果发生在升级场景，后果更严重：代理若把 <code>Connection: Upgrade</code> 与 <code>Upgrade: websocket</code> 错误转发给源站，源站会回 101 并开始说 WebSocket 帧，而夹在中间的代理还在按 HTTP 解析字节，连接立即错乱。这正是 MDN 强调「Upgrade 必须在 Connection 里列出」的工程原因——它提醒每一跳：这个首部到我为止。</p>
+
+    <p>MDN 补充说，WebSocket 连接几乎总是通过升级 HTTP 或 HTTPS 建立，而用 <code>WebSocket()</code> 构造 API 时这些握手细节都被库代劳了；只有自己从头实现 WebSocket 客户端时，才需要亲手处理升级过程。这也提示了本节与前后讲的分工：升级是 HTTP/1.1 的遗产，而 HTTP/2、HTTP/3 有自己的多路复用机制，不再需要这种「把连接改成另一套协议」的把戏。</p>
+
+    <div class="box insight">
+      <span class="box-tag">✅ 判定规则</span>
+      <p>看到 <code>Upgrade</code>，立刻检查两件事是否成对出现：<code>Connection: Upgrade</code> 在不在（否则逐跳语义没声明，中间节点可能误转发）？响应是不是 <code>101 Switching Protocols</code>（否则说明服务器没同意升级，仍是普通 HTTP）？看到任意逐跳首部，问「谁消费、谁重新生成」——正确模式永远是每一跳消费上游的、再为下游生成自己的，绝不原样转发。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>「Sec-WebSocket-Key 是用来加密或认证的安全机制」——错。MDN 明说它「不提供安全性」，算法公开固定，只用于确认对方确实在发起 WebSocket 握手、挡住无意的滥用；真正的安全来自 <code>wss://</code> 之下的 TLS。另一个误区是以为 HTTP/2 也能用 Upgrade 升级——MDN 明确禁止，该机制只属 HTTP/1.1。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front"><div class="q-tag">回忆 11.4-1</div><div class="q-text">写出 WebSocket 升级请求与 101 响应的关键首部，并说明 Upgrade 与 Connection 为何必须同时出现。</div><span class="tap">点击翻面 →</span></div>
+            <div class="flip-face flip-back"><div class="a-tag">参考答案</div>请求带 <code>Upgrade: websocket</code>、<code>Connection: Upgrade</code>、<code>Sec-WebSocket-Key</code>、<code>Sec-WebSocket-Version: 13</code>；响应为 <code>101 Switching Protocols</code>，回 <code>Upgrade</code>、<code>Connection</code> 与 <code>Sec-WebSocket-Accept</code>。Upgrade 是逐跳首部，必须在 Connection 中列出，才能声明「只在本跳有效」，让中间节点消费而非误转发。</div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front"><div class="q-tag">回忆 11.4-2</div><div class="q-text">Connection、Keep-Alive、Proxy-Authenticate、Transfer-Encoding、Upgrade 中哪些是逐跳首部？代理误转发 Connection: close 会怎样？</div><span class="tap">点击翻面 →</span></div>
+            <div class="flip-face flip-back"><div class="a-tag">参考答案</div>五个全是逐跳首部。代理若把客户端的 <code>Connection: close</code> 原样转给源站，源站会在响应后关闭「代理—源站」连接，无故拆掉复用连接；而客户端第一跳的 close 意图又没被执行，最终导致连接语义错乱、请求失败或延迟抖动。正确做法是每跳消费并重新生成逐跳首部。</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 11.5 ============ -->
+    <h2><span class="sec-no">11.5</span>延伸：规范怎么写：逐跳首部、CONNECT 与握手在 RFC 里的精确定义</h2>
+
+    <p>前四节始终以 MDN 为口径，但 MDN 是面向开发者的文档，刻意省略了规范性细节——它说 Via「由代理添加」，却没给格式；说 CONNECT「打开隧道」，却没定义状态码的精确语义；说 Upgrade 是逐跳首部，却没列全逐跳首部清单。当你要实现一个真正合规的代理或客户端时，就必须去看 IETF 的规范。本节把这些细节对齐到现行 RFC：<strong>RFC 9110</strong>（HTTP 语义）、<strong>RFC 9112</strong>（HTTP/1.1 线上格式）与 <strong>RFC 6455</strong>（WebSocket 协议）。</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>MDN 的说法</th><th>RFC 怎么写</th><th>为什么值得知道</th></tr>
+        <tr><td>代理用 Via 首部提供自身信息，请求与响应中都可出现，逐跳追加</td><td>RFC 9110 §7.6.1 定义 Via 的语法为「收受协议 + 收受者 + 可选注释」的列表，并规定代理转发时必须在列表末尾追加自己的一段；同一节给出逐跳首部完整清单：Connection、Keep-Alive、Proxy-Authenticate、Proxy-Authorization、TE、Trailer、Transfer-Encoding、Upgrade</td><td>实现代理时，哪些首部要消费并重新生成、Via 每段怎么写，都有规范性答案。MDN 的「逐跳追加」在这里变成了 MUST 级别的操作要求，11.4 的故障链正是违反它的后果</td></tr>
+        <tr><td>经代理的请求目标用绝对形式（absolute-form），直连用源点形式</td><td>RFC 9112 §3.2 定义四种请求目标；客户端向代理发请求时 MUST 使用 absolute-form（CONNECT 除外），向源服务器发时 MUST 用 origin-form；CONNECT 的目标必须用 authority-form</td><td>写代理客户端或抓包分析时，请求行的形式不是风格选择而是合规要求。把 origin-form 发给代理，代理有权拒绝</td></tr>
+        <tr><td>CONNECT 启动双向通信、打开隧道，成功返回 200 Connection established</td><td>RFC 9112 §9.3.6 规定 CONNECT 的目标是 <code>主机:端口</code> 的权威形式，代理建立到目标的 TCP 连接后，发送 2xx（通常是 200）响应表示「切换到隧道模式」；一旦隧道建立，代理不得再解析该连接上的字节</td><td>解释了为什么成功状态码是 2xx 却没有任何响应主体——它标记的是「连接用途改变」而非「资源取回」；也说明端口白名单与隧道滥用防护的规范依据</td></tr>
+        <tr><td>Upgrade 是逐跳首部，必须在 Connection 中列出；服务器同意则回 101</td><td>RFC 9110 §7.8 定义 Upgrade 机制：客户端用 Upgrade 列出候选协议，发送方 MUST 在 Connection 中一并列出 Upgrade；101 Switching Protocols 在 RFC 9110 的状态码章节定义，表示服务器理解并愿意切换；HTTP/2 的 RFC 9113 明确禁用此机制</td><td>把 MDN 的「必须同时出现」落实为 MUST 条款。少写 Connection: Upgrade 不是小疏漏，而是违反规范，中间节点的行为将不可预测</td></tr>
+        <tr><td>WebSocket 密钥经固定算法算出 Accept，防止滥用但不提供安全性</td><td>RFC 6455 §1.3 定义打开握手：客户端密钥是 base64 编码的 16 字节随机值，服务器把它与固定 GUID <code>258EAFA5-E914-47DA-95CA-C5AB0DC85B11</code> 拼接，取 SHA-1 后 base64 得 Accept；版本为 13，不支持时回 426 Upgrade Required 并列出支持的版本</td><td>MDN 说「算法由规范定义」，这里就是那个算法。自己实现握手或排查「握手失败」时，能逐步验证密钥到 Accept 的推导，也能正确处理 426 与 Sec-WebSocket-Version</td></tr>
+      </table>
+    </div>
+
+    <p>这张表反复出现一个词：MUST。这正是 RFC 与 MDN 的语气差别——MDN 用「应该」「通常」，RFC 用 MUST / SHOULD / MAY 严格分级。当你需要判定一个实现「合规还是违规」时，MDN 给方向，RFC 给裁决。11.4 的故障链在 RFC 口径下其实是一次违规：代理没有按 §7.6.1 消费并重新生成逐跳首部。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>把三份 RFC 按职责对号入座，本讲的全部细节就归位了：<strong>RFC 9110 管语义</strong>（逐跳首部清单、Via / Upgrade 的含义、101 的意义），<strong>RFC 9112 管 HTTP/1.1 的线上格式</strong>（四种请求目标、CONNECT 的权威形式与隧道切换），<strong>RFC 6455 管 WebSocket</strong>（握手算法、密钥到 Accept、版本与 426）。MDN 把这些揉成一篇好读的指南，RFC 则把它们拆成可执行、可判定的条款。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>别再引用旧编号。网上大量文章仍把 CONNECT、Upgrade 的细节写在 RFC 2616 或 RFC 7230 里——它们已被 2022 年的 RFC 9110 系列取代；WebSocket 握手请认准 RFC 6455。查规范先看 httpwg.org/specs 的现行列表，再读具体章节，避免把已作废的说法当成现行要求。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front"><div class="q-tag">回忆 11.5-1</div><div class="q-text">RFC 9110、RFC 9112、RFC 6455 各自管本讲的哪一块？逐跳首部的完整清单包含哪些？</div><span class="tap">点击翻面 →</span></div>
+            <div class="flip-face flip-back"><div class="a-tag">参考答案</div>9110 管语义（逐跳首部、Via、Upgrade、101），9112 管 HTTP/1.1 线上格式（四种请求目标、CONNECT 权威形式与隧道），6455 管 WebSocket 握手。逐跳首部：Connection、Keep-Alive、Proxy-Authenticate、Proxy-Authorization、TE、Trailer、Transfer-Encoding、Upgrade。</div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front"><div class="q-tag">回忆 11.5-2</div><div class="q-text">RFC 6455 里 Sec-WebSocket-Accept 的算法是什么？服务器不支持客户端版本时回什么？</div><span class="tap">点击翻面 →</span></div>
+            <div class="flip-face flip-back"><div class="a-tag">参考答案</div>把客户端密钥与固定 GUID <code>258EAFA5-E914-47DA-95CA-C5AB0DC85B11</code> 拼接，取 SHA-1，再对 20 字节做 base64 得 Accept。不支持请求版本时回 426 Upgrade Required，并在首部里列出服务器支持的版本；支持时响应不含 Sec-WebSocket-Version。</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===== 概念卡 ===== -->
+    <h2><span class="sec-no">🃏</span>概念卡：本讲概念的一分钟画像</h2>
+    <p>翻面前先自问：这个概念我能用一句话讲清楚吗？</p>
+    <div class="flip-grid">
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front"><div class="q-tag">概念卡 1</div><div class="q-text">正向代理（Forward Proxy）</div><span class="tap">点击翻面 →</span></div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">代表客户端、替客户端访问互联网的中间节点，MDN 也称隧道或网关。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">节省与控制带宽、隐藏客户端身份（如 TOR 匿名路由）、突破访问限制。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">你托朋友替你跑腿，对方只看见朋友，看不见你。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为正向代理隐藏服务器；它隐藏的是客户端，服务器身份与它无关。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">公司出口、VPN、需要匿名或带宽管控的场景；11.2 绝对形式、11.3 隧道。</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front"><div class="q-tag">概念卡 2</div><div class="q-text">反向代理（Reverse Proxy）</div><span class="tap">点击翻面 →</span></div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">代表服务器、替服务器接住客户端请求的中间节点，对客户端隐藏后端。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">负载均衡、缓存静态内容、压缩与优化，分担后端压力并提升可用性。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">你打电话到公司总机，被转给某个分机，你并不知道后面有几个人。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为客户端知道它的存在；反向代理通常对客户端透明，看起来就是目标站。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">网站入口、CDN 边缘、网关层；与第 5 讲共享缓存相衔接。</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front"><div class="q-tag">概念卡 3</div><div class="q-text">请求目标形式（origin / absolute / authority-form）</div><span class="tap">点击翻面 →</span></div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">请求行的目标有四种写法：路径、完整 URL、主机端口、星号。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">区分「发给谁」与「找哪个资源」：对端不同，写法不同。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">直连说门牌号，找代理要说完整地址，建管道只报主机和端口。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为经代理有绝对形式就不用 Host；两者维度不同，都要带。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">11.2 全节；写代理客户端、分析抓包时判定请求行是否合规。</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front"><div class="q-tag">概念卡 4</div><div class="q-text">Via 首部</div><span class="tap">点击翻面 →</span></div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">由代理逐跳追加的首部，每段记录一跳的协议版本与代理标识，请求与响应中都出现。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">记录报文走过的代理路径，用于排障与环路检测，补回被代理切断的链路信息。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">像快递包裹上每一站盖的戳，串起来就是完整路线。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为 Via 只加一次或被下游覆盖；每一跳都追加，列表长度等于代理数。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">11.2 两代理推演；排查多层代理、CDN 链路时读它。</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front"><div class="q-tag">概念卡 5</div><div class="q-text">CONNECT 与隧道（Tunneling）</div><span class="tap">点击翻面 →</span></div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">用 HTTP 传输 TCP 的机制；CONNECT 让代理建立到目标的连接，随后只透传字节。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">让 HTTPS 穿过正向代理：TLS 端到端加密，代理无法解析却仍需转发。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">代理借你一根管子，管子里的东西它不拆不看，只管运。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为 200 之后代理还在转发 HTTP；那之后是 raw TCP，代理放弃解析权。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">11.3 三步交互；理解代理能看见目标主机端口、看不见隧道内明文。</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front"><div class="q-tag">概念卡 6</div><div class="q-text">逐跳首部（Hop-by-hop Header）</div><span class="tap">点击翻面 →</span></div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">只对本跳连接有效的首部，每跳消费后重新生成；Connection 列出本跳的其他逐跳首部。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">让每段连接各自管理自己的传输状态，不把本跳语义误植到下一跳。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">行李转运时每一段换一次运输单，而不是把上一段的单子一路贴到底。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为 Transfer-Encoding 端到端；它只描述本跳主体如何定界，是逐跳的。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">11.4 故障链；实现代理、排查连接被意外关闭时必查。</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front"><div class="q-tag">概念卡 7</div><div class="q-text">协议升级与 WebSocket 握手（Upgrade / 101）</div><span class="tap">点击翻面 →</span></div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">HTTP/1.1 用 Upgrade 请求切换协议，服务器以 101 同意，连接随即变成双向管道。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">在既有连接上支持 WebSocket 等双向协议，不新开端口；Upgrade 必须与 Connection 同现。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">同一条电话线，谈完开场白后双方约定改说另一种暗号。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为 Sec-WebSocket-Key 是安全机制或 HTTP/2 也能升级；它不提供安全性，且 2 禁用升级。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">11.4 握手与密钥推导；自实现 WebSocket 或排查 101 / 426 时。</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===== 分层习题 ===== -->
+    <h2><span class="sec-no">✍️</span>分层习题：先自己写，再点开核对</h2>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>判断下列说法的正误并说明理由：①「反向代理隐藏客户端 IP」；②「正向代理代表服务器，用来做负载均衡」；③「客户端通常不知道自己经过了反向代理」。</div>
+      <details><summary>提示</summary><p>回到 11.1 的判据：代理代表谁、隐藏谁。正向替客户端出去，反向替服务器进来。</p></details>
+      <details><summary>完整解答</summary><div class="ex-answer">① 错。隐藏客户端身份是<strong>正向代理</strong>的作用；反向代理隐藏的是服务器身份。② 错。代表服务器、做负载均衡是<strong>反向代理</strong>的职责；正向代理代表客户端，典型用途是节省带宽与匿名访问。③ 对。反向代理部署在站点入口，对客户端透明，访客以为自己连的就是目标站，并不知道后面还有后端机器。三句的判断都取决于「代表谁」这一条判据，把它记牢就不会被「代理」这个笼统的词绕晕。</div></details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>下列首部哪些是逐跳首部哪些是端到端首部：<code>Connection</code>、<code>Transfer-Encoding</code>、<code>Upgrade</code>、<code>Host</code>、<code>Cache-Control</code>？并回答：为什么说逐跳首部必须「每跳消费并重新生成」？</div>
+      <details><summary>提示</summary><p>判据：描述「这一跳怎么传」的是逐跳的，描述「资源本身是什么」的是端到端的。</p></details>
+      <details><summary>完整解答</summary><div class="ex-answer">逐跳首部：<code>Connection</code>、<code>Transfer-Encoding</code>、<code>Upgrade</code>（此外还有 Keep-Alive、Proxy-Authenticate、Proxy-Authorization、TE、Trailer）。端到端首部：<code>Host</code>（描述目标主机）、<code>Cache-Control</code>（描述资源的缓存语义）。逐跳首部描述的是本跳的连接状态——比如 Transfer-Encoding 只说「本跳主体怎么分块」，Upgrade 只说「本跳想切协议」。一旦被原样转发到下一跳，这些语义就会落到一条不同的连接上，造成 11.4 里「源站误关连接」那类故障。因此正确模式永远是：每一跳消费上游的逐跳首部，再根据自己的连接状况为下游重新生成，绝不原样传递。</div></details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>一条请求从客户端出发，依次经过正向代理 P1、P2 到达源站，P1 与客户端之间、P1 与 P2 之间用 HTTP/1.1，P2 与源站之间用 HTTP/1.0。客户端请求里没有 Via。请逐步写出：① P1 转发时请求里 Via 的值；② P2 转发时 Via 的值；③ 源站收到的 Via 有几段、各代表什么？</div>
+      <details><summary>提示</summary><p>每一跳都在列表末尾追加「协议版本 + 自身标识」，协议版本写本跳收到请求时用的版本。</p></details>
+      <details><summary>完整解答</summary><div class="ex-answer">① P1 以 HTTP/1.1 收到请求，转发给 P2 时追加自己的一段：<code>Via: 1.1 p1.example</code>。② P2 以 HTTP/1.1 收到（P1—P2 这一跳是 1.1），转发给源站时在末尾追加自己的一段：<code>Via: 1.1 p1.example, 1.1 p2.example</code>。注意第二段写的是 P2 <strong>收到</strong>请求时用的版本 1.1，而不是它转发给源站用的 1.0——Via 记录的是收受协议。③ 源站收到的 Via 有两段：第一段 <code>1.1 p1.example</code> 代表 P1 这一跳，第二段 <code>1.1 p2.example</code> 代表 P2 这一跳。列表顺序从客户端往服务器方向排列，正好是报文实际走过的路径。如果 P2 转发时用的是 HTTP/1.0，这只是「P2—源站」这一跳的版本，会体现在源站随后回程时 P2 追加的那段 Via 里，而不是去程列表里。</div></details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>给出下面两条场景，分别写出请求行并说明原因。场景 A：浏览器直连 <code>www.site.org</code> 取 <code>/a/b.html</code>。场景 B：浏览器通过正向代理 <code>proxy.corp:8080</code> 取同一个资源。再把场景 B 改成访问 <code>https://www.site.org</code>（443 端口），写出第一条发给代理的请求；并回答这条请求之后代理能看到什么、看不到什么。</div>
+      <details><summary>提示</summary><p>问自己：请求行的接收者与 URI 权威是不是同一个？直连用 origin-form，经代理用 absolute-form，建 HTTPS 隧道用 authority-form。</p></details>
+      <details><summary>完整解答</summary><div class="ex-answer">场景 A（直连）：请求行 <code>GET /a/b.html HTTP/1.1</code>，配 <code>Host: www.site.org</code>。TCP 对端就是目标站，路径即可定位资源，用 origin-form。场景 B（经代理）：请求行 <code>GET http://www.site.org/a/b.html HTTP/1.1</code>，仍带 <code>Host: www.site.org</code>。TCP 对端是代理而 URI 权威是目标站，二者分离，必须用 absolute-form 让代理知道往哪转；Host 仍要带以区分虚拟主机。场景 B 改为 HTTPS：浏览器不能直接发 GET（代理读不到加密目标），第一步发 <code>CONNECT www.site.org:443 HTTP/1.1</code>，配 <code>Host: www.site.org:443</code>，请求目标用 authority-form。代理回 <code>200 Connection established</code> 后只做字节透传。此后代理看得到目标主机与端口、客户端 IP、密文流量大小与时序；看不到隧道内的 HTTP 方法、路径、首部、Cookie 与正文——那些都被 TLS 端到端加密了。</div></details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l3">L3 建模应用</span>某公司的内网用户要通过一台正向代理访问外网，公司还有一个对外的 Web 服务部署了反向代理。请设计一个方案并回答：① 内网用户访问外网 HTTPS 站点时，代理用哪种方法和请求目标？代理能看到什么、看不到什么？② 外网访客访问公司 Web 服务时，反向代理能起到哪三种作用？③ 后端想知道「访客原本的 IP 和协议」，该用哪些首部补回被代理抹掉的信息？④ 若代理实现有 bug，把客户端的 <code>Connection: close</code> 原样转发给源站，会发生什么？给出完整故障链。</div>
+      <details><summary>提示</summary><p>把「正向代理出去」「反向代理进来」「逐跳首部每跳消费」三个模型分别套到对应环节。</p></details>
+      <details><summary>完整解答</summary><div class="ex-answer">① 内网用户访问外网 HTTPS，客户端先向正向代理发 <code>CONNECT 目标主机:443 HTTP/1.1</code>（authority-form），代理建 TCP 后回 200 Connection established，随后纯透传。代理看得到目标主机端口、客户端 IP、密文流量大小与时序；看不到隧道内的方法、路径、首部与正文，因为 TLS 端到端加密。② 反向代理对外可：负载均衡（分发到多台后端）、缓存静态内容（图片等不常变资源命中即回）、压缩与优化内容（加快传输）。③ 用 <code>Forwarded</code>（标准）或事实标准的 <code>X-Forwarded-For</code>（源 IP）、<code>X-Forwarded-Host</code>（原始主机）、<code>X-Forwarded-Proto</code>（原始协议）补回被抹掉的信息；代理自身路径信息用 <code>Via</code>。④ 故障链：客户端带 <code>Connection: close</code>，只想关闭「客户端—代理」这一跳；代理若有 bug 未消费而原样转发给源站，源站会把 close 当作针对自己的指令，响应后关闭「代理—源站」连接，无故拆掉代理复用的连接池；同时客户端第一跳的 close 意图因代理只顾转发而没执行；最终代理下次复用那条源站连接时发现已关闭，请求失败或被迫重连，出现延迟抖动与偶发错误。根治办法是每一跳消费并重新生成逐跳首部——这正是 RFC 9110 §7.6.1 的要求。</div></details>
+    </div>
+
+    <!-- ===== 自测 ===== -->
+    <h2><span class="sec-no">✅</span>本章自测：每题只选一个答案</h2>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 1</div>
+      <div class="q-stem">客户端通过正向代理发送 HTTP 请求时，请求目标通常采用哪种形式？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. origin-form（只有路径）</li>
+        <li data-opt="b">B. absolute-form（完整 URL）</li>
+        <li data-opt="c">C. authority-form（主机:端口）</li>
+        <li data-opt="d">D. asterisk-form（星号）</li>
+      </ul>
+      <div class="quiz-explain">解析：B 对。发给代理时 TCP 对端是代理、URI 权威是目标站，二者分离，必须用完整 URL 让代理知道往哪转。A 是直连源站时的写法；C 是 CONNECT 专用的权威形式；D 只用于 OPTIONS *。把请求目标形式与场景对应起来是关键。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="c">
+      <div class="q-no">自测 2</div>
+      <div class="q-stem">CONNECT 隧道建立后，正向代理能看到什么？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 隧道内的 HTTP 方法与路径</li>
+        <li data-opt="b">B. 请求首部里的 Cookie 与网页正文</li>
+        <li data-opt="c">C. CONNECT 的目标主机与端口，以及密文流量的大小与时序</li>
+        <li data-opt="d">D. 目标站返回的明文响应内容</li>
+      </ul>
+      <div class="quiz-explain">解析：C 对。目标主机端口在 CONNECT 请求行里是明文，密文的长度与时序无需解密即可观察。A、B、D 都在 TLS 加密的隧道内，代理没有会话密钥，看不到——这正是隧道「放弃应用层解析权」的含义。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="a">
+      <div class="q-no">自测 3</div>
+      <div class="q-stem">为什么 Upgrade 首部必须同时出现在 Connection 首部里？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 因为 Upgrade 是逐跳首部，列入 Connection 才能声明它只在本跳有效，让中间节点消费而非误转发</li>
+        <li data-opt="b">B. 因为 Connection 负责加密升级后的数据</li>
+        <li data-opt="c">C. 因为 Connection 用来协商 TLS 版本</li>
+        <li data-opt="d">D. 因为少了 Connection，服务器就无法返回 200 OK</li>
+      </ul>
+      <div class="quiz-explain">解析：A 对，这是 MDN 与 RFC 9110 §7.8 的明确要求。B 错，加密由 TLS 负责，与 Connection 首部无关；C 错，TLS 版本在握手里协商，不是这个首部；D 错，升级成功返回的是 101 Switching Protocols 而非 200，且不写 Connection 的问题是逐跳语义丢失、中间节点行为不可控。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="d">
+      <div class="q-no">自测 4</div>
+      <div class="q-stem">下列哪一项<strong>不是</strong>逐跳首部？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. Transfer-Encoding</li>
+        <li data-opt="b">B. Keep-Alive</li>
+        <li data-opt="c">C. Proxy-Authenticate</li>
+        <li data-opt="d">D. Cache-Control</li>
+      </ul>
+      <div class="quiz-explain">解析：D 对。Cache-Control 描述资源本身的缓存语义，是端到端首部。A、B、C 加上 Connection、Upgrade、TE、Trailer、Proxy-Authorization 都是 RFC 9110 §7.6.1 列出的逐跳首部。尤其 A 常被误判为端到端——它其实只描述本跳主体如何定界，代理转发时要按下一跳重新编码。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="a">
+      <div class="q-no">自测 5</div>
+      <div class="q-stem">关于 Sec-WebSocket-Key 与 Sec-WebSocket-Accept，下列说法正确的是？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 密钥经「拼接固定 GUID → SHA-1 → base64」得到 Accept，用于确认握手意图，不提供安全性</li>
+        <li data-opt="b">B. 密钥是加密 WebSocket 数据的对称密钥</li>
+        <li data-opt="c">C. Accept 由服务器随机生成，与客户端密钥无关</li>
+        <li data-opt="d">D. 该机制在 HTTP/2 上同样适用</li>
+      </ul>
+      <div class="quiz-explain">解析：A 对，这是 RFC 6455 定义的算法，MDN 也强调密钥「不提供安全性」。B 错，WebSocket 数据的机密性来自 wss:// 下的 TLS，不靠这个公开算法的密钥；C 错，Accept 必须由客户端密钥算出，客户端会验证；D 错，MDN 明确 HTTP/2 禁止使用升级机制。</div>
+    </div>
+
+    <div class="retell">
+      <h3>🗣️ 用自己的话，三句话讲完本讲</h3>
+      <p>对着空气（或室友）说出这三句。说卡壳的那句，回去重读对应小节。</p>
+      <details><summary>句1：这讲解决什么问题？——</summary><div class="retell-answer">参考答案：把 HTTP 里夹在中间的那些角色讲清楚——正向代理替客户端出去、反向代理替服务器进来，请求目标怎么变形、Via 怎么逐跳记录，HTTPS 如何用 CONNECT 隧道穿过代理，以及 HTTP/1.1 如何就地升级成 WebSocket。</div></details>
+      <details><summary>句2：核心机制是什么？——</summary><div class="retell-answer">参考答案：代理把一条连接拆成两条，因此要改写请求目标（origin 变 absolute）、用 Via 串回路径信息、用逐跳首部管理每一跳的连接状态；CONNECT 让代理建好 TCP 后只透传字节，把 HTTP 语义还给两端；Upgrade 加 Connection 声明逐跳，服务器以 101 同意后连接变成双向管道。</div></details>
+      <details><summary>句3：它和前后讲怎么分工？——</summary><div class="retell-answer">参考答案：本讲接第 1 讲的会话与第 4 讲的连接管理，把「一跳」扩展到「多跳」；反向代理缓存衔接第 5、6 讲缓存；隧道的加密边界呼应避免明文泄密；升级机制是 HTTP/1.1 的遗产，与 HTTP/2、HTTP/3 的多路复用形成对照，也为理解 WebSocket 应用打基础。</div></details>
+    </div>
+
+    <div class="review-plan">
+      <h3>🔁 间隔复习计划</h3>
+      <p>回忆本身比重读有效 10 倍。到点只做一件事：翻卡 + 重做标记题。</p>
+      <table>
+        <tr><th>时间点</th><th>复习内容</th><th>预计用时</th></tr>
+        <tr><td>第 1 天</td><td>概念卡 1–7 全翻 + 回忆 11.1 / 11.2 / 11.3 / 11.4 / 11.5 各 2 张，重点看卡 3、5、6</td><td>15 分钟</td></tr>
+        <tr><td>第 3 天</td><td>重做自测 2、3、4、5 + 翻错的卡 4、6、7；默写逐跳首部完整清单</td><td>10 分钟</td></tr>
+        <tr><td>第 7 天</td><td>三句话复述 + L2 两题（Via 逐跳推演、请求目标形式判定）+ 徒手画 CONNECT 三步</td><td>15 分钟</td></tr>
+        <tr><td>第 15 天</td><td>只重做合上书挑战；能全过就毕业，重点检验第 4、6 条故障链与一条报文</td><td>15 分钟</td></tr>
+      </table>
+    </div>
+
+    <div class="final-challenge">
+      <h3>🚪 合上书挑战：能全写出来，这一讲才毕业</h3>
+      <ol id="challenge-list">
+        <li>用一条判据区分正向代理与反向代理：各代表谁、隐藏谁、各举一个 MDN 列出的用途。</li>
+        <li>对照写出「直连」与「经正向代理」两条请求，说明请求目标为何从 origin-form 变为 absolute-form，Host 为什么仍要带。</li>
+        <li>推演请求经过 P1、P2 两个代理时 Via 的逐跳追加，写出源站收到的最终值并解释顺序与版本含义。</li>
+        <li>默写 CONNECT 建隧道的三步交互报文，写出代理成功时的状态行，并列出代理能看到与看不到的各三类信息。</li>
+        <li>写出 WebSocket 升级请求与 101 响应的关键首部，逐步推导 Sec-WebSocket-Accept，并说明 Upgrade 为何必须与 Connection 同现。</li>
+        <li>列出八个逐跳首部，推演代理错误转发 Connection: close 导致连接被意外关闭的完整故障链，并说出正确做法。</li>
+        <li>一句话回答本讲主线问题：正向代理、反向代理、CONNECT 隧道与协议升级分别改变了连接的哪一段，又让谁能看见什么？</li>
+      </ol>
+    </div>
+
+    <div class="complete-zone">
+      <button class="btn-complete" id="btn-complete" onclick="markDone()">✓ 我已完成本讲（含合上书挑战）</button>
+    </div>
+
+    <div class="chapter-nav">
+      <a href="chapter-10.html"><span class="nav-dir">← 上一讲</span>第10讲 CSP、权限策略与 Fetch 元数据</a>
+      <a href="chapter-12.html" class="next"><span class="nav-dir">下一讲 →</span>第12讲 HTTP 重定向</a>
+    </div>
+
+  </div>
+</div>
+
+<footer class="footer">
+  <div class="wrap">第11讲 代理、隧道与协议升级 · HTTP 精通 · 依据 MDN Web Docs《HTTP 指南》整理，延伸板块对照 RFC 9110 系列 · 学习进度保存在本机浏览器中</div>
+</footer>
+
+<script src="assets/mermaid.min.js"></script>
+<script>
+mermaid.initialize({
+  startOnLoad: true,
+  theme: "base",
+  themeVariables: {
+    primaryColor: "#e3edf7",
+    primaryBorderColor: "#1d5f9e",
+    primaryTextColor: "#1d5f9e",
+    lineColor: "#5c554b",
+    secondaryColor: "#fbeedd",
+    tertiaryColor: "#f5f1e8",
+    fontFamily: "-apple-system, PingFang SC, sans-serif",
+    fontSize: "14px"
+  },
+  flowchart: { curve: "linear", htmlLabels: false }
+});
+</script>
+<script>
+document.querySelectorAll(".quiz-block").forEach(block => {
+  const answer = block.dataset.answer;
+  const explain = block.querySelector(".quiz-explain");
+  block.querySelectorAll(".quiz-opts li").forEach(li => {
+    li.addEventListener("click", () => {
+      const opts = block.querySelectorAll(".quiz-opts li");
+      opts.forEach(o => o.classList.add("disabled"));
+      if (li.dataset.opt === answer) {
+        li.classList.add("correct");
+      } else {
+        li.classList.add("wrong");
+        block.querySelector(`[data-opt="${answer}"]`).classList.add("correct");
+      }
+      explain.classList.add("show");
+    });
+  });
+});
+
+document.querySelectorAll("#challenge-list li").forEach(li => {
+  li.addEventListener("click", () => li.classList.toggle("checked"));
+});
+
+const KEY = "http_guide_progress_v1";
+function loadProgress() {
+  try { return JSON.parse(localStorage.getItem(KEY)) || {}; } catch (e) { return {}; }
+}
+const progress = loadProgress();
+const btn = document.getElementById("btn-complete");
+if (progress[11] && progress[11].done) {
+  btn.textContent = "✓ 已完成 · 再次点击重置";
+  btn.classList.add("done");
+}
+function markDone() {
+  const p = loadProgress();
+  if (p[11] && p[11].done) {
+    delete p[11];
+    btn.textContent = "✓ 我已完成本讲（含合上书挑战）";
+    btn.classList.remove("done");
+  } else {
+    p[11] = { done: true, completedAt: Date.now(), reviewsDone: 0 };
+    btn.textContent = "✓ 已完成 · 复习提醒已开启";
+    btn.classList.add("done");
+  }
+  localStorage.setItem(KEY, JSON.stringify(p));
+}
+</script>
+
+</body>
+</html>

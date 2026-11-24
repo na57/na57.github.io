@@ -1,0 +1,887 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第6讲 条件请求与范围请求 · HTTP 精通</title>
+<link rel="stylesheet" href="assets/style.css">
+<style>
+/* 本套专用：协议报文原文展示与 MDN 来源条 */
+.wire{background:var(--bg-deep);border:1px solid var(--line);border-left:4px solid var(--accent);border-radius:8px;padding:14px 18px;margin:14px 0;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:13.5px;line-height:1.78;white-space:pre-wrap;overflow-wrap:anywhere;color:var(--ink-soft);}
+.wire b{color:var(--accent);font-weight:700;}
+.wire i{color:var(--orange);font-style:normal;}
+.wire em{color:var(--ink-faint);font-style:normal;}
+.wire.sm{font-size:12.5px;}
+.wire-cap{font-size:13px;color:var(--ink-faint);margin:-8px 0 16px;}
+.mdn-src{background:var(--bg-deep);border:1px solid var(--line);border-left:4px solid var(--accent);border-radius:8px;padding:12px 18px;margin:16px 0 0;font-size:13px;line-height:1.8;color:var(--ink-soft);}
+.mdn-src strong{color:var(--accent);}
+.mdn-src a{color:var(--accent);text-decoration:none;border-bottom:1px dashed var(--line);}
+.mdn-src a:hover{border-bottom-style:solid;}
+.to-slide{font-size:13px;color:var(--accent);text-decoration:none;border:1px solid var(--line);border-radius:6px;padding:4px 11px;white-space:nowrap;}
+.to-slide:hover{background:var(--bg-deep);}
+</style>
+</head>
+<body>
+
+<nav class="topbar">
+  <div class="topbar-inner">
+    <span class="brand"><a href="index.html" style="color:inherit">← HTTP 精通 · 学习地图</a></span>
+    <span class="crumb">第②组 · 连接与缓存 / 第6讲</span>
+    <a class="to-slide" href="../http-guide-slides/06-%E6%9D%A1%E4%BB%B6%E8%AF%B7%E6%B1%82%E4%B8%8E%E8%8C%83%E5%9B%B4%E8%AF%B7%E6%B1%82-%E8%AF%BE%E4%BB%B6.html" target="_blank" rel="noopener noreferrer">配套课件 ↗</a>
+  </div>
+</nav>
+
+<div class="wrap">
+
+  <div class="lecture-head">
+    <span class="ch-label">GUIDE 06 · 连接与缓存</span>
+    <h1>条件请求与范围请求</h1>
+    <p class="lead">第 5 讲的缓存在「陈旧」时要去服务器再验证，本讲给出验证的武器；顺带解决另一个常见问题——只取回文件的一段。</p>
+    <div class="mdn-src"><strong>本讲对应的 MDN 指南：</strong><a href="https://developer.mozilla.org/zh-CN/docs/Web/HTTP/Guides/Conditional_requests" target="_blank" rel="noopener">条件请求</a> · <a href="https://developer.mozilla.org/zh-CN/docs/Web/HTTP/Guides/Range_requests" target="_blank" rel="noopener">范围请求</a></div>
+  </div>
+
+  <!-- 本章定位 -->
+  <div class="position-bar">
+    <strong>本讲在主线上的位置：</strong>第 5 讲的缓存与新鲜度 → <u>本讲：条件请求与范围请求</u> → 第 7 讲转向无状态协议如何记住用户。<br>
+    第6讲回答主线上的第6个问题：<strong>怎样用一次轻量请求确认资源没变，或者只取回文件的某一段？</strong>
+    <div class="map-inline">
+      <span class="node">第5讲 HTTP 缓存</span><span class="arrow">→</span>
+      <span class="node here">第6讲 条件请求与范围请求</span><span class="arrow">→</span>
+      <span class="node">第7讲 Cookie：给无状态协议加上记忆</span><span class="arrow">→</span>
+      <span class="node">第7–10讲 状态与安全</span><span class="arrow">→</span>
+      <span class="node">第11–12讲 中间层与分发</span>
+    </div>
+  </div>
+
+  <!-- 学习目标 -->
+  <div class="objectives">
+    <h4>🎯 学完本讲，合上书你应该能：</h4>
+    <ol>
+      <li>解释强验证器与弱验证器的区别及各自适用场景</li>
+      <li>走通 If-None-Match 与 If-Modified-Since 得到 304 的完整报文流程</li>
+      <li>用 If-Match 与 If-Unmodified-Since 实现防丢失更新的乐观锁</li>
+      <li>手算多段 Range 请求的字节范围与 206 响应首部</li>
+      <li>判断条件首部的优先级与「条件不满足」时该返回什么状态码</li>
+    </ol>
+  </div>
+
+  <!-- 视频卡插槽：后面录制 B 站讲解时在此插入 <details class="video-card" id="video-card">…</details> -->
+  <!-- VIDEO_CARD_SLOT -->
+
+  <div class="lecture">
+
+    <!-- 推导主线图 -->
+    <div class="figure">
+      <div class="mermaid">
+flowchart LR
+  A["缓存副本已陈旧"]
+  B["带上验证器发条件请求"]
+  C["资源未变返回 304"]
+  D["资源变了返回新主体"]
+  E["Range 只取一段"]
+  F["返回 206 部分内容"]
+  A --> B
+  B --> C
+  B --> D
+  B --> E
+  E --> F
+  classDef hot fill:#fbeedd,stroke:#c4651f,stroke-width:2.5px,color:#c4651f;
+  classDef danger fill:#fae9e7,stroke:#b03a2e,stroke-width:2.5px,color:#b03a2e;
+  class C hot;
+  class D danger;
+      </div>
+      <div class="caption">条件请求的主线：用验证器把「要不要重传」变成一个可判定的问题；304 省主体、206 省字节，红色节点是资源确已变化时必须回传新主体的分支。</div>
+    </div>
+
+<!-- ============ 6.1 ============ -->
+    <h2><span class="sec-no">6.1</span>验证器：用一小段信息代表「资源的某个版本」</h2>
+
+    <p>第 5 讲把缓存的新鲜度算到了秒，得出一个结论：副本一旦陈旧，就得去服务器问一句「变了没有」。但「问」要问得省——如果每次确认都把整份资源传回来，缓存就白做了。本讲先回答一个更基础的问题：客户端和服务器凭什么用<strong>一小段信息</strong>代表「某个版本的资源」。</p>
+
+    <p>先看两个具体的麻烦。设想一个 10 MB 的文件，客户端缓存了副本，一分钟后副本陈旧，需要确认服务器上的版本是否变化。最笨的办法是把整份文件下载下来逐字节比对——为了回答一个「是 / 否」问题，先花掉 10 MB 带宽。更麻烦的是断点续传：已经下载了 8 MB，中途断线，重连时要确认「前面这 8 MB 还是同一个版本」，否则拼出来的文件是两份不同版本的缝合怪，看似完整实则损坏。</p>
+
+    <p>这两个麻烦有同一个形状：都需要一个<strong>版本指纹</strong>，让客户端能问「你手上的这一份，和我缓存的那一份是不是同一个版本」。逐字节比对之所以不可取，是因为它把「回答问题的成本」和「资源本身的大小」绑在了一起。MDN 给出的解法是把成本与大小解耦：服务器在返回资源时同时返回一个描述版本的短值，客户端以后只拿这个短值去比对。这类短值在 MDN 里叫<span class="term">验证器</span>（Validator）。</p>
+
+    <p>有了验证器，就有了<span class="term">条件请求</span>（Conditional Requests）这个概念。MDN 的定义很精确：<strong>在条件请求中，请求的结果、甚至请求是否成功，都会随「验证器与受影响资源的比较结果」而变化</strong>。注意「甚至请求成功与否」这句——条件请求不只是「省流量」的小优化，它还能决定一次写操作到底允许不允许发生，这是本讲后半段乐观锁的理论根据。</p>
+
+    <p>MDN 把验证器分成两大类：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>验证器类型</th><th>英文与含义</th><th>长什么样</th><th>直观类比</th></tr>
+        <tr><td>最后修改时间</td><td><span class="term">最后修改时间</span>（Last-Modified），资源上一次被改动的时间戳</td><td><code>Last-Modified: Mon, 16 Nov 2026 00:00:00 GMT</code></td><td>书的「版次日期」</td></tr>
+        <tr><td>实体标签</td><td><span class="term">实体标签</span>（ETag, Entity Tag），MDN 称其为「一个意义模糊的字符串，指代一个独一无二的版本」</td><td><code>ETag: "67a4-19f2c"</code> 或弱版 <code>W/"v1"</code></td><td>书的「ISBN + 印次」</td></tr>
+      </table>
+    </div>
+
+    <p>MDN 特别提醒：ETag 背后可以是「使用 MD5 之类算法获取的资源散列值」，但规范并不规定算法，只要求这个字符串能唯一标识一个版本。所以不要把 ETag 当成「一定是 MD5」——它是服务器自定义的版本标识，可能是散列、可能是递增序号、也可能是文件系统的 inode 编号组合。</p>
+
+    <p>比较同一份资源的不同版本，还有强弱之分。MDN 区分两种<strong>等值检查</strong>：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>验证类型</th><th>MDN 口径</th><th>典型场景</th><th>判定严格度</th></tr>
+        <tr><td><span class="term">强验证</span>（Strong Validation）</td><td>确保要比较的资源与对象<strong>每一个字节都相同</strong></td><td>断点续传、字节范围合并——差一个字节就是坏文件</td><td>最严：逐字节相等才算匹配</td></tr>
+        <tr><td><span class="term">弱验证</span>（Weak Validation）</td><td>把<strong>内容相同</strong>的两份文件视作一样，细微差别（广告不同、页脚时间不同）可接受</td><td>缓存刷新——语义等价即可复用</td><td>较松：语义等价就算匹配</td></tr>
+      </table>
+    </div>
+
+    <p>这里有个极易搞混的点，MDN 说得很清楚：<strong>验证类型与验证器的类型是相互独立的</strong>。Last-Modified 和 ETag 都可以用于强验证或弱验证，只是服务端实现复杂程度不同；HTTP 默认使用强验证，但可以指定何时改用弱验证。落到 ETag 上，区分方法写在值里：带 <code>W/</code> 前缀的是弱验证器（如 <code>W/"v1"</code>），不带前缀的是强验证器（如 <code>"67a4-19f2c"</code>）。</p>
+
+    <p>下面是一条最小完整例子：服务器返回资源时，把两种验证器一起放进响应首部。</p>
+
+    <div class="wire"><i>HTTP/1.1 200 OK</i>
+<i>Date:</i> Mon, 16 Nov 2026 00:30:00 GMT
+<i>Content-Type:</i> text/plain; charset=utf-8
+<i>Content-Length:</i> 12
+<i>Last-Modified:</i> Mon, 16 Nov 2026 00:00:00 GMT
+<i>ETag:</i> "67a4-19f2c"
+<i>Cache-Control:</i> max-age=60
+
+HTTP 条件请求</div>
+    <div class="wire-cap">一次普通的 200 响应同时给出两种验证器：Last-Modified 给出最后修改时间，ETag 给出版本字符串。客户端会把它们连同主体一起缓存，陈旧时再拿出来发条件请求。</div>
+
+    <p>MDN 指出，验证器会「与资源一起被缓存起来（与所有的首部一样）」，并在缓存失效时用来发起条件请求。这正是第 5 讲与第 6 讲的接缝：第 5 讲算的是什么叫「失效」，本讲讲的是「失效之后拿什么去问」——拿的就是这里缓存下来的 ETag 与 Last-Modified。</p>
+
+    <div class="box insight">
+      <span class="box-tag">✅ 判定规则</span>
+      <p>验证器的全部价值在于一件事：<strong>比较验证器比传输资源便宜得多</strong>。看到任何「条件请求」的场景，先问「比较的是什么验证器、是强是弱」；凡是要求字节级一致（续传、合并、并发写）的场合，必须用强验证器，弱验证器（<code>W/</code> 前缀）在这类场合会被判为不匹配。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>「ETag 一定是强验证器」——错。带 <code>W/</code> 前缀的 ETag 是弱验证器，只支持弱比较，不能用于范围请求的字节级校验。另一个误区是以为 Last-Modified 足够精确：它通常只有秒级粒度，一秒内的多次修改它分辨不出，做强验证时不如 ETag 可靠。MDN 说得很直白——用 Last-Modified 很难为强验证提供唯一标识，这件事通常由 ETag 完成。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front"><div class="q-tag">回忆 6.1-1</div><div class="q-text">什么是验证器？MDN 把它分成哪两大类？</div><span class="tap">点击翻面 →</span></div>
+            <div class="flip-face flip-back"><div class="a-tag">参考答案</div>验证器是描述资源版本的短值，用来避免逐字节比对。两类：Last-Modified（最后修改时间）与 ETag（实体标签，唯一指代版本的字符串）。二者都随资源一起返回并被缓存。</div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front"><div class="q-tag">回忆 6.1-2</div><div class="q-text">强验证与弱验证的区别是什么？ETag 值里的 W/ 前缀表示什么？</div><span class="tap">点击翻面 →</span></div>
+            <div class="flip-face flip-back"><div class="a-tag">参考答案</div>强验证要求逐字节相同，用于续传等字节级场景；弱验证只要求内容语义相同。<code>W/</code> 前缀表示弱验证器，只能弱比较；不带前缀默认为强验证器。验证类型与验证器类型彼此独立。</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 6.2 ============ -->
+    <h2><span class="sec-no">6.2</span>用 If-None-Match 与 If-Modified-Since 走通一次 304</h2>
+
+    <p>上一节造好了验证器这把「版本指纹」，本节就用它解决第 5 讲留下的那个问题：缓存副本陈旧之后，怎样用一次轻量请求确认资源没变。MDN 把这类「缓存更新」称为条件请求最常见的应用场景，而要发起它，需要用到两个条件首部。</p>
+
+    <p>先看语义。MDN 对这两个首部的定义是：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>请求首部</th><th>MDN 语义</th><th>携带的验证器</th><th>默认验证类型</th></tr>
+        <tr><td><code>If-None-Match</code></td><td>远端资源的实体标签与列出的值<strong>都不相同</strong>时，条件匹配成功</td><td>ETag</td><td>强验证，除非值带 <code>W/</code></td></tr>
+        <tr><td><code>If-Modified-Since</code></td><td>远端资源的 Last-Modified 日期<strong>比给定值更晚</strong>时，条件匹配成功</td><td>Last-Modified 日期</td><td>按日期比较</td></tr>
+      </table>
+    </div>
+
+    <p>请把「条件匹配成功」这句话读两遍，因为它和直觉是反的。对 <code>If-None-Match</code> 来说，「匹配成功」意味着<strong>服务器上的版本和你带来的版本不一样</strong>，也就是资源确实变了——这时候服务器应该返回 <code>200 OK</code> 加新主体。反过来，如果服务器上的 ETag 和你带来的相同（「匹配失败」），说明资源没变，服务器返回 <code>304 Not Modified</code>，且<strong>没有主体</strong>。缓存拿这个 304 去刷新自己的副本，继续用本地已存的资源。</p>
+
+    <p>现在走一遍完整流程。第一步是资源首次到达，服务器给出 200，并把验证器交给客户端缓存——这条报文已经在 6.1 节见过，这里聚焦第二步：缓存过期后客户端发起的条件请求。</p>
+
+    <div class="wire"><b>GET /doc.txt HTTP/1.1</b>
+<b>Host:</b> example.com
+<b>If-None-Match:</b> "67a4-19f2c"
+<b>If-Modified-Since:</b> Mon, 16 Nov 2026 00:00:00 GMT
+
+<em>（空行：本请求无主体）</em></div>
+    <div class="wire-cap">缓存陈旧后的条件请求：把上次缓存下来的 ETag 放进 If-None-Match，把 Last-Modified 放进 If-Modified-Since，两个首部一起发给服务器。</div>
+
+    <p>服务器比对后，发现资源版本没变，于是返回 304：</p>
+
+    <div class="wire"><i>HTTP/1.1 304 Not Modified</i>
+<i>Date:</i> Mon, 16 Nov 2026 00:31:00 GMT
+<i>ETag:</i> "67a4-19f2c"
+<i>Cache-Control:</i> max-age=60
+
+<em>（空行之后没有任何主体——这是 304 的关键）</em></div>
+    <div class="wire-cap">304 响应只有状态行与少量首部，没有空行后的主体字节。它相当于告诉客户端「你的副本还是新的，直接用」。这次往返只传了几百字节首部，省下了整份资源的传输。</div>
+
+    <p>把这两条报文连起来看，就得到 MDN 描述的完整判定逻辑：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>服务器比对结果</th><th>对 If-None-Match 而言</th><th>返回状态码</th><th>有无主体</th><th>客户端动作</th></tr>
+        <tr><td>版本没变</td><td>服务器 ETag 与带来值相同 → 匹配失败</td><td>304 Not Modified</td><td>无</td><td>刷新缓存元信息，复用本地副本</td></tr>
+        <tr><td>版本变了</td><td>服务器 ETag 与带来值不同 → 匹配成功</td><td>200 OK</td><td>有新主体</td><td>用新版本替换缓存副本</td></tr>
+      </table>
+    </div>
+
+    <p>MDN 对 304 的价值说得很清楚：尽管有一次请求／响应往返会消耗资源，但「这样做比将整个资源通过网络再传输一遍更高效」。这就是本讲主线问题的第一半答案——用一次轻量请求确认资源没变，靠的就是 ETag 比对加 304 无主体。</p>
+
+    <div class="figure">
+      <div class="mermaid">
+flowchart LR
+  A["副本已陈旧"] --> B["带上验证器发起请求"]
+  B --> C{"资源是否变化"}
+  C -->|未变| D["返回 304 且无主体"]
+  C -->|已变| E["返回 200 与新主体"]
+      </div>
+      <div class="caption">图 6.1 缓存再验证的分流：验证器把「要不要重传整份资源」变成一个可判定的分支。</div>
+    </div>
+
+    <p>现在处理一个必须讲清的细节：<strong>两个首部同时出现时怎么办</strong>。客户端像上面那样把 If-None-Match 和 If-Modified-Since 都带上，是很常见的做法（浏览器就是这么干的），因此规范必须给出一个确定的裁断，否则同一请求经不同服务器会得出不同结果。RFC 9110 规定了明确优先级：<strong>If-None-Match 优先于 If-Modified-Since</strong>。当 If-None-Match 存在时，If-Modified-Since 被忽略——服务器只看 ETag，拿它和 ETag 带来的日期值不作比较。换句话说，若两者结论冲突（例如 ETag 说「没变」而日期说「变了」），以 ETag 为准：返回 304。MDN 在缓存更新一节也明确写道，验证器的值会「用作 If-Modified-Since 和 If-None-Match 首部字段的参数」，而两者并存时以 ETag 那条链路为判定主干。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>304 是一个「没有主体的成功响应」。它没有 Content-Length 主体、没有 HTML，客户端看到的「页面没变」其实是<strong>本地缓存 + 服务器一句『没变』</strong>拼出来的结果。理解这一点，就不会再去 304 里找新内容——新内容只会出现在 200 里。优先级上记住一条：<strong>ETag 说了算，日期靠边站</strong>。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>三个高发错误。其一，以为 304 里带着更新后的资源——错，304 无主体，任何找主体的尝试都是方向错误。其二，以为 If-None-Match 和 If-Modified-Since 都写会更保险——错，二者结论冲突时以 If-None-Match 为准，写日期只是给不支持 ETag 的老服务器留后路。其三，把「匹配成功」理解成「资源没变」——对 If-None-Match 恰好相反，匹配成功意味着资源变了、要回 200。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front"><div class="q-tag">回忆 6.2-1</div><div class="q-text">默写出用 If-None-Match 触发 304 的请求与响应报文各一条，并说明 304 为什么没有主体。</div><span class="tap">点击翻面 →</span></div>
+            <div class="flip-face flip-back"><div class="a-tag">参考答案</div>请求带 <code>If-None-Match: "版本值"</code>；服务器比对 ETag 相同则回 <code>304 Not Modified</code>，只有状态行与少量首部，无主体。因为客户端已有缓存副本，304 只起「刷新元信息、确认可复用」的作用，传主体是浪费。</div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front"><div class="q-tag">回忆 6.2-2</div><div class="q-text">If-None-Match 与 If-Modified-Since 同时出现、且结论冲突时，听谁的？返回什么？</div><span class="tap">点击翻面 →</span></div>
+            <div class="flip-face flip-back"><div class="a-tag">参考答案</div>听 If-None-Match（ETag 优先），If-Modified-Since 被忽略。若 ETag 判定资源没变，就返回 304 无主体；这保证同一请求在不同服务器上有确定一致的结果。</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 6.3 ============ -->
+    <h2><span class="sec-no">6.3</span>用 If-Match 与 If-Unmodified-Since 给并发写加一把乐观锁</h2>
+
+    <p>上一节用条件首部解决「别传重复的」，本节反过来，用同一套验证器解决「别覆盖别人的」。MDN 把这类应用称作<span class="term">乐观锁</span>（Optimistic Locking），它是 wiki、内容管理系统与版本控制系统普遍采用的并发控制算法。</p>
+
+    <p>先看要解决的麻烦。假设一个文档，客户端 A 和 B 几乎同时把它读到本地编辑。A 改完提交，B 随后也改完提交——B 的提交基于的是<strong>修改前的旧版本</strong>，它对 A 的改动一无所知，于是 A 的修改被 B 整份覆盖。最终保存下来的是谁，取决于谁提交得更快；而快慢又取决于客户端性能、网络状况甚至人打字的手速。MDN 把这种情形叫<span class="term">竞态条件</span>（Race Condition）：结果不可预测、难以探测、更难复现和除错。这个「更新丢失」问题没有「既不打扰任何一方又自动合并」的完美解，MDN 的态度很务实：我们追求的是<strong>结果可预测</strong>，并且在更新被拒绝时给客户端明确反馈。</p>
+
+    <p>乐观锁的思路是：<strong>允许所有客户端拿副本去改，但只让基于最新版本的那一次提交成功</strong>。其余基于过期版本的提交一律拒绝，由客户端决定怎么办（提示用户基于最新版重做，或展示两版差异辅助合并）。支撑它的两个条件首部，MDN 定义如下：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>请求首部</th><th>MDN 语义</th><th>条件不满足（提交被拒）时</th></tr>
+        <tr><td><code>If-Match</code></td><td>远端资源的实体标签与列出值<strong>相同</strong>时匹配成功；默认强验证（除非带 <code>W/</code>）</td><td>返回 <code>412 Precondition Failed</code></td></tr>
+        <tr><td><code>If-Unmodified-Since</code></td><td>远端资源 Last-Modified 日期<strong>早于或等于</strong>给定值时匹配成功</td><td>返回 <code>412 Precondition Failed</code></td></tr>
+      </table>
+    </div>
+
+    <p>注意这两个首部和上一节那两个的「成功条件」正好互补：If-None-Match 要「不一样」才成功，If-Match 要「一样」才成功。可以这样记：<strong>读场景用 If-*，是想说「没变就别传」；写场景用 If-Match，是想说「没变才准写」</strong>。值 <code>*</code> 是特例：<code>If-Match: *</code> 表示「只要资源存在就匹配」，而 <code>If-None-Match: *</code> 表示「只要资源不存在就匹配」，后者用于首次上传（MDN 专门讲了「处理资源的首次上传问题」）。</p>
+
+    <p>下面把两个客户端并发修改同一资源的完整时序走一遍，这是本讲第二个必须掌握的手推例子。假设文档 <code>/doc/42</code> 当前版本 ETag 为 <code>"v1"</code>。</p>
+
+    <div class="wire"><em>时刻 t1：客户端 A 读取</em>
+<b>GET /doc/42 HTTP/1.1</b>
+<b>Host:</b> wiki.example
+
+<i>HTTP/1.1 200 OK</i>
+<i>ETag:</i> "v1"
+
+<em>时刻 t2：客户端 B 也读取，拿到同一版本</em>
+<b>GET /doc/42 HTTP/1.1</b>
+<b>Host:</b> wiki.example
+
+<i>HTTP/1.1 200 OK</i>
+<i>ETag:</i> "v1"</div>
+    <div class="wire-cap">t1、t2 两次读取都拿到 ETag "v1"。此刻 A、B 手上的副本是基于同一版本的，谁都不知道对方也在编辑。</div>
+
+    <div class="wire"><em>时刻 t3：A 改完提交，带上它读到的版本作为前提条件</em>
+<b>PUT /doc/42 HTTP/1.1</b>
+<b>Host:</b> wiki.example
+<b>If-Match:</b> "v1"
+<b>Content-Length:</b> 20
+
+A 的修改内容……
+
+<i>HTTP/1.1 200 OK</i>
+<i>ETag:</i> "v2"</div>
+    <div class="wire-cap">t3：A 提交时带上 If-Match: "v1"。服务器发现当前版本正是 "v1"，条件满足，写入成功，新版本变成 "v2"，并在响应里回传新 ETag。</div>
+
+    <div class="wire"><em>时刻 t4：B 也改完提交，但它手上仍是旧版本 "v1"</em>
+<b>PUT /doc/42 HTTP/1.1</b>
+<b>Host:</b> wiki.example
+<b>If-Match:</b> "v1"
+<b>Content-Length:</b> 20
+
+B 的修改内容……
+
+<i>HTTP/1.1 412 Precondition Failed</i>
+<i>Content-Length:</i> 0</div>
+    <div class="wire-cap">t4：B 的 If-Match: "v1" 与服务器当前版本 "v2" 不符，条件不满足，服务器拒绝写入并返回 412。A 的修改因此没有被静默覆盖——这正是乐观锁要的结果。</div>
+
+    <p>把四个时刻列成表，并发控制的关键就一目了然：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>时刻</th><th>动作</th><th>携带的版本</th><th>服务器当前版本</th><th>结果</th></tr>
+        <tr><td>t1</td><td>A 读取</td><td>—</td><td>v1</td><td>200，得到 ETag「v1」</td></tr>
+        <tr><td>t2</td><td>B 读取</td><td>—</td><td>v1</td><td>200，得到 ETag「v1」</td></tr>
+        <tr><td>t3</td><td>A 提交</td><td>If-Match: v1</td><td>v1</td><td>匹配，写入成功，版本升为 v2</td></tr>
+        <tr><td>t4</td><td>B 提交</td><td>If-Match: v1</td><td>v2</td><td>不匹配，返回 412，B 的改动未覆盖 A</td></tr>
+      </table>
+    </div>
+
+    <p>收到 412 之后怎么办？MDN 给出的两条路是：<strong>或者通知用户基于最新版本重新开始编辑，或者给用户展示两个版本之间的差异</strong>，让他自己决定保留哪些改动。关键点在于——<strong>过期提交的失败是显式可见的</strong>，而不是像无锁并发那样悄悄覆盖、事后无人察觉。这就是乐观锁「可预测」的含义：要么成功，要么明确失败，绝不会悄悄丢失某人的工作。</p>
+
+    <p>把 If-Unmodified-Since 换上来推演，逻辑完全一样，只是比较对象从 ETag 变成日期：客户端提交时带 <code>If-Unmodified-Since: Mon, 16 Nov 2026 00:00:00 GMT</code>，如果服务器资源的 Last-Modified 晚于这个时间（说明读完之后被人改过），条件不成立，同样返回 412。它的弱点是秒级精度，同一秒内的并发改动可能漏检，所以并发要求高时用 If-Match 更稳。</p>
+
+    <p>现在补齐本讲第三块硬内容：<strong>条件首部的优先级与结果对照判定表</strong>。当请求里同时出现多个条件首部时，RFC 9110 规定了确定的评估顺序，先算前面的，满足条件才继续算后面的：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>评估顺序</th><th>首部</th><th>被忽略的条件</th><th>条件不满足时的结果</th></tr>
+        <tr><td>1</td><td><code>If-Match</code></td><td>若存在，忽略 If-Unmodified-Since</td><td>412 Precondition Failed</td></tr>
+        <tr><td>2</td><td><code>If-Unmodified-Since</code></td><td>仅当无 If-Match 时评估</td><td>412 Precondition Failed</td></tr>
+        <tr><td>3</td><td><code>If-None-Match</code></td><td>若存在，忽略 If-Modified-Since</td><td>GET/HEAD → 304；其他方法 → 412</td></tr>
+        <tr><td>4</td><td><code>If-Modified-Since</code></td><td>仅当无 If-None-Match 时评估</td><td>GET/HEAD → 304；其他方法 → 412</td></tr>
+        <tr><td>5</td><td><code>If-Range</code></td><td>与 Range 配合，最后评估</td><td>不匹配则忽略 Range，返回 200 完整资源</td></tr>
+      </table>
+    </div>
+
+    <p>这张表里有两处值得停一下。第一，<code>If-None-Match</code> 与 <code>If-Modified-Since</code> 条件不满足时返回什么，<strong>取决于请求方法</strong>：对安全的 GET/HEAD 返回 304（省传输），对其他方法返回 412（拒绝写）。这正好呼应 MDN 开头那句「反应取决于请求所使用的方法」。第二，顺序 1、2 是一组（写门槛），顺序 3、4 是一组（读捷径），每组内部 ETag 首部都压过日期首部——「ETag 优先」这条规矩在本讲反复出现。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>乐观锁并没有真的「加锁」——没有任何资源被锁住，所有客户端都能自由读取。它只是把「你提交的版本必须还是我给你的那个」写进请求，让服务器替你守住一致性。这就是为什么叫「乐观」：赌的是冲突很少发生，一旦发生就用 412 显式告知，而不是靠互斥锁牺牲并发。看到 <code>If-Match</code> 就想到「写门槛」，看到 <code>If-None-Match</code> 就想到「读捷径」，两者别混。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>「加了 If-Match 就能自动合并并发修改」——错。它只会拒绝过期提交并返回 412，合并是客户端的责任，服务器不代劳。另一个误区是把 <code>If-Match: *</code> 与 <code>If-None-Match: *</code> 搞反：前者是「资源存在即可写」，后者是「资源不存在才能写」（首次上传）。最后，别在需要强一致的场景用 If-Unmodified-Since 替代 If-Match——秒级精度会漏掉同秒内的并发改动。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front"><div class="q-tag">回忆 6.3-1</div><div class="q-text">用完整时序复述两客户端并发 PUT：每一步带什么首部、服务器返回什么、412 出现在哪一步。</div><span class="tap">点击翻面 →</span></div>
+            <div class="flip-face flip-back"><div class="a-tag">参考答案</div>A、B 都 GET 到 ETag「v1」；A 先 PUT 带 If-Match: "v1"，匹配成功回 200、版本升为「v2」；B 后 PUT 仍带 If-Match: "v1"，与当前「v2」不符，回 412。B 需基于最新版本重做或看差异，A 的改动未被覆盖。</div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front"><div class="q-tag">回忆 6.3-2</div><div class="q-text">说出五个条件首部的评估优先级；If-None-Match 条件不满足时，GET 与 PUT 分别返回什么？</div><span class="tap">点击翻面 →</span></div>
+            <div class="flip-face flip-back"><div class="a-tag">参考答案</div>顺序：If-Match → If-Unmodified-Since → If-None-Match → If-Modified-Since → If-Range；ETag 首部压过对应日期首部。If-None-Match 不满足时：GET/HEAD 回 304，PUT 等非安全方法回 412。</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 6.4 ============ -->
+    <h2><span class="sec-no">6.4</span>范围请求：只取一段，以及 206 响应怎么算</h2>
+
+    <p>前面三节都在回答「要不要传整份」，还有一个问题始终没答：<strong>能不能只传一份中的一段</strong>。MDN 的《范围请求》给出的答案就是<span class="term">范围请求</span>（Range Requests）——它让客户端只要求服务器回传消息的一部分。MDN 点名了三类最需要它的客户端：支持随机访问的媒体播放器（拖进度条）、明确只要大文件某部分的数据处理工具、以及能暂停和恢复下载的下载管理器。</p>
+
+    <p>先讲能力探测。MDN 说，只要响应里存在 <code>Accept-Ranges</code> 首部且值不是 <code>none</code>，就表示服务器支持范围请求；<code>Accept-Ranges: bytes</code> 表示以字节为单位定义范围。客户端可以用 HEAD 请求做一次轻量探测：</p>
+
+    <div class="wire"><b>HEAD /video/sample.mp4 HTTP/1.1</b>
+<b>Host:</b> media.example
+
+<i>HTTP/1.1 200 OK</i>
+<i>Accept-Ranges:</i> bytes
+<i>Content-Length:</i> 10000
+<i>Content-Type:</i> video/mp4</div>
+    <div class="wire-cap">HEAD 只取首部不取主体。Accept-Ranges: bytes 声明支持字节范围；Content-Length: 10000 告诉客户端完整资源是 10000 字节，这是后面手算范围端点的基准。</div>
+
+    <p>接着看怎么请求。Range 首部有几种写法，MDN 都给了示例：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>Range 写法</th><th>含义</th><th>以总长 10000 为例</th></tr>
+        <tr><td><code>Range: bytes=0-1023</code></td><td>闭区间，取第 0 到第 1023 字节</td><td>前 1024 字节</td></tr>
+        <tr><td><code>Range: bytes=9500-</code></td><td>从第 9500 字节一直到末尾</td><td>第 9500 至 9999 字节</td></tr>
+        <tr><td><code>Range: bytes=-500</code></td><td>后缀范围，取最后 500 字节</td><td>第 9500 至 9999 字节</td></tr>
+        <tr><td><code>Range: bytes=0-499,9000-9999</code></td><td>多段范围，逗号分隔</td><td>前 500 字节 + 后 1000 字节</td></tr>
+      </table>
+    </div>
+
+    <p>要注意端点是<strong>从 0 开始、闭区间</strong>：<code>bytes=0-499</code> 实际包含 500 个字节（499 − 0 + 1 = 500），不是 499 个。这是手算时最容易差一的地方。</p>
+
+    <p>单段请求的响应长这样：</p>
+
+    <div class="wire"><b>GET /video/sample.mp4 HTTP/1.1</b>
+<b>Host:</b> media.example
+<b>Range:</b> bytes=0-1023
+
+<i>HTTP/1.1 206 Partial Content</i>
+<i>Content-Length:</i> 1024
+<i>Content-Range:</i> bytes 0-1023/10000
+<i>Content-Type:</i> video/mp4
+
+<em>（空行后是 1024 字节的部分数据）</em></div>
+    <div class="wire-cap">206 Partial Content 成功返回一段。Content-Length 现在是「这一段」的大小而非完整大小；Content-Range 用 bytes 起始-结束/总长 说明这段在完整资源中的位置。</div>
+
+    <p>MDN 明确说明了 <code>Content-Range</code> 的作用：表示「此部分消息在完整资源中的位置」。它的格式是 <code>Content-Range: bytes 首字节-末字节/完整长度</code>，分母始终是资源总长而不是本段长度。</p>
+
+    <p>现在是本讲第四个、也是计算量最大的手算例子：<strong>多段 Range 请求</strong>。给定文件 <code>/docs/report.txt</code>，总长 1000 字节，可视为 ASCII 文本；请求两段：<code>Range: bytes=0-9,990-999</code>。要求算出 206 响应里每段的 Content-Range、每段实际字节数，并写出完整 multipart 响应报文。</p>
+
+    <p><strong>第一步：逐段算端点与字节数。</strong>公式为「字节数 = 末字节 − 首字节 + 1」。</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>段</th><th>请求范围</th><th>首字节</th><th>末字节</th><th>实际字节数（末−首+1）</th><th>Content-Range</th></tr>
+        <tr><td>第 1 段</td><td>bytes=0-9</td><td>0</td><td>9</td><td>9 − 0 + 1 = 10</td><td><code>bytes 0-9/1000</code></td></tr>
+        <tr><td>第 2 段</td><td>bytes=990-999</td><td>990</td><td>999</td><td>999 − 990 + 1 = 10</td><td><code>bytes 990-999/1000</code></td></tr>
+      </table>
+    </div>
+
+    <p><strong>第二步：确认总长分母。</strong>两段 Content-Range 的分母都写完整资源长度 1000，而不是本段长度 10；这是 Content-Range 的硬性格式，分母永远是整个 selected representation 的长度。</p>
+
+    <p><strong>第三步：写 multipart 响应报文。</strong>多段时 MDN 说服务器以 <code>206 Partial Content</code> 加 <code>Content-Type: multipart/byteranges; boundary=边界串</code> 响应，随后每一段都带自己的 Content-Type 与 Content-Range，边界串用于分隔各段。取边界串 <code>abc123</code>，完整报文如下（为便于手算，假设第 1 段数据是 10 字节的 <code>0123456789</code>，第 2 段是 10 字节的 <code>ABCDEFGHIJ</code>）：</p>
+
+    <div class="wire"><i>HTTP/1.1 206 Partial Content</i>
+<i>Date:</i> Mon, 16 Nov 2026 00:40:00 GMT
+<i>Content-Type:</i> multipart/byteranges; boundary=abc123
+<i>Content-Length:</i> 178
+
+--abc123
+Content-Type: text/plain
+Content-Range: bytes 0-9/1000
+
+0123456789
+--abc123
+Content-Type: text/plain
+Content-Range: bytes 990-999/1000
+
+ABCDEFGHIJ
+--abc123--</div>
+    <div class="wire-cap">多段 206 的完整报文：顶层 Content-Type 是 multipart/byteranges 并给出 boundary；每段各带 Content-Type 与 Content-Range；最后的边界串两侧各加两个连字符表示结束。</div>
+
+    <p><strong>第四步：手算 Content-Length: 178。</strong>为让这个数字可核对，约定每行以 CRLF（回车换行，记 2 字节）结尾，等号右边是逐项字节数：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>组成</th><th>字符数</th><th>+ CRLF</th><th>小计</th></tr>
+        <tr><td>--abc123</td><td>8</td><td>+2</td><td>10</td></tr>
+        <tr><td>Content-Type: text/plain</td><td>24</td><td>+2</td><td>26</td></tr>
+        <tr><td>Content-Range: bytes 0-9/1000</td><td>29</td><td>+2</td><td>31</td></tr>
+        <tr><td>空行（段首部与数据之间）</td><td>0</td><td>+2</td><td>2</td></tr>
+        <tr><td>0123456789（第 1 段数据）</td><td>10</td><td>+2</td><td>12</td></tr>
+        <tr><td>第 1 段合计</td><td>—</td><td>—</td><td>81</td></tr>
+        <tr><td>--abc123</td><td>8</td><td>+2</td><td>10</td></tr>
+        <tr><td>Content-Type: text/plain</td><td>24</td><td>+2</td><td>26</td></tr>
+        <tr><td>Content-Range: bytes 990-999/1000</td><td>33</td><td>+2</td><td>35</td></tr>
+        <tr><td>空行</td><td>0</td><td>+2</td><td>2</td></tr>
+        <tr><td>ABCDEFGHIJ（第 2 段数据）</td><td>10</td><td>+2</td><td>12</td></tr>
+        <tr><td>第 2 段合计</td><td>—</td><td>—</td><td>85</td></tr>
+        <tr><td>--abc123--（结束边界）</td><td>10</td><td>+2</td><td>12</td></tr>
+        <tr><td><strong>总计</strong></td><td>—</td><td>—</td><td><strong>81 + 85 + 12 = 178</strong></td></tr>
+      </table>
+    </div>
+
+    <p>这段手算把三件事钉死了：每段字节数按「末−首+1」算；Content-Range 分母是总长 1000；multipart 的 Content-Length 是「所有边界行 + 每段首部 + 每段数据 + 各 CRLF」之和。能在纸上独立复现这三步，多段范围请求就掌握了。</p>
+
+    <p>接下来讲范围请求的校验与三种响应状态。MDN 列出三种状态：</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>状态</th><th>状态码</th><th>触发条件</th><th>响应特征</th></tr>
+        <tr><td>范围成功</td><td>206 Partial Content</td><td>请求的范围有效，服务器满足它</td><td>带 Content-Range，主体是所请求的段</td></tr>
+        <tr><td>范围不满足</td><td>416 Range Not Satisfiable</td><td>没有任何范围与资源重叠，例如每段首字节都大于资源长度</td><td>带 <code>Content-Range: bytes */1000</code> 说明可用总长</td></tr>
+        <tr><td>不支持范围</td><td>200 OK</td><td>服务器不支持范围请求，或选择忽略 Range</td><td>返回完整资源主体</td></tr>
+      </table>
+    </div>
+
+    <p>看一个 416 的例子。若对总长 1000 的资源请求 <code>Range: bytes=2000-3000</code>，起点 2000 已经超过资源末尾，没有任何字节可给：</p>
+
+    <div class="wire"><b>GET /docs/report.txt HTTP/1.1</b>
+<b>Host:</b> docs.example
+<b>Range:</b> bytes=2000-3000
+
+<i>HTTP/1.1 416 Range Not Satisfiable</i>
+<i>Content-Range:</i> bytes */1000
+<i>Content-Length:</i> 0</div>
+    <div class="wire-cap">416 用 Content-Range: bytes */1000 告知「当前资源完整长度是 1000，你要的范围无从满足」，星号表示「没有返回任何具体范围，只给总长」。</div>
+
+    <p>最后补上范围请求与条件请求的交叉点：<code>If-Range</code>。断点续传时有一个隐患——资源在两次下载之间被改动，第二次取回的段就对应了另一个版本，拼出来的文件损坏。MDN 说可以用 If-Modified-Since 加 If-Match 来防（前置条件失败就返回错误，客户端从头重下），但那样在文件变化时多一次往返；为此 HTTP 专门设计了 If-Range。它的语义是：<strong>条件成立就按 Range 返回 206，条件不成立就忽略 Range 直接返回 200 加完整资源</strong>。它可以带一个 ETag 或一个日期值，但<strong>不能同时带两者</strong>。</p>
+
+    <div class="wire"><b>GET /video/sample.mp4 HTTP/1.1</b>
+<b>Host:</b> media.example
+<b>If-Range:</b> "v1"
+<b>Range:</b> bytes=8000-
+
+<em>若资源仍是 "v1" → 206，主体是 8000-9999；</em>
+<em>若资源已变 → 200，主体是完整的 10000 字节。</em></div>
+    <div class="wire-cap">If-Range 把「版本校验」与「范围请求」合并成一次往返：验证器匹配就给那段，不匹配就干脆给整份，避免拼出混合版本。</div>
+
+    <p>MDN 还提醒了一个容易混淆的对照：不要把这个<code>按范围取片段</code>和 <code>Transfer-Encoding: chunked</code> 的<strong>分块传输编码</strong>混为一谈。分块编码是服务器在「事先不知道响应总大小」时把数据分批发出、降低延迟的手段，由传输层处理；范围请求是按字节位置取资源的「哪一段」，与应用语义相关。MDN 明确说两者兼容，可独立使用或组合使用——一段 206 响应完全可以同时用 chunked 传输。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>Range 把「一份响应」变成「按字节寻址的片段集合」，Content-Range 则是每个片段的「坐标 + 全局总长」。单段用普通 206，多段用 multipart/byteranges 包起来。记住三个判定端点：206 成功、416 范围越界、200 服务器不支持或条件不成立时的完整回退。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>其一，以为带 Range 就一定拿到 206——错，服务器可以忽略 Range 返回 200 完整资源，客户端必须检查状态码而不是假定。其二，把 <code>bytes=-500</code> 当成「从第 500 字节开始」——错，它是后缀写法，指「最后 500 字节」（总长 1000 时是 9500–9999）。其三，算错端点差一——<code>bytes=0-9</code> 是 10 个字节不是 9 个。其四，把 Content-Range 的分母写成段长——分母永远是资源总长。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front"><div class="q-tag">回忆 6.4-1</div><div class="q-text">总长 1000 字节，请求 bytes=0-9,990-999。写出两段各自的字节数与 Content-Range，并说出 multipart 响应的顶层 Content-Type。</div><span class="tap">点击翻面 →</span></div>
+            <div class="flip-face flip-back"><div class="a-tag">参考答案</div>两段字节数都是「末−首+1」= 10；Content-Range 分别是 <code>bytes 0-9/1000</code> 与 <code>bytes 990-999/1000</code>，分母是总长不是段长。顶层 <code>Content-Type: multipart/byteranges; boundary=边界串</code>，每段再各带 Content-Type 与 Content-Range。</div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front"><div class="q-tag">回忆 6.4-2</div><div class="q-text">范围请求有三种状态，分别是什么状态码、什么触发条件？If-Range 条件不成立时返回什么？</div><span class="tap">点击翻面 →</span></div>
+            <div class="flip-face flip-back"><div class="a-tag">参考答案</div>206 范围成功并带 Content-Range；416 范围与资源无重叠并带 <code>bytes */总长</code>；200 服务器不支持或忽略 Range 时回完整资源。<code>If-Range</code> 不成立时忽略 Range、返回 200 加完整资源，避免拼出混合版本。</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 6.5 ============ -->
+    <h2><span class="sec-no">6.5</span>延伸：规范怎么写：MDN 的条件与范围对应 RFC 的哪一段</h2>
+
+    <p>MDN 是面向开发者的工作文档，它把「怎么用条件请求省流量、怎么续传」讲得很透，但刻意省掉了规范层面的细节。当你要实现服务器、判定一个边界行为（比如两个首部冲突时谁优先、弱验证器能不能用于范围）时，就需要看 IETF 的规范措辞。2022 年 6 月，IETF 把 HTTP 语义整理进 <strong>RFC 9110</strong>：<strong>第 8 节定义条件请求与验证器，第 14 节定义范围请求，第 13 节定义前置条件的评估顺序</strong>。把 MDN 的工程口径和 RFC 的规范口径对齐，是本节要做的事。</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr><th>MDN 的说法</th><th>RFC 怎么写</th><th>为什么值得知道</th></tr>
+        <tr><td>条件请求的结果随验证器与资源的比较而变化</td><td>RFC 9110 §8.8 定义条件请求与「前提条件」；§13.2.2 给出前置条件的评估规则</td><td>MDN 讲「结果会变」，RFC 规定「按什么顺序变」。实现服务器时必须照 §13.2.2 的顺序评估，否则同一请求会得出不同结果</td></tr>
+        <tr><td>验证器分 ETag 与 Last-Modified，且有强弱验证之分</td><td>RFC 9110 §8.8.2 定义验证器；§8.8.2.1 明确强验证器要求逐字节相同且各元数据一致，弱验证器用 <code>W/</code> 前缀标识</td><td>规范给强弱下了严格定义：强验证器可用于范围与字节级合并，弱验证器不行。这正是续传必须用强 ETag 的规范依据</td></tr>
+        <tr><td>ETag 可以是资源散列值</td><td>RFC 9110 §8.8.3 只要求 ETag 是不透明字符串，用双引号包裹；<code>W/</code> 前缀表示弱；不规定生成算法</td><td>别把 ETag 当固定算法。只要能保证「版本不同则值不同」即可，散列、序号、版本号都合法，关键是唯一性与稳定性</td></tr>
+        <tr><td>If-None-Match 与 If-Modified-Since 同时出现时以 ETag 为准</td><td>RFC 9110 §13.2.2 规定优先级：If-Match → If-Unmodified-Since → If-None-Match → If-Modified-Since → If-Range；后者存在时前者忽略对应日期首部</td><td>这是 MUST 级的确定顺序，不是实现偏好。它保证客户带两个首部时，链路上的任何服务器都得出同一结论</td></tr>
+        <tr><td>Range 请求成功回 206、越界回 416、不支持回 200</td><td>RFC 9110 §14.2 定义 Range，§14.3 定义 Content-Range（含 <code>bytes */长度</code> 的满足形式），§15.3.7 定义 206、§15.5.17 定义 416</td><td>规范明确 416 必须用 <code>Content-Range: bytes */当前长度</code> 告知可用总长；客户端据此可修正范围重试</td></tr>
+        <tr><td>多段范围用 multipart/byteranges 返回，每段带 Content-Type 与 Content-Range</td><td>RFC 9110 §14.6 定义 multipart/byteranges：边界参数必带，每段必须含 Content-Range，Content-Type 在各段相同时可省略</td><td>MDN 说每段都带 Content-Type，规范则允许「类型相同时省略」。读抓包看到省略了 Content-Type 的段，别以为是错误</td></tr>
+      </table>
+    </div>
+
+    <p>这张表的用法不是让你去背 RFC 条款号，而是给你一条判断路径：<strong>MDN 说「通常」「建议」而你要一个确定的对错时，去 RFC 找规范性措辞</strong>。RFC 里 MUST / SHOULD / MAY 是有严格区别的；MDN 里的一句「以 ETag 为准」，在 RFC 里对应的是必须照做的评估顺序。</p>
+
+    <div class="box idea">
+      <span class="box-tag">💡 关键一跃</span>
+      <p>把 RFC 9110 的第 8、13、14 节串起来，就是本讲的完整骨架：<strong>第 8 节造出验证器（ETag / Last-Modified，分强弱），第 13 节规定用它们做前置条件时的评估顺序与状态码，第 14 节把同一套验证器用到按字节取片段上（If-Range + Range → 206 / 416 / 200）</strong>。MDN 的两篇指南正是这三节内容面向开发者的重写。</p>
+    </div>
+
+    <div class="box warning">
+      <span class="box-tag">⚠️ 常见误区</span>
+      <p>别拿旧资料里的 RFC 编号当现行规范。条件请求与范围请求现在都在 RFC 9110（OLD 的 RFC 7232、RFC 7233 已被它取代）。网上大量教程还引用 7232/7233，不代表它们仍有效。查规范先认准 httpwg.org 的现行列表，再读具体章节，避免把已被废止的条款当成依据。</p>
+    </div>
+
+    <div class="recall-zone">
+      <h4>🧠 回忆卡片 · 先默答再翻面</h4>
+      <div class="flip-grid">
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front"><div class="q-tag">回忆 6.5-1</div><div class="q-text">RFC 9110 的第 8、13、14 节分别讲什么？它们与本讲是什么关系？</div><span class="tap">点击翻面 →</span></div>
+            <div class="flip-face flip-back"><div class="a-tag">参考答案</div>§8 条件请求与验证器（强弱、W/ 前缀）；§13 前置条件评估顺序与状态码；§14 范围请求（Range、Content-Range、multipart）。MDN 两篇指南正是这三节的开发者版重写。</div>
+          </div>
+        </div>
+        <div class="flip-card" onclick="this.classList.toggle('flipped')">
+          <div class="flip-inner">
+            <div class="flip-face flip-front"><div class="q-tag">回忆 6.5-2</div><div class="q-text">规范对「强验证器」和「弱验证器」的界定是什么？为什么续传必须用强验证器？</div><span class="tap">点击翻面 →</span></div>
+            <div class="flip-face flip-back"><div class="a-tag">参考答案</div>强验证器要求两个表示逐字节相同、各元数据也一致；弱验证器只要语义等价，用 <code>W/</code> 前缀标识。续传要把两段拼成同一文件，差一字节即损坏，所以必须字节级一致，弱验证器不满足此要求。</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===== 概念卡 ===== -->
+    <h2><span class="sec-no">🃏</span>概念卡：本讲概念的一分钟画像</h2>
+    <p>翻面前先自问：这个概念我能用一句话讲清楚吗？</p>
+    <div class="flip-grid">
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front"><div class="q-tag">概念卡 1</div><div class="q-text">验证器（Validator）</div><span class="tap">点击翻面 →</span></div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">描述资源版本的短值，含 ETag 与 Last-Modified 两类，随资源一起返回并被缓存。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">避免为回答「版本变没变」而逐字节传输整份资源。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">书的版次与印次——一眼比对版本，不必重读全书。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为 ETag 一定是 MD5 强验证器；带 W/ 前缀的是弱验证器。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">所有条件请求的前提；第 6.1 节定义，第 6.5 节看规范。</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front"><div class="q-tag">概念卡 2</div><div class="q-text">强验证与弱验证（Strong / Weak Validation）</div><span class="tap">点击翻面 →</span></div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">强验证要求逐字节相同；弱验证只要求内容语义相同，细微差异可接受。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">区分「必须字节级一致」与「语义等价即可」两类比较需求。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">强验证像比对文件校验和，弱验证像比对文章大意。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为强弱由验证器类型决定；实际二者独立，ETag 用 W/ 前缀标弱。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">续传与并发写必须强验证；缓存刷新可用弱验证。</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front"><div class="q-tag">概念卡 3</div><div class="q-text">If-None-Match / If-Modified-Since 与 304</div><span class="tap">点击翻面 →</span></div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">读场景的条件首部：版本没变则回 304 无主体；ETag 优先于日期。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">缓存陈旧后用一次轻量请求确认资源未变，省去整份传输。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">问一句「还是老版本吗」，答「是」就只回两个字，不搬整箱货。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为 304 带新内容；以为两个首部都写更保险——冲突时以 ETag 为准。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">缓存再验证；承接第 5 讲的「陈旧」判定。</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front"><div class="q-tag">概念卡 4</div><div class="q-text">If-Match / If-Unmodified-Since 与乐观锁</div><span class="tap">点击翻面 →</span></div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">写场景的条件首部：版本仍是读到的那个才准写，否则 412。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">并发编辑时防止后提交者静默覆盖先提交者，让失败显式可见。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">提交时附上「我基于第几版」，版本变了就拒收，绝不悄悄合并。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为它会自动合并；它只拒绝过期提交，合并是客户端的事。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">wiki、CMS、PUT 更新；<code>If-None-Match: *</code> 用于首次上传。</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front"><div class="q-tag">概念卡 5</div><div class="q-text">优先级与状态码分流</div><span class="tap">点击翻面 →</span></div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">顺序：If-Match → If-Unmodified-Since → If-None-Match → If-Modified-Since → If-Range。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">多首部并存时给出确定结果，保证不同服务器判定一致。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">一组写门槛在前，一组读捷径在后；每组里 ETag 压过日期。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为 If-None-Match 不满足一律 304；非安全方法是 412。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">实现服务器判定逻辑；RFC 9110 §13.2.2 的 MUST 级规则。</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="flip-card tall" onclick="this.classList.toggle('flipped')">
+        <div class="flip-inner">
+          <div class="flip-face flip-front"><div class="q-tag">概念卡 6</div><div class="q-text">范围请求与 206（Range / Content-Range）</div><span class="tap">点击翻面 →</span></div>
+          <div class="flip-face flip-back">
+            <div class="cc-row"><span class="cc-k">定义</span><span class="cc-v">Range 按字节取片段，成功回 206 加 Content-Range；多段用 multipart/byteranges。</span></div>
+            <div class="cc-row"><span class="cc-k">解决问题</span><span class="cc-v">支持拖进度条、断点续传、只取大文件的一部分。</span></div>
+            <div class="cc-row"><span class="cc-k">直觉</span><span class="cc-v">Content-Range 是片段的坐标加总长，如「第 0–9 字节，共 1000」。</span></div>
+            <div class="cc-row"><span class="cc-k">误区</span><span class="cc-v">以为带 Range 必得 206；越界回 416，不支持回 200。<code>bytes=-500</code> 是末 500 字节。</span></div>
+            <div class="cc-row"><span class="cc-k">何时用</span><span class="cc-v">续传与媒体随机访问；If-Range 校验版本避免拼出混合文件。</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===== 分层习题 ===== -->
+    <h2><span class="sec-no">✍️</span>分层习题：先自己写，再点开核对</h2>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>判断下列说法正误并说明理由：①「If-None-Match 匹配成功说明资源没变」；②「ETag 一定是强验证器」；③「If-Match 能自动合并两个人的并发修改」。</div>
+      <details><summary>提示</summary><p>逐句回到条件首部的「成功条件」定义，注意 If-None-Match 与直觉相反，以及乐观锁的职责边界。</p></details>
+      <details><summary>完整解答</summary><div class="ex-answer">① 错。If-None-Match 的匹配成功指「服务器 ETag 与带来值都不相同」，即资源<strong>变了</strong>，应返回 200 加新主体；资源没变时是匹配失败，返回 304。② 错。带 <code>W/</code> 前缀的 ETag 是弱验证器，只能弱比较，不能用于续传等字节级场景；强弱与验证器类型无关。③ 错。If-Match 只在版本不符时返回 412 拒绝过期提交，它保证「不静默覆盖」，但合并差异是客户端的责任，服务器不代劳。</div></details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l1">L1 概念辨析</span>请分别说明 304、412、416 三个状态码各由什么条件触发、响应里有没有主体，并各举一个本讲出现的首部。</div>
+      <details><summary>提示</summary><p>把三个码按「读捷径 / 写门槛 / 范围」三类归位，再各配一个条件首部。</p></details>
+      <details><summary>完整解答</summary><div class="ex-answer"><strong>304 Not Modified</strong>：读场景条件不满足（资源没变），<code>If-None-Match</code> 判定相同即触发；无主体，客户端复用缓存。<strong>412 Precondition Failed</strong>：写场景条件不满足（版本已过期），<code>If-Match</code> 或 <code>If-Unmodified-Since</code> 触发；本讲例子里主体长度为 0。<strong>416 Range Not Satisfiable</strong>：<code>Range</code> 请求的范围与资源无任何重叠，响应带 <code>Content-Range: bytes */总长</code>，主体通常为空。三者分属「缓存再验证 / 并发控制 / 范围请求」三条链路，别串味。</div></details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>客户端缓存的副本带 <code>ETag: "abc"</code> 与 <code>Last-Modified: Mon, 16 Nov 2026 00:00:00 GMT</code>，缓存已陈旧。请分步写出：① 客户端发起的条件请求应带哪两个首部、值分别是什么；② 若服务器当前 ETag 仍是 "abc" 但 Last-Modified 已更新为 00:05:00，服务器返回什么、有无主体；③ 若同时出现两个首部且结论冲突，听谁的。<br><br>要求把「匹配成功 / 失败」的判定写清，不跳步。</div>
+      <details><summary>提示</summary><p>先写请求首部；再对 If-None-Match 逐字应用「都不相同才成功」；最后回忆优先级。</p></details>
+      <details><summary>完整解答</summary><div class="ex-answer">① 请求带 <code>If-None-Match: "abc"</code> 与 <code>If-Modified-Since: Mon, 16 Nov 2026 00:00:00 GMT</code>。② 对 If-None-Match 而言，服务器 ETag「abc」与带来值「abc」<strong>相同</strong>，即「都不相同」不成立 → 匹配失败 → 资源没变 → 返回 <strong>304 Not Modified</strong>，无主体，客户端复用缓存。（此刻 Last-Modified 虽然变了，但按优先级它被忽略，不参与判定。）③ 结论冲突时以 <code>If-None-Match</code>（ETag）为准，<code>If-Modified-Since</code> 被忽略；这保证同一请求在不同服务器上结果一致。正因为 ETag 优先，本例即使日期显示资源被改过，仍返回 304。</div></details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l2">L2 手算推导</span>文件总长 800 字节，请求 <code>Range: bytes=0-99,700-799</code>。请纸笔完成：① 两段各含多少字节（写出算式）；② 两段各自的 Content-Range；③ 若边界串为 <code>xy</code>、每段数据恰为 100 字节，按「每行以 CRLF 结尾、每段带 Content-Type: text/plain 与 Content-Range」的口径，列出 multipart 主体各组成并算出 Content-Length。</div>
+      <details><summary>提示</summary><p>字节数用「末−首+1」；Content-Range 分母写总长 800；Content-Length 要把边界行、每段首部、数据、空行、CRLF 全加起来。</p></details>
+      <details><summary>完整解答</summary><div class="ex-answer">① 第 1 段 99−0+1 = 100 字节；第 2 段 799−700+1 = 100 字节。② 第 1 段 <code>Content-Range: bytes 0-99/800</code>；第 2 段 <code>Content-Range: bytes 700-799/800</code>，分母都是总长 800。③ 逐项（字符数 + CRLF 2 字节）：<br>第 1 段：<code>--xy</code> 4+2=6；<code>Content-Type: text/plain</code> 24+2=26；<code>Content-Range: bytes 0-99/800</code> 27+2=29；空行 2；数据 100+2=102；小计 165。<br>第 2 段：<code>--xy</code> 6；<code>Content-Type: text/plain</code> 26；<code>Content-Range: bytes 700-799/800</code> 30+2=32；空行 2；数据 102；小计 168。<br>结束边界 <code>--xy--</code> 6+2=8。<br>总计 165 + 168 + 8 = <strong>341</strong>。（若实现省略各段 Content-Type，总数相应减少每段 26 字节；题目已指定要带。）</div></details>
+    </div>
+
+    <div class="exercise">
+      <div class="ex-stem"><span class="ex-level l3">L3 建模应用</span>你要为一个带断点续传的网盘设计 HTTP 层：大文件支持暂停/恢复，多人在同一账号下编辑同一份配置。请用本讲机制回答：① 续传时怎样避免把两个版本的片段拼在一起，给出两种方案并比较；② 并发编辑配置时怎样防止更新丢失；③ 说明每处该用强验证器还是弱验证器、为什么。</div>
+      <details><summary>提示</summary><p>续传的「版本一致性」用 If-Range 或 If-Match+Range；并发写用乐观锁；再逐处判断强弱。</p></details>
+      <details><summary>完整解答</summary><div class="ex-answer">① 方案一：续传请求同时带 <code>If-Match: "版本"</code> 与 <code>Range</code>——版本不符时服务器返回错误，客户端从头重下；灵活但变化时多一次往返。方案二：用 <code>If-Range: "版本"</code>——版本匹配回 206 续传，不匹配直接回 200 加完整资源，一次往返搞定，代价是条件值只能是单个 ETag 或日期、且失败时要重传整份。高频续传选方案二更省往返。② 编辑配置用乐观锁：读取时记下 ETag，提交配置（PUT）时带 <code>If-Match: "读到的ETag"</code>；版本已变则回 412，客户端基于最新版本重做或展示差异。③ 续传与并发写都<strong>必须强验证器</strong>：前者要把片段字节级拼接成同一文件，差一字节即损坏；后者要保证「提交的版本与读到的逐字节一致」。仅在「缓存刷新、语义等价即可复用」的场合才可用弱验证器（<code>W/</code> 前缀 ETag），它不能用于范围合并或乐观锁的强一致判定。</div></details>
+    </div>
+
+    <!-- ===== 自测 ===== -->
+    <h2><span class="sec-no">✅</span>本章自测：每题只选一个答案</h2>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 1</div>
+      <div class="q-stem">客户端发起缓存再验证时，若 <code>If-None-Match</code> 带来的 ETag 与服务器当前 ETag 相同，服务器应返回什么？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 200 OK，带新主体</li>
+        <li data-opt="b">B. 304 Not Modified，无主体</li>
+        <li data-opt="c">C. 412 Precondition Failed</li>
+        <li data-opt="d">D. 416 Range Not Satisfiable</li>
+      </ul>
+      <div class="quiz-explain">解析：B 对。ETag 相同意味着 If-None-Match「都不相同」不匹配，即资源没变，回 304 无主体。A 是资源确实变了（匹配成功）时的结果；C 是写场景 If-Match 失败的结果，读场景不用 412；D 是范围越界，与条件请求无关。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="c">
+      <div class="q-no">自测 2</div>
+      <div class="q-stem">两个客户端并发编辑，后提交者用哪组首部才能在版本已过期时被服务器拒绝？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. If-None-Match / If-Modified-Since</li>
+        <li data-opt="b">B. If-Range / Range</li>
+        <li data-opt="c">C. If-Match / If-Unmodified-Since</li>
+        <li data-opt="d">D. Accept-Ranges / Content-Range</li>
+      </ul>
+      <div class="quiz-explain">解析：C 对。写场景的乐观锁用 If-Match 或 If-Unmodified-Since，版本不符回 412。A 是读场景缓存再验证，不满足时回 304 而非拒绝写；B 用于条件式范围请求；D 中 Accept-Ranges 是服务器能力声明、Content-Range 是响应首部，都不是客户端提交的前提条件。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="a">
+      <div class="q-no">自测 3</div>
+      <div class="q-stem">If-None-Match 与 If-Modified-Since 同时出现且结论冲突时，正确的是？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 以 If-None-Match 为准，If-Modified-Since 被忽略</li>
+        <li data-opt="b">B. 以 If-Modified-Since 为准</li>
+        <li data-opt="c">C. 两者取交集，任一不满足即失败</li>
+        <li data-opt="d">D. 由客户端随机决定</li>
+      </ul>
+      <div class="quiz-explain">解析：A 对。RFC 9110 §13.2.2 规定 If-None-Match 优先于 If-Modified-Since，后者存在时被忽略，保证判定确定一致。B 把优先级颠倒；C 的「取交集」不是规范行为，会导致与 ETag 单独判定时结论不同；D 显然不可能，协议不能依赖随机。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="d">
+      <div class="q-no">自测 4</div>
+      <div class="q-stem">文件总长 1000 字节，请求 <code>Range: bytes=0-9,990-999</code>。下列关于响应的说法正确的是？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. 两段各 9 字节，Content-Range 分母为 10</li>
+        <li data-opt="b">B. 返回 200 OK 加完整文件</li>
+        <li data-opt="c">C. 第二段的 Content-Range 是 bytes 990-999/10</li>
+        <li data-opt="d">D. 返回 206，用 multipart/byteranges，两段各 10 字节，Content-Range 分母为 1000</li>
+      </ul>
+      <div class="quiz-explain">解析：D 对。字节数按「末−首+1」各为 10；多段用 multipart/byteranges 返回 206；Content-Range 分母永远是资源总长 1000。A 把端点算成 9 字节且分母错；B 只在服务器不支持或条件不成立时发生，此处是多段成功；C 分母写成段长 10，违背 Content-Range 格式。</div>
+    </div>
+
+    <div class="quiz-block" data-answer="b">
+      <div class="q-no">自测 5</div>
+      <div class="q-stem">关于 If-Range 与范围请求，下列说法错误的是？</div>
+      <ul class="quiz-opts">
+        <li data-opt="a">A. If-Range 条件成立时返回 206 部分内容</li>
+        <li data-opt="b">B. If-Range 可同时带一个 ETag 和一个日期，以增强校验</li>
+        <li data-opt="c">C. If-Range 条件不成立时忽略 Range，返回 200 完整资源</li>
+        <li data-opt="d">D. 范围与资源无重叠时返回 416 并带 bytes */总长</li>
+      </ul>
+      <div class="quiz-explain">解析：B 错（本题选错误项）。MDN 明确 If-Range 只能带一个实体标签或一个日期值，不能同时带两者，B 的说法与规范相反。A、C 正是 If-Range 的两种分支；D 是 416 的标准形式。If-Range 的作用是把版本校验与范围请求合成一次往返，避免把不同版本的片段拼成损坏文件。</div>
+    </div>
+
+    <div class="retell">
+      <h3>🗣️ 用自己的话，三句话讲完本讲</h3>
+      <p>对着空气（或室友）说出这三句。说卡壳的那句，回去重读对应小节。</p>
+      <details><summary>句1：这讲解决什么问题？——</summary><div class="retell-answer">参考答案：解决两件事——用一次轻量请求确认缓存资源没变而不重传整份（304），以及只取回大文件的某一段以支持续传与随机访问（206）。</div></details>
+      <details><summary>句2：核心机制是什么？——</summary><div class="retell-answer">参考答案：用验证器（ETag / Last-Modified，分强弱）把「版本是否相同」变成短值比较；If-None-Match 走缓存再验证、If-Match 走乐观锁，都有确定的优先级与状态码；Range 按字节寻址，If-Range 校验版本，206 / 416 / 200 三分流。</div></details>
+      <details><summary>句3：它和前后讲怎么分工？——</summary><div class="retell-answer">参考答案：第 5 讲算出缓存「陈旧」，本讲给出「再验证」与「只取一段」的武器；下一讲第 7 讲转向无状态协议如何用 cookie 记住用户，进入状态与安全一组。</div></details>
+    </div>
+
+    <div class="review-plan">
+      <h3>🔁 间隔复习计划</h3>
+      <p>回忆本身比重读有效 10 倍。到点只做一件事：翻卡 + 重做标记题。</p>
+      <table>
+        <tr><th>时间点</th><th>复习内容</th><th>预计用时</th></tr>
+        <tr><td>第 1 天</td><td>概念卡 1–6 + 回忆 6.1 / 6.2 / 6.3 / 6.4 / 6.5 各 2 张</td><td>14 分钟</td></tr>
+        <tr><td>第 3 天</td><td>重做自测 1、3、5 + 翻概念卡 2、3、5（强弱验证、304、优先级）</td><td>10 分钟</td></tr>
+        <tr><td>第 7 天</td><td>三句话复述 + 重做 L2 两题（条件请求判定、多段 Range 手算）+ 回忆 6.3-1、6.4-1</td><td>14 分钟</td></tr>
+        <tr><td>第 15 天</td><td>只重做合上书挑战；能默写 304 流程、乐观锁时序、multipart 报文就毕业</td><td>18 分钟</td></tr>
+      </table>
+    </div>
+
+    <div class="final-challenge">
+      <h3>🚪 合上书挑战：能全写出来，这一讲才毕业</h3>
+      <ol id="challenge-list">
+        <li>说出两种验证器（ETag / Last-Modified）与强弱验证的区别，并解释 ETag 的 W/ 前缀含义。</li>
+        <li>默写 If-None-Match 触发 304 的请求与响应报文，说明 304 为何无主体、以及两首部并存时如何处理。</li>
+        <li>用完整时序推演两个客户端并发 PUT：每步带什么首部、服务器返回什么、412 出现在哪一步、之后客户端怎么办。</li>
+        <li>默写五个条件首部的评估优先级，并说出四个条件首部不满足时各自返回什么（区分 GET 与非安全方法）。</li>
+        <li>手算多段 Range：总长 1000、请求 bytes=0-9,990-999，写出每段字节数、Content-Range 与完整 multipart 报文。</li>
+        <li>说出 206 / 416 / 200 三种范围响应的触发条件，以及 If-Range 条件不成立时的返回。</li>
+        <li>一句话回答本讲主线问题：怎样用一次轻量请求确认资源没变，或者只取回文件的某一段？</li>
+      </ol>
+    </div>
+
+    <div class="complete-zone">
+      <button class="btn-complete" id="btn-complete" onclick="markDone()">✓ 我已完成本讲（含合上书挑战）</button>
+    </div>
+
+    <div class="chapter-nav">
+      <a href="chapter-05.html"><span class="nav-dir">← 上一讲</span>第5讲 HTTP 缓存</a>
+      <a href="chapter-07.html" class="next"><span class="nav-dir">下一讲 →</span>第7讲 Cookie：给无状态协议加上记忆</a>
+    </div>
+
+  </div>
+</div>
+
+<footer class="footer">
+  <div class="wrap">第6讲 条件请求与范围请求 · HTTP 精通 · 依据 MDN Web Docs《HTTP 指南》整理，延伸板块对照 RFC 9110 系列 · 学习进度保存在本机浏览器中</div>
+</footer>
+
+<script src="assets/mermaid.min.js"></script>
+<script>
+mermaid.initialize({
+  startOnLoad: true,
+  theme: "base",
+  themeVariables: {
+    primaryColor: "#e3edf7",
+    primaryBorderColor: "#1d5f9e",
+    primaryTextColor: "#1d5f9e",
+    lineColor: "#5c554b",
+    secondaryColor: "#fbeedd",
+    tertiaryColor: "#f5f1e8",
+    fontFamily: "-apple-system, PingFang SC, sans-serif",
+    fontSize: "14px"
+  },
+  flowchart: { curve: "linear", htmlLabels: false }
+});
+</script>
+<script>
+document.querySelectorAll(".quiz-block").forEach(block => {
+  const answer = block.dataset.answer;
+  const explain = block.querySelector(".quiz-explain");
+  block.querySelectorAll(".quiz-opts li").forEach(li => {
+    li.addEventListener("click", () => {
+      const opts = block.querySelectorAll(".quiz-opts li");
+      opts.forEach(o => o.classList.add("disabled"));
+      if (li.dataset.opt === answer) {
+        li.classList.add("correct");
+      } else {
+        li.classList.add("wrong");
+        block.querySelector(`[data-opt="${answer}"]`).classList.add("correct");
+      }
+      explain.classList.add("show");
+    });
+  });
+});
+
+document.querySelectorAll("#challenge-list li").forEach(li => {
+  li.addEventListener("click", () => li.classList.toggle("checked"));
+});
+
+const KEY = "http_guide_progress_v1";
+function loadProgress() {
+  try { return JSON.parse(localStorage.getItem(KEY)) || {}; } catch (e) { return {}; }
+}
+const progress = loadProgress();
+const btn = document.getElementById("btn-complete");
+if (progress[6] && progress[6].done) {
+  btn.textContent = "✓ 已完成 · 再次点击重置";
+  btn.classList.add("done");
+}
+function markDone() {
+  const p = loadProgress();
+  if (p[6] && p[6].done) {
+    delete p[6];
+    btn.textContent = "✓ 我已完成本讲（含合上书挑战）";
+    btn.classList.remove("done");
+  } else {
+    p[6] = { done: true, completedAt: Date.now(), reviewsDone: 0 };
+    btn.textContent = "✓ 已完成 · 复习提醒已开启";
+    btn.classList.add("done");
+  }
+  localStorage.setItem(KEY, JSON.stringify(p));
+}
+</script>
+
+</body>
+</html>

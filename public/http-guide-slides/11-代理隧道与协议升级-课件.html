@@ -1,0 +1,620 @@
+<!DOCTYPE html>
+<!--
+  ======================================================================
+  HTTP 精通 · 课件外壳（deck-shell.html）
+  由 build-slides.mjs 把 slides/NN.html 注入幻灯片区域，
+  输出 public/http-guide-slides/NN-xxx-课件.html。
+  骨架来自站内通用 1280×720 课件模板；本套额外增加 .wire 协议报文块。
+  每页必须写 data-narration（180–280 字口语稿，禁半角双引号、禁换行、禁小于号）。
+  ======================================================================
+-->
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第11讲 代理、隧道与协议升级 · HTTP 精通 课件</title>
+<script>
+window.MathJax = {
+  tex: {
+    inlineMath: [['$', '$'], ['\\(', '\\)']],
+    displayMath: [['$$', '$$'], ['\\[', '\\]']],
+    processEscapes: true,
+    tags: 'none'
+  },
+  svg: { fontCache: 'global', scale: 1.05 },
+  options: { skipHtmlTags: ['script','noscript','style','textarea','pre','code'] }
+};
+</script>
+<!-- MathJax 本地引用（tex-svg 单文件全量组件，约2MB，自带字体数据），file:// 与断网均可用 -->
+<script src="assets/tex-svg.js" async></script>
+<style>
+  :root{
+    --primary:#1a365d; --accent:#2b6cb0; --accent-light:#ebf8ff; --accent-border:#bee3f8;
+    --text:#2d3748; --muted:#718096; --border:#e2e8f0; --bg-light:#f7fafc;
+    --success:#38a169; --danger:#e53e3e; --warning:#dd6b20; --warn-bg:#fffaf0;
+  }
+  *{margin:0;padding:0;box-sizing:border-box;}
+  html,body{width:100%;height:100%;overflow:hidden;background:#0f172a;}
+  body{
+    font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Hiragino Sans GB","Microsoft YaHei","WenQuanYi Micro Hei",sans-serif;
+    color:var(--text);
+  }
+  #stage{
+    position:absolute; left:50%; top:50%;
+    width:1280px; height:720px;
+    transform:translate(-50%,-50%) scale(1);
+    transform-origin:center center;
+    background:#ffffff;
+    box-shadow:0 0 40px rgba(0,0,0,.4);
+    overflow:hidden;
+  }
+  .slide{
+    position:absolute; inset:0;
+    padding:36px 60px 52px;
+    display:none;
+    flex-direction:column;
+    background:#ffffff;
+    opacity:0;
+    transition:opacity .35s ease;
+  }
+  .slide.active{ display:flex; opacity:1; }
+
+  #progress{ position:absolute; top:0; left:0; height:6px; background:var(--accent); width:0; z-index:50; transition:width .35s; }
+
+  /* 封面 / 结束页 */
+  .slide-cover{ justify-content:center; align-items:center; text-align:center; }
+  .slide-cover{ background:linear-gradient(135deg,#1a365d 0%,#2b6cb0 100%); color:#fff; }
+  .slide-cover .kicker{ font-size:22px; letter-spacing:6px; opacity:.85; margin-bottom:18px;}
+  .slide-cover h1{ font-size:64px; font-weight:800; line-height:1.2; margin-bottom:22px; letter-spacing:2px;}
+  .slide-cover .sub{ font-size:26px; opacity:.92; margin-bottom:36px;}
+  .slide-cover .meta{ font-size:19px; opacity:.85; line-height:2;}
+  .slide-cover .divider{ width:160px;height:5px;background:#fff;opacity:.6;margin:0 auto 30px;border-radius:3px;}
+  .slide-cover .question{ font-size:24px; background:rgba(255,255,255,.12); border:1px solid rgba(255,255,255,.35); border-radius:12px; padding:12px 28px; margin-bottom:30px;}
+
+  /* 页头：结论式标题 */
+  .slide-head{ display:flex; align-items:baseline; gap:16px; border-bottom:3px solid var(--accent); padding-bottom:9px; margin-bottom:12px;}
+  .slide-head .sec{ font-size:17px; color:var(--accent); font-weight:700; background:var(--accent-light); padding:3px 11px; border-radius:6px; white-space:nowrap;}
+  .slide-head h3{ font-size:29px; color:var(--primary); font-weight:700;}
+  .slide-body{ flex:1; display:flex; flex-direction:column; justify-content:center; min-height:0; }
+
+  p{ font-size:21px; line-height:1.65; margin-bottom:8px;}
+  .lead{ font-size:23px; color:#374151; line-height:1.75;}
+  ul,ol{ margin:0 0 8px 26px; font-size:21px; line-height:1.7;}
+  li{ margin-bottom:5px;}
+  strong{ color:var(--primary); }
+
+  /* 公式块 */
+  .formula{ background:var(--accent-light); border-left:5px solid var(--accent); border-radius:0 10px 10px 0; padding:9px 22px; margin:9px 0; text-align:center; font-size:23px;}
+  .formula-concl{ background:#fffaf0; border-left:5px solid var(--warning);}
+  .MathJax{ font-size:1.05em !important; }
+  mjx-container[display="true"]{ margin:6px 0 !important; }
+
+  /* 表格 */
+  table{ width:100%; border-collapse:collapse; margin:10px 0; font-size:20px;}
+  th{ background:var(--accent); color:#fff; padding:8px 12px; text-align:center; font-weight:600;}
+  td{ padding:7px 12px; border:1px solid var(--border); text-align:center; vertical-align:middle;}
+  tr:nth-child(even) td{ background:var(--bg-light);}
+  td.l{ text-align:left; }
+  table.small{ font-size:18px; }
+  table.small td, table.small th{ padding:6px 10px; }
+
+  /* 组件 */
+  .card{ background:var(--accent-light); border:1px solid var(--accent-border); border-radius:12px; padding:12px 20px; margin:10px 0;}
+  .tip{ background:#ebf8ff; border-left:5px solid var(--accent); border-radius:0 10px 10px 0; padding:10px 20px; margin:10px 0; font-size:20px; color:#2c5282;}
+  .deep{ background:#f0fff4; border-left:5px solid var(--success); border-radius:0 10px 10px 0; padding:10px 20px; margin:10px 0; font-size:20px; color:#22543d;}
+  .warn{ background:var(--warn-bg); border-left:5px solid var(--warning); border-radius:0 10px 10px 0; padding:10px 20px; margin:10px 0; font-size:20px; color:#744210;}
+  .trap{ background:#fef2f2; border-left:5px solid var(--danger); border-radius:0 10px 10px 0; padding:10px 20px; margin:10px 0; font-size:20px; color:#7f1d1d;}
+
+  .pause{
+    background:var(--warn-bg); border:2px dashed var(--warning); border-radius:14px;
+    padding:10px 22px; margin:10px 0; display:flex; align-items:center; gap:16px;
+  }
+  .pause .icon{ font-size:36px; line-height:1; }
+  .pause .txt b{ color:var(--warning); font-size:21px; }
+  .pause .txt p{ font-size:18px; color:#744210; margin:3px 0 0; }
+
+  .cols{ display:flex; gap:28px; align-items:stretch; }
+  .col{ flex:1; min-width:0; }
+
+  /* 推导分步：仅互动模式隐藏，截图(autohide)模式全部可见——此规则不可删 */
+  .step{ opacity:0; transform:translateY(8px); transition:opacity .3s ease, transform .3s ease; }
+  .step.on{ opacity:1; transform:none; }
+  body.autohide .step{ opacity:1 !important; transform:none !important; }
+  .step-hint{ font-size:14px; color:var(--muted); margin-top:4px;}
+  body.autohide .step-hint{ display:none; }
+
+  /* HTTP 精通课件专用：协议报文原文块 */
+  .wire{background:#0f172a;color:#e2e8f0;border-radius:10px;padding:12px 18px;margin:8px 0;
+    font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:17px;line-height:1.55;
+    white-space:pre-wrap;overflow-wrap:anywhere;}
+  .wire b{color:#7dd3fc;font-weight:700;}
+  .wire i{color:#fde68a;font-style:normal;}
+  .wire em{color:#86efac;font-style:normal;}
+  .wire.sm{font-size:15px;line-height:1.45;}
+  .wire-cap{font-size:15px;color:var(--muted);margin:0 0 8px;}
+  .to-lec{color:#bee3f8;text-decoration:none;font-size:15px;margin-left:12px;}
+  .to-lec:hover{text-decoration:underline;}
+  .badge{display:inline-block;background:var(--accent-light);color:var(--accent);border:1px solid var(--accent-border);
+    border-radius:6px;padding:2px 10px;font-size:17px;font-weight:700;margin-right:8px;}
+
+  /* 因果链 */
+  .chain{ margin:6px 0; }
+  .chain .link{ display:flex; align-items:center; gap:14px; margin:6px 0;}
+  .chain .no{ width:34px; height:34px; border-radius:50%; background:var(--accent); color:#fff; font-size:18px; font-weight:700; display:flex; align-items:center; justify-content:center; flex-shrink:0;}
+  .chain .txt{ font-size:21px; line-height:1.5;}
+  .chain .txt strong{ color:var(--primary); }
+
+  /* mermaid 容器：高度封顶，防止溢出 720px 舞台 */
+  .mmd{ background:var(--bg-light); border:1px solid var(--border); border-radius:12px; padding:10px 14px; display:flex; justify-content:center; align-items:center; margin:8px 0;}
+  .mmd .mermaid{ display:flex; justify-content:center; width:100%; visibility:hidden; }
+  .mmd .mermaid[data-done]{ visibility:visible; }
+  .mmd .mermaid svg{ max-width:100%; height:auto; max-height:230px; }
+  .mmd.mmd-tall .mermaid svg{ max-height:330px; }
+  .mmd.mmd-sm svg{ max-height:150px; }
+  .mmd-row{ display:flex; gap:18px; }
+  .mmd-row .mmd{ flex:1; flex-direction:column; }
+  .mmd .cap{ font-size:17px; color:var(--muted); margin-top:6px; text-align:center;}
+  .mmd .cap b{ color:var(--text); }
+
+  #footer{ position:absolute; bottom:0; left:0; right:0; height:40px; display:flex; align-items:center; justify-content:space-between; padding:0 30px; font-size:15px; color:#94a3b8; background:rgba(247,250,252,.85); border-top:1px solid var(--border); z-index:40;}
+  #footer .brand{ font-weight:600; color:var(--accent); }
+
+  .nav{ position:absolute; bottom:48px; right:40px; display:flex; gap:12px; z-index:45;}
+  .nav button{ width:54px; height:54px; border-radius:50%; border:none; background:var(--accent); color:#fff; font-size:24px; cursor:pointer; box-shadow:0 3px 10px rgba(43,108,176,.4); display:flex; align-items:center; justify-content:center;}
+  .nav button:hover{ background:var(--primary); }
+  .nav button:disabled{ background:#cbd5d0; cursor:default; box-shadow:none;}
+
+  #hint{ position:absolute; bottom:48px; left:40px; font-size:14px; color:#94a3b8; z-index:45;}
+
+  body.autohide #progress, body.autohide #footer, body.autohide .nav, body.autohide #hint{ display:none !important; }
+</style>
+</head>
+<body>
+<div id="stage">
+
+  <div id="progress"></div>
+
+<!-- 第 11 讲：代理、隧道与协议升级 -->
+<section class="slide slide-cover active" data-narration="欢迎回到 HTTP 精通。前面十讲我们把一次请求画成客户端和源站之间的一条直线，这一讲要把中间人请进画面。第 11 讲，代理、隧道与协议升级，属于第四组中间层与分发。本讲要回答的问题是：代理与隧道各在什么层级工作，Upgrade 又是怎样把 HTTP 连接改成 WebSocket 的。学完你应该能对照写出直连和经代理的两条请求，推演 Via 怎么逐跳追加，走通 CONNECT 建隧道的三步交互，并说清哪些首部只对本跳有效。对应的 MDN 原文是代理服务器与隧道、协议升级机制两篇。">
+  <div class="kicker">第 11 讲 · 第④组 中间层与分发</div>
+  <h1>代理、隧道与协议升级</h1>
+  <div class="sub">中间那一跳能改写什么，又看不到什么</div>
+  <div class="question">代理与隧道各在什么层级工作，Upgrade 又是怎样把 HTTP 连接改成 WebSocket 的？</div>
+  <div class="meta">
+    配套讲义：HTTP 精通 第 11 讲 · 依据 MDN《代理服务器与隧道》《协议升级机制》<br>
+    ← → 翻页 · 推导页按空格逐步展开
+  </div>
+</section>
+
+<section class="slide" data-narration="先看这一讲在十二讲主线上的位置。前三组把请求怎么组织、怎么变快、怎么记住用户讲完了，第四组专门处理请求经过别人地盘的情况。第十一讲讲中间层：代理在应用语义层插手，隧道在字节层透传，升级则把连接切成另一种协议。它往回牵着第四讲的连接管理和第五讲的共享缓存，因为反向代理缓存正是共享缓存的落地形态；往前紧接第十二讲的重定向，两者都在改变请求去向。图上高亮的是本讲，它是理解多数线上故障真正发生地的入口，也是从单跳走向多跳的转折点。">
+  <div class="slide-head"><span class="sec">定位</span><h3>第 11 讲把一条直线拆成多跳</h3></div>
+  <div class="slide-body">
+    <div class="mmd mmd-sm">
+      <div class="mermaid">
+flowchart LR
+  A["第1到3讲 基础与表示"] --> B["第4到6讲 连接与缓存"] --> C["第7到10讲 状态与安全"] --> D["第11讲 代理隧道与升级"]:::here --> E["第12讲 重定向"]
+  classDef here fill:#2b6cb0,color:#ffffff,stroke:#1a365d,stroke-width:3px
+      </div>
+    </div>
+    <p style="text-align:center;">本讲解决「<strong>多跳</strong>」：一条连接被拆成两段之后，谁能改它、谁能看见什么。</p>
+    <div class="tip">往回牵第 4 讲连接管理与第 5 讲共享缓存，往前紧接第 12 讲重定向；对应 MDN：Proxy servers and tunneling / Protocol upgrade mechanism。</div>
+  </div>
+</section>
+
+<section class="slide" data-narration="本讲的主线是一条五环因果链。第一环，客户端把请求发给代理而不是源站，一条端到端连接被拆成两段。第二环，既然接收者变了，代理就得改写请求目标并转发，请求行从路径升级成完整 URL。第三环，每经过一跳，代理用 Via 把自己的标识追加进列表，串成完整路径。第四环，遇到 HTTPS 就用 CONNECT 建隧道只搬字节，遇到双向通信需求就用 Upgrade 把连接换成 WebSocket。第五环，逐跳首部一旦被误转发到下一跳，故障就从这里开始。这条链不是五个并列知识点，而是前一步逼出后一步，它同时就是本讲的目录。">
+  <div class="slide-head"><span class="sec">主线</span><h3>中间层的五环因果链</h3></div>
+  <div class="slide-body">
+    <div class="chain">
+      <div class="link"><span class="no">1</span><span class="txt"><strong>请求经代理</strong>：一条端到端连接被拆成两段</span></div>
+      <div class="link"><span class="no">2</span><span class="txt"><strong>代理改写并转发</strong>：请求目标从路径升级成完整 URL</span></div>
+      <div class="link"><span class="no">3</span><span class="txt"><strong>Via 逐跳追加</strong>：每一跳把路径戳进报文</span></div>
+      <div class="link"><span class="no">4</span><span class="txt"><strong>CONNECT 建隧道 / Upgrade 切协议</strong>：代理要么只搬字节，要么交出连接</span></div>
+      <div class="link"><span class="no">5</span><span class="txt"><strong>逐跳首部被误转发</strong>：本跳语义落到错误的连接上，故障由此开始</span></div>
+    </div>
+    <div class="tip">代理在应用语义层插手，隧道在字节层透传，Upgrade 在两者之间切换协议；最后一环是逐跳首部越过一跳后的故障。</div>
+  </div>
+</section>
+
+<section class="slide" data-narration="先用一个具体场景逼出问题。你在公司内网点开一个外网的 HTTPS 页面，请求并没有直接飞到目标服务器，而是先到公司出口那台代理。问题来了：HTTPS 是端到端加密的，代理手里没有会话密钥，既读不到请求行也改不动首部，它凭什么知道该把这条请求转发到哪里？另一边，网站机房前面还站着反向代理，访客以为连的就是目标站，其实后端有十台机器在分担流量。左边这张卡是我们熟悉的直线模型，右边是中间层进场后的真实拓扑。要解释这两处反常，就得把代理、隧道、升级逐个拆开看。">
+  <div class="slide-head"><span class="sec">动机</span><h3>「客户端到源站一条直线」解释不了两种反常</h3></div>
+  <div class="slide-body">
+    <div class="cols">
+      <div class="col"><div class="card">🛰 <strong>熟悉的直线模型</strong><br>浏览器发请求，源站回响应，中间谁也没有。一次点击说得通，却解释不了代理的存在。</div></div>
+      <div class="col"><div class="card">🧩 <strong>中间层进场后</strong><br>出口代理读不到加密目标却要转发；站点入口的反向代理对访客透明，后端还藏着多台机器。</div></div>
+    </div>
+    <div class="tip">💡 本讲方案：正向代理替客户端「出去」，反向代理替服务器「进来」，隧道借一条 TCP 给两端，升级把连接换协议。</div>
+  </div>
+</section>
+
+<section class="slide" data-narration="给代理一个准确定义。它有点两面派：对着客户端时扮演服务器，接受请求、回响应；对着目标服务器时又扮演客户端，发请求、等响应。判据只有一条，它代表谁。代表客户端的叫正向代理（forward proxy），隐藏客户端身份，用途是节省带宽和匿名访问；代表服务器的叫反向代理（reverse proxy），隐藏服务器身份，用途是负载均衡、缓存静态内容和压缩。由此推出本讲最要紧的一句话：代理不是多了一跳，而是把一条端到端连接拆成两条各自独立的连接。正因为被拆开，才有缓存、改写首部的机会，也才需要用 Via 和 Forwarded 把切断的信息串回来。">
+  <div class="slide-head"><span class="sec">定义</span><h3>代理既当客户端又当服务器</h3></div>
+  <div class="slide-body">
+    <div class="cols">
+      <div class="col"><div class="card">🌐 <strong>正向代理（forward proxy）</strong><br>代表客户端、隐藏客户端，公司出口、匿名访问；客户端通常知道它。</div></div>
+      <div class="col"><div class="card">🏢 <strong>反向代理（reverse proxy）</strong><br>代表服务器、隐藏服务器，负载均衡、缓存、压缩；客户端通常毫无察觉。</div></div>
+    </div>
+    <div class="formula formula-concl">代理（proxy）= 对着客户端当服务器 · 对着源站当客户端 · 一条连接拆成两段</div>
+    <div class="deep">拆开之后，被抹掉的客户端信息用 Forwarded 或 X-Forwarded-For 补回，代理自己的路径用 <strong>Via</strong> 补回；只对本跳有效的首部必须每跳消费并重新生成。</div>
+  </div>
+</section>
+
+<section class="slide" data-narration="来看第一组报文对照。左边直连源站：TCP 连接已锁定对端，请求行只给路径就够，这叫源点形式（origin-form），域名放在 Host 里。右边配了正向代理：TCP 对端是代理而不是目标站，若还写 GET /index.html，代理无从判断这个路径属于哪台服务器，于是必须把完整 URL 写进请求行，升级成绝对形式（absolute-form），带上 scheme 和主机。结论是：请求目标变形，根因在于 TCP 对端和 URI 权威不再是同一个对象。Host 仍保留，因为它标识目标主机上的虚拟主机。下一页推演 Via 怎么把路径记下来。">
+  <div class="slide-head"><span class="sec">例子 · 报文①</span><h3>直连与经代理：请求目标为何从路径变完整 URL</h3></div>
+  <div class="slide-body">
+    <div class="wire sm"><b>GET /index.html HTTP/1.1</b>
+<i>Host</i>: www.example.com
+<i>Accept</i>: text/html
+
+<em>（直连源站：origin-form，只有路径）</em></div>
+    <div class="wire-cap">直连：TCP 已锁定对端，请求目标用 <strong>源点形式</strong>（origin-form），域名交给 Host 首部。</div>
+    <div class="wire sm"><b>GET http://www.example.com/index.html HTTP/1.1</b>
+<i>Host</i>: www.example.com
+<i>Accept</i>: text/html
+
+<em>（经正向代理：absolute-form，带 scheme 与主机）</em></div>
+    <div class="wire-cap">经代理：请求目标从路径变成完整 URL，代理据此知道往哪转；Host 仍保留以区分虚拟主机。</div>
+    <div class="tip">判据：<strong>请求行的接收者与 URI 权威是否同一个</strong>。直连二者合一用 origin-form，经代理二者分离用 <strong>绝对形式</strong>（absolute-form）。</div>
+  </div>
+</section>
+
+<section class="slide" data-narration="接着推演两代理链路里 Via 怎么逐跳追加。Via 每段记两件事：这一跳的协议版本和对端标识，形如 1.1 proxy-a.example.com。第 0 跳，客户端直连代理 A 发出请求，此时没有 Via。第 1 跳，代理 A 以 HTTP/1.1 收到，转发时把自己的一段追加进去，Via 第一次出现。第 2 跳，代理 B 不覆盖、只在末尾追加自己的一段，列表变成两段，A 在前 B 在后。规律三条：每次追加不覆盖、顺序从客户端往服务器、带版本还能认出旧设备。下一页把四种请求目标形式一次记全。">
+  <div class="slide-head"><span class="sec">例子 · 报文②</span><h3>Via 逐跳追加：0 跳 / 1 跳 / 2 跳三条报文</h3></div>
+  <div class="slide-body">
+    <div class="wire sm"><b>GET http://www.example.com/index.html HTTP/1.1</b>
+<i>Host</i>: www.example.com
+<em>（第 0 跳 · 客户端 → 代理 A：还没有 Via）</em></div>
+    <div class="wire-cap">第 0 跳：客户端刚发出请求，Via 为空。</div>
+    <div class="wire sm"><b>GET http://www.example.com/index.html HTTP/1.1</b>
+<i>Host</i>: www.example.com
+<i>Via</i>: 1.1 proxy-a.example.com
+<em>（第 1 跳 · 代理 A 追加自己的标识）</em></div>
+    <div class="wire-cap">第 1 跳：Via 第一次出现，只有 A 这一段。</div>
+    <div class="wire sm"><b>GET http://www.example.com/index.html HTTP/1.1</b>
+<i>Host</i>: www.example.com
+<i>Via</i>: 1.1 proxy-a.example.com, 1.1 proxy-b.example.net
+<em>（第 2 跳 · 代理 B 在末尾追加，A 在前 B 在后）</em></div>
+    <div class="wire-cap">第 2 跳：列表变两段，顺序就是报文走过的方向；响应沿原路返回时同样逐跳追加。</div>
+  </div>
+</section>
+
+<section class="slide" data-narration="把请求目标的四种写法一次记全，后面会反复出现。源点形式（origin-form）只写路径和查询串，直连源站时绝大多数请求用它；绝对形式（absolute-form）写完整 URL，向正向代理发请求时专用；权威形式（authority-form）只写主机和端口，是 CONNECT 专用；星号形式（asterisk-form）写一个星号，用于 OPTIONS 星号这类针对服务器整体的询问。判定浓缩成一句：接收者和 URI 权威是不是同一个，是就用源点形式，不是就用绝对形式，建管道单独用权威形式。下一页走通 CONNECT 的完整交互。">
+  <div class="slide-head"><span class="sec">专题 · 判定表</span><h3>四种请求目标形式，一张表记全</h3></div>
+  <div class="slide-body">
+    <table class="small">
+      <thead><tr><th>请求目标形式</th><th>长什么样</th><th>什么时候用</th></tr></thead>
+      <tbody>
+        <tr><td class="l"><strong>源点形式 origin-form</strong></td><td class="l">/index.html?q=1</td><td class="l">直连源站时的绝大多数请求</td></tr>
+        <tr><td class="l"><strong>绝对形式 absolute-form</strong></td><td class="l">http://www.example.com/index.html</td><td class="l">向正向代理发请求时</td></tr>
+        <tr><td class="l"><strong>权威形式 authority-form</strong></td><td class="l">www.example.com:443</td><td class="l">CONNECT 方法专用</td></tr>
+        <tr><td class="l"><strong>星号形式 asterisk-form</strong></td><td class="l">*</td><td class="l">OPTIONS 星号，询问服务器整体能力</td></tr>
+      </tbody>
+    </table>
+    <div class="tip">判定只问一句：请求行接收者与 URI 权威是否同一？同一用 origin-form，分离用 absolute-form，建管道用 authority-form。</div>
+  </div>
+</section>
+
+<section class="slide" data-narration="第二组例子，CONNECT 怎么为 HTTPS 建隧道（tunneling）。第一步，浏览器不发 GET，而是向代理发 CONNECT，请求目标用权威形式，只写 www.example.com:443，语义不是取资源，而是替我连到这台主机。第二步，代理新建一条到 443 端口的 TCP 连接，连上就回 200 Connection established，这不是普通 200 OK，它表示连接从此变成管道，后面没有响应主体。握手后代理主动放弃应用层解析权，把 HTTP 语义交还两端。第三步的字节透传，下一页连同视野边界一起看。">
+  <div class="slide-head"><span class="sec">例子 · 报文③</span><h3>CONNECT 建隧道：请求与 200 响应</h3></div>
+  <div class="slide-body">
+    <div class="wire sm"><b>CONNECT www.example.com:443 HTTP/1.1</b>
+<i>Host</i>: www.example.com:443
+<i>Proxy-Connection</i>: Keep-Alive
+
+<em>（① 客户端 → 代理：请连到 www.example.com:443）</em></div>
+    <div class="wire-cap">第一步：CONNECT 请求目标是 <strong>权威形式</strong>（authority-form），语义是建立到目标的 TCP 连接，而非取资源。</div>
+    <div class="wire sm"><i>HTTP/1.1 200 Connection established</i>
+<i>Proxy-Agent</i>: ProxyGateway/1.0
+
+<em>（② 代理 → 客户端：隧道就绪，之后字节直接透传）</em></div>
+    <div class="wire-cap">第二步：200 Connection established 不是普通 200 OK，它标志连接用途改变，此后不再有 HTTP 响应主体。</div>
+    <div class="deep">隧道不是透明管道，是代理主动放弃应用层解析权：只保留建 TCP、转发字节、最后关闭这层连接管理。</div>
+  </div>
+</section>
+
+<section class="slide" data-narration="把隧道建立之后的事讲透。代理回完 200 就不再按 HTTP 解析字节，只做一件事：客户端发来的原样转给目标站，目标站的响应原样转回来。所以浏览器是在管道里跟目标站完成 TLS 握手，ClientHello、证书、Finished 依次走过，之后才是加密的 GET 和响应，全程代理只搬密文。表格把边界列清楚：代理看得到目标主机端口、客户端真实 IP、密文流量的大小和时序；看不到隧道内的方法、路径、首部、Cookie 和正文，因为 TLS 端到端加密、代理没有会话密钥。隧道的价值正在于此。">
+  <div class="slide-head"><span class="sec">专题 · 视野边界</span><h3>隧道里代理看得到什么、看不到什么</h3></div>
+  <div class="slide-body">
+    <div class="wire sm"><em>③ 隧道内字节透传，代理不解析</em>
+<b>→ TLS ClientHello</b>  ...随机数与加密套件...
+<b>← TLS ServerHello + Certificate</b>  ...证书链...
+<b>→ TLS Finished</b>
+<em>随后才是加密后的 HTTP：</em>
+<b>→ [加密] GET /index.html HTTP/1.1</b>
+<b>← [加密] HTTP/1.1 200 OK ...</b></div>
+    <div class="wire-cap">第三步：TLS 握手与之后的 HTTP 全部以密文字节流通过，代理只搬运字节，看不到明文请求行、首部或正文。</div>
+    <table class="small">
+      <thead><tr><th>信息项</th><th>正向代理能否看到</th><th>原因</th></tr></thead>
+      <tbody>
+        <tr><td class="l">CONNECT 的目标主机与端口</td><td class="l">能看到</td><td class="l">在请求行权威形式里，是明文</td></tr>
+        <tr><td class="l">客户端真实 IP</td><td class="l">能看到</td><td class="l">客户端与代理直连，TCP 对端就是客户端</td></tr>
+        <tr><td class="l">密文流量大小与时序</td><td class="l">能看到</td><td class="l">长度和时间特征，无需解密</td></tr>
+        <tr><td class="l">隧道内 HTTP 方法与路径</td><td class="l">看不到</td><td class="l">被 TLS 加密，代理没有会话密钥</td></tr>
+        <tr><td class="l">请求首部、Cookie、网页正文</td><td class="l">看不到</td><td class="l">同上，无法解读</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section class="slide" data-narration="第三组例子，一条 HTTP/1.1 连接怎么就地变成 WebSocket。协议升级（protocol upgrade）由客户端发起：先发普通 GET，带上四个关键首部。Upgrade 指出目标协议 websocket，Connection 把它标成逐跳首部，另有校验用的随机密钥和版本号 13。服务器同意就回 101 Switching Protocols，带上 Upgrade、Connection 和由密钥算出的 Accept 值。发出 101 后，连启动升级的那条请求也被新协议接管，HTTP 退场，连接变成双向管道。应答值怎么算，推导页见。">
+  <div class="slide-head"><span class="sec">例子 · 报文④</span><h3>Upgrade: websocket 握手请求与 101 响应</h3></div>
+  <div class="slide-body">
+    <div class="wire sm"><b>GET /chat HTTP/1.1</b>
+<i>Host</i>: server.example.com
+<i>Upgrade</i>: websocket
+<i>Connection</i>: Upgrade
+<i>Sec-WebSocket-Key</i>: dGhlIHNhbXBsZSBub25jZQ==
+<i>Sec-WebSocket-Version</i>: 13
+
+<em>（客户端 → 服务器：请升级到 WebSocket）</em></div>
+    <div class="wire-cap">升级请求：Upgrade 指明目标协议，Connection 声明它逐跳，Key 是校验用随机密钥，Version 为 13。</div>
+    <div class="wire sm"><i>HTTP/1.1 101 Switching Protocols</i>
+<i>Upgrade</i>: websocket
+<i>Connection</i>: Upgrade
+<i>Sec-WebSocket-Accept</i>: s3pPLMBiTxaQ9kYGzzhZRbK+xOo=
+
+<em>（服务器 → 客户端：此后是 WebSocket 帧，不再是 HTTP 报文）</em></div>
+    <div class="wire-cap">101 响应：状态行宣告切换，Upgrade 与 Connection 必须同时出现，Accept 由客户端密钥经固定算法算出。</div>
+  </div>
+</section>
+
+<section class="slide" data-narration="先回答一个必答题：Upgrade 为什么非得同时出现在 Connection 里？因为它是逐跳首部（hop-by-hop header），只在本跳有效，必须在 Connection 里点名，中间节点才会消费掉、不往下传；缺了这行，代理可能把它当端到端首部转给下一跳，行为不可控。讲义里五个首部：Connection、Keep-Alive、Proxy-Authenticate、Transfer-Encoding、Upgrade，全是逐跳。判据一句：描述这一跳怎么传的是逐跳，描述资源本身是什么的才是端到端首部（end-to-end header）。">
+  <div class="slide-head"><span class="sec">专题 · 首部判定</span><h3>五个首部逐个判：全是逐跳首部</h3></div>
+  <div class="slide-body">
+    <table class="small">
+      <thead><tr><th>首部</th><th>是否逐跳</th><th>说明</th></tr></thead>
+      <tbody>
+        <tr><td class="l">Connection</td><td class="l">是</td><td class="l">逐跳首部的总开关，并列出本跳其他逐跳首部</td></tr>
+        <tr><td class="l">Keep-Alive</td><td class="l">是</td><td class="l">本跳连接保活参数，只对本跳有意义</td></tr>
+        <tr><td class="l">Proxy-Authenticate</td><td class="l">是</td><td class="l">代理的认证挑战，只在客户端与代理一跳间使用</td></tr>
+        <tr><td class="l">Transfer-Encoding</td><td class="l">是</td><td class="l">本跳主体如何分块，下一跳要重新编码</td></tr>
+        <tr><td class="l">Upgrade</td><td class="l">是</td><td class="l">逐跳首部，必须在 Connection 中列出</td></tr>
+      </tbody>
+    </table>
+    <div class="tip">判据：描述「这一跳怎么传」的是逐跳，描述「资源本身是什么」的是端到端。正确模式永远是每跳消费并重新生成，绝不原样转发。</div>
+    <div class="deep">Upgrade 说想切到什么协议，Connection: Upgrade 说这个首部到我为止；缺了后者，源站回 101 讲 WebSocket 帧，中间代理还在按 HTTP 解析，连接立即错乱。</div>
+  </div>
+</section>
+
+<section class="slide" data-narration="第四组例子，逐跳首部被误转发会滚出怎样的故障链。场景是客户端经正向代理访问源站，本跳请求带 Connection: close，意思是这一跳用完就关，本身没错。正确做法是代理消费掉它，按自己与源站的策略重新生成。可假设代理有 bug，把 close 原样转给了源站。接下来五步一步步坏下去：源站当作针对自己的指令，响应后关掉到代理的连接，复用连接池被无故拆掉一条；客户端第一跳的关闭意图又因代理只顾转发没执行；等代理下次想复用那条连接，发现已被关闭，请求失败或被迫重连，出现延迟抖动和偶发错误。">
+  <div class="slide-head"><span class="sec">专题 · 故障链</span><h3>误转发 Connection: close 的五步故障链</h3></div>
+  <div class="slide-body">
+    <div class="wire sm"><em>客户端 → 代理（本跳想关闭）</em>
+<b>GET /page HTTP/1.1</b>
+<i>Host</i>: www.example.com
+<i>Connection</i>: close
+
+<em>代理 → 源站（错误：原样转发了逐跳首部）</em>
+<b>GET /page HTTP/1.1</b>
+<i>Host</i>: www.example.com
+<i>Connection</i>: close   <em>← 本该被消费并重新生成</em></div>
+    <div class="wire-cap">故障起点：代理把只对本跳有效的 Connection: close 原样转发，源站误以为这条连接用完要关。</div>
+    <table class="small">
+      <thead><tr><th>步骤</th><th>发生了什么</th><th>后果</th></tr></thead>
+      <tbody>
+        <tr><td class="l">① 客户端发请求</td><td class="l">带 Connection: close，只想关客户端到代理这一跳</td><td class="l">意图只作用第一跳</td></tr>
+        <tr><td class="l">② 代理错误转发</td><td class="l">未消费，原样写进代理到源站的请求</td><td class="l">第一跳意图误植到第二跳</td></tr>
+        <tr><td class="l">③ 源站照做</td><td class="l">当作针对自己的指令，响应后关闭到代理的 TCP</td><td class="l">代理复用的源站连接池被拆掉一条</td></tr>
+        <tr><td class="l">④ 客户端意图落空</td><td class="l">代理只顾转发，没在本跳执行 close</td><td class="l">客户端以为会关的连接还开着，语义错乱</td></tr>
+        <tr><td class="l">⑤ 连锁反应</td><td class="l">代理下次想复用那条连接，发现已被关闭</td><td class="l">请求失败或被迫重连，延迟抖动与偶发错误</td></tr>
+      </tbody>
+    </table>
+    <div class="tip">根治办法只有一句：每一跳消费上游逐跳首部，再为下游重新生成自己的，绝不跨跳传递。</div>
+  </div>
+</section>
+
+<section class="slide" data-narration="轮到手算。Sec-WebSocket-Key 到 Sec-WebSocket-Accept 怎么变，按空格一步步看。第一步，取出客户端密钥这个 base64 串，它是十六字节随机值编码来的。第二步，把它和 WebSocket 规范写死的固定 GUID 拼成一个长串，拼 GUID 是为了让应答值只可能由懂协议的一方算出。第三步，对拼接结果取 SHA-1 散列，得到二十字节定长摘要。第四步，把二十字节做 base64 编码，就得到 Accept。四步全是公开固定的算法，只证明握手方懂 WebSocket，不提供安全性，机密性来自 wss 之下的 TLS。">
+  <div class="slide-head"><span class="sec">推导</span><h3>Sec-WebSocket-Accept 的四步推导</h3></div>
+  <div class="slide-body">
+    <div class="step"><p><strong>① 取客户端密钥</strong>：dGhlIHNhbXBsZSBub25jZQ==，base64 编码的 16 字节随机值，先拿到输入。</p></div>
+    <div class="step"><p><strong>② 拼接固定 GUID</strong>：与 258EAFA5-E914-47DA-95CA-C5AB0DC85B11 拼成一串——GUID 写死，保证只有懂 WebSocket 的一方算得出应答。</p></div>
+    <div class="step"><p><strong>③ 取 SHA-1</strong>：对拼接结果散列，得 20 字节 b3 7a 4f 32 65 82 f6 3f 27 98 a1 44 3b 7c f9 8a 3e 2c 3f 0a，把长串压成定长摘要。</p></div>
+    <div class="step"><p><strong>④ base64 编码</strong>：20 字节编码成 s3pPLMBiTxaQ9kYGzzhZRbK+xOo=，即 Sec-WebSocket-Accept，客户端据此校验。</p></div>
+    <div class="deep">算法公开固定，MDN 明说密钥「不提供安全性」：只确认「我确实在发起 WebSocket 握手」、挡住无意滥用；机密性来自 wss 之下的 TLS。</div>
+    <p class="step-hint">按空格 / → 逐步揭示每一步</p>
+  </div>
+</section>
+
+<section class="slide" data-narration="现在把前面几组例子合起来用。屏幕上是条经两台代理的升级请求，判三件事：请求目标用哪种形式、为什么；Via 两段说明穿过几跳、顺序怎么读；Upgrade 和 Connection 什么关系，代理转发前怎么处理。先暂停视频自己推一遍。推出来了吗？好，对答案。第一，请求行是完整 URL，用绝对形式，因对端是代理、URI 权威是目标站。第二，Via 两段 A 在前 B 在后，方向从客户端往服务器。第三，Upgrade 是逐跳首部，必须在 Connection 里列出，每跳消费并重新生成，绝不原样转发，否则源站回 101、代理还按 HTTP 解析，连接错乱。">
+  <div class="slide-head"><span class="sec">演练</span><h3>读一条经代理的升级请求，自己判三件事</h3></div>
+  <div class="slide-body">
+    <div class="wire sm"><b>GET http://server.example.com/chat HTTP/1.1</b>
+<i>Host</i>: server.example.com
+<i>Upgrade</i>: websocket
+<i>Connection</i>: Upgrade
+<i>Via</i>: 1.1 proxy-a.example.com, 1.1 proxy-b.example.net
+
+<em>（一条经两台代理的升级请求，请判定三件事）</em></div>
+    <div class="step"><p>① 请求目标 <strong>absolute-form</strong>：完整 URL，因 TCP 对端是代理、URI 权威是目标站，二者分离。</p></div>
+    <div class="step"><p>② Via <strong>两段</strong>：A 在前 B 在后，穿过两台代理，方向从客户端往服务器。</p></div>
+    <div class="step"><p>③ <strong>Upgrade 是逐跳首部</strong>：必须在 Connection 中列出，每跳消费并重新生成，绝不原样转发。</p></div>
+    <div class="pause"><div class="icon">✍️</div><div class="txt"><b>暂停推导</b><p>合上答案，自己判定请求目标形式、Via 段数与顺序，以及 Upgrade 与 Connection 的关系。</p></div></div>
+    <p class="step-hint">按空格 / → 逐步揭示答案</p>
+  </div>
+</section>
+
+<section class="slide" data-narration="把 MDN 工程口径和 RFC 规范口径对一次。MDN 说 Via 逐跳追加、Upgrade 是逐跳首部，RFC 9110 第 7.6.1 节给出清单并把追加写成 MUST 级要求，前面故障链正是一次违规。经代理用绝对形式，对应 RFC 9112 第 3.2 节四种请求目标；CONNECT 在 9112 第 9.3.6 节，Upgrade 与 101 在 9110 第 7.8 节，握手算法在 RFC 6455 第 1.3 节。三份规范归位：9110 管语义，9112 管线上格式，6455 管握手。查 MDN 更快，断合规回到条文。">
+  <div class="slide-head"><span class="sec">规范对照</span><h3>MDN 的说法 → RFC 怎么写 → 为什么值得知道</h3></div>
+  <div class="slide-body">
+    <table class="small">
+      <thead><tr><th>MDN 的说法</th><th>RFC 怎么写</th><th>为什么值得知道</th></tr></thead>
+      <tbody>
+        <tr><td class="l">Via 逐跳追加，Upgrade 是逐跳首部</td><td class="l">RFC 9110 §7.6.1 给出 Via 语法与逐跳首部完整清单，转发时 MUST 在末尾追加</td><td class="l">哪些首部要消费并重新生成有规范答案，故障链正是违反它</td></tr>
+        <tr><td class="l">经代理用绝对形式，直连用源点形式</td><td class="l">RFC 9112 §3.2 定义四种请求目标，向代理 MUST 用 absolute-form，CONNECT 用 authority-form</td><td class="l">请求行形式不是风格而是合规要求，把 origin-form 发给代理可被拒绝</td></tr>
+        <tr><td class="l">CONNECT 打开隧道，成功回 200 Connection established</td><td class="l">RFC 9112 §9.3.6 规定目标为权威形式，建 TCP 后发 2xx 切换隧道模式，此后不得再解析字节</td><td class="l">解释为何 2xx 却无响应主体：标记的是连接用途改变</td></tr>
+        <tr><td class="l">Upgrade 须在 Connection 列出，同意回 101</td><td class="l">RFC 9110 §7.8 定义 Upgrade，发送方 MUST 在 Connection 一并列出；101 在状态码章节；HTTP/2 的 RFC 9113 禁用此机制</td><td class="l">把「必须同时出现」落实为 MUST，少写不是小疏漏</td></tr>
+        <tr><td class="l">WebSocket 密钥经固定算法算出 Accept</td><td class="l">RFC 6455 §1.3 定义打开握手：密钥拼 GUID 取 SHA-1 再 base64，版本 13，不支持回 426</td><td class="l">自实现握手或排查握手失败时，能逐步验证推导</td></tr>
+      </tbody>
+    </table>
+    <div class="deep">延伸板块在每讲末尾出现一次：MDN 给方向，RFC 给裁决，两条口径对齐才能既把事做成又说清为什么。</div>
+  </div>
+</section>
+
+<section class="slide" data-narration="扫三个最常见的雷。第一，以为 200 Connection established 之后代理还在转发 HTTP，其实那之后已是裸 TCP 字节流，代理放弃解析权，按 HTTP 读 TLS 记录只会出错，CONNECT 也不是取资源的方法。第二，以为有了绝对形式 Host 就多余，其实前者解决代理往哪转，Host 解决目标主机上哪个虚拟主机，规范都要求带。第三，把 Sec-WebSocket-Key 当成加密或认证机制，其实算法公开固定、不提供安全性，安全来自 wss 的 TLS；HTTP/2 也禁用升级。分开这三件事，才不混淆版本与语义。">
+  <div class="slide-head"><span class="sec">避坑</span><h3>三个把隧道、请求目标与安全混为一谈的误解</h3></div>
+  <div class="slide-body">
+    <div class="trap">❌ <strong>200 之后代理还在转发 HTTP 报文</strong><br>✅ 那之后是一对裸 TCP 字节流，代理放弃解析权；CONNECT 也不是取资源，成功 2xx 语义是「管道就绪」。</div>
+    <div class="trap">❌ <strong>有了 absolute-form，Host 就多余了</strong><br>✅ 绝对形式解决「代理往哪转」，Host 解决「目标主机上哪个虚拟主机」，维度不同，规范都要求带。</div>
+    <div class="trap">❌ <strong>Sec-WebSocket-Key 是加密机制，HTTP/2 也能 Upgrade</strong><br>✅ 算法公开固定、不提供安全性，安全来自 wss 的 TLS；MDN 明确 HTTP/2 禁用升级机制。</div>
+  </div>
+</section>
+
+<section class="slide" data-narration="最后说清本讲和第十二讲怎么分工，别重复用功。第十一讲处理的是中间层：请求被代理改写、被隧道透传、被升级换协议，关心的是在哪一跳、谁改得动、谁看得见什么，它改变的是请求的路径和承载，并没有让客户端重新发一次请求。第十二讲讲重定向，服务器用 3xx 加 Location 告诉客户端这个地址换了、请去别处，客户端要重新发起一次请求，于是第一讲那三阶段整个再走一遍。所以本讲留下的账是地址本身变了怎么办，交给第十二讲偿还。钩子是：中间层能把请求送到某个地址，可要是那个地址自己换了，就得靠重定向带路。">
+  <div class="slide-head"><span class="sec">接口</span><h3>第 11 讲改路径，第 12 讲换地址</h3></div>
+  <div class="slide-body">
+    <table>
+      <thead><tr><th></th><th>第 11 讲 代理隧道与升级</th><th>第 12 讲 HTTP 重定向</th></tr></thead>
+      <tbody>
+        <tr><td class="l"><strong>改什么</strong></td><td class="l">请求经过哪一跳、承载与可见性</td><td class="l">资源的新地址</td></tr>
+        <tr><td class="l"><strong>靠什么</strong></td><td class="l">请求目标变形、Via、CONNECT、Upgrade</td><td class="l">3xx 状态码与 Location 首部</td></tr>
+        <tr><td class="l"><strong>客户端动作</strong></td><td class="l">不重新发请求，改的是同一条链路</td><td class="l">重新发一次请求，三阶段再走一遍</td></tr>
+        <tr><td class="l"><strong>留下的账</strong></td><td class="l">地址本身变了怎么办</td><td class="l">回扣第 1 讲三阶段，收束全书</td></tr>
+      </tbody>
+    </table>
+    <div class="tip">钩子：中间层能把请求送到某个地址，可那个地址自己换了，就要靠 3xx 与 Location 带路。</div>
+  </div>
+</section>
+
+<section class="slide" data-narration="用三句话收束第十一讲。解决什么：把夹在客户端和源站之间的中间层讲清楚，正向代理替客户端出去、反向代理替服务器进来，请求目标怎么变形、Via 怎么逐跳记录、HTTPS 怎么用 CONNECT 穿过代理、连接怎么就地升级成 WebSocket。核心机制：代理把一条连接拆成两段，于是要改写目标、用 Via 串回路径、用逐跳首部管理每跳状态；CONNECT 只搬字节，Upgrade 以 101 换协议。承上启下：往回接第四讲连接管理与第五讲共享缓存，往前交出地址变更这道题给第十二讲。">
+  <div class="slide-head"><span class="sec">小结</span><h3>三句话讲完第 11 讲</h3></div>
+  <div class="slide-body">
+    <div class="chain">
+      <div class="link"><span class="no">1</span><span class="txt"><strong>解决什么</strong>：讲清中间那一跳，代理、隧道、升级分别改变了连接的哪一段</span></div>
+      <div class="link"><span class="no">2</span><span class="txt"><strong>核心机制</strong>：连接拆两段 → 目标变形 + Via 串路 + 逐跳首部每跳消费；CONNECT 只搬字节，Upgrade 以 101 换协议</span></div>
+      <div class="link"><span class="no">3</span><span class="txt"><strong>承上启下</strong>：往回接第 4、5 讲，往前把地址变更交给第 12 讲重定向</span></div>
+    </div>
+    <div class="formula formula-concl">谁改得动，谁看得见 —— 合上书也要能默写</div>
+  </div>
+</section>
+
+<section class="slide slide-cover" data-narration="本讲结束，留四项挑战，合上书完成。第一，对照写出直连和经正向代理两条请求，说明目标为何从源点形式变成绝对形式、Host 为什么仍要带。第二，推演请求经过两台代理时 Via 怎么逐跳追加，写出源站收到的最终值并解释顺序与版本。第三，默写 CONNECT 建隧道三步与成功状态行，列出代理看得到和看不到的各三类信息。第四，写出 WebSocket 升级请求与 101 响应的关键首部，推导 Accept，并说清误转发 Connection: close 的五步故障链与正确做法。全做出来再点完成按钮。下一讲第十二讲重定向，让三阶段再走一遍，收束全程。">
+  <div class="kicker">第 11 讲 结束</div>
+  <h1>谁改得动，谁看得见</h1>
+  <div class="sub">毕业挑战：合上书，拿一张纸</div>
+  <div class="divider"></div>
+  <div class="meta">
+    ☑ 对照直连与经代理两条请求，说清目标变形与 Host　　☑ 推演两代理 Via 逐跳追加并解释顺序与版本<br>
+    ☑ 默写 CONNECT 三步、看得到与看不到的各三类　　☑ 写升级握手、推导 Accept、推出 close 故障链<br><br>
+    下一讲 · 第 12 讲 HTTP 重定向：3xx 与 Location 让三阶段再走一遍，收束全程
+  </div>
+</section>
+
+  <!-- 页脚：brand 改为本章标题；总页数改 pagenum 初值 -->
+  <div id="footer">
+    <span class="brand">第11讲 代理、隧道与协议升级 · HTTP 精通 课件　<a class="to-lec" href="../http-guide/index.html">讲义首页 ↗</a></span>
+    <span id="pagenum">1 / 1</span>
+  </div>
+
+  <!-- 导航 -->
+  <div class="nav">
+    <button id="prev" title="上一页 (←)">‹</button>
+    <button id="next" title="下一页 (→ / 空格)">›</button>
+  </div>
+  <div id="hint">← → 翻页 · 空格下一页 · 推导页逐步显示 · 点击左右半屏翻页</div>
+
+</div>
+
+<!-- mermaid 本地引用，保证离线可用；初始化参数全套课件统一，勿改 -->
+<script src="assets/mermaid.min.js"></script>
+<script>
+mermaid.initialize({
+  startOnLoad: false,   // 必须为 false：display:none 的隐藏页渲染会得到 0 宽高的退化 SVG，
+                        // 改为页面激活时懒渲染（见 renderMermaid）
+  theme: "base",
+  themeVariables: {
+    primaryColor: "#ebf8ff",
+    primaryBorderColor: "#2b6cb0",
+    primaryTextColor: "#1a365d",
+    lineColor: "#718096",
+    fontFamily: "-apple-system, PingFang SC, sans-serif",
+    fontSize: "15px"
+  },
+  flowchart: { curve: "linear", htmlLabels: false }
+});
+</script>
+<script>
+(function(){
+  const slides = Array.from(document.querySelectorAll('.slide'));
+  const total = slides.length;
+  let idx = 0;
+
+  const params = new URLSearchParams(location.search);
+  const startSlide = parseInt(params.get('slide'), 10);
+  if (params.get('autohide') === '1') document.body.classList.add('autohide');
+  if (!isNaN(startSlide) && startSlide >= 1 && startSlide <= total) idx = startSlide - 1;
+
+  const progress = document.getElementById('progress');
+  const pagenum = document.getElementById('pagenum');
+  const prevBtn = document.getElementById('prev');
+  const nextBtn = document.getElementById('next');
+
+  // 推导分步：每页记住已展开的步数；autohide（截图）模式下 CSS 强制全显
+  const stepState = new Map();
+  function stepsOf(i){ return Array.from(slides[i].querySelectorAll('.step')); }
+  function applySteps(){
+    stepsOf(idx).forEach((el, k)=> el.classList.toggle('on', k < (stepState.get(idx) || 0)));
+  }
+  // 前进一步：先展开本页下一步，全部展开后才翻页
+  function forward(){
+    const steps = stepsOf(idx);
+    const shown = stepState.get(idx) || 0;
+    if (shown < steps.length){ stepState.set(idx, shown + 1); applySteps(); return; }
+    go(idx + 1);
+  }
+  // 后退一步：先收起本页最后一步，收完才回上一页
+  function backward(){
+    const steps = stepsOf(idx);
+    const shown = stepState.get(idx) || 0;
+    if (shown > 0){ stepState.set(idx, shown - 1); applySteps(); return; }
+    go(idx - 1);
+  }
+
+  // mermaid 懒渲染：只在页面激活（有真实宽高）时渲染该页的图，渲染后打 data-done 防重复
+  function renderMermaid(slide){
+    if (typeof mermaid === 'undefined') return;
+    const nodes = Array.from(slide.querySelectorAll('.mermaid:not([data-done])'));
+    if (!nodes.length) return;
+    nodes.forEach(n => n.setAttribute('data-done', ''));
+    mermaid.run({ nodes }).catch(err => {
+      nodes.forEach(n => n.removeAttribute('data-done'));
+      console.error('mermaid 渲染失败：', err);
+    });
+  }
+
+  function render(){
+    slides.forEach((s,i)=> s.classList.toggle('active', i===idx));
+    progress.style.width = ((idx+1)/total*100) + '%';
+    pagenum.textContent = (idx+1) + ' / ' + total;
+    prevBtn.disabled = (idx===0);
+    nextBtn.disabled = (idx===total-1);
+    applySteps();
+    renderMermaid(slides[idx]);
+  }
+  function go(n){ idx = Math.max(0, Math.min(total-1, n)); render(); }
+
+  prevBtn.addEventListener('click', e=>{ e.stopPropagation(); backward(); });
+  nextBtn.addEventListener('click', e=>{ e.stopPropagation(); forward(); });
+
+  document.addEventListener('keydown', e=>{
+    if(e.key==='ArrowRight'||e.key===' '||e.key==='PageDown'){ e.preventDefault(); forward(); }
+    else if(e.key==='ArrowLeft'||e.key==='PageUp'){ e.preventDefault(); backward(); }
+    else if(e.key==='Home'){ stepState.set(idx, 0); go(0); }
+    else if(e.key==='End'){ go(total-1); }
+  });
+
+  document.getElementById('stage').addEventListener('click', e=>{
+    if(e.target.closest('.nav') || e.target.closest('a')) return;
+    const x = e.clientX;
+    if(x < window.innerWidth*0.5) backward(); else forward();
+  });
+
+  function fit(){
+    const s = Math.min(window.innerWidth/1280, window.innerHeight/720);
+    document.getElementById('stage').style.transform = 'translate(-50%,-50%) scale(' + s + ')';
+  }
+  window.addEventListener('resize', fit);
+  fit();
+  render();
+})();
+</script>
+</body>
+</html>

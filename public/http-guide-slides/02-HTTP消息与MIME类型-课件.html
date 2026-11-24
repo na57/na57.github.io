@@ -1,0 +1,624 @@
+<!DOCTYPE html>
+<!--
+  ======================================================================
+  HTTP 精通 · 课件外壳（deck-shell.html）
+  由 build-slides.mjs 把 slides/NN.html 注入幻灯片区域，
+  输出 public/http-guide-slides/NN-xxx-课件.html。
+  骨架来自站内通用 1280×720 课件模板；本套额外增加 .wire 协议报文块。
+  每页必须写 data-narration（180–280 字口语稿，禁半角双引号、禁换行、禁小于号）。
+  ======================================================================
+-->
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第2讲 HTTP 消息与 MIME 类型 · HTTP 精通 课件</title>
+<script>
+window.MathJax = {
+  tex: {
+    inlineMath: [['$', '$'], ['\\(', '\\)']],
+    displayMath: [['$$', '$$'], ['\\[', '\\]']],
+    processEscapes: true,
+    tags: 'none'
+  },
+  svg: { fontCache: 'global', scale: 1.05 },
+  options: { skipHtmlTags: ['script','noscript','style','textarea','pre','code'] }
+};
+</script>
+<!-- MathJax 本地引用（tex-svg 单文件全量组件，约2MB，自带字体数据），file:// 与断网均可用 -->
+<script src="assets/tex-svg.js" async></script>
+<style>
+  :root{
+    --primary:#1a365d; --accent:#2b6cb0; --accent-light:#ebf8ff; --accent-border:#bee3f8;
+    --text:#2d3748; --muted:#718096; --border:#e2e8f0; --bg-light:#f7fafc;
+    --success:#38a169; --danger:#e53e3e; --warning:#dd6b20; --warn-bg:#fffaf0;
+  }
+  *{margin:0;padding:0;box-sizing:border-box;}
+  html,body{width:100%;height:100%;overflow:hidden;background:#0f172a;}
+  body{
+    font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Hiragino Sans GB","Microsoft YaHei","WenQuanYi Micro Hei",sans-serif;
+    color:var(--text);
+  }
+  #stage{
+    position:absolute; left:50%; top:50%;
+    width:1280px; height:720px;
+    transform:translate(-50%,-50%) scale(1);
+    transform-origin:center center;
+    background:#ffffff;
+    box-shadow:0 0 40px rgba(0,0,0,.4);
+    overflow:hidden;
+  }
+  .slide{
+    position:absolute; inset:0;
+    padding:36px 60px 52px;
+    display:none;
+    flex-direction:column;
+    background:#ffffff;
+    opacity:0;
+    transition:opacity .35s ease;
+  }
+  .slide.active{ display:flex; opacity:1; }
+
+  #progress{ position:absolute; top:0; left:0; height:6px; background:var(--accent); width:0; z-index:50; transition:width .35s; }
+
+  /* 封面 / 结束页 */
+  .slide-cover{ justify-content:center; align-items:center; text-align:center; }
+  .slide-cover{ background:linear-gradient(135deg,#1a365d 0%,#2b6cb0 100%); color:#fff; }
+  .slide-cover .kicker{ font-size:22px; letter-spacing:6px; opacity:.85; margin-bottom:18px;}
+  .slide-cover h1{ font-size:64px; font-weight:800; line-height:1.2; margin-bottom:22px; letter-spacing:2px;}
+  .slide-cover .sub{ font-size:26px; opacity:.92; margin-bottom:36px;}
+  .slide-cover .meta{ font-size:19px; opacity:.85; line-height:2;}
+  .slide-cover .divider{ width:160px;height:5px;background:#fff;opacity:.6;margin:0 auto 30px;border-radius:3px;}
+  .slide-cover .question{ font-size:24px; background:rgba(255,255,255,.12); border:1px solid rgba(255,255,255,.35); border-radius:12px; padding:12px 28px; margin-bottom:30px;}
+
+  /* 页头：结论式标题 */
+  .slide-head{ display:flex; align-items:baseline; gap:16px; border-bottom:3px solid var(--accent); padding-bottom:9px; margin-bottom:12px;}
+  .slide-head .sec{ font-size:17px; color:var(--accent); font-weight:700; background:var(--accent-light); padding:3px 11px; border-radius:6px; white-space:nowrap;}
+  .slide-head h3{ font-size:29px; color:var(--primary); font-weight:700;}
+  .slide-body{ flex:1; display:flex; flex-direction:column; justify-content:center; min-height:0; }
+
+  p{ font-size:21px; line-height:1.65; margin-bottom:8px;}
+  .lead{ font-size:23px; color:#374151; line-height:1.75;}
+  ul,ol{ margin:0 0 8px 26px; font-size:21px; line-height:1.7;}
+  li{ margin-bottom:5px;}
+  strong{ color:var(--primary); }
+
+  /* 公式块 */
+  .formula{ background:var(--accent-light); border-left:5px solid var(--accent); border-radius:0 10px 10px 0; padding:9px 22px; margin:9px 0; text-align:center; font-size:23px;}
+  .formula-concl{ background:#fffaf0; border-left:5px solid var(--warning);}
+  .MathJax{ font-size:1.05em !important; }
+  mjx-container[display="true"]{ margin:6px 0 !important; }
+
+  /* 表格 */
+  table{ width:100%; border-collapse:collapse; margin:10px 0; font-size:20px;}
+  th{ background:var(--accent); color:#fff; padding:8px 12px; text-align:center; font-weight:600;}
+  td{ padding:7px 12px; border:1px solid var(--border); text-align:center; vertical-align:middle;}
+  tr:nth-child(even) td{ background:var(--bg-light);}
+  td.l{ text-align:left; }
+  table.small{ font-size:18px; }
+  table.small td, table.small th{ padding:6px 10px; }
+
+  /* 组件 */
+  .card{ background:var(--accent-light); border:1px solid var(--accent-border); border-radius:12px; padding:12px 20px; margin:10px 0;}
+  .tip{ background:#ebf8ff; border-left:5px solid var(--accent); border-radius:0 10px 10px 0; padding:10px 20px; margin:10px 0; font-size:20px; color:#2c5282;}
+  .deep{ background:#f0fff4; border-left:5px solid var(--success); border-radius:0 10px 10px 0; padding:10px 20px; margin:10px 0; font-size:20px; color:#22543d;}
+  .warn{ background:var(--warn-bg); border-left:5px solid var(--warning); border-radius:0 10px 10px 0; padding:10px 20px; margin:10px 0; font-size:20px; color:#744210;}
+  .trap{ background:#fef2f2; border-left:5px solid var(--danger); border-radius:0 10px 10px 0; padding:10px 20px; margin:10px 0; font-size:20px; color:#7f1d1d;}
+
+  .pause{
+    background:var(--warn-bg); border:2px dashed var(--warning); border-radius:14px;
+    padding:10px 22px; margin:10px 0; display:flex; align-items:center; gap:16px;
+  }
+  .pause .icon{ font-size:36px; line-height:1; }
+  .pause .txt b{ color:var(--warning); font-size:21px; }
+  .pause .txt p{ font-size:18px; color:#744210; margin:3px 0 0; }
+
+  .cols{ display:flex; gap:28px; align-items:stretch; }
+  .col{ flex:1; min-width:0; }
+
+  /* 推导分步：仅互动模式隐藏，截图(autohide)模式全部可见——此规则不可删 */
+  .step{ opacity:0; transform:translateY(8px); transition:opacity .3s ease, transform .3s ease; }
+  .step.on{ opacity:1; transform:none; }
+  body.autohide .step{ opacity:1 !important; transform:none !important; }
+  .step-hint{ font-size:14px; color:var(--muted); margin-top:4px;}
+  body.autohide .step-hint{ display:none; }
+
+  /* HTTP 精通课件专用：协议报文原文块 */
+  .wire{background:#0f172a;color:#e2e8f0;border-radius:10px;padding:12px 18px;margin:8px 0;
+    font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:17px;line-height:1.55;
+    white-space:pre-wrap;overflow-wrap:anywhere;}
+  .wire b{color:#7dd3fc;font-weight:700;}
+  .wire i{color:#fde68a;font-style:normal;}
+  .wire em{color:#86efac;font-style:normal;}
+  .wire.sm{font-size:15px;line-height:1.45;}
+  .wire-cap{font-size:15px;color:var(--muted);margin:0 0 8px;}
+  .to-lec{color:#bee3f8;text-decoration:none;font-size:15px;margin-left:12px;}
+  .to-lec:hover{text-decoration:underline;}
+  .badge{display:inline-block;background:var(--accent-light);color:var(--accent);border:1px solid var(--accent-border);
+    border-radius:6px;padding:2px 10px;font-size:17px;font-weight:700;margin-right:8px;}
+
+  /* 因果链 */
+  .chain{ margin:6px 0; }
+  .chain .link{ display:flex; align-items:center; gap:14px; margin:6px 0;}
+  .chain .no{ width:34px; height:34px; border-radius:50%; background:var(--accent); color:#fff; font-size:18px; font-weight:700; display:flex; align-items:center; justify-content:center; flex-shrink:0;}
+  .chain .txt{ font-size:21px; line-height:1.5;}
+  .chain .txt strong{ color:var(--primary); }
+
+  /* mermaid 容器：高度封顶，防止溢出 720px 舞台 */
+  .mmd{ background:var(--bg-light); border:1px solid var(--border); border-radius:12px; padding:10px 14px; display:flex; justify-content:center; align-items:center; margin:8px 0;}
+  .mmd .mermaid{ display:flex; justify-content:center; width:100%; visibility:hidden; }
+  .mmd .mermaid[data-done]{ visibility:visible; }
+  .mmd .mermaid svg{ max-width:100%; height:auto; max-height:230px; }
+  .mmd.mmd-tall .mermaid svg{ max-height:330px; }
+  .mmd.mmd-sm svg{ max-height:150px; }
+  .mmd-row{ display:flex; gap:18px; }
+  .mmd-row .mmd{ flex:1; flex-direction:column; }
+  .mmd .cap{ font-size:17px; color:var(--muted); margin-top:6px; text-align:center;}
+  .mmd .cap b{ color:var(--text); }
+
+  #footer{ position:absolute; bottom:0; left:0; right:0; height:40px; display:flex; align-items:center; justify-content:space-between; padding:0 30px; font-size:15px; color:#94a3b8; background:rgba(247,250,252,.85); border-top:1px solid var(--border); z-index:40;}
+  #footer .brand{ font-weight:600; color:var(--accent); }
+
+  .nav{ position:absolute; bottom:48px; right:40px; display:flex; gap:12px; z-index:45;}
+  .nav button{ width:54px; height:54px; border-radius:50%; border:none; background:var(--accent); color:#fff; font-size:24px; cursor:pointer; box-shadow:0 3px 10px rgba(43,108,176,.4); display:flex; align-items:center; justify-content:center;}
+  .nav button:hover{ background:var(--primary); }
+  .nav button:disabled{ background:#cbd5d0; cursor:default; box-shadow:none;}
+
+  #hint{ position:absolute; bottom:48px; left:40px; font-size:14px; color:#94a3b8; z-index:45;}
+
+  body.autohide #progress, body.autohide #footer, body.autohide .nav, body.autohide #hint{ display:none !important; }
+</style>
+</head>
+<body>
+<div id="stage">
+
+  <div id="progress"></div>
+
+<!-- 第 2 讲：HTTP 消息与 MIME 类型 -->
+<section class="slide slide-cover active" data-narration="欢迎回到 HTTP 精通第 2 讲，HTTP 消息与 MIME 类型。上一讲把一次会话拆成建立连接、交换报文、复用或结束三段，这一讲钻进中间那段，把流动的字节逐行拆开。本讲要回答封面这个问题：一条报文由哪几部分组成，接收方凭什么知道主体从哪开始、到哪结束、该用什么解析。学完你要能默写请求与响应的四段结构，对一条真实报文逐行说出字段职责，手算主体边界，说清一到五开头的状态码各让谁行动，并解释类型为何不能只靠扩展名。配套 MDN 原文是 HTTP 消息和 MIME 类型两篇。我们从一个 TCP 搬不动的问题出发。">
+  <div class="kicker">第 2 讲 · 第①组 基础与表示</div>
+  <h1>HTTP 消息与 MIME 类型</h1>
+  <div class="sub">把会话里流动的报文逐行拆开</div>
+  <div class="question">一条 HTTP 报文由哪几部分组成，接收方凭什么知道主体从哪开始、到哪结束、该用什么解析？</div>
+  <div class="meta">
+    配套讲义：HTTP 精通 第 2 讲 · 依据 MDN《HTTP 消息》《MIME 类型》<br>
+    ← → 翻页 · 推导页按空格逐步展开
+  </div>
+</section>
+
+<section class="slide" data-narration="先看这一讲在十二讲主线上的位置。第 1 讲画出会话骨架，第 2、3 讲展开中间那段交换的报文与表示，第 4 到 6 讲插入连接复用与缓存，第 7 到 10 讲补状态与身份，第 11、12 讲处理中间层与改道。图上高亮的是第 2 讲，属第一组基础与表示，任务是把抽象的交换报文变成可命名的对象：起始行、首部、空行、主体，以及声明字节身份的 MIME 类型。本讲立起的定界、类型和状态码，是后面连接、缓存、条件请求和重定向各讲反复调用的共同底座。对应的 MDN 原文是 HTTP 消息与 MIME 类型。下一页先把本讲主线摊成一条因果链。">
+  <div class="slide-head"><span class="sec">定位</span><h3>第 2 讲把中间那段报文变成可命名的对象</h3></div>
+  <div class="slide-body">
+    <div class="mmd mmd-sm">
+      <div class="mermaid">
+flowchart LR
+  A["第1讲 会话骨架"] --> B["第2讲 报文与 MIME"]:::here --> C["第3讲 内容与表示"] --> D["第4到6讲 连接与缓存"] --> E["第7到10讲 状态与安全"] --> F["第11到12讲 中间层"]
+  classDef here fill:#2b6cb0,color:#ffffff,stroke:#1a365d,stroke-width:3px
+      </div>
+    </div>
+    <p style="text-align:center;">本讲解决「<strong>命名与定界</strong>」：把一段字节切成能指认的四段，并说清它是什么。</p>
+    <div class="tip">本讲对应的 MDN 原文：HTTP 消息 Messages / MIME 类型 MIME types。</div>
+  </div>
+</section>
+
+<section class="slide" data-narration="本讲的主线是一条六环因果链，也是解析报文的先后顺序。第一环，会话里的一次事务真正流动的是一段报文。第二环，先读到的起始行给出意图或结果，请求说要做什么，响应说成了没有。第三环，紧跟着的首部携带元数据，说明主机名、接受什么表示、主体多长。第四环，那个空行划出边界，它是首部结束、主体开始的唯一语法标志，也是全流程的转折点。第五环，主体承载表示的字节，靠长度或分块读到结束。第六环，收尾时 Content-Type 声明该用什么解析，一旦类型缺失或被篡改，嗅探就会带来冲突。这条链就是本讲目录，后面每个例子都挂在某一环上。">
+  <div class="slide-head"><span class="sec">主线</span><h3>报文解析的六环因果链</h3></div>
+  <div class="slide-body">
+    <div class="chain">
+      <div class="link"><span class="no">1</span><span class="txt"><strong>会话中的一次事务</strong>：网络上流动的是一段报文</span></div>
+      <div class="link"><span class="no">2</span><span class="txt"><strong>起始行给出意图或结果</strong>：请求说做什么，响应说成败</span></div>
+      <div class="link"><span class="no">3</span><span class="txt"><strong>首部携带元数据</strong>：主机名、可接受表示、长度</span></div>
+      <div class="link"><span class="no">4</span><span class="txt"><strong>空行划出边界</strong>：首部结束、主体开始的唯一标志</span></div>
+      <div class="link"><span class="no">5</span><span class="txt"><strong>主体承载表示字节</strong>：按长度或分块读到结束</span></div>
+      <div class="link"><span class="no">6</span><span class="txt"><strong>类型声明与嗅探的冲突</strong>：缺失或被改就出故障</span></div>
+    </div>
+    <div class="tip">解析顺序：先读起始行，再逐行读首部，遇空行停止，最后按长度读主体并按类型解析。</div>
+  </div>
+</section>
+
+<section class="slide" data-narration="先用一个具体场景逼出为什么需要本讲。客户端想告诉服务器把首页给我，于是在 TCP 连接上写下 GET 加路径这几个字节。TCP 忠实保证这串字节按序、不丢、不重地到达，可服务器拿到后面对三个无解的追问：这串字节到哪儿算一条完整指令，也就是边界；它是一条读请求还是一次写入，也就是意图；回答完之后跟着的内容到底多长，也就是定界。TCP 一概不回答，因为它只搬运字节、不解释字节。左边这张卡是这个过于简略的解释，右边是把它当黑盒会遇到的麻烦。HTTP 的解决办法，是给每次交换套一个固定四段结构，让接收方按规则把字节流切成一条条报文。">
+  <div class="slide-head"><span class="sec">动机</span><h3>TCP 只搬字节，回答不了三个追问</h3></div>
+  <div class="slide-body">
+    <div class="cols">
+      <div class="col"><div class="card">🙂 <strong>过于简略的解释</strong><br>连接上写下 GET 加路径，服务器自然回一个页面。能说通一次点击，仅此而已。</div></div>
+      <div class="col"><div class="card">🤔 <strong>黑盒留下的三问</strong><br>字节到哪儿算一条完整指令（边界）？是读还是写（意图）？后面的内容多长（定界）？</div></div>
+    </div>
+    <div class="tip">💡 本讲方案：给每次交换套一个<strong>固定四段结构</strong>，让收发双方把无边界的字节流切成一条条报文。</div>
+    <div class="deep">TCP 保证按序、不丢、不重，但不解释字节；解释工作全部交给 HTTP 的报文结构。</div>
+  </div>
+</section>
+
+<section class="slide" data-narration="给报文一个能默写的定义。MDN 说报文是服务器与客户端交换数据的方式，只有两种：客户端发出、触发动作的请求（request），以及服务器给出的响应（response）。两者结构相似，都由四部分组成且顺序不可交换：一行起始行（start-line），永远单行；一组可选首部，指明属性或描述主体；一个空行，宣告元数据发送完毕；一个可选主体，承载文档字节，大小由首部指定。起始行与首部合称请求头，主体叫有效载荷。记住这个统称，谈缓存、谈编码时才分得清动的是头还是载荷。请先立住这副四段骨架，下一页摆一段真实事务。">
+  <div class="slide-head"><span class="sec">定义</span><h3>四段骨架：起始行 / 首部 / 空行 / 主体</h3></div>
+  <div class="slide-body">
+    <p class="lead"><strong>HTTP 报文</strong>（HTTP message）只有两种：客户端发出的<strong>请求</strong>（request），与服务器给出的<strong>响应</strong>（response）。</p>
+    <div class="cols">
+      <div class="col"><div class="card">🧱 <strong>头：起始行 + 首部</strong><br>起始行（start-line）永远单行；首部是可选的一组键值对，二者合称「请求头」。</div></div>
+      <div class="col"><div class="card">📨 <strong>载荷：空行 + 主体</strong><br>空行宣告元数据结束；主体（body）承载文档字节，大小由首部指定。</div></div>
+    </div>
+    <div class="formula formula-concl">起始行 → 首部 → 空行 → 主体　·　顺序不可交换</div>
+    <div class="deep">起始行与首部合称「请求头」，主体叫「有效载荷」；谈缓存、谈编码时，先分清动的是头还是载荷。</div>
+  </div>
+</section>
+
+<section class="slide" data-narration="来看完整例子第一组，一条 GET 请求和它的 200 响应，逐行拆开。为看清结构只留关键行，回车换行不显示。请求第一行是请求行，含方法、目标和版本；后面 Host 给主机名，Accept 声明愿接收的表示，User-Agent 报出客户端身份；空行之后 GET 不带主体。响应第一行是状态行，含版本、状态码 200 和状态文本 OK；主体是 HTML、字符集 UTF-8、长度 19 字节；空行之后就是主体。蓝色标起始行，黄色标首部名，绿色标主体。先建立整体形状，下一页把每行职责和 19 字节手算对上。">
+  <div class="slide-head"><span class="sec">例子 · 报文</span><h3>一次事务 = 一段请求 + 一段响应</h3></div>
+  <div class="slide-body">
+    <div class="wire sm"><b>GET /index.html HTTP/1.1</b>
+<i>Host</i>: www.example.com
+<i>Accept</i>: text/html,application/xhtml+xml
+<i>User-Agent</i>: Mozilla/5.0 (X11; Linux x86_64) Firefox/128.0
+
+<em>（空行之后 GET 无主体）</em></div>
+    <div class="wire-cap">请求：起始行 + 请求首部 + 空行 + 可选主体；Host / Accept / User-Agent 各司其职。</div>
+    <div class="wire sm"><b>HTTP/1.1 200 OK</b>
+<i>Date</i>: Mon, 16 Nov 2026 08:00:00 GMT
+<i>Content-Type</i>: text/html; charset=utf-8
+<i>Content-Length</i>: 19
+
+<em>&lt;html&gt;你好&lt;/html&gt;</em></div>
+    <div class="wire-cap">响应：状态行 + 首部 + 空行 + 主体；主体正好 19 字节，与 Content-Length 一致。</div>
+  </div>
+</section>
+
+<section class="slide" data-narration="把上一页的报文逐行拆开，一步都不能跳。请求行按空格切成三段：GET 是方法，声明读这个意图；斜杠 index.html 是目标，指出要哪份资源；HTTP 1.1 是版本，承诺按这套语法解析。Host 不是目标 IP，IP 在 TCP 连好对端时就定了，Host 带的是原本要访问的主机名，同机多站点全靠它选虚拟主机。响应侧 200 只读数字判成败。重点看主体那段 html 标签文本，正好 19 字节：开始标签 6 字节，你好两汉字在 UTF-8 下各 3 字节共 6 字节，闭合标签 7 字节，六加六加七等于十九，读完即结束。">
+  <div class="slide-head"><span class="sec">例子 · 逐行</span><h3>每行都有职责，19 字节要手算</h3></div>
+  <div class="slide-body">
+    <table class="small">
+      <thead><tr><th>行</th><th>职责</th><th>写错会怎样</th></tr></thead>
+      <tbody>
+        <tr><td class="l"><strong>GET /index.html HTTP/1.1</strong></td><td class="l">方法 / 目标 / 版本</td><td class="l">目标形式错，代理无法转发</td></tr>
+        <tr><td class="l"><strong>Host</strong></td><td class="l">指定虚拟主机，非目标 IP</td><td class="l">同 IP 多站点落到默认站</td></tr>
+        <tr><td class="l"><strong>空行</strong></td><td class="l">首部结束的唯一标志</td><td class="l">主体首行被误当首部</td></tr>
+        <tr><td class="l"><strong>Content-Length: 19</strong></td><td class="l">主体定界，UTF-8 字节数</td><td class="l">写大等到超时，写小粘下一条</td></tr>
+      </tbody>
+    </table>
+    <div class="formula formula-concl">19 字节 = &lt;html&gt; 6　+　你好 6　+　&lt;/html&gt; 7</div>
+    <div class="tip">口诀：<strong>起始行定动作，首部定条件，空行定边界，长度定主体</strong>。</div>
+  </div>
+</section>
+
+<section class="slide" data-narration="顺着请求行再补一个容易低估的点：请求目标。多数人以为它永远是斜杠开头的路径，MDN 明确列出四种形式，各有出场场合。原始形式最常见，直连源站时用路径就够，因为主机名已由 Host 给出，后面还可以跟问号和查询串。绝对形式用于经代理的 GET，代理同时服务多个源站，必须给完整 URL 才能确定去向。authority 形式只给域名加可选端口，专用于 CONNECT 建隧道。星号形式是一个星号，配合 OPTIONS 问整台服务器支持什么。把这张表读成一句话：目标和连谁绑在一起，四种形式其实是四种连接拓扑的投影，第 11 讲讲代理与隧道时会原样回来。">
+  <div class="slide-head"><span class="sec">专题 · 起始行</span><h3>请求目标四形式，是四种连接拓扑</h3></div>
+  <div class="slide-body">
+    <table class="small">
+      <thead><tr><th>形式</th><th>长什么样</th><th>什么时候用</th></tr></thead>
+      <tbody>
+        <tr><td class="l"><strong>原始形式 origin form</strong></td><td class="l">GET /background.png HTTP/1.0</td><td class="l">直连源站，最常见；可跟问号查询串</td></tr>
+        <tr><td class="l"><strong>绝对形式 absolute form</strong></td><td class="l">GET http://example.com/docs HTTP/1.1</td><td class="l">经代理，代理要靠完整 URL 定去向</td></tr>
+        <tr><td class="l"><strong>authority 形式</strong></td><td class="l">CONNECT example.com:80 HTTP/1.1</td><td class="l">仅 CONNECT 建隧道，只要域名端口</td></tr>
+        <tr><td class="l"><strong>星号形式 asterisk form</strong></td><td class="l">OPTIONS * HTTP/1.1</td><td class="l">问整台服务器支持什么方法</td></tr>
+      </tbody>
+    </table>
+    <div class="tip">目标和「连谁」绑在一起：直连给路径、经代理给全址、建隧道给 authority、问全局打星号。</div>
+    <div class="deep">四种形式由语法产生式固定，不是写法偏好；第 11 讲代理与隧道会原样回归。</div>
+  </div>
+</section>
+
+<section class="slide" data-narration="完整例子第二组，一到五开头的状态码分流判定表，把五类和九个高频码摆在一张纸上。响应起始行叫状态行，客户端判成败只读三位数字，状态文本只是注释。看首位分流：100 是服务器让客户端继续发主体的临时响应；200 成了读主体；301 永久搬家带 Location 要更新书签再发一次；304 是缓存再验证成功、去的是自己的缓存、不回主体，不是错误；400 语法错要改请求，401 缺身份要带凭据，403 懂但拒绝授权，404 找不到且不愿说明，500 是服务端故障。关键在下一步谁行动：四开头改请求，五开头才轮到服务端修、客户端可重试。">
+  <div class="slide-head"><span class="sec">例子 · 状态码</span><h3>1xx–5xx 九码分流判定表</h3></div>
+  <div class="slide-body">
+    <table class="small">
+      <thead><tr><th>状态码 · 类别</th><th>触发方与条件</th><th>客户端该做什么</th></tr></thead>
+      <tbody>
+        <tr><td class="l"><strong>100</strong> · 1xx 信息</td><td class="l">服务器收到 Expect: 100-continue 后回临时响应</td><td class="l">继续发主体，过渡响应非最终</td></tr>
+        <tr><td class="l"><strong>200</strong> · 2xx 成功</td><td class="l">服务器成功处理并带回主体</td><td class="l">按 Content-Type 解析主体</td></tr>
+        <tr><td class="l"><strong>301</strong> · 3xx 重定向</td><td class="l">资源永久迁走，通常带 Location</td><td class="l">更新书签，跟 Location 再发一次</td></tr>
+        <tr><td class="l"><strong>304</strong> · 3xx 重定向</td><td class="l">条件请求判定副本仍有效，不回主体</td><td class="l">直接用缓存，再验证成功非错误</td></tr>
+        <tr><td class="l"><strong>400</strong> · 4xx 客户端错</td><td class="l">服务器认为请求语法有误</td><td class="l">改请求，不要原样重试</td></tr>
+        <tr><td class="l"><strong>401</strong> · 4xx 客户端错</td><td class="l">要求先认证，缺凭据或凭据无效</td><td class="l">带 Authorization 重发，缺的是身份</td></tr>
+        <tr><td class="l"><strong>403</strong> · 4xx 客户端错</td><td class="l">理解请求但拒绝授权，与身份无关</td><td class="l">换身份或放弃，重试无意义</td></tr>
+        <tr><td class="l"><strong>404</strong> · 4xx 客户端错</td><td class="l">找不到可用表示且不愿说明</td><td class="l">核对 URL，重试通常无益</td></tr>
+        <tr><td class="l"><strong>500</strong> · 5xx 服务端错</td><td class="l">服务器遇到阻止完成的意外状况</td><td class="l">幂等请求可稍后重试，要修服务端</td></tr>
+      </tbody>
+    </table>
+    <div class="deep">三位<strong>状态码</strong>（status code）口诀：1xx 继续发、2xx 收结果、3xx 去别处、4xx 改请求、5xx 服务端修；只有 5xx 配幂等方法才值得自动重试。</div>
+  </div>
+</section>
+
+<section class="slide" data-narration="完整例子第三组，同一份内容的两种主体定界对照。客户端要上传纯文本 hello world，共 11 字节，服务端生成响应前不一定知道总长，于是有两条路。路线 A 用 Content-Length 定界，声明 11，接收方读完空行再读恰好 11 字节即结束。路线 B 用分块编码定界，长度未知，主体切成若干块，每块先写十六进制长度再写数据，大小为 0 的块收尾。蓝色标起始行与块大小，绿色标主体。两条路拼出的主体完全一致，都是 hello world。为什么动态生成的大响应偏爱分块，下一页逐块手算给你看。">
+  <div class="slide-head"><span class="sec">例子 · 定界</span><h3>同一份内容：Content-Length 与 chunked</h3></div>
+  <div class="slide-body">
+    <div class="wire sm"><b>POST /upload HTTP/1.1</b>
+<i>Host</i>: www.example.com
+<i>Content-Type</i>: text/plain; charset=utf-8
+<i>Content-Length</i>: 11
+
+<em>hello world</em></div>
+    <div class="wire-cap">路线 A · Content-Length 定界：读完空行再读恰好 11 字节即结束，长度必须事先算准。</div>
+    <div class="wire sm"><b>POST /upload HTTP/1.1</b>
+<i>Host</i>: www.example.com
+<i>Content-Type</i>: text/plain; charset=utf-8
+<i>Transfer-Encoding</i>: chunked
+
+<b>5</b>
+hello
+<b>6</b>
+ world
+<b>0</b>
+
+</div>
+    <div class="wire-cap">路线 B · chunked 定界：每块先写十六进制长度再写数据，0 块收尾，拼出同样是 hello world。</div>
+  </div>
+</section>
+
+<section class="slide" data-narration="把路线 B 的分块主体逐块手算一遍，按空格逐步展开。第一步读第一行 5，十六进制 5 等于十进制 5，表示紧接 5 字节。第二步读恰好 5 字节 hello，随后一个回车换行作块结束符，不计入块大小，累计 hello。第三步读下一行 6，表示下一块 6 字节。第四步读恰好 6 字节，一个空格加 world 五字母正好 6 字节，累计变成 hello world，和路线 A 一致。第五步读一行 0，主体结束，后面可跟尾部首部，本例没有，一个空行收尾。结论：长度头、数据、回车换行三段式重复，0 块是唯一的正文结束信号。">
+  <div class="slide-head"><span class="sec">专题 · 手算</span><h3>分块主体逐块解析，一步不跳</h3></div>
+  <div class="slide-body">
+    <div class="step"><p><strong>① 读块大小 5</strong>：十六进制 5 = 十进制 5，表示紧接 5 字节数据。</p></div>
+    <div class="step"><p><strong>② 读 5 字节 hello</strong>：随后一个 CRLF 作块结束符，不计入块大小，累计 hello。</p></div>
+    <div class="step"><p><strong>③ 读块大小 6</strong>：十六进制 6 = 十进制 6，下一块 6 字节。</p></div>
+    <div class="step"><p><strong>④ 读 6 字节「 world」</strong>：一个空格加 world 五字母，累计 hello world，与路线 A 一致。</p></div>
+    <div class="step"><p><strong>⑤ 读块大小 0</strong>：主体结束；0 块后可跟尾部首部，本例没有，一个空行收尾。</p></div>
+    <div class="formula formula-concl">长度头 + 数据 + CRLF 三段式重复 · 0 块是唯一正文结束信号</div>
+    <p class="step-hint">按空格 / → 逐步展开推导</p>
+  </div>
+</section>
+
+<section class="slide" data-narration="定界讲完，还剩一个必须分清的概念：内容编码与内容类型是两个正交维度。内容类型声明表示本身是什么，HTML、JSON 还是图片；内容编码声明对这份表示施加了什么变换，最常见是 gzip 压缩。二者能叠加在同一条响应上。看这段报文，类型是 HTML 带 UTF-8 字符集，编码是 gzip，长度写 843，注意 843 是压缩后的字节，不是解压后的大小。解析顺序很关键：先按内容编码解压得原始字节，再按内容类型决定用哪个解析器；反过来先按 HTML 解析一堆压缩字节只会得到乱码。压缩是外衣，类型才是身份。">
+  <div class="slide-head"><span class="sec">专题 · 正交</span><h3>类型、变换、长度：三条首部互不替代</h3></div>
+  <div class="slide-body">
+    <div class="wire sm"><b>HTTP/1.1 200 OK</b>
+<i>Content-Type</i>: text/html; charset=utf-8
+<i>Content-Encoding</i>: gzip
+<i>Content-Length</i>: 843
+
+<em>（843 字节是 gzip 压缩后的字节，不是解压后 HTML 大小）</em></div>
+    <div class="wire-cap"><strong>内容编码</strong>（Content-Encoding）管「做了什么变换」，Content-Type 管「是什么」，二者正交、可叠加。</div>
+    <div class="deep">解析顺序：按 Content-Length 读出字节 → 按 Content-Encoding 解压 → 按 Content-Type 解析；先解码、后解析，反过来就是乱码。</div>
+    <div class="tip">charset 是 Content-Type 的参数，不是 Content-Encoding；压缩编码与字符编码是两码事。</div>
+  </div>
+</section>
+
+<section class="slide" data-narration="完整例子第四组，MIME 类型判定表。MIME 全称多用途互联网邮件扩展，由 RFC 6838 定义，结构是大类斜杠子类型，可带参数，文本类缺省字符集 US-ASCII。表里四种高频类型各有默认处理：text/html 按 HTML 渲染、脚本可执行；application/json 当数据交给脚本或触发下载；image/svg+xml 带加 xml 后缀、作矢量图渲染且内部可含脚本；application/octet-stream 是未知二进制兜底，弹出另存为，是安全默认值。MDN 警告浏览器看 MIME 不看扩展名，配错就曲解内容。">
+  <div class="slide-head"><span class="sec">例子 · MIME</span><h3>四种高频 MIME 类型的判定表</h3></div>
+  <div class="slide-body">
+    <p class="lead"><strong>MIME 类型</strong>（MIME type，MDN 又称媒体类型 media type）由 Content-Type 声明，结构是 type/subtype，可带参数。</p>
+    <table class="small">
+      <thead><tr><th>Content-Type</th><th>归类</th><th>浏览器默认处理</th><th>声明错误时的风险</th></tr></thead>
+      <tbody>
+        <tr><td class="l"><strong>text/html</strong></td><td class="l">text 独立类型</td><td class="l">解析成 DOM 并渲染，脚本可执行</td><td class="l">纯文本被嗅探成 HTML，内容被执行</td></tr>
+        <tr><td class="l"><strong>application/json</strong></td><td class="l">application 独立类型</td><td class="l">当数据交给脚本或触发下载</td><td class="l">被嗅探成 HTML 时可控文本可能被执行</td></tr>
+        <tr><td class="l"><strong>image/svg+xml</strong></td><td class="l">image 独立类型，+xml 后缀</td><td class="l">作矢量图渲染，内部可含脚本</td><td class="l">顶层打开时脚本可执行，嵌入受限</td></tr>
+        <tr><td class="l"><strong>application/octet-stream</strong></td><td class="l">未知二进制兜底</td><td class="l">弹出另存为，不自动执行</td><td class="l">安全默认值：不猜用途就不会误当可执行</td></tr>
+      </tbody>
+    </table>
+    <div class="tip">text 类最常用参数 charset，缺省 US-ASCII；UTF-8 纯文本应写 text/plain;charset=UTF-8。浏览器看 MIME 而非扩展名。</div>
+  </div>
+</section>
+
+<section class="slide" data-narration="类型声明和浏览器猜测之间还有一场博弈。内容嗅探指类型缺失或被认为设错时，浏览器查看资源本身猜类型，各家行为不同。问题在于某些类型代表可执行内容，让浏览器自由猜就有安全风险，服务器用 nosniff 首部禁止嗅探。对照表显示：完全缺类型声明时，没有 nosniff 会读开头字节嗅探、可能猜成 HTML 或脚本执行，带 nosniff 则按保守类型处理、不升级成可执行类型；脚本错发成纯文本时，没有 nosniff 可能照常执行、掩盖配置错误，带 nosniff 直接拒绝执行。记住 nosniff 只是别猜按标签来，并不会修好写错的类型。">
+  <div class="slide-head"><span class="sec">专题 · 嗅探</span><h3>有无 nosniff：声明与猜测的对照</h3></div>
+  <div class="slide-body">
+    <table class="small">
+      <thead><tr><th>场景</th><th>没有 nosniff</th><th>带 X-Content-Type-Options: nosniff</th></tr></thead>
+      <tbody>
+        <tr><td class="l">完全缺 Content-Type</td><td class="l">读开头字节嗅探，可能猜成 HTML 或脚本并执行</td><td class="l">按保守类型处理，不升级成可执行类型</td></tr>
+        <tr><td class="l">脚本错发成 text/plain</td><td class="l">可能嗅出是脚本照常执行，掩盖配置错误</td><td class="l">声明与执行要求不符，拒绝执行</td></tr>
+        <tr><td class="l">API 返回 JSON 类型写错</td><td class="l">可能被当 HTML 渲染，引入脚本执行面</td><td class="l">按保守类型处理，不升级为可执行类型</td></tr>
+        <tr><td class="l">用户上传文件下载</td><td class="l">可能据内容猜测而尝试就地打开</td><td class="l">更可能走另存为，减少就地执行</td></tr>
+      </tbody>
+    </table>
+    <div class="deep"><strong>内容嗅探</strong>（MIME sniffing）：类型缺失或被认为设错时浏览器读字节猜类型，各家行为不同；nosniff 只是「别猜、按标签来」，不会自动修正写错的类型。</div>
+  </div>
+</section>
+
+<section class="slide" data-narration="把本讲的解析顺序正式推一遍，按空格逐步展开。第一步读起始行到回车换行结束，请求拆方法、目标、版本，响应拆版本、状态码、状态文本。第二步逐行解析首部键值对，顺手按作用域归到通用、请求、响应、表示四类，旧称实体首部描述格式的部分已并入表示首部。第三步遇空行立刻停止读首部，它是全流程转折点，没有它解析器不知道读到哪行算完。第四步按 Content-Length 或分块把主体读到边界。第五步先按 Content-Encoding 逆变换，再按 Content-Type 解析。顺序不能颠倒，先解码后解析，先定界后解释。下一页轮到你自己动手算一遍。">
+  <div class="slide-head"><span class="sec">推导</span><h3>解析流水线：先定界，后解释</h3></div>
+  <div class="slide-body">
+    <div class="step"><p><strong>① 读起始行</strong>：请求拆方法 / 目标 / 版本，响应拆版本 / 状态码 / 状态文本。</p></div>
+    <div class="step"><p><strong>② 逐行读首部</strong>：每行一个冒号分隔的键值对，按作用域归到通用 / 请求 / 响应 / 表示四类（旧称实体首部已并入表示首部）。</p></div>
+    <div class="step"><p><strong>③ 遇空行停止</strong>：它是首部结束、主体开始的唯一语法标志，全流程的转折点。</p></div>
+    <div class="step"><p><strong>④ 按长度或分块读主体</strong>：Content-Length 读固定字节，chunked 逐块读到 0 块。</p></div>
+    <div class="step"><div class="formula formula-concl">⑤ 先按 Content-Encoding 解码 → 再按 Content-Type 解析表示</div></div>
+    <p class="step-hint">按空格 / → 逐步展开推导</p>
+  </div>
+</section>
+
+<section class="slide" data-narration="轮到你了。屏幕上给了一段分块主体，请先自己逐块推一遍：块大小到底按什么进制读，三块分别拼出什么，累计多少字节，还有 0 块后面为什么非得再跟一个空行。建议你把推导过程写在纸上，别在脑子里打转。先暂停视频自己推一遍。推出来了吗？好，对答案。第一行 4 是十六进制 4 等于 4 字节，读 Welc；下一行 6 读 ome 加空格加 to 共 6 字节；再一行 4 读空格加 you 共 4 字节；拼起来是 Welcome to you，四加六加四等于十四字节；最后 0 表示主体结束，本例没有尾部首部，直接一个空行收尾。把块大小当成十进制的，回看逐块手算那页。">
+  <div class="slide-head"><span class="sec">演练</span><h3>读一段分块主体，自己把边界算出来</h3></div>
+  <div class="slide-body">
+    <div class="wire sm"><b>4</b>
+Welc
+<b>6</b>
+ome␠to
+<b>4</b>
+␠you
+<b>0</b>
+
+</div>
+    <div class="wire-cap">一段分块主体：␠ 表示一个空格。请先自己逐块推，再对答案。</div>
+    <div class="step"><p>① 块大小按<strong>十六进制</strong>读：4 / 6 / 4 / 0，本例数值与十进制相同。</p></div>
+    <div class="step"><p>② 三块拼出 <strong>Welcome to you</strong>，4 + 6 + 4 = <strong>14 字节</strong>，空格也占 1 字节。</p></div>
+    <div class="step"><p>③ 0 块表示主体结束；0 块后可跟尾部首部，本例无，一个空行收尾。</p></div>
+    <div class="pause"><div class="icon">✍️</div><div class="txt"><b>暂停推导</b><p>合上答案，自己写出块大小进制、拼接后的主体、总字节数，以及 0 块后为何还要空行。</p></div></div>
+    <p class="step-hint">按空格 / → 逐步揭示答案</p>
+  </div>
+</section>
+
+<section class="slide" data-narration="按本课的固定动作，把 MDN 工程口径和 RFC 规范口径对一次。MDN 说报文由起始行、首部、空行、主体四部分组成，RFC 9112 用 ABNF 逐字节约束顺序和空行位置，写解析器报错要回到这里。请求行三要素与四种目标，9112 定成语法产生式，9110 定义方法语义。状态码五类与逐码语义在 9110，它还定义安全与幂等属性，是判断能否自动重试、能否缓存的权威依据。分块编码也在 9112，块大小十六进制。类型注册与命名看 6838。嗅探与 nosniff 归 Fetch 规范和浏览器实现，不在核心 HTTP RFC。">
+  <div class="slide-head"><span class="sec">规范对照</span><h3>MDN 的说法 → RFC 怎么写 → 为什么值得知道</h3></div>
+  <div class="slide-body">
+    <table class="small">
+      <thead><tr><th>MDN 的说法</th><th>RFC 怎么写</th><th>为什么值得知道</th></tr></thead>
+      <tbody>
+        <tr><td class="l">报文由起始行、首部、空行、主体四部分组成</td><td class="l">RFC 9112 用 ABNF 逐字节约束顺序与空行 CRLF 位置</td><td class="l">写解析器时据此定位报错，空行缺失是语法违规</td></tr>
+        <tr><td class="l">请求行三要素、请求目标四种形式</td><td class="l">RFC 9112 把目标定为四种语法产生式，RFC 9110 定义方法语义</td><td class="l">不会发明第五种写法，懂 HTTP/2 改编码不改语义</td></tr>
+        <tr><td class="l">状态码首位分五类，常见 200、404、302</td><td class="l">RFC 9110 建注册表、逐码定语义，并定义 safe 与 idempotent 属性</td><td class="l">能否自动重试、能否缓存的权威依据</td></tr>
+        <tr><td class="l">长度未知用 chunked，0 块结束</td><td class="l">RFC 9112 定义 chunk = 十六进制 chunk-size + CRLF + data + CRLF</td><td class="l">手算分块边界、排查多一个 CRLF 就错位</td></tr>
+        <tr><td class="l">MIME 形如 type/subtype，IANA 跟踪</td><td class="l">RFC 6838 定义注册树、命名语法与 +xml / +json 结构化后缀</td><td class="l">懂厂商类型来路，为第 3 讲内容协商打底</td></tr>
+        <tr><td class="l">类型缺失会嗅探，nosniff 可禁止</td><td class="l">判定算法不在核心 HTTP RFC，由 Fetch 规范与浏览器实现定义</td><td class="l">排查时用对文档：语法 9112、语义 9110、类型 6838</td></tr>
+      </tbody>
+    </table>
+    <div class="deep">MDN 告诉你「是什么」，RFC 告诉你「精确到字节是什么」；写解析器或判重试时，最终要落到右列规范字句。</div>
+  </div>
+</section>
+
+<section class="slide" data-narration="扫三个最常见的雷。第一，以为空行只是排版、删掉也能解析，其实它是首部结束、主体开始的唯一语法标志，缺了它接收方会把主体第一行当又一个首部，整条报文全乱。第二，把 Content-Length 随便写或写小于实际字节，接收方按声明读完就停，多出的字节会被误当下一条报文的起始行，造成粘包式错乱；写大于实际则一直等不来的字节、挂到超时，根因是 TCP 是字节流、长度是唯一依据。第三，按文件后缀判断类型，这把 URL 名字当成内容声明，协商返回不同表示时立刻失效；还有把 charset 当 Content-Encoding，压缩编码与字符编码是两码事。">
+  <div class="slide-head"><span class="sec">避坑</span><h3>三个把边界与类型混为一谈的误解</h3></div>
+  <div class="slide-body">
+    <div class="trap">❌ <strong>空行只是排版，删掉也能解析</strong><br>✅ 它是首部结束、主体开始的唯一语法标志；缺了它，主体第一行会被当成又一个首部，整条报文全乱。</div>
+    <div class="trap">❌ <strong>Content-Length 随便写、块大小按十进制读</strong><br>✅ 长度写小会粘包、写大会挂到超时，因为 TCP 是字节流、长度是唯一边界；chunked 块大小是十六进制，1A 是 26 不是 10。</div>
+    <div class="trap">❌ <strong>按文件后缀判断类型，把 charset 当 Content-Encoding</strong><br>✅ 浏览器看 MIME 不看扩展名，同一 URL 可协商出不同表示；charset 是 Content-Type 的参数，压缩编码与字符编码两码事。</div>
+  </div>
+</section>
+
+<section class="slide" data-narration="这一讲和下一讲怎么分工，说清楚才不会重复用功。本讲负责一段报文的形状：四段结构、起始行、首部作用域、状态码五类、主体两种定界，以及类型声明和内容嗅探，回答字节从哪读、到哪停、按什么解析。第 3 讲往前走，讲同一个 URL 凭什么返回不同表示：Accept 系列首部与 q 值怎么打分，服务器驱动与代理驱动的协商，编码的区别，Vary 怎么进缓存键，以及为什么按 User-Agent 猜能力是反模式、客户端提示怎么取代。本讲立的类型、编码和首部作用域，正是第 3 讲挑表示的原料。下一讲问的是该给哪一种表示。">
+  <div class="slide-head"><span class="sec">接口</span><h3>第 2 讲拆报文，第 3 讲选表示</h3></div>
+  <div class="slide-body">
+    <table>
+      <thead><tr><th></th><th>第 2 讲</th><th>第 3 讲</th></tr></thead>
+      <tbody>
+        <tr><td class="l"><strong>粒度</strong></td><td class="l">一段报文的每一行与每个字节</td><td class="l">同一个 URL 的多种表示</td></tr>
+        <tr><td class="l"><strong>核心对象</strong></td><td class="l">四段结构、状态码、定界、MIME、嗅探</td><td class="l">Accept 与 q 值、编码、Vary、Client Hints</td></tr>
+        <tr><td class="l"><strong>回答什么</strong></td><td class="l">从哪读、到哪停、按什么解析</td><td class="l">该给哪一种表示、选择权在谁手里</td></tr>
+      </tbody>
+    </table>
+    <div class="tip">钩子：报文拆完了，下一讲问的是同一个 URL 凭什么返回不同表示；本讲立的 Content-Type、Content-Encoding 正是协商时挑表示的原料。</div>
+  </div>
+</section>
+
+<section class="slide" data-narration="用三句话收束第 2 讲。解决什么：在 TCP 只搬运字节、没有消息边界的前提下，为一次交换建立固定四段结构，让接收方知道从哪读、到哪停、按什么解析，把第 1 讲抽象的交换报文变成可逐行拆开的对象。核心机制：起始行给意图或结果，首部带元数据，空行划边界，Content-Length 或 chunked 定界主体，Content-Type 用 MIME 声明身份、nosniff 防嗅探绕过。承上启下：第 1 讲给会话全景，本讲明细化报文，第 3 讲讲同一资源如何按 Accept 给出不同表示。请记住口诀，先定界后解释，先解码后解析。">
+  <div class="slide-head"><span class="sec">小结</span><h3>三句话讲完第 2 讲</h3></div>
+  <div class="slide-body">
+    <div class="chain">
+      <div class="link"><span class="no">1</span><span class="txt"><strong>解决什么</strong>：给 TCP 无边界的字节流建立固定四段结构，让接收方知道从哪读、到哪停、按什么解析</span></div>
+      <div class="link"><span class="no">2</span><span class="txt"><strong>核心机制</strong>：起始行 + 首部 + 空行 + 主体；长度或分块定界；Content-Type 声明身份、nosniff 防嗅探</span></div>
+      <div class="link"><span class="no">3</span><span class="txt"><strong>承上启下</strong>：第 1 讲给会话全景，本讲明细化报文，第 3 讲讲同一资源如何给出不同表示</span></div>
+    </div>
+    <div class="formula formula-concl">先定界、后解释；先解码、后解析 —— 合上书也要能默写</div>
+  </div>
+</section>
+
+<section class="slide slide-cover" data-narration="第 2 讲到这儿结束。给你留四项毕业挑战，合上书拿一张纸完成：第一，默写请求与响应的四段结构，各写一条含空行与主体的完整报文；第二，写出 1xx 到 5xx 五类分工，各举一码并说清下一步谁行动；第三，手算那段 html 标签主体的 19 字节边界，再逐块解析分块、说清块大小为何按十六进制读；第四，对比四种高频类型的处理，并说明 nosniff 的作用。全做出来，再点讲义底部的完成按钮，让复习提醒开始计时。下一讲，看同一个 URL 凭什么给出不同表示。">
+  <div class="kicker">第 2 讲 结束</div>
+  <h1>先定界，后解释</h1>
+  <div class="sub">毕业挑战：合上书，拿一张纸</div>
+  <div class="divider"></div>
+  <div class="meta">
+    ☑ 默写四段结构并各写一条含空行与主体的完整报文　　☑ 写出 1xx–5xx 五类分工，各举一码并说清谁行动<br>
+    ☑ 手算 19 字节主体边界并逐块解析分块、说清十六进制　　☑ 对比四种 MIME 类型处理并说明 nosniff 作用<br><br>
+    下一讲 · 第 3 讲 内容协商、压缩与客户端提示：同一个 URL 凭什么给出不同表示
+  </div>
+</section>
+
+  <!-- 页脚：brand 改为本章标题；总页数改 pagenum 初值 -->
+  <div id="footer">
+    <span class="brand">第2讲 HTTP 消息与 MIME 类型 · HTTP 精通 课件　<a class="to-lec" href="../http-guide/index.html">讲义首页 ↗</a></span>
+    <span id="pagenum">1 / 1</span>
+  </div>
+
+  <!-- 导航 -->
+  <div class="nav">
+    <button id="prev" title="上一页 (←)">‹</button>
+    <button id="next" title="下一页 (→ / 空格)">›</button>
+  </div>
+  <div id="hint">← → 翻页 · 空格下一页 · 推导页逐步显示 · 点击左右半屏翻页</div>
+
+</div>
+
+<!-- mermaid 本地引用，保证离线可用；初始化参数全套课件统一，勿改 -->
+<script src="assets/mermaid.min.js"></script>
+<script>
+mermaid.initialize({
+  startOnLoad: false,   // 必须为 false：display:none 的隐藏页渲染会得到 0 宽高的退化 SVG，
+                        // 改为页面激活时懒渲染（见 renderMermaid）
+  theme: "base",
+  themeVariables: {
+    primaryColor: "#ebf8ff",
+    primaryBorderColor: "#2b6cb0",
+    primaryTextColor: "#1a365d",
+    lineColor: "#718096",
+    fontFamily: "-apple-system, PingFang SC, sans-serif",
+    fontSize: "15px"
+  },
+  flowchart: { curve: "linear", htmlLabels: false }
+});
+</script>
+<script>
+(function(){
+  const slides = Array.from(document.querySelectorAll('.slide'));
+  const total = slides.length;
+  let idx = 0;
+
+  const params = new URLSearchParams(location.search);
+  const startSlide = parseInt(params.get('slide'), 10);
+  if (params.get('autohide') === '1') document.body.classList.add('autohide');
+  if (!isNaN(startSlide) && startSlide >= 1 && startSlide <= total) idx = startSlide - 1;
+
+  const progress = document.getElementById('progress');
+  const pagenum = document.getElementById('pagenum');
+  const prevBtn = document.getElementById('prev');
+  const nextBtn = document.getElementById('next');
+
+  // 推导分步：每页记住已展开的步数；autohide（截图）模式下 CSS 强制全显
+  const stepState = new Map();
+  function stepsOf(i){ return Array.from(slides[i].querySelectorAll('.step')); }
+  function applySteps(){
+    stepsOf(idx).forEach((el, k)=> el.classList.toggle('on', k < (stepState.get(idx) || 0)));
+  }
+  // 前进一步：先展开本页下一步，全部展开后才翻页
+  function forward(){
+    const steps = stepsOf(idx);
+    const shown = stepState.get(idx) || 0;
+    if (shown < steps.length){ stepState.set(idx, shown + 1); applySteps(); return; }
+    go(idx + 1);
+  }
+  // 后退一步：先收起本页最后一步，收完才回上一页
+  function backward(){
+    const steps = stepsOf(idx);
+    const shown = stepState.get(idx) || 0;
+    if (shown > 0){ stepState.set(idx, shown - 1); applySteps(); return; }
+    go(idx - 1);
+  }
+
+  // mermaid 懒渲染：只在页面激活（有真实宽高）时渲染该页的图，渲染后打 data-done 防重复
+  function renderMermaid(slide){
+    if (typeof mermaid === 'undefined') return;
+    const nodes = Array.from(slide.querySelectorAll('.mermaid:not([data-done])'));
+    if (!nodes.length) return;
+    nodes.forEach(n => n.setAttribute('data-done', ''));
+    mermaid.run({ nodes }).catch(err => {
+      nodes.forEach(n => n.removeAttribute('data-done'));
+      console.error('mermaid 渲染失败：', err);
+    });
+  }
+
+  function render(){
+    slides.forEach((s,i)=> s.classList.toggle('active', i===idx));
+    progress.style.width = ((idx+1)/total*100) + '%';
+    pagenum.textContent = (idx+1) + ' / ' + total;
+    prevBtn.disabled = (idx===0);
+    nextBtn.disabled = (idx===total-1);
+    applySteps();
+    renderMermaid(slides[idx]);
+  }
+  function go(n){ idx = Math.max(0, Math.min(total-1, n)); render(); }
+
+  prevBtn.addEventListener('click', e=>{ e.stopPropagation(); backward(); });
+  nextBtn.addEventListener('click', e=>{ e.stopPropagation(); forward(); });
+
+  document.addEventListener('keydown', e=>{
+    if(e.key==='ArrowRight'||e.key===' '||e.key==='PageDown'){ e.preventDefault(); forward(); }
+    else if(e.key==='ArrowLeft'||e.key==='PageUp'){ e.preventDefault(); backward(); }
+    else if(e.key==='Home'){ stepState.set(idx, 0); go(0); }
+    else if(e.key==='End'){ go(total-1); }
+  });
+
+  document.getElementById('stage').addEventListener('click', e=>{
+    if(e.target.closest('.nav') || e.target.closest('a')) return;
+    const x = e.clientX;
+    if(x < window.innerWidth*0.5) backward(); else forward();
+  });
+
+  function fit(){
+    const s = Math.min(window.innerWidth/1280, window.innerHeight/720);
+    document.getElementById('stage').style.transform = 'translate(-50%,-50%) scale(' + s + ')';
+  }
+  window.addEventListener('resize', fit);
+  fit();
+  render();
+})();
+</script>
+</body>
+</html>

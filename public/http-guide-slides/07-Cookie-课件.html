@@ -1,0 +1,679 @@
+<!DOCTYPE html>
+<!--
+  ======================================================================
+  HTTP 精通 · 课件外壳（deck-shell.html）
+  由 build-slides.mjs 把 slides/NN.html 注入幻灯片区域，
+  输出 public/http-guide-slides/NN-xxx-课件.html。
+  骨架来自站内通用 1280×720 课件模板；本套额外增加 .wire 协议报文块。
+  每页必须写 data-narration（180–280 字口语稿，禁半角双引号、禁换行、禁小于号）。
+  ======================================================================
+-->
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第7讲 Cookie：给无状态协议加上记忆 · HTTP 精通 课件</title>
+<script>
+window.MathJax = {
+  tex: {
+    inlineMath: [['$', '$'], ['\\(', '\\)']],
+    displayMath: [['$$', '$$'], ['\\[', '\\]']],
+    processEscapes: true,
+    tags: 'none'
+  },
+  svg: { fontCache: 'global', scale: 1.05 },
+  options: { skipHtmlTags: ['script','noscript','style','textarea','pre','code'] }
+};
+</script>
+<!-- MathJax 本地引用（tex-svg 单文件全量组件，约2MB，自带字体数据），file:// 与断网均可用 -->
+<script src="assets/tex-svg.js" async></script>
+<style>
+  :root{
+    --primary:#1a365d; --accent:#2b6cb0; --accent-light:#ebf8ff; --accent-border:#bee3f8;
+    --text:#2d3748; --muted:#718096; --border:#e2e8f0; --bg-light:#f7fafc;
+    --success:#38a169; --danger:#e53e3e; --warning:#dd6b20; --warn-bg:#fffaf0;
+  }
+  *{margin:0;padding:0;box-sizing:border-box;}
+  html,body{width:100%;height:100%;overflow:hidden;background:#0f172a;}
+  body{
+    font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Hiragino Sans GB","Microsoft YaHei","WenQuanYi Micro Hei",sans-serif;
+    color:var(--text);
+  }
+  #stage{
+    position:absolute; left:50%; top:50%;
+    width:1280px; height:720px;
+    transform:translate(-50%,-50%) scale(1);
+    transform-origin:center center;
+    background:#ffffff;
+    box-shadow:0 0 40px rgba(0,0,0,.4);
+    overflow:hidden;
+  }
+  .slide{
+    position:absolute; inset:0;
+    padding:36px 60px 52px;
+    display:none;
+    flex-direction:column;
+    background:#ffffff;
+    opacity:0;
+    transition:opacity .35s ease;
+  }
+  .slide.active{ display:flex; opacity:1; }
+
+  #progress{ position:absolute; top:0; left:0; height:6px; background:var(--accent); width:0; z-index:50; transition:width .35s; }
+
+  /* 封面 / 结束页 */
+  .slide-cover{ justify-content:center; align-items:center; text-align:center; }
+  .slide-cover{ background:linear-gradient(135deg,#1a365d 0%,#2b6cb0 100%); color:#fff; }
+  .slide-cover .kicker{ font-size:22px; letter-spacing:6px; opacity:.85; margin-bottom:18px;}
+  .slide-cover h1{ font-size:64px; font-weight:800; line-height:1.2; margin-bottom:22px; letter-spacing:2px;}
+  .slide-cover .sub{ font-size:26px; opacity:.92; margin-bottom:36px;}
+  .slide-cover .meta{ font-size:19px; opacity:.85; line-height:2;}
+  .slide-cover .divider{ width:160px;height:5px;background:#fff;opacity:.6;margin:0 auto 30px;border-radius:3px;}
+  .slide-cover .question{ font-size:24px; background:rgba(255,255,255,.12); border:1px solid rgba(255,255,255,.35); border-radius:12px; padding:12px 28px; margin-bottom:30px;}
+
+  /* 页头：结论式标题 */
+  .slide-head{ display:flex; align-items:baseline; gap:16px; border-bottom:3px solid var(--accent); padding-bottom:9px; margin-bottom:12px;}
+  .slide-head .sec{ font-size:17px; color:var(--accent); font-weight:700; background:var(--accent-light); padding:3px 11px; border-radius:6px; white-space:nowrap;}
+  .slide-head h3{ font-size:29px; color:var(--primary); font-weight:700;}
+  .slide-body{ flex:1; display:flex; flex-direction:column; justify-content:center; min-height:0; }
+
+  p{ font-size:21px; line-height:1.65; margin-bottom:8px;}
+  .lead{ font-size:23px; color:#374151; line-height:1.75;}
+  ul,ol{ margin:0 0 8px 26px; font-size:21px; line-height:1.7;}
+  li{ margin-bottom:5px;}
+  strong{ color:var(--primary); }
+
+  /* 公式块 */
+  .formula{ background:var(--accent-light); border-left:5px solid var(--accent); border-radius:0 10px 10px 0; padding:9px 22px; margin:9px 0; text-align:center; font-size:23px;}
+  .formula-concl{ background:#fffaf0; border-left:5px solid var(--warning);}
+  .MathJax{ font-size:1.05em !important; }
+  mjx-container[display="true"]{ margin:6px 0 !important; }
+
+  /* 表格 */
+  table{ width:100%; border-collapse:collapse; margin:10px 0; font-size:20px;}
+  th{ background:var(--accent); color:#fff; padding:8px 12px; text-align:center; font-weight:600;}
+  td{ padding:7px 12px; border:1px solid var(--border); text-align:center; vertical-align:middle;}
+  tr:nth-child(even) td{ background:var(--bg-light);}
+  td.l{ text-align:left; }
+  table.small{ font-size:18px; }
+  table.small td, table.small th{ padding:6px 10px; }
+
+  /* 组件 */
+  .card{ background:var(--accent-light); border:1px solid var(--accent-border); border-radius:12px; padding:12px 20px; margin:10px 0;}
+  .tip{ background:#ebf8ff; border-left:5px solid var(--accent); border-radius:0 10px 10px 0; padding:10px 20px; margin:10px 0; font-size:20px; color:#2c5282;}
+  .deep{ background:#f0fff4; border-left:5px solid var(--success); border-radius:0 10px 10px 0; padding:10px 20px; margin:10px 0; font-size:20px; color:#22543d;}
+  .warn{ background:var(--warn-bg); border-left:5px solid var(--warning); border-radius:0 10px 10px 0; padding:10px 20px; margin:10px 0; font-size:20px; color:#744210;}
+  .trap{ background:#fef2f2; border-left:5px solid var(--danger); border-radius:0 10px 10px 0; padding:10px 20px; margin:10px 0; font-size:20px; color:#7f1d1d;}
+
+  .pause{
+    background:var(--warn-bg); border:2px dashed var(--warning); border-radius:14px;
+    padding:10px 22px; margin:10px 0; display:flex; align-items:center; gap:16px;
+  }
+  .pause .icon{ font-size:36px; line-height:1; }
+  .pause .txt b{ color:var(--warning); font-size:21px; }
+  .pause .txt p{ font-size:18px; color:#744210; margin:3px 0 0; }
+
+  .cols{ display:flex; gap:28px; align-items:stretch; }
+  .col{ flex:1; min-width:0; }
+
+  /* 推导分步：仅互动模式隐藏，截图(autohide)模式全部可见——此规则不可删 */
+  .step{ opacity:0; transform:translateY(8px); transition:opacity .3s ease, transform .3s ease; }
+  .step.on{ opacity:1; transform:none; }
+  body.autohide .step{ opacity:1 !important; transform:none !important; }
+  .step-hint{ font-size:14px; color:var(--muted); margin-top:4px;}
+  body.autohide .step-hint{ display:none; }
+
+  /* HTTP 精通课件专用：协议报文原文块 */
+  .wire{background:#0f172a;color:#e2e8f0;border-radius:10px;padding:12px 18px;margin:8px 0;
+    font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:17px;line-height:1.55;
+    white-space:pre-wrap;overflow-wrap:anywhere;}
+  .wire b{color:#7dd3fc;font-weight:700;}
+  .wire i{color:#fde68a;font-style:normal;}
+  .wire em{color:#86efac;font-style:normal;}
+  .wire.sm{font-size:15px;line-height:1.45;}
+  .wire-cap{font-size:15px;color:var(--muted);margin:0 0 8px;}
+  .to-lec{color:#bee3f8;text-decoration:none;font-size:15px;margin-left:12px;}
+  .to-lec:hover{text-decoration:underline;}
+  .badge{display:inline-block;background:var(--accent-light);color:var(--accent);border:1px solid var(--accent-border);
+    border-radius:6px;padding:2px 10px;font-size:17px;font-weight:700;margin-right:8px;}
+
+  /* 因果链 */
+  .chain{ margin:6px 0; }
+  .chain .link{ display:flex; align-items:center; gap:14px; margin:6px 0;}
+  .chain .no{ width:34px; height:34px; border-radius:50%; background:var(--accent); color:#fff; font-size:18px; font-weight:700; display:flex; align-items:center; justify-content:center; flex-shrink:0;}
+  .chain .txt{ font-size:21px; line-height:1.5;}
+  .chain .txt strong{ color:var(--primary); }
+
+  /* mermaid 容器：高度封顶，防止溢出 720px 舞台 */
+  .mmd{ background:var(--bg-light); border:1px solid var(--border); border-radius:12px; padding:10px 14px; display:flex; justify-content:center; align-items:center; margin:8px 0;}
+  .mmd .mermaid{ display:flex; justify-content:center; width:100%; visibility:hidden; }
+  .mmd .mermaid[data-done]{ visibility:visible; }
+  .mmd .mermaid svg{ max-width:100%; height:auto; max-height:230px; }
+  .mmd.mmd-tall .mermaid svg{ max-height:330px; }
+  .mmd.mmd-sm svg{ max-height:150px; }
+  .mmd-row{ display:flex; gap:18px; }
+  .mmd-row .mmd{ flex:1; flex-direction:column; }
+  .mmd .cap{ font-size:17px; color:var(--muted); margin-top:6px; text-align:center;}
+  .mmd .cap b{ color:var(--text); }
+
+  #footer{ position:absolute; bottom:0; left:0; right:0; height:40px; display:flex; align-items:center; justify-content:space-between; padding:0 30px; font-size:15px; color:#94a3b8; background:rgba(247,250,252,.85); border-top:1px solid var(--border); z-index:40;}
+  #footer .brand{ font-weight:600; color:var(--accent); }
+
+  .nav{ position:absolute; bottom:48px; right:40px; display:flex; gap:12px; z-index:45;}
+  .nav button{ width:54px; height:54px; border-radius:50%; border:none; background:var(--accent); color:#fff; font-size:24px; cursor:pointer; box-shadow:0 3px 10px rgba(43,108,176,.4); display:flex; align-items:center; justify-content:center;}
+  .nav button:hover{ background:var(--primary); }
+  .nav button:disabled{ background:#cbd5d0; cursor:default; box-shadow:none;}
+
+  #hint{ position:absolute; bottom:48px; left:40px; font-size:14px; color:#94a3b8; z-index:45;}
+
+  body.autohide #progress, body.autohide #footer, body.autohide .nav, body.autohide #hint{ display:none !important; }
+</style>
+</head>
+<body>
+<div id="stage">
+
+  <div id="progress"></div>
+
+<!-- 第 7 讲：Cookie：给无状态协议加上记忆 -->
+<section class="slide slide-cover active" data-narration="欢迎回到 HTTP 精通。第 6 讲收了尾，现在偿还第 1 讲那笔账：HTTP 无状态，服务器处理完一条请求就忘干净，可登录态、购物车偏要跨请求记住。本讲回答封面上这个问题：cookie 怎么给无状态协议加上记忆，又为什么成了安全重灾区。学完你要能走通 Set-Cookie 到 Cookie 的完整往返，用 Domain 和 Path 判定某请求带不带某枚 cookie，说清 Secure、HttpOnly、SameSite 各挡哪类攻击。对应的 MDN 原文是 HTTP Cookie 一篇。我们先看本讲在十二讲主线上的位置。">
+  <div class="kicker">第 7 讲 · 第③组 状态与安全</div>
+  <h1>Cookie：给无状态协议加上记忆</h1>
+  <div class="sub">服务器把一小段状态托付给浏览器保管</div>
+  <div class="question">cookie 是怎么让无状态协议记住一个用户的，它又为什么成了安全重灾区？</div>
+  <div class="meta">
+    配套讲义：HTTP 精通 第 7 讲 · 依据 MDN《HTTP Cookie》<br>
+    ← → 翻页 · 推导页按空格逐步展开
+  </div>
+</section>
+
+<section class="slide" data-narration="承接封面，先看本讲在十二讲主线上的位置。前三讲把一次会话拆成阶段、拆开报文、讲清表示，第四到第六讲解决怎么传得更快，也就是连接复用、缓存和条件请求。从本讲起进入第③组状态与安全：第七讲让无状态协议记住用户，第八讲用挑战响应证明你是你，第九讲划出跨源读取的边界，第十讲反过来限制页面能做什么。图上高亮的就是第七讲，它是这四讲的起点，先把状态造出来，后面证明身份、划边界才有对象可谈。这条链也牵回第一讲：无状态留下的债，今天正式开始还。接下来把本讲自己的因果链摊开。">
+  <div class="slide-head"><span class="sec">定位</span><h3>第 7 讲开启第③组：状态与安全</h3></div>
+  <div class="slide-body">
+    <div class="mmd mmd-sm">
+      <div class="mermaid">
+flowchart LR
+  A["第1到3讲 基础与表示"] --> B["第4到6讲 连接与缓存"] --> C["第7讲 Cookie 给无状态加记忆"]:::here --> D["第8到10讲 认证 CORS 与页面策略"] --> E["第11到12讲 中间层与重定向"]
+  C -.-> F["第8讲 身份验证"]
+  classDef here fill:#2b6cb0,color:#ffffff,stroke:#1a365d,stroke-width:3px
+      </div>
+    </div>
+    <p style="text-align:center;">本讲是状态与安全四讲的<strong>第一环</strong>：先造出状态，再证明身份、划边界。</p>
+    <div class="tip">对应的 MDN 原文：Cookies。高亮节点就是本讲。</div>
+  </div>
+</section>
+
+<section class="slide" data-narration="本讲主线是一条六环因果链，也是目录。一，服务器用 Set-Cookie 把状态压成键值下发；二，浏览器收好存在本地；三，此后每次请求都由浏览器在 Cookie 首部主动带回；四，带不带不无条件，Domain、Path、SameSite 三道闸门先做作用域匹配，过不了就不发；五，服务器读标识查会话，把散落的请求串成同一用户；六是伏笔，属性一旦配错，这套记忆会反过来变成攻击面。前五环是功能，最后一环是后半段重心。先看个具体场景，逼出为什么非得有它。">
+  <div class="slide-head"><span class="sec">主线</span><h3>cookie 的六环因果链</h3></div>
+  <div class="slide-body">
+    <div class="chain">
+      <div class="link"><span class="no">1</span><span class="txt"><strong>服务器下发 Set-Cookie</strong>：把状态压成键值</span></div>
+      <div class="link"><span class="no">2</span><span class="txt"><strong>浏览器保存 cookie</strong>：凭据收在本地</span></div>
+      <div class="link"><span class="no">3</span><span class="txt"><strong>后续请求带 Cookie</strong>：浏览器主动交回</span></div>
+      <div class="link"><span class="no">4</span><span class="txt"><strong>作用域匹配决定是否发</strong>：Domain / Path / SameSite 三闸门</span></div>
+      <div class="link"><span class="no">5</span><span class="txt"><strong>服务器恢复用户状态</strong>：读标识查会话</span></div>
+      <div class="link"><span class="no">6</span><span class="txt"><strong>属性配错反成攻击面</strong>：记忆机制变成风险</span></div>
+    </div>
+    <div class="tip">cookie 的主线：状态从服务器转移到客户端并在每次请求显式带回；属性配置不当时，这套记忆机制反过来变成攻击面。</div>
+  </div>
+</section>
+
+<section class="slide" data-narration="先用一个场景逼出问题：你登录后关掉标签页，第二天打开它仍认得你；加进购物车的商品，跳到结算页还在。可协议层是另一幅图景，HTTP 无状态，第二条请求到来时，服务器没有任何依据判断它和上一条来自同一个人。左边是协议的事实，右边是应用的期待，中间隔着一道缝。第 1 讲把它记成一笔债，第 6 讲讲完条件请求，现在正式偿还。补缝的办法不是改协议，而是在协议之上造一层记忆，把状态压成一小段键值交给浏览器，每次请求显式交回，HTTP 一点没变。下一页给这套机制一个准确定义。">
+  <div class="slide-head"><span class="sec">动机</span><h3>「服务器忘干净」与「应用要记住」隔着一道缝</h3></div>
+  <div class="slide-body">
+    <div class="cols">
+      <div class="col"><div class="card">🧊 <strong>协议的事实</strong><br>无状态：请求之间彼此独立，服务器不保留上一次的任何信息。</div></div>
+      <div class="col"><div class="card">🛒 <strong>应用的期待</strong><br>登录态、购物车、主题偏好，都要跨多次请求延续。</div></div>
+    </div>
+    <div class="tip">💡 本讲方案：把状态压成一小段键值交给浏览器，每次请求由浏览器显式带回；协议本身不变。</div>
+  </div>
+</section>
+
+<section class="slide" data-narration="给这套机制下定义。Cookie 指服务器发到浏览器、保存在本地的一小块数据，下次向同一服务器发请求时会被带上。拆成部件看：服务器用 Set-Cookie 下发一张写着编号的凭条，浏览器收好，此后每次请求用 Cookie 首部交回，服务器不记任何人，只读编号查会话。所以状态不在服务器的连接记忆里，而在浏览器手上，每次显式带回。cookie 是架在 HTTP 之上的能力，不是协议语义的一部分；这个载体在客户端、服务器只校验的分工，是后面七个属性的总纲。按生存期它还分两大家族，下一页接着拆。">
+  <div class="slide-head"><span class="sec">定义</span><h3>Cookie：状态在浏览器手上，服务器只校验</h3></div>
+  <div class="slide-body">
+    <div class="cols">
+      <div class="col"><div class="card">📤 <strong>下发与保存</strong><br>服务器用 Set-Cookie 写一张身份凭条，浏览器把它存进 cookie 罐。</div></div>
+      <div class="col"><div class="card">📥 <strong>带回与恢复</strong><br>后续请求由浏览器用 Cookie 首部交回，服务器读编号恢复状态。</div></div>
+    </div>
+    <div class="formula formula-concl">状态不在服务器的连接记忆里，而在浏览器手上，每次请求显式带回</div>
+    <div class="deep">术语首现：<strong>Cookie</strong>（HTTP cookie，也称 Web Cookie）是一小块数据；<strong>Set-Cookie 首部</strong>（Set-Cookie response header）与 <strong>Cookie 首部</strong>（Cookie request header）是承载它的两个首部。cookie 是架在 HTTP 之上的能力，不是协议语义的一部分。</div>
+  </div>
+</section>
+
+<section class="slide" data-narration="按生存期 cookie 分两大家族。会话 cookie 不设过期时间，关闭当前会话就删；但 MDN 提醒，一些浏览器重启时用会话恢复把会话续上，可能把它无限延长。持久 cookie 靠两个属性定寿命：Expires 给 GMT 绝对日期，Max-Age 给相对秒数，到期由浏览器清除。屏幕上一条响应并列下发两个 Set-Cookie，theme=dark 没有过期时间是会话 cookie，带 Expires 写到 2026 年 10 月 21 日的是持久 cookie。MDN 把用途归成会话状态管理、个性化设置、浏览器行为跟踪三类，第三类是隐私争议源头。光有赤裸键值还不够，下一页看一组最短往返把过程钉死。">
+  <div class="slide-head"><span class="sec">定义 · 生存期</span><h3>会话 cookie 与持久 cookie：活多久</h3></div>
+  <div class="slide-body">
+    <div class="cols">
+      <div class="col"><div class="card">🕐 <strong>会话 cookie</strong>（session cookie）<br>不设过期时间，会话结束即删；会话恢复可能把它延长。</div></div>
+      <div class="col"><div class="card">📅 <strong>持久 cookie</strong>（persistent cookie）<br>靠 Expires 绝对日期或 Max-Age 相对秒数指定寿命。</div></div>
+    </div>
+    <div class="wire sm"><i>Set-Cookie</i>: theme=dark; Path=/
+<i>Set-Cookie</i>: id=a3fWa; Expires=Wed, 21 Oct 2026 07:28:00 GMT; Path=/</div>
+    <div class="wire-cap">两条 Set-Cookie 并列：第一条无过期时间是会话 cookie，第二条带 Expires 是持久 cookie。一条响应可以同时下发多个 Set-Cookie。</div>
+    <div class="deep">MDN 归纳三类用途：会话状态管理、个性化设置、浏览器行为跟踪；第三类正是隐私争议的源头。</div>
+  </div>
+</section>
+
+<section class="slide" data-narration="先看一组最短往返，把状态存在谁手上钉死。第一次是 GET /dashboard，服务器不知道来者是谁，于是在 200 响应里用 Set-Cookie 下发 sid=9f3a2b，带 Path=/ 和 HttpOnly，回复请登录，协议并不要求服务器记住这次下发。第二次是 POST /login，浏览器主动把这枚 sid 放进 Cookie 首部带回，主体是 user=alice 和 pass=correct。服务器读到编号，才知道这次登录属于刚才那位访客。盯住两条请求的关系：状态在浏览器手上，每次显式交回，应用自己造出一层记忆，HTTP 一点没变。可这样一枚没写范围、没写有效期的白条远远不够，下一页看完整的七个开关。">
+  <div class="slide-head"><span class="sec">例子 · 报文</span><h3>最短往返：状态到底存在谁手上</h3></div>
+  <div class="slide-body">
+    <div class="wire sm"><b>GET /dashboard HTTP/1.1</b>
+<i>Host</i>: app.example.com
+<i>Accept</i>: text/html
+
+<b>HTTP/1.1 200 OK</b>
+<i>Content-Type</i>: text/html; charset=utf-8
+<i>Set-Cookie</i>: sid=9f3a2b; Path=/; HttpOnly
+<i>Content-Length</i>: 96
+
+<em>请登录。</em></div>
+    <div class="wire-cap">第一次请求：服务器在 200 响应里用 Set-Cookie 下发会话标识 sid=9f3a2b，回复请登录。协议不要求服务器记住这次下发动作。</div>
+    <div class="wire sm"><b>POST /login HTTP/1.1</b>
+<i>Host</i>: app.example.com
+<i>Cookie</i>: sid=9f3a2b
+<i>Content-Type</i>: application/x-www-form-urlencoded
+<i>Content-Length</i>: 27
+
+<em>user=alice&amp;pass=correct</em></div>
+    <div class="wire-cap">第二次请求：浏览器主动把 sid=9f3a2b 放进 Cookie 首部带回。服务器读到它，才知道这次登录属于刚才那位访客；主体用和号连接两个字段。</div>
+  </div>
+</section>
+
+<section class="slide" data-narration="这是本讲第一个必须逐字读懂的报文。例子①这条 200 响应里，sid=9f3a2b 之后用分号跟了七个属性：Domain=app.example.com、Path=/account、Expires 到 2026 年 10 月 21 日、Max-Age=604800、Secure、HttpOnly、SameSite=Lax，浏览器据此决定存哪、发给谁、发多久、跨不跨站。下面 GET /account/profile 的 Cookie 首部只带名字与值，七个属性一个没出现，属性是存储规则不随请求回传。响应又下发新 sid 等于 7c81de，是 MDN 推荐的防会话固定做法。接下来逐属性拆开，先算寿命那道坑。">
+  <div class="slide-head"><span class="sec">例子① · 报文</span><h3>一条完整 Set-Cookie 的七个开关</h3></div>
+  <div class="slide-body">
+    <div class="wire sm"><b>HTTP/1.1 200 OK</b>
+<i>Date</i>: Mon, 16 Nov 2026 00:30:00 GMT
+<i>Content-Type</i>: text/html; charset=utf-8
+<i>Set-Cookie</i>: sid=9f3a2b; Domain=app.example.com; Path=/account; Expires=Wed, 21 Oct 2026 07:28:00 GMT; Max-Age=604800; Secure; HttpOnly; SameSite=Lax
+<i>Cache-Control</i>: no-store
+<i>Content-Length</i>: 214
+
+<em>登录成功，这是你的账户首页。</em></div>
+    <div class="wire-cap">例子① 完整 Set-Cookie：键值 sid=9f3a2b 之后紧跟 Domain、Path、Expires、Max-Age、Secure、HttpOnly、SameSite 七个属性，用分号分隔。</div>
+    <div class="wire sm"><b>GET /account/profile HTTP/1.1</b>
+<i>Host</i>: app.example.com
+<i>Cookie</i>: sid=9f3a2b
+<i>Accept</i>: text/html
+<i>Sec-Fetch-Site</i>: same-origin
+
+<b>HTTP/1.1 200 OK</b>
+<i>Set-Cookie</i>: sid=7c81de; Domain=app.example.com; Path=/account; Max-Age=604800; Secure; HttpOnly; SameSite=Lax
+<i>Cache-Control</i>: no-store
+
+<em>个人资料页。</em></div>
+    <div class="wire-cap">后续请求：Cookie 首部只带名字与值，七个属性都不回传；属性是浏览器存 cookie 时的规则。响应再次下发新 sid 是防会话固定的做法。</div>
+  </div>
+</section>
+
+<section class="slide" data-narration="把七个开关摆成表，每个回答一个独立问题：Domain 管哪些主机能收，Path 管路径里出现什么，Expires 和 Max-Age 管活到何时，Secure 管能否走明文，HttpOnly 管脚本能否读，SameSite 管跨站带不带。先算寿命，这里有坑：Expires 是绝对 GMT 日期，只与客户端时钟相关；Max-Age 是相对秒数，从收到响应起倒数，不依赖时钟，两者同现时 Max-Age 优先。上例 Expires 写 2026 年 10 月 21 日早已过去，而 Max-Age 等于 604800 秒正好 7 天，从 11 月 16 日算到 11 月 23 日，生效的是后者。记住这个优先级，下一页看两个无取值的安全开关。">
+  <div class="slide-head"><span class="sec">专题 · 逐属性</span><h3>七属性各把一道关，先手算寿命优先级</h3></div>
+  <div class="slide-body">
+    <table class="small">
+      <thead><tr><th>属性</th><th>回答的问题</th><th>取值与含义</th><th>不设会怎样</th></tr></thead>
+      <tbody>
+        <tr><td class="l"><strong>Domain</strong></td><td class="l">哪些主机可以收</td><td class="l">指定主机名，通常连子域一并包含</td><td class="l">默认同一主机，不含子域</td></tr>
+        <tr><td class="l"><strong>Path</strong></td><td class="l">路径里必须出现什么</td><td class="l">如 /account，子路径一并匹配</td><td class="l">默认取设置请求路径的目录</td></tr>
+        <tr><td class="l"><strong>Expires</strong></td><td class="l">绝对过期是哪天</td><td class="l">GMT 日期，只与客户端时钟相关</td><td class="l">该维度不产生过期</td></tr>
+        <tr><td class="l"><strong>Max-Age</strong></td><td class="l">还能活多少秒</td><td class="l">相对秒数，优先于 Expires</td><td class="l">与 Expires 都不设即会话 cookie</td></tr>
+        <tr><td class="l"><strong>Secure</strong></td><td class="l">能不能走明文</td><td class="l">无取值，只在 HTTPS 发送</td><td class="l">明文请求可能暴露给中间人</td></tr>
+        <tr><td class="l"><strong>HttpOnly</strong></td><td class="l">脚本能不能读</td><td class="l">无取值，Document.cookie 读不到</td><td class="l">脚本可读，XSS 可窃取标识</td></tr>
+        <tr><td class="l"><strong>SameSite</strong></td><td class="l">跨站要不要带</td><td class="l">Strict / Lax / None</td><td class="l">按新默认行为当 Lax</td></tr>
+      </tbody>
+    </table>
+    <div class="formula formula-concl">Expires 只看客户端时钟；Max-Age 是相对秒数不依赖时钟；两者同现 Max-Age 优先</div>
+    <div class="deep">手算：Expires 写 2026 年 10 月 21 日已过去；Max-Age 等于 604800 秒等于 7 天，从 11 月 16 日收到响应算到 11 月 23 日，浏览器按 7 天保存。</div>
+  </div>
+</section>
+
+<section class="slide" data-narration="Secure 和 HttpOnly 是两个无取值开关，写上即生效，各挡一类攻击，别混用。Secure 只在 HTTPS 加密请求里发送，挡明文窃听与中间人篡改，保证凭条不在路上裸奔，但挡不住能读硬盘或用脚本读它的人。HttpOnly 让 Document.cookie 读不到该 cookie，只对服务器可见，挡 XSS 窃取会话标识。一个管路上不被偷看，一个管到页面后不被脚本偷走，缺一不可。还有个细节：每次认证都应重新生成并下发会话 cookie，防的是会话固定攻击。三道闸门决定发往何处，下一页展开。">
+  <div class="slide-head"><span class="sec">专题 · 安全开关</span><h3>Secure 管路上，HttpOnly 管页面后</h3></div>
+  <div class="slide-body">
+    <table class="small">
+      <thead><tr><th>开关</th><th>挡住的攻击</th><th>作用机理</th><th>挡不住什么</th></tr></thead>
+      <tbody>
+        <tr><td class="l"><strong>Secure</strong></td><td class="l">明文窃听、中间人篡改</td><td class="l">只在 HTTPS 加密请求里发送</td><td class="l">能读硬盘或用脚本读取的人</td></tr>
+        <tr><td class="l"><strong>HttpOnly</strong></td><td class="l">跨站脚本窃取会话</td><td class="l">Document.cookie 读不到它</td><td class="l">网络窃听，也挡不住 CSRF</td></tr>
+      </tbody>
+    </table>
+    <div class="formula formula-concl">一个管路上不被偷看，一个管到页面后不被脚本偷走，两者缺一不可</div>
+    <div class="deep">术语首现：<strong>跨站脚本</strong>（XSS，Cross-Site Scripting）、<strong>中间人</strong>（man-in-the-middle）、<strong>会话固定攻击</strong>（session fixation attack）。MDN 建议承载会话的 cookie 两者都加，且每次认证重发新值。</div>
+  </div>
+</section>
+
+<section class="slide" data-narration="例子②把作用域算清楚。待判定 cookie 是 sid=9f3a2b，Domain=shop.example.com，Path=/docs，带 Secure。决定会不会出现在 Cookie 首部里的，是三道串联闸门：主机是不是该域或其子域、路径落不落在 /docs 作用域、是否 HTTPS，全过才发，任一拦下就不发。这张表把八个候选 URL 逐一过闸写全理由。盯住三行：/docsets 以 /docs 开头却不发，路径要按分段匹配；父域 example.com 拿不到子域 cookie，作用域只向下不向上；明文 http 被 Secure 拦。第三道闸门 SameSite 更复杂，下一页单独算。">
+  <div class="slide-head"><span class="sec">例子② · 作用域</span><h3>Domain → Path → Secure：八个 URL 逐一判定</h3></div>
+  <div class="slide-body">
+    <div class="wire sm"><i>Set-Cookie</i>: sid=9f3a2b; Domain=shop.example.com; Path=/docs; Secure</div>
+    <div class="wire-cap">待判定 cookie：主机限定 shop.example.com 及其子域，路径限定 /docs 及其子路径，且只在 HTTPS 下发送。</div>
+    <table class="small">
+      <thead><tr><th>候选请求 URL</th><th>① Domain 闸门</th><th>② Path 闸门</th><th>③ Secure 闸门</th><th>结果</th></tr></thead>
+      <tbody>
+        <tr><td class="l">https://shop.example.com/docs</td><td class="l">通过：主机完全相同</td><td class="l">通过：/docs 精确相等</td><td class="l">通过：HTTPS</td><td class="l"><strong>发送</strong></td></tr>
+        <tr><td class="l">https://shop.example.com/docs/Web/HTTP</td><td class="l">通过：主机完全相同</td><td class="l">通过：以 /docs/ 开头属子路径</td><td class="l">通过：HTTPS</td><td class="l"><strong>发送</strong></td></tr>
+        <tr><td class="l">https://www.shop.example.com/docs</td><td class="l">通过：显式 Domain 含子域</td><td class="l">通过：路径精确相等</td><td class="l">通过：HTTPS</td><td class="l"><strong>发送</strong></td></tr>
+        <tr><td class="l">https://shop.example.com/docsets</td><td class="l">通过：主机完全相同</td><td class="l">拦截：/docsets 不以 /docs/ 开头，仅字符串前缀相同</td><td class="l">不判定</td><td class="l"><strong>不发</strong></td></tr>
+        <tr><td class="l">https://shop.example.com/fr/docs</td><td class="l">通过：主机完全相同</td><td class="l">拦截：/fr/docs 不以 /docs 开头</td><td class="l">不判定</td><td class="l"><strong>不发</strong></td></tr>
+        <tr><td class="l">https://shop.example.com/</td><td class="l">通过：主机完全相同</td><td class="l">拦截：根路径 / 不在 /docs 作用域内</td><td class="l">不判定</td><td class="l"><strong>不发</strong></td></tr>
+        <tr><td class="l">https://example.com/docs</td><td class="l">拦截：example.com 是父域，作用域不向上冒泡</td><td class="l">不判定</td><td class="l">不判定</td><td class="l"><strong>不发</strong></td></tr>
+        <tr><td class="l">http://shop.example.com/docs</td><td class="l">通过：主机完全相同</td><td class="l">通过：路径精确相等</td><td class="l">拦截：明文 HTTP，Secure 要求加密</td><td class="l"><strong>不发</strong></td></tr>
+      </tbody>
+    </table>
+    <div class="deep">术语首现：<strong>作用域</strong>（scope）由 Domain 与 Path 共同界定；规范算法是<strong>域名匹配</strong>（domain-match）与<strong>路径匹配</strong>（path-match）。三个反直觉点：/docsets 不匹配、父域不冒泡、明文被 Secure 拦。</div>
+  </div>
+</section>
+
+<section class="slide" data-narration="例子③是第三道闸门 SameSite，管跨站要不要带 cookie，防 CSRF。站由可注册域和方案共同定义，所以 http 与 https 的同名主机已不同站。三个取值里 Strict 只发给来源站点，Lax 放行外站链接进来的安全顶层导航，None 跨站也发但必须配 Secure。四类场景：站点内 fetch 同站，三值一律带；外站链接跳转 Strict 不发、Lax 发、None 发；跨站 POST 表单和跨站子资源，Strict 与 Lax 都不发、只有 None 发。Strict 最紧、Lax 兼顾体验、None 风险最高。两条硬规矩：没设置按 Lax 处理，None 必须配 Secure 否则被拒。下一页把三者摆在一起。">
+  <div class="slide-head"><span class="sec">例子③ · SameSite</span><h3>Strict / Lax / None：四类场景的携带判定</h3></div>
+  <div class="slide-body">
+    <table class="small">
+      <thead><tr><th>取值</th><th>MDN 的口径</th><th>典型用途</th></tr></thead>
+      <tbody>
+        <tr><td class="l"><strong>Strict</strong></td><td class="l">只发送到来源站点，最严格</td><td class="l">高敏感操作，宁可多点一次</td></tr>
+        <tr><td class="l"><strong>Lax</strong></td><td class="l">放行从外站链接进来的顶层导航</td><td class="l">主流默认，兼顾体验</td></tr>
+        <tr><td class="l"><strong>None</strong></td><td class="l">同站跨站都发，必须配 Secure</td><td class="l">第三方登录回调等嵌入场景</td></tr>
+      </tbody>
+    </table>
+    <table class="small">
+      <thead><tr><th>请求场景</th><th>是否跨站</th><th>Strict</th><th>Lax</th><th>None 配 Secure</th></tr></thead>
+      <tbody>
+        <tr><td class="l">站点内 fetch：fetch('/api/cart')</td><td class="l">同站</td><td class="l">发送</td><td class="l">发送</td><td class="l">发送</td></tr>
+        <tr><td class="l">外站链接跳转：顶层 GET 导航</td><td class="l">跨站，安全方法</td><td class="l"><strong>不发</strong></td><td class="l">发送</td><td class="l">发送</td></tr>
+        <tr><td class="l">跨站 POST 表单：提交到 /transfer</td><td class="l">跨站，非安全方法</td><td class="l"><strong>不发</strong></td><td class="l"><strong>不发</strong></td><td class="l">发送</td></tr>
+        <tr><td class="l">跨站子资源：外站引用本站图片脚本</td><td class="l">跨站，子资源</td><td class="l"><strong>不发</strong></td><td class="l"><strong>不发</strong></td><td class="l">发送</td></tr>
+      </tbody>
+    </table>
+    <div class="wire sm"><em>错误：None 少了 Secure，浏览器拒绝这枚 cookie</em>
+<i>Set-Cookie</i>: sid=9f3a2b; SameSite=None
+
+<em>正确：None 必须搭配 Secure，且页面本身需为 HTTPS</em>
+<i>Set-Cookie</i>: sid=9f3a2b; SameSite=None; Secure</div>
+    <div class="wire-cap">None 与 Secure 是捆绑关系：第一行会被丢弃，第二行才在跨站场景正常携带。术语首现：<strong>跨站请求伪造</strong>（CSRF，Cross-Site Request Forgery）、<strong>站点</strong>（site for cookies）。</div>
+    <div class="tip">未设置 SameSite 按新的默认行为当 Lax 处理；None 必须配 Secure，本地 http 环境常因此调不通跨站 cookie。</div>
+  </div>
+</section>
+
+<section class="slide" data-narration="例子④划清职责边界。最易混的两件事：把 cookie 当成认证本身，把它和 localStorage 当成能互换的存储。掰开看：cookie 是认出你的载体，只装一枚会话标识，不证明身份；认证是证明你是你，凭据由代码显式放进 Authorization 首部；localStorage 是本地键值仓库，永不自动发往服务器。这张表从八个维度把三者对上，最该记住自动发送与 HttpOnly 两行：cookie 按作用域自动带且能设 HttpOnly，localStorage 都不行。原则是自动往返的状态用 cookie，本机数据放 localStorage。最严重的事故是把标识写进 URL，下一页推演两条链。">
+  <div class="slide-head"><span class="sec">例子④ · 职责边界</span><h3>cookie、认证凭据、localStorage 的八维对照</h3></div>
+  <div class="slide-body">
+    <table class="small">
+      <thead><tr><th>维度</th><th>Cookie</th><th>认证凭据</th><th>localStorage</th></tr></thead>
+      <tbody>
+        <tr><td class="l"><strong>存在哪里</strong></td><td class="l">cookie 罐，按域与路径组织</td><td class="l">由客户端代码掌握</td><td class="l">浏览器本地，按源隔离</td></tr>
+        <tr><td class="l"><strong>谁写入</strong></td><td class="l">服务器 Set-Cookie 或脚本</td><td class="l">客户端代码显式设置</td><td class="l">JavaScript 显式写入</td></tr>
+        <tr><td class="l"><strong>自动随请求发送</strong></td><td class="l"><strong>是</strong>，按作用域规则</td><td class="l">否，每次显式加首部</td><td class="l"><strong>否</strong>，永不进网络请求</td></tr>
+        <tr><td class="l"><strong>脚本能否读取</strong></td><td class="l">能，除非加 HttpOnly</td><td class="l">取决于代码如何保管</td><td class="l">能</td></tr>
+        <tr><td class="l"><strong>能否设 HttpOnly</strong></td><td class="l">能</td><td class="l">不适用</td><td class="l">不能</td></tr>
+        <tr><td class="l"><strong>容量量级</strong></td><td class="l">很小，约 4 KB</td><td class="l">无存储概念，首部受大小限制</td><td class="l">大得多，通常 5 MB 以上</td></tr>
+        <tr><td class="l"><strong>典型用途</strong></td><td class="l">会话标识、偏好设置</td><td class="l">API 的 Bearer Token</td><td class="l">本地缓存、离线数据</td></tr>
+        <tr><td class="l"><strong>主要风险</strong></td><td class="l">CSRF、跨站跟踪、属性配错</td><td class="l">令牌泄露到日志或前端</td><td class="l">XSS 可直接读走数据</td></tr>
+      </tbody>
+    </table>
+    <div class="tip">术语首现：<strong>认证凭据</strong>（Authorization header）、<strong>本地存储</strong>（Web Storage API 的 localStorage）。认出你与证明你是你是两件事，cookie 与认证是搭档不是同一物。</div>
+  </div>
+</section>
+
+<section class="slide" data-narration="假设有人把会话标识拼进链接写成 /cart?sid=9f3a2b。先看泄露链四步：URL 记进浏览器历史被下一位使用者看到，写进服务器日志被运维看到，放进 Referer 发给第三方，贴进聊天被收信人看到；四步走完谁都能拼回同样 URL 冒充登录，这就是会话劫持。再看缓存失效链四步：sid 污染缓存键把一份 /cart 拆成无数键，共享缓存命中率暴跌、回源激增，可能把 A 的页面缓存后发给 B 串号，旧 sid 反被缓存放大。两边合起来一句话：会话标识属于状态，不该成为资源地址的一部分。机制讲透了，下一页收成可复用的判定步骤。">
+  <div class="slide-head"><span class="sec">专题 · 故障链</span><h3>把会话标识写进 URL：两条链同时踩雷</h3></div>
+  <div class="slide-body">
+    <div class="wire sm"><em>情形 A：用 cookie，URL 稳定，共享缓存可复用一份响应</em>
+<b>GET /cart HTTP/1.1</b>
+<i>Host</i>: shop.example.com
+<i>Cookie</i>: sid=9f3a2b
+
+<b>HTTP/1.1 200 OK</b>
+<i>Cache-Control</i>: private, no-store
+
+<em>情形 B：把 sid 拼进 URL，缓存键被每个人的标识污染</em>
+<b>GET /cart?sid=9f3a2b HTTP/1.1</b>
+<i>Host</i>: shop.example.com
+
+<em>同一份 /cart 被拆成 /cart?sid=9f3a2b 与 /cart?sid=7c81de 等无数个缓存键</em></div>
+    <div class="wire-cap">cookie 让 URL 保持稳定，缓存键只认资源本身；把 sid 拼进 URL 则让每个用户都产生一个新缓存键。</div>
+    <table class="small">
+      <thead><tr><th>泄露链环节</th><th>谁能看到会话标识</th></tr></thead>
+      <tbody>
+        <tr><td class="l">① 浏览器历史</td><td class="l">共用这台电脑的下一位使用者</td></tr>
+        <tr><td class="l">② 服务器访问日志</td><td class="l">运维、日志采集与分析系统</td></tr>
+        <tr><td class="l">③ Referer 首部</td><td class="l">第三方站点、广告与分析服务</td></tr>
+        <tr><td class="l">④ 复制分享</td><td class="l">任何收到链接的人</td></tr>
+      </tbody>
+    </table>
+    <div class="chain">
+      <div class="link"><span class="no">1</span><span class="txt"><strong>缓存键被污染</strong>：sid 不同键不同，一份 /cart 拆成无数键</span></div>
+      <div class="link"><span class="no">2</span><span class="txt"><strong>命中率暴跌</strong>：共享缓存人人一份，回源量激增</span></div>
+      <div class="link"><span class="no">3</span><span class="txt"><strong>串号风险</strong>：A 的带 sid 页面被缓存后发给 B</span></div>
+      <div class="link"><span class="no">4</span><span class="txt"><strong>陈旧凭据</strong>：缓存放大早已失效的旧 sid 泄露</span></div>
+    </div>
+    <div class="formula formula-concl">会话标识属于状态，不该成为资源地址的一部分 —— 术语首现：<strong>会话劫持</strong>（session hijacking）</div>
+  </div>
+</section>
+
+<section class="slide" data-narration="把前面的机制收成三句可复用的判定步骤，按空格逐步展开。一，读 Set-Cookie 按固定顺序问七个问题：键名、Domain、Path、Expires 与 Max-Age、Secure、HttpOnly、SameSite。二，属性名只写在 Set-Cookie 里，回传的 Cookie 首部只有名字与值，别去那里找 Path 或 Secure，这是规范结论不是浏览器习惯。三，排查 cookie 没带上按 Domain 到 Path 到 SameSite 到 Secure 四闸门依次过：主机、路径、跨站、明文，四步都过才发。这套顺序是排查线上工单的标准动作。光看不练不行，下一页轮到你自己推一遍。">
+  <div class="slide-head"><span class="sec">推导</span><h3>三步收成可复用的判定动作</h3></div>
+  <div class="slide-body">
+    <div class="step"><p><strong>① 读 Set-Cookie 固定七问</strong>：键名、Domain、Path、Expires 与 Max-Age、Secure、HttpOnly、SameSite。</p></div>
+    <div class="step"><p><strong>② 属性名只在 Set-Cookie</strong>：回传的 Cookie 首部只有名字与值，别去那里找 Path 或 Secure。</p></div>
+    <div class="step"><p><strong>③ 排查没带上按四闸门</strong>：Domain → Path → SameSite → Secure，主机、路径、跨站、明文依次过。</p></div>
+    <div class="step"><div class="formula formula-concl">四步都过才发送，任一拦下即不发</div></div>
+    <p class="step-hint">按空格 / → 逐步展开推导</p>
+  </div>
+</section>
+
+<section class="slide" data-narration="轮到你了。屏幕这枚 cookie 是 sid=k9，Domain=app.example.com，Path=/docs，带 Secure，下面五个候选 URL，请按三道闸门逐一判定带不带并写全理由。先暂停视频自己推一遍。推出来了吗？好，对答案。/docs/a 属子路径又走 HTTPS，发送；/docsets 只是字符串前缀相同，被 Path 拦下，不发；sub 子域向下包含，发送；example.com 是父域不冒泡，不发；明文 http 被 Secure 拦，不发。结论只有第一个和第三个携带。若把 /docsets 判成发送，说明路径分段还没立住，回看例子②。把工程口径吃透后，下一页把 MDN 和 RFC 对一次。">
+  <div class="slide-head"><span class="sec">演练</span><h3>五个 URL，自己把三闸门推一遍</h3></div>
+  <div class="slide-body">
+    <div class="wire sm"><i>Set-Cookie</i>: sid=k9; Domain=app.example.com; Path=/docs; Secure
+<em>候选：/docs/a　/docsets　sub 子域的 /docs　父域 example.com 的 /docs　明文 http 的 /docs</em></div>
+    <div class="step"><p>① /docs/a <strong>发送</strong>：主机相同、路径以 /docs/ 开头属子路径、HTTPS 三关全过。</p></div>
+    <div class="step"><p>② /docsets <strong>不发</strong>，被 Path 拦；③ 子域 <strong>发送</strong>，显式 Domain 向下包含。</p></div>
+    <div class="step"><p>④ 父域 example.com <strong>不发</strong>，作用域不向上冒泡；⑤ 明文 http <strong>不发</strong>，被 Secure 拦。</p></div>
+    <div class="step"><div class="formula formula-concl">结论：只有 ① 与 ③ 携带该 cookie</div></div>
+    <div class="pause"><div class="icon">✍️</div><div class="txt"><b>暂停推导</b><p>合上答案，对五个 URL 逐一过 Domain、Path、Secure 三闸门，写出各自结论与理由。</p></div></div>
+    <p class="step-hint">按空格 / → 逐步揭示答案</p>
+  </div>
+</section>
+
+<section class="slide" data-narration="把 MDN 与 RFC 口径对一次。第一行，Set-Cookie 与 Cookie 首部对应 RFC 6265 第三、五节的语法与存储模型，属性不随请求回传。第二行，没设 SameSite 按 Lax、None 必须配 Secure，而 2011 年原始 6265 没有 SameSite，这些是 6265bis 才引入的。第三行，作用域对应 6265 的域名匹配与路径匹配，加斜杠规则正是 /docs 不匹配 /docsets 的根源。第四行，两个前缀是 6265bis 的强制校验，不符即拒绝保存。第五行，站点由可注册域与方案定义。MUST、SHOULD、MAY 有别，None 配 Secure 是硬性要求。两个前缀再展开。">
+  <div class="slide-head"><span class="sec">规范对照</span><h3>MDN 的说法 → RFC 怎么写 → 为什么值得知道</h3></div>
+  <div class="slide-body">
+    <table class="small">
+      <thead><tr><th>MDN 的说法</th><th>RFC 怎么写</th><th>为什么值得知道</th></tr></thead>
+      <tbody>
+        <tr><td class="l">Set-Cookie 下发、Cookie 首部带回，属性不回传</td><td class="l">RFC 6265 §3 两套语法、§5 存储模型</td><td class="l">属性是存储规则不是回传内容，别去 Cookie 首部解析属性</td></tr>
+        <tr><td class="l">未设 SameSite 按 Lax、None 必须配 Secure</td><td class="l">2011 年原始 RFC 6265 无 SameSite，6265bis 引入并规定缺省 Lax</td><td class="l">新默认行为是规范演进，移植老代码须显式写 SameSite</td></tr>
+        <tr><td class="l">Domain 含子域、Path 子路径匹配，/docs 不匹配 /docsets</td><td class="l">RFC 6265 §5.1.3 域名匹配、§5.1.4 路径匹配要加斜杠</td><td class="l">实现匹配算法照抄两节，别用简单字符串前缀比较</td></tr>
+        <tr><td class="l">__Host- 与 __Secure- 前缀作深度防御</td><td class="l">6265bis 前缀校验，不符条件浏览器拒绝保存</td><td class="l">把设置要求变成浏览器强制校验，__Host- 锁死 Domain</td></tr>
+        <tr><td class="l">站点由可注册域与方案定义，区分第一方与第三方</td><td class="l">6265bis 引入 site for cookies 与可注册域，依赖公共后缀列表</td><td class="l">方案也算站点一部分，http 与 https 同名主机不再同站</td></tr>
+      </tbody>
+    </table>
+    <div class="deep">术语首现：<strong>可注册域</strong>（registrable domain）、<strong>公共后缀列表</strong>（Public Suffix List）。RFC 里 MUST、SHOULD、MAY 有严格区别；None 必须配 Secure 是强制要求，浏览器据此直接丢弃违规 cookie。</div>
+  </div>
+</section>
+
+<section class="slide" data-narration="把两个前缀展开，它们是 MDN 推荐却常被忽视的深度防御。__Secure- 只要求带 Secure、来自安全来源；__Host- 再加两道锁：不带 Domain、Path 精确为斜杠。效果是子域想伪造 __Host- 会话 cookie 时，要么被限制在自身子域，要么因带 Domain 被整个丢弃，无法冒充父域，所以叫与主机锁死。屏幕上两条是合规写法：__Secure-sid 带 Secure 和 Path=/account，__Host-sid 不带 Domain、Path 为斜杠。任何一条不满足条件，浏览器都拒绝保存。还有个易漏点：服务器检查须比对完整 cookie 名，前缀不会被剥掉。把边界扫一遍，下一页看三个最常见的雷。">
+  <div class="slide-head"><span class="sec">专题 · 前缀</span><h3>__Host- 与 __Secure-：把设置要求写成钢印</h3></div>
+  <div class="slide-body">
+    <div class="cols">
+      <div class="col"><div class="card">🔒 <strong>__Secure-</strong><br>只要求带 Secure、来自安全来源。</div></div>
+      <div class="col"><div class="card">🔐 <strong>__Host-</strong><br>再加两道锁：不带 Domain、Path 精确为 /，与主机锁死。</div></div>
+    </div>
+    <div class="wire sm"><em>__Secure-：带 Secure 且来自安全来源即可</em>
+<i>Set-Cookie</i>: __Secure-sid=9f3a2b; Secure; Path=/account; SameSite=Lax
+
+<em>__Host-：还要求不带 Domain、Path 精确为 /</em>
+<i>Set-Cookie</i>: __Host-sid=9f3a2b; Secure; Path=/; SameSite=Lax</div>
+    <div class="wire-cap">两条合规的前缀 cookie：__Host- 因锁死主机更安全；任何一条不满足各自条件，浏览器都会拒绝保存。</div>
+    <div class="deep">术语首现：<strong>深度防御</strong>（defense in depth）、<strong>与主机锁死</strong>（domain-locked）。应用服务器须比对完整 cookie 名，因为 Cookie 首部不会把前缀剥掉。</div>
+  </div>
+</section>
+
+<section class="slide" data-narration="扫三个最常见的雷。一，以为 cookie 加密能存密码。错，它只是普通文本，用户可读可改，应放不透明标识符，真实数据留服务端。二，以为 Expires 和 Max-Age 都写就以 Expires 为准。错，Max-Age 优先，它是相对秒数不依赖客户端时钟。三，以为加了 HttpOnly 就万事大吉。它挡 XSS 窃取，挡不住 CSRF，后者靠 SameSite 与令牌；连带误区是把 None 单独写上，不带 Secure 会被直接丢弃。把这三件事分开，配置时不会顾此失彼。本讲与下一讲怎么分工，下一页列分工表。">
+  <div class="slide-head"><span class="sec">避坑</span><h3>三个把不同层次混为一谈的误解</h3></div>
+  <div class="slide-body">
+    <div class="trap">❌ <strong>cookie 是加密的，能存密码这类敏感信息</strong><br>✅ 它只是普通文本，用户可读可改；应放<strong>不透明标识符</strong>（opaque identifier），真实数据留在服务端。</div>
+    <div class="trap">❌ <strong>Expires 与 Max-Age 都写了，以 Expires 为准</strong><br>✅ Max-Age 优先，它是相对秒数不依赖客户端时钟，Expires 只与客户端相关。</div>
+    <div class="trap">❌ <strong>加了 HttpOnly 就万事大吉</strong><br>✅ 它挡 XSS 窃取，挡不住 CSRF，后者靠 SameSite 与令牌；单独写 None 不带 Secure 会被直接丢弃。</div>
+  </div>
+</section>
+
+<section class="slide" data-narration="这一讲和下一讲怎么分工，说清楚才不重复用功。本讲负责认出你：cookie 把状态标识交给浏览器、每次自动带回，核心对象是 Set-Cookie、Cookie 和七个属性。第 8 讲负责证明你是你，讲 HTTP 身份验证框架：服务器用 401 加 WWW-Authenticate 发起挑战，客户端用 Authorization 带凭据重试，Basic 用 Base64 编码用户名口令。两者是搭档不是同一件事：cookie 承载会话标识，认证校验它属于谁。本讲留下的账交给第 8 讲偿还，再往后第 9 讲讲跨源边界。钩子：下一讲看一次 401 挑战到 Authorization 的完整报文。下一页用三句话收束。">
+  <div class="slide-head"><span class="sec">接口</span><h3>第 7 讲认出你，第 8 讲证明你是你</h3></div>
+  <div class="slide-body">
+    <table>
+      <thead><tr><th></th><th>第 7 讲 Cookie</th><th>第 8 讲 HTTP 身份验证</th></tr></thead>
+      <tbody>
+        <tr><td class="l"><strong>回答什么</strong></td><td class="l">无状态怎么记住用户，认出你</td><td class="l">怎么证明你是你</td></tr>
+        <tr><td class="l"><strong>核心对象</strong></td><td class="l">Set-Cookie、Cookie、七个属性、作用域</td><td class="l">401、WWW-Authenticate、Authorization、realm</td></tr>
+        <tr><td class="l"><strong>机制</strong></td><td class="l">浏览器自动带回会话标识</td><td class="l">挑战—响应，凭据由代码显式出示</td></tr>
+        <tr><td class="l"><strong>两者关系</strong></td><td class="l">cookie 常承载一枚会话标识</td><td class="l">认证校验这枚标识归属谁</td></tr>
+      </tbody>
+    </table>
+    <div class="tip">钩子：cookie 与认证是搭档不是同一件事；下一讲用 401 挑战与 Authorization 把「证明身份」补全。</div>
+  </div>
+</section>
+
+<section class="slide" data-narration="用三句话收束第七讲。解决什么：偿还第一讲无状态如何记住用户这笔账，讲清往返、七个属性、作用域与安全边界。核心机制：Set-Cookie 把标识交给浏览器，Cookie 首部自动带回；Domain、Path、SameSite 三闸门定发往何处，Secure 与 HttpOnly 分别挡窃听和脚本窃取，Expires 与 Max-Age 定寿命且后者优先。承上启下：本讲认出你，第 8 讲证明你是你，第 5 讲缓存用来分析 URL 泄露链。记住口诀，先有状态再划边界，合上书也要能默写。最后留四项毕业挑战，下一页见。">
+  <div class="slide-head"><span class="sec">小结</span><h3>三句话讲完第 7 讲</h3></div>
+  <div class="slide-body">
+    <div class="chain">
+      <div class="link"><span class="no">1</span><span class="txt"><strong>解决什么</strong>：偿还无状态如何记住用户这笔账，讲清往返、七属性与作用域</span></div>
+      <div class="link"><span class="no">2</span><span class="txt"><strong>核心机制</strong>：Set-Cookie 交载体、Cookie 首部自动带回，三闸门定发往何处、四属性挡风险</span></div>
+      <div class="link"><span class="no">3</span><span class="txt"><strong>承上启下</strong>：本讲认出你，第 8 讲证明你是你，第 5 讲缓存用来分析 URL 泄露链</span></div>
+    </div>
+    <div class="formula formula-concl">先有状态，再划边界 —— 合上书也要能默写</div>
+  </div>
+</section>
+
+<section class="slide slide-cover" data-narration="第七讲到这儿结束。留四项毕业挑战，合上书完成。一，默写一条含 Domain、Path、Expires、Max-Age、Secure、HttpOnly、SameSite 七个属性的 Set-Cookie，逐属性说清把关，手算两个寿命谁优先。二，给定 sid，Domain=shop.example.com，Path=/docs，带 Secure，对若干 URL 按三闸门判定并写理由。三，列出 Strict、Lax、None 在四类场景的携带，说明 None 为何必须配 Secure。四，对比三者并推演标识写进 URL 的泄露链与缓存失效链。做完再点完成按钮。下一讲第 8 讲 HTTP 身份验证，看一次 401 挑战怎么走完。">
+  <div class="kicker">第 7 讲 结束</div>
+  <h1>先有状态，再划边界</h1>
+  <div class="sub">毕业挑战：合上书，拿一张纸</div>
+  <div class="divider"></div>
+  <div class="meta">
+    ☑ 默写含七属性的 Set-Cookie 并手算寿命优先级　　☑ 按三闸门判定候选 URL 是否携带<br>
+    ☑ 列 SameSite 三值在四类场景的携带　　☑ 对比三者并推演 URL 泄露链与缓存失效链<br><br>
+    下一讲 · 第 8 讲 HTTP 身份验证：一次 401 挑战到 Authorization 的完整报文
+  </div>
+</section>
+
+  <!-- 页脚：brand 改为本章标题；总页数改 pagenum 初值 -->
+  <div id="footer">
+    <span class="brand">第7讲 Cookie：给无状态协议加上记忆 · HTTP 精通 课件　<a class="to-lec" href="../http-guide/index.html">讲义首页 ↗</a></span>
+    <span id="pagenum">1 / 1</span>
+  </div>
+
+  <!-- 导航 -->
+  <div class="nav">
+    <button id="prev" title="上一页 (←)">‹</button>
+    <button id="next" title="下一页 (→ / 空格)">›</button>
+  </div>
+  <div id="hint">← → 翻页 · 空格下一页 · 推导页逐步显示 · 点击左右半屏翻页</div>
+
+</div>
+
+<!-- mermaid 本地引用，保证离线可用；初始化参数全套课件统一，勿改 -->
+<script src="assets/mermaid.min.js"></script>
+<script>
+mermaid.initialize({
+  startOnLoad: false,   // 必须为 false：display:none 的隐藏页渲染会得到 0 宽高的退化 SVG，
+                        // 改为页面激活时懒渲染（见 renderMermaid）
+  theme: "base",
+  themeVariables: {
+    primaryColor: "#ebf8ff",
+    primaryBorderColor: "#2b6cb0",
+    primaryTextColor: "#1a365d",
+    lineColor: "#718096",
+    fontFamily: "-apple-system, PingFang SC, sans-serif",
+    fontSize: "15px"
+  },
+  flowchart: { curve: "linear", htmlLabels: false }
+});
+</script>
+<script>
+(function(){
+  const slides = Array.from(document.querySelectorAll('.slide'));
+  const total = slides.length;
+  let idx = 0;
+
+  const params = new URLSearchParams(location.search);
+  const startSlide = parseInt(params.get('slide'), 10);
+  if (params.get('autohide') === '1') document.body.classList.add('autohide');
+  if (!isNaN(startSlide) && startSlide >= 1 && startSlide <= total) idx = startSlide - 1;
+
+  const progress = document.getElementById('progress');
+  const pagenum = document.getElementById('pagenum');
+  const prevBtn = document.getElementById('prev');
+  const nextBtn = document.getElementById('next');
+
+  // 推导分步：每页记住已展开的步数；autohide（截图）模式下 CSS 强制全显
+  const stepState = new Map();
+  function stepsOf(i){ return Array.from(slides[i].querySelectorAll('.step')); }
+  function applySteps(){
+    stepsOf(idx).forEach((el, k)=> el.classList.toggle('on', k < (stepState.get(idx) || 0)));
+  }
+  // 前进一步：先展开本页下一步，全部展开后才翻页
+  function forward(){
+    const steps = stepsOf(idx);
+    const shown = stepState.get(idx) || 0;
+    if (shown < steps.length){ stepState.set(idx, shown + 1); applySteps(); return; }
+    go(idx + 1);
+  }
+  // 后退一步：先收起本页最后一步，收完才回上一页
+  function backward(){
+    const steps = stepsOf(idx);
+    const shown = stepState.get(idx) || 0;
+    if (shown > 0){ stepState.set(idx, shown - 1); applySteps(); return; }
+    go(idx - 1);
+  }
+
+  // mermaid 懒渲染：只在页面激活（有真实宽高）时渲染该页的图，渲染后打 data-done 防重复
+  function renderMermaid(slide){
+    if (typeof mermaid === 'undefined') return;
+    const nodes = Array.from(slide.querySelectorAll('.mermaid:not([data-done])'));
+    if (!nodes.length) return;
+    nodes.forEach(n => n.setAttribute('data-done', ''));
+    mermaid.run({ nodes }).catch(err => {
+      nodes.forEach(n => n.removeAttribute('data-done'));
+      console.error('mermaid 渲染失败：', err);
+    });
+  }
+
+  function render(){
+    slides.forEach((s,i)=> s.classList.toggle('active', i===idx));
+    progress.style.width = ((idx+1)/total*100) + '%';
+    pagenum.textContent = (idx+1) + ' / ' + total;
+    prevBtn.disabled = (idx===0);
+    nextBtn.disabled = (idx===total-1);
+    applySteps();
+    renderMermaid(slides[idx]);
+  }
+  function go(n){ idx = Math.max(0, Math.min(total-1, n)); render(); }
+
+  prevBtn.addEventListener('click', e=>{ e.stopPropagation(); backward(); });
+  nextBtn.addEventListener('click', e=>{ e.stopPropagation(); forward(); });
+
+  document.addEventListener('keydown', e=>{
+    if(e.key==='ArrowRight'||e.key===' '||e.key==='PageDown'){ e.preventDefault(); forward(); }
+    else if(e.key==='ArrowLeft'||e.key==='PageUp'){ e.preventDefault(); backward(); }
+    else if(e.key==='Home'){ stepState.set(idx, 0); go(0); }
+    else if(e.key==='End'){ go(total-1); }
+  });
+
+  document.getElementById('stage').addEventListener('click', e=>{
+    if(e.target.closest('.nav') || e.target.closest('a')) return;
+    const x = e.clientX;
+    if(x < window.innerWidth*0.5) backward(); else forward();
+  });
+
+  function fit(){
+    const s = Math.min(window.innerWidth/1280, window.innerHeight/720);
+    document.getElementById('stage').style.transform = 'translate(-50%,-50%) scale(' + s + ')';
+  }
+  window.addEventListener('resize', fit);
+  fit();
+  render();
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,687 @@
+<!DOCTYPE html>
+<!--
+  ======================================================================
+  HTTP 精通 · 课件外壳（deck-shell.html）
+  由 build-slides.mjs 把 slides/NN.html 注入幻灯片区域，
+  输出 public/http-guide-slides/NN-xxx-课件.html。
+  骨架来自站内通用 1280×720 课件模板；本套额外增加 .wire 协议报文块。
+  每页必须写 data-narration（180–280 字口语稿，禁半角双引号、禁换行、禁小于号）。
+  ======================================================================
+-->
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第4讲 HTTP/1.x 的连接管理 · HTTP 精通 课件</title>
+<script>
+window.MathJax = {
+  tex: {
+    inlineMath: [['$', '$'], ['\\(', '\\)']],
+    displayMath: [['$$', '$$'], ['\\[', '\\]']],
+    processEscapes: true,
+    tags: 'none'
+  },
+  svg: { fontCache: 'global', scale: 1.05 },
+  options: { skipHtmlTags: ['script','noscript','style','textarea','pre','code'] }
+};
+</script>
+<!-- MathJax 本地引用（tex-svg 单文件全量组件，约2MB，自带字体数据），file:// 与断网均可用 -->
+<script src="assets/tex-svg.js" async></script>
+<style>
+  :root{
+    --primary:#1a365d; --accent:#2b6cb0; --accent-light:#ebf8ff; --accent-border:#bee3f8;
+    --text:#2d3748; --muted:#718096; --border:#e2e8f0; --bg-light:#f7fafc;
+    --success:#38a169; --danger:#e53e3e; --warning:#dd6b20; --warn-bg:#fffaf0;
+  }
+  *{margin:0;padding:0;box-sizing:border-box;}
+  html,body{width:100%;height:100%;overflow:hidden;background:#0f172a;}
+  body{
+    font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Hiragino Sans GB","Microsoft YaHei","WenQuanYi Micro Hei",sans-serif;
+    color:var(--text);
+  }
+  #stage{
+    position:absolute; left:50%; top:50%;
+    width:1280px; height:720px;
+    transform:translate(-50%,-50%) scale(1);
+    transform-origin:center center;
+    background:#ffffff;
+    box-shadow:0 0 40px rgba(0,0,0,.4);
+    overflow:hidden;
+  }
+  .slide{
+    position:absolute; inset:0;
+    padding:36px 60px 52px;
+    display:none;
+    flex-direction:column;
+    background:#ffffff;
+    opacity:0;
+    transition:opacity .35s ease;
+  }
+  .slide.active{ display:flex; opacity:1; }
+
+  #progress{ position:absolute; top:0; left:0; height:6px; background:var(--accent); width:0; z-index:50; transition:width .35s; }
+
+  /* 封面 / 结束页 */
+  .slide-cover{ justify-content:center; align-items:center; text-align:center; }
+  .slide-cover{ background:linear-gradient(135deg,#1a365d 0%,#2b6cb0 100%); color:#fff; }
+  .slide-cover .kicker{ font-size:22px; letter-spacing:6px; opacity:.85; margin-bottom:18px;}
+  .slide-cover h1{ font-size:64px; font-weight:800; line-height:1.2; margin-bottom:22px; letter-spacing:2px;}
+  .slide-cover .sub{ font-size:26px; opacity:.92; margin-bottom:36px;}
+  .slide-cover .meta{ font-size:19px; opacity:.85; line-height:2;}
+  .slide-cover .divider{ width:160px;height:5px;background:#fff;opacity:.6;margin:0 auto 30px;border-radius:3px;}
+  .slide-cover .question{ font-size:24px; background:rgba(255,255,255,.12); border:1px solid rgba(255,255,255,.35); border-radius:12px; padding:12px 28px; margin-bottom:30px;}
+
+  /* 页头：结论式标题 */
+  .slide-head{ display:flex; align-items:baseline; gap:16px; border-bottom:3px solid var(--accent); padding-bottom:9px; margin-bottom:12px;}
+  .slide-head .sec{ font-size:17px; color:var(--accent); font-weight:700; background:var(--accent-light); padding:3px 11px; border-radius:6px; white-space:nowrap;}
+  .slide-head h3{ font-size:29px; color:var(--primary); font-weight:700;}
+  .slide-body{ flex:1; display:flex; flex-direction:column; justify-content:center; min-height:0; }
+
+  p{ font-size:21px; line-height:1.65; margin-bottom:8px;}
+  .lead{ font-size:23px; color:#374151; line-height:1.75;}
+  ul,ol{ margin:0 0 8px 26px; font-size:21px; line-height:1.7;}
+  li{ margin-bottom:5px;}
+  strong{ color:var(--primary); }
+
+  /* 公式块 */
+  .formula{ background:var(--accent-light); border-left:5px solid var(--accent); border-radius:0 10px 10px 0; padding:9px 22px; margin:9px 0; text-align:center; font-size:23px;}
+  .formula-concl{ background:#fffaf0; border-left:5px solid var(--warning);}
+  .MathJax{ font-size:1.05em !important; }
+  mjx-container[display="true"]{ margin:6px 0 !important; }
+
+  /* 表格 */
+  table{ width:100%; border-collapse:collapse; margin:10px 0; font-size:20px;}
+  th{ background:var(--accent); color:#fff; padding:8px 12px; text-align:center; font-weight:600;}
+  td{ padding:7px 12px; border:1px solid var(--border); text-align:center; vertical-align:middle;}
+  tr:nth-child(even) td{ background:var(--bg-light);}
+  td.l{ text-align:left; }
+  table.small{ font-size:18px; }
+  table.small td, table.small th{ padding:6px 10px; }
+
+  /* 组件 */
+  .card{ background:var(--accent-light); border:1px solid var(--accent-border); border-radius:12px; padding:12px 20px; margin:10px 0;}
+  .tip{ background:#ebf8ff; border-left:5px solid var(--accent); border-radius:0 10px 10px 0; padding:10px 20px; margin:10px 0; font-size:20px; color:#2c5282;}
+  .deep{ background:#f0fff4; border-left:5px solid var(--success); border-radius:0 10px 10px 0; padding:10px 20px; margin:10px 0; font-size:20px; color:#22543d;}
+  .warn{ background:var(--warn-bg); border-left:5px solid var(--warning); border-radius:0 10px 10px 0; padding:10px 20px; margin:10px 0; font-size:20px; color:#744210;}
+  .trap{ background:#fef2f2; border-left:5px solid var(--danger); border-radius:0 10px 10px 0; padding:10px 20px; margin:10px 0; font-size:20px; color:#7f1d1d;}
+
+  .pause{
+    background:var(--warn-bg); border:2px dashed var(--warning); border-radius:14px;
+    padding:10px 22px; margin:10px 0; display:flex; align-items:center; gap:16px;
+  }
+  .pause .icon{ font-size:36px; line-height:1; }
+  .pause .txt b{ color:var(--warning); font-size:21px; }
+  .pause .txt p{ font-size:18px; color:#744210; margin:3px 0 0; }
+
+  .cols{ display:flex; gap:28px; align-items:stretch; }
+  .col{ flex:1; min-width:0; }
+
+  /* 推导分步：仅互动模式隐藏，截图(autohide)模式全部可见——此规则不可删 */
+  .step{ opacity:0; transform:translateY(8px); transition:opacity .3s ease, transform .3s ease; }
+  .step.on{ opacity:1; transform:none; }
+  body.autohide .step{ opacity:1 !important; transform:none !important; }
+  .step-hint{ font-size:14px; color:var(--muted); margin-top:4px;}
+  body.autohide .step-hint{ display:none; }
+
+  /* HTTP 精通课件专用：协议报文原文块 */
+  .wire{background:#0f172a;color:#e2e8f0;border-radius:10px;padding:12px 18px;margin:8px 0;
+    font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:17px;line-height:1.55;
+    white-space:pre-wrap;overflow-wrap:anywhere;}
+  .wire b{color:#7dd3fc;font-weight:700;}
+  .wire i{color:#fde68a;font-style:normal;}
+  .wire em{color:#86efac;font-style:normal;}
+  .wire.sm{font-size:15px;line-height:1.45;}
+  .wire-cap{font-size:15px;color:var(--muted);margin:0 0 8px;}
+  .to-lec{color:#bee3f8;text-decoration:none;font-size:15px;margin-left:12px;}
+  .to-lec:hover{text-decoration:underline;}
+  .badge{display:inline-block;background:var(--accent-light);color:var(--accent);border:1px solid var(--accent-border);
+    border-radius:6px;padding:2px 10px;font-size:17px;font-weight:700;margin-right:8px;}
+
+  /* 因果链 */
+  .chain{ margin:6px 0; }
+  .chain .link{ display:flex; align-items:center; gap:14px; margin:6px 0;}
+  .chain .no{ width:34px; height:34px; border-radius:50%; background:var(--accent); color:#fff; font-size:18px; font-weight:700; display:flex; align-items:center; justify-content:center; flex-shrink:0;}
+  .chain .txt{ font-size:21px; line-height:1.5;}
+  .chain .txt strong{ color:var(--primary); }
+
+  /* mermaid 容器：高度封顶，防止溢出 720px 舞台 */
+  .mmd{ background:var(--bg-light); border:1px solid var(--border); border-radius:12px; padding:10px 14px; display:flex; justify-content:center; align-items:center; margin:8px 0;}
+  .mmd .mermaid{ display:flex; justify-content:center; width:100%; visibility:hidden; }
+  .mmd .mermaid[data-done]{ visibility:visible; }
+  .mmd .mermaid svg{ max-width:100%; height:auto; max-height:230px; }
+  .mmd.mmd-tall .mermaid svg{ max-height:330px; }
+  .mmd.mmd-sm svg{ max-height:150px; }
+  .mmd-row{ display:flex; gap:18px; }
+  .mmd-row .mmd{ flex:1; flex-direction:column; }
+  .mmd .cap{ font-size:17px; color:var(--muted); margin-top:6px; text-align:center;}
+  .mmd .cap b{ color:var(--text); }
+
+  #footer{ position:absolute; bottom:0; left:0; right:0; height:40px; display:flex; align-items:center; justify-content:space-between; padding:0 30px; font-size:15px; color:#94a3b8; background:rgba(247,250,252,.85); border-top:1px solid var(--border); z-index:40;}
+  #footer .brand{ font-weight:600; color:var(--accent); }
+
+  .nav{ position:absolute; bottom:48px; right:40px; display:flex; gap:12px; z-index:45;}
+  .nav button{ width:54px; height:54px; border-radius:50%; border:none; background:var(--accent); color:#fff; font-size:24px; cursor:pointer; box-shadow:0 3px 10px rgba(43,108,176,.4); display:flex; align-items:center; justify-content:center;}
+  .nav button:hover{ background:var(--primary); }
+  .nav button:disabled{ background:#cbd5d0; cursor:default; box-shadow:none;}
+
+  #hint{ position:absolute; bottom:48px; left:40px; font-size:14px; color:#94a3b8; z-index:45;}
+
+  body.autohide #progress, body.autohide #footer, body.autohide .nav, body.autohide #hint{ display:none !important; }
+</style>
+</head>
+<body>
+<div id="stage">
+
+  <div id="progress"></div>
+
+<section class="slide slide-cover active" data-narration="欢迎回到 HTTP 精通。第 3 讲把「传什么」拆成了资源、表示与协商，这一讲转向同一条主线上的另一半，也就是「怎么传」。打开一个页面往往要发十几个请求，可每发一个请求之前，网络层面都得先建一条 TCP 连接，这笔隐藏成本到底有多贵，HTTP/1.x 又用哪几种方式把它摊薄，就是本讲要算清楚的账。本讲要回答的问题是：三种连接模型各自省了什么，又留下了什么病。学完你应该能用 RTT 估算它们的总时延，说清队头阻塞为什么挥之不去，并判断一条连接当前请求之后还能不能安全复用。对应的 MDN 原文是《HTTP/1.x 的连接管理》一篇。">
+  <div class="kicker">HTTP 精通 · 第 4 讲 · 第②组 连接与缓存</div>
+  <h1>HTTP/1.x 的连接管理</h1>
+  <div class="sub">建一次连接到底有多贵，以及怎样把这笔成本摊薄</div>
+  <div class="question">三种连接模型各自省了什么，又留下了什么病？</div>
+  <div class="meta">
+    配套讲义：HTTP 精通 第 4 讲 · 依据 MDN《HTTP/1.x 的连接管理》<br>
+    第②组 连接与缓存（4–6）· 第 4 讲：少建连接<br>
+    ← → 翻页 · 推导页按空格逐步显示
+  </div>
+</section>
+
+<section class="slide" data-narration="先看这一讲在十二讲主线上的位置。第一组基础与表示解决「传什么」，第二组连接与缓存解决「怎么传」和「怎么少传」，本讲是第二组的开头。第 4 讲算清建连接的成本，讲短连接、持久连接和流水线三种模型；第 5 讲换一条思路，用缓存让一部分请求干脆不必发；第 6 讲用条件请求和范围请求把要传的字节压到最小。图上高亮的是第 4 讲，它牵着后面两讲，也牵着队头阻塞这条线，那个病要到 HTTP/2 的多路复用才第一次被解决，又在 HTTP/3 才彻底收尾。把位置摆正，后面每一页的数字才不是孤立的算式。">
+  <div class="slide-head"><span class="sec">定位</span><h3>第 4 讲是「连接与缓存」这一组的开头</h3></div>
+  <div class="slide-body">
+    <div class="mmd mmd-sm">
+      <div class="mermaid">
+flowchart LR
+  A["第1到3讲 基础与表示"] --> B["第4讲 连接管理"]:::here --> C["第5讲 缓存"] --> D["第6讲 条件与范围请求"]
+  B --> E["队头阻塞引向 HTTP2 多路复用"]
+  A --> F["第7到12讲 状态与分发"]
+  classDef here fill:#2b6cb0,color:#ffffff,stroke:#1a365d,stroke-width:3px
+      </div>
+    </div>
+    <p style="text-align:center;">本讲解决「<strong>怎么传</strong>」：把建连接的成本算清，再看三种模型怎样摊薄它。</p>
+    <div class="tip">本讲对应的 MDN 原文：Connection management in HTTP/1.x。</div>
+  </div>
+</section>
+
+<section class="slide" data-narration="本讲的主线是一条六环的因果链，不是三个并列名词。第一环，最朴素的模型是每条事务都新建一条连接。第二环，这一下就撞上两笔贵账：TCP 三次握手要一个往返，慢启动又要连接热起来才快。第三环，既然贵在反复新建，对策就是别关，让持久连接复用同一条 TCP。第四环，复用之后还剩一个空档，于是流水线让请求不必等响应就连着发。第五环，可响应必须按请求顺序回来，队首一慢就把后面全堵住，这就是队头阻塞。第六环，这条连接到底什么时候关，又牵出逐跳首部和关闭判定。记住一句话：成本逼出复用，复用逼出流水线，流水线留下病。">
+  <div class="slide-head"><span class="sec">主线</span><h3>成本 → 复用 → 流水线 → 队头阻塞</h3></div>
+  <div class="slide-body">
+    <div class="chain">
+      <div class="link"><span class="no">1</span><span class="txt"><strong>每条事务新建连接</strong>：最朴素的短连接模型</span></div>
+      <div class="link"><span class="no">2</span><span class="txt"><strong>三次握手与慢启动很贵</strong>：冷连接前期传得慢</span></div>
+      <div class="link"><span class="no">3</span><span class="txt"><strong>持久连接复用 TCP</strong>：省掉反复握手，让连接变热</span></div>
+      <div class="link"><span class="no">4</span><span class="txt"><strong>流水线连续发请求</strong>：省掉发一个等一个的空等</span></div>
+      <div class="link"><span class="no">5</span><span class="txt"><strong>响应按序形成队头阻塞</strong>：队首慢堵住后面全部</span></div>
+      <div class="link"><span class="no">6</span><span class="txt"><strong>连接何时关闭</strong>：逐跳首部与复用判定</span></div>
+    </div>
+    <div class="tip">成本逼出复用，复用逼出流水线，流水线又留下队头阻塞；这是 HTTP/2 多路复用要解决的核心痛点。</div>
+  </div>
+</section>
+
+<section class="slide" data-narration="先用一个具体场景逼出问题。你在带宽很大的公司网络里打开一个图片站，页面有十几张小图，按理说几十千字节一眨眼就该传完，可首屏还是慢了半拍。很多人第一反应是带宽不够，于是去升级链路，结果没什么改善。真相是：每取一个资源都要先花一个往返去握手，这半拍主要花在包一来一回的物理时间上，跟带宽几乎无关；更糟的是新连接还卡在慢启动，拥塞窗口很小，传大对象尤其吃亏。左边这张卡是常见的误判，右边是把它拆开后要看的两笔账。要解释这个现象，就得把建连接的成本单独拎出来算，而不是盯着带宽。">
+  <div class="slide-head"><span class="sec">动机</span><h3>带宽再大，也压不掉一个来回的时间</h3></div>
+  <div class="slide-body">
+    <div class="cols">
+      <div class="col"><div class="card">📶 <strong>常见误判</strong><br>首屏慢就怪带宽小，于是升级链路；可小图标只有几十字节，照样要等。</div></div>
+      <div class="col"><div class="card">⏱ <strong>真正的两笔账</strong><br>每个资源先付一次握手 RTT；新连接还卡在<strong>慢启动</strong>（slow start），<strong>拥塞窗口</strong>（congestion window，cwnd）没涨起来。</div></div>
+    </div>
+    <div class="formula">一次请求的成本 ≈ 三次握手 1 RTT + 慢启动若干 RTT + 请求响应 1 RTT</div>
+    <div class="tip">💡 本讲方案：先把连接当成有生命周期的稀缺资源，再算三种模型怎样把成本摊到更多请求上。</div>
+  </div>
+</section>
+
+<section class="slide" data-narration="把核心概念拆成部件，术语首现我都给英文原名。第一种短连接，英文 short-lived connection，每个请求用一条独立 TCP，请求前握手、应答后立即关闭，是 HTTP/1.0 的默认模型。第二种持久连接，英文 persistent connection，也叫 keep-alive 连接，一条 TCP 保持一段时间、重复服务一串请求，HTTP/1.1 默认就是它。第三种 HTTP 流水线，英文 HTTP pipelining，在同一条连接上连续发请求而不等应答，但响应仍按请求顺序返回。三种模型只差两件事：要不要反复握手，要不要发一个等一个。">
+  <div class="slide-head"><span class="sec">定义</span><h3>三种模型，只差两件事：握手与等待</h3></div>
+  <div class="slide-body">
+    <div class="cols">
+      <div class="col"><div class="card">🔌 <strong>短连接</strong>（short-lived connection）<br>每条事务新建并关闭一条 TCP，请求前握手、应答后立即关，成本最高。</div></div>
+      <div class="col"><div class="card">♻️ <strong>持久连接</strong>（persistent connection）<br>一条 TCP 保持一段时间，重复服务多条请求，省掉反复握手。</div></div>
+    </div>
+    <div class="cols">
+      <div class="col"><div class="card">🚀 <strong>流水线</strong>（HTTP pipelining）<br>不等响应就连续发多个请求，响应仍按请求顺序返回。</div></div>
+      <div class="col"><div class="card">📏 <strong>往返时延</strong>（RTT，Round-Trip Time）<br>一个包从客户端到服务器再回来的时间，是本讲所有手算的尺子。</div></div>
+    </div>
+    <div class="formula formula-concl">要不要反复握手，要不要发一个等一个 —— 两问定模型</div>
+    <div class="deep">版本默认值要记牢：HTTP/1.0 默认短连接，HTTP/1.1 默认持久连接，只有写 Connection: close 才退回短连接。</div>
+  </div>
+</section>
+
+<section class="slide" data-narration="手算之前先把尺子和参数固定下来，后面几页都沿用这一组数。往返时延取五十毫秒，也就是一个包一来一回的时间；最大分段大小 MSS 取一千四百六十字节，是一条 TCP 段能承载的最大应用数据；初始拥塞窗口 cwnd 取十个 MSS，约一万四千六百字节，意思是连接刚建好、还没收到确认前，发送方最多只能发这么多；服务器处理时间本例先记为零，只算网络开销。还要分清两件事：三次握手是建连的固定门票，慢启动则是新连接传数据时的加速过程。把这两笔拆开，才能解释为什么一条冷连接比一条养热的连接慢得多。">
+  <div class="slide-head"><span class="sec">专题 · 参数</span><h3>先把尺子固定：RTT、MSS、cwnd、慢启动</h3></div>
+  <div class="slide-body">
+    <table class="small">
+      <thead><tr><th>参数</th><th>取值</th><th>含义</th></tr></thead>
+      <tbody>
+        <tr><td class="l"><strong>往返时延 RTT</strong>（Round-Trip Time）</td><td class="l">50 ms</td><td class="l">一个包从客户端到服务器再回来的时间</td></tr>
+        <tr><td class="l"><strong>最大分段大小 MSS</strong>（Maximum Segment Size）</td><td class="l">1460 字节</td><td class="l">一条 TCP 段能承载的最大应用层数据</td></tr>
+        <tr><td class="l"><strong>拥塞窗口 cwnd</strong>（congestion window）</td><td class="l">初始 10 MSS</td><td class="l">收到确认前发送方被允许发出的数据量</td></tr>
+        <tr><td class="l"><strong>慢启动</strong>（slow start）</td><td class="l">每轮翻倍</td><td class="l">cwnd 按 10、20、40、80 MSS 指数增长</td></tr>
+      </tbody>
+    </table>
+    <div class="cols">
+      <div class="col"><div class="card">🎫 <strong>三次握手</strong>（three-way handshake）<br>发 SYN、回 SYN-ACK、再发 ACK；发出第一个请求字节前先付 1 个 RTT。</div></div>
+      <div class="col"><div class="card">🐢 <strong>慢启动</strong>（slow start）<br>连接刚建好时 cwnd 很小，每收到一轮确认就翻倍，传大对象尤其吃亏。</div></div>
+    </div>
+    <div class="deep">关键区分：握手是固定门票，与资源大小无关；慢启动是加速过程，决定一条冷连接前几轮能发多少数据。</div>
+  </div>
+</section>
+
+<section class="slide" data-narration="先看最朴素模型长什么样，这是讲义里取两个资源的两条独立连接。蓝色是请求行，黄色是首部名，绿色是注释。连接 A 为样式表而生：先三次握手，再发 GET，写明 Connection: close，拿到响应后服务器立刻发 FIN 把连接关掉。连接 B 为脚本重新建一条：又一次完整的三次握手，又一次请求与响应，又一次关闭。请注意每条连接都在响应之后被掐断，第二条连接完全享受不到第一条积累的任何 TCP 状态，拥塞窗口又得从十个小段重新涨起。这就是短连接把刚养热一点的连接立刻作废的样子，下一页看对策。">
+  <div class="slide-head"><span class="sec">例子 · 报文</span><h3>短连接：一条连接只服务一次事务</h3></div>
+  <div class="slide-body">
+    <div class="wire sm"><em>—— 连接 A：为 /style.css 而生 ——</em>
+<em>[客户端发 SYN → 服务器回 SYN-ACK → 客户端发 ACK，三次握手完成]</em>
+<b>GET /style.css HTTP/1.1</b>
+<i>Host</i>: www.example.com
+<i>Connection</i>: close
+
+<b>HTTP/1.1 200 OK</b>
+<i>Content-Type</i>: text/css
+<i>Content-Length</i>: 128
+
+<em>body { color: #333; }</em>
+<em>[服务器发 FIN，连接 A 关闭]</em>
+<em>—— 连接 B：为 /app.js 重新建一条 ——</em>
+<em>[又一次三次握手……]</em>
+<b>GET /app.js HTTP/1.1</b>
+<i>Host</i>: www.example.com
+<i>Connection</i>: close
+
+<b>HTTP/1.1 200 OK</b>
+<i>Content-Type</i>: application/javascript
+<i>Content-Length</i>: 64
+<em>[又一次关闭……]</em></div>
+    <div class="wire-cap">两个资源走了两条完整连接：握手、传输、关闭三步重复两遍，第二条连接享受不到第一条积累的任何 TCP 状态。</div>
+  </div>
+</section>
+
+<section class="slide" data-narration="既然成本来自反复新建，最直接的对策就是别关，看讲义里这条长连接报文。开头只做一次三次握手，此后两条请求共用同一条连接，第二条请求没有重新握手，直接接着发。响应里多了 Keep-Alive 这个首部，timeout=5 表示我至少愿意再等五秒空闲，max=100 表示这条连接最多还能承载一百次请求。这里要分清两个长得很像、职责却不同的首部：Connection: keep-alive 是声明「我要用长连接」的开关，Keep-Alive 后面那串参数才是调超时和上限的旋钮。把它们混为一谈，就会写出发了开关却调不动超时的配置错误。">
+  <div class="slide-head"><span class="sec">例子 · 报文</span><h3>持久连接：握手一次，两条请求复用同一条 TCP</h3></div>
+  <div class="slide-body">
+    <div class="wire sm"><em>[一次三次握手，此后两条请求复用同一条连接]</em>
+<b>GET /style.css HTTP/1.1</b>
+<i>Host</i>: www.example.com
+<i>Connection</i>: keep-alive
+
+<b>HTTP/1.1 200 OK</b>
+<i>Content-Type</i>: text/css
+<i>Content-Length</i>: 128
+<i>Keep-Alive</i>: timeout=5, max=100
+
+<em>[没有关闭！连接保持打开……]</em>
+<b>GET /app.js HTTP/1.1</b>
+<i>Host</i>: www.example.com
+<i>Connection</i>: keep-alive
+
+<b>HTTP/1.1 200 OK</b>
+<i>Content-Type</i>: application/javascript
+<i>Content-Length</i>: 64
+<i>Keep-Alive</i>: timeout=5, max=100
+<em>[连接继续保持，直到空闲超时或任一方要求关闭]</em></div>
+    <div class="wire-cap">两条请求共用一条 TCP，只在开头握手一次；Connection 是开关，Keep-Alive 的 timeout 与 max 是具体参数。</div>
+    <div class="deep">版本差异：HTTP/1.0 要显式写 keep-alive 才得到长连接，HTTP/1.1 默认就是，只有 Connection: close 才退回短连接。</div>
+  </div>
+</section>
+
+<section class="slide" data-narration="把三种模型放到同一把尺子下对决，这是本讲第一个要记住的例子。沿用刚才的参数：RTT 五十毫秒，忽略处理与传输，握手和每个请求响应各算一个 RTT，取同页面四个小资源。短连接每个资源握手五十加传输五十，四个重复四遍，握手二百、传输二百，共四百毫秒、八个 RTT。长连接握手只付一次五十，省三次握手，但四个请求仍串行、四个等响应一个不少，共二百五十毫秒、五个 RTT。流水线握手五十加最后一个响应回来的五十，共一百毫秒、两个 RTT。结论：长连接省握手，流水线省等待。">
+  <div class="slide-head"><span class="sec">例子① · 手算</span><h3>取 4 个资源：8 RTT / 5 RTT / 2 RTT</h3></div>
+  <div class="slide-body">
+    <table class="small">
+      <thead><tr><th>模型</th><th>握手开销</th><th>传输开销（逐项）</th><th>总耗时</th></tr></thead>
+      <tbody>
+        <tr><td class="l"><strong>短连接</strong>（4 条连接逐个取）</td><td class="l">4 × 50 = 200 ms</td><td class="l">资源1 50 + 资源2 50 + 资源3 50 + 资源4 50 = 200 ms</td><td class="l"><strong>400 ms = 8 RTT</strong></td></tr>
+        <tr><td class="l"><strong>持久连接</strong>（1 条连接发一个等一个）</td><td class="l">1 × 50 = 50 ms</td><td class="l">等响应1 50 + 等响应2 50 + 等响应3 50 + 等响应4 50 = 200 ms</td><td class="l"><strong>250 ms = 5 RTT</strong></td></tr>
+        <tr><td class="l"><strong>流水线</strong>（请求连发、响应按序回）</td><td class="l">1 × 50 = 50 ms</td><td class="l">4 个请求背靠背发出约 0；4 个响应连续回，最后一个约在 1 RTT 末到 = 50 ms</td><td class="l"><strong>100 ms = 2 RTT</strong></td></tr>
+      </tbody>
+    </table>
+    <div class="formula formula-concl">长连接省握手（省 3 次）· 流水线省等待（省 3 个空等 RTT）</div>
+    <div class="tip">注意：长连接仍要逐个等响应，四个 RTT 一个不少；流水线的收益全来自把请求提前塞进网络。</div>
+  </div>
+</section>
+
+<section class="slide" data-narration="第二个要记住的例子，把建一条连接到底多贵拆成握手和慢启动逐项算。RTT 五十毫秒，一条全新冷连接要返回一百 KB 响应，初始 cwnd 十个 MSS。三次握手这半边：发 SYN、回 SYN-ACK、再发 ACK，发出第一个请求字节前已先付一个 RTT、五十毫秒，哪怕只取三十字节小图标也躲不掉。慢启动按轮翻倍：第一轮十个 MSS 发一万四千六百字节，第二轮二十个发两万九千二，第三轮四十个发五万八千四，第四轮累计十万二千二、补两百字节发完。合计握手一个 RTT 加慢启动四个 RTT，共五个 RTT、二百五十毫秒；养热的连接一个 RTT、五十毫秒就够。">
+  <div class="slide-head"><span class="sec">例子② · 手算</span><h3>冷连接 5 RTT，热连接 1 RTT</h3></div>
+  <div class="slide-body">
+    <table class="small">
+      <thead><tr><th>轮次</th><th>本轮 cwnd</th><th>本轮可发数据</th><th>累计已发</th></tr></thead>
+      <tbody>
+        <tr><td class="l"><strong>第 1 轮</strong></td><td class="l">10 MSS</td><td class="l">10 × 1460 = 14600 字节</td><td class="l">14600 字节</td></tr>
+        <tr><td class="l"><strong>第 2 轮</strong></td><td class="l">20 MSS（翻倍）</td><td class="l">20 × 1460 = 29200 字节</td><td class="l">43800 字节</td></tr>
+        <tr><td class="l"><strong>第 3 轮</strong></td><td class="l">40 MSS</td><td class="l">40 × 1460 = 58400 字节</td><td class="l">102200 字节</td></tr>
+        <tr><td class="l"><strong>第 4 轮</strong></td><td class="l">80 MSS</td><td class="l">只剩 102400 − 102200 = 200 字节，1 个段发完</td><td class="l">102400 字节（完成）</td></tr>
+      </tbody>
+    </table>
+    <div class="formula formula-concl">冷连接 ≈ 握手 1 RTT + 慢启动 4 RTT = 5 RTT = 250 ms　｜　热连接 ≈ 1 RTT = 50 ms</div>
+    <div class="deep">冷连接比热连接慢整整 4 个 RTT：短连接的病根不只是多一次握手，而是让每条连接永远停在慢启动的开头几轮。</div>
+  </div>
+</section>
+
+<section class="slide" data-narration="流水线到底长什么样，看讲义里这段报文就清楚了。同一条长连接上，四个 GET 背靠背写进管道，中间完全不等响应，这是它比长连接快的地方。可下面服务端返回的四个响应块，顺序被死死钉成和请求发出时一模一样：慢报告、图标、样式表、脚本。注意图标 logo.png 在 CDN 边缘早就缓存好了，随时能回，却只能排在慢报告后面。这就是请求可以抢着发、响应必须排着回。报文已经把队头阻塞的形状摆出来了，下一页我们用逐拍时间表把它算到底，看那几个早就就绪的响应究竟被拖了多久。">
+  <div class="slide-head"><span class="sec">例子 · 报文</span><h3>流水线：请求连发，响应按序</h3></div>
+  <div class="slide-body">
+    <div class="wire sm"><em>[同一条长连接上，四个请求背靠背发出，中间不等响应]</em>
+<b>GET /slow-report HTTP/1.1</b>
+<i>Host</i>: www.example.com
+<b>GET /logo.png HTTP/1.1</b>
+<i>Host</i>: www.example.com
+<b>GET /style.css HTTP/1.1</b>
+<i>Host</i>: www.example.com
+<b>GET /app.js HTTP/1.1</b>
+<i>Host</i>: www.example.com
+
+<b>HTTP/1.1 200 OK</b>  <em>（/slow-report，慢）</em>
+<i>Content-Length</i>: 90000
+
+<b>HTTP/1.1 200 OK</b>  <em>（/logo.png，已就绪但必须排在后面）</em>
+<i>Content-Length</i>: 2048
+
+<b>HTTP/1.1 200 OK</b>  <em>（/style.css）</em>
+<i>Content-Length</i>: 128
+
+<b>HTTP/1.1 200 OK</b>  <em>（/app.js）</em>
+<i>Content-Length</i>: 64</div>
+    <div class="wire-cap">请求可连续写入管道，但响应必须按同样顺序写回；即使 logo.png 早已缓存，也只能排在慢报告之后。</div>
+    <div class="deep">判定口诀：第二个请求是否必须等第一个响应回来？必须等是普通长连接，不必等、连续发才是流水线。另外只有<strong>幂等</strong>（idempotent）方法 GET、HEAD、PUT、DELETE 能安全进流水线，POST 这类写入请求不行。</div>
+  </div>
+</section>
+
+<section class="slide" data-narration="第三个要记住的例子，把上一页报文摊成逐拍时间表。一条流水线连接上，客户端一口气发出四个请求：R1 是服务器要现算三 RTT 的慢报告，R2、R3、R4 都是边缘缓存、零处理随时能回的快资源。t 等于零时四个请求全进管道；半个 RTT 时服务器收齐，R2 到 R4 其实早可发，可 R1 才刚开始慢处理。从半个到三个半 RTT 客户端一直等，看不到任何响应。四个 RTT 时才收到 R1、才轮到发 R2，R2 被堵了三个半 RTT，之后 R3、R4 陆续解堵。响应按序让三个早就就绪的快资源陪着慢报告罚站，这就是队头阻塞。">
+  <div class="slide-head"><span class="sec">例子③ · 时序</span><h3>慢响应 R1 拖住早已就绪的 R2 / R3 / R4</h3></div>
+  <div class="slide-body">
+    <table class="small">
+      <thead><tr><th>时刻</th><th>客户端侧</th><th>服务器侧</th><th>关键点</th></tr></thead>
+      <tbody>
+        <tr><td class="l">t = 0</td><td class="l">连续发出 R1 R2 R3 R4</td><td class="l">尚未收到</td><td class="l">全部进管道，不用等</td></tr>
+        <tr><td class="l">t = 0.5 RTT</td><td class="l">等待</td><td class="l">收齐 4 个请求；R2/R3/R4 已就绪，R1 开始慢处理</td><td class="l">快响应其实早可发</td></tr>
+        <tr><td class="l">t = 0.5 → 3.5 RTT</td><td class="l">一直等待，看不到任何响应</td><td class="l">R1 耗时 3 RTT 才产出</td><td class="l">R2/R3/R4 只能干等</td></tr>
+        <tr><td class="l">t = 4 RTT</td><td class="l">收到 R1</td><td class="l">此刻才轮到发 R2</td><td class="l"><strong>R2 被堵 3.5 RTT</strong></td></tr>
+        <tr><td class="l">t = 4.5 / 5 / 5.5 RTT</td><td class="l">依次收到 R2 / R3 / R4</td><td class="l">依次发 R3 / R4 / 完成</td><td class="l">4 个资源才全部到齐</td></tr>
+      </tbody>
+    </table>
+    <div class="wire sm"><b>GET /slow-report</b>  <b>GET /logo.png</b>  <b>GET /style.css</b>  <b>GET /app.js</b>
+<em>↑ 四个请求 t=0 全部背靠背进管道</em>
+<i>200 /slow-report</i>  <em>（3 RTT 后才就绪）</em>
+<i>200 /logo.png</i>  <i>200 /style.css</i>  <i>200 /app.js</i>  <em>（早已就绪却被排在后面）</em></div>
+    <div class="wire-cap"><strong>队头阻塞</strong>（head-of-line blocking，HOL）：队首一个慢元素，把后面所有已就绪元素全部堵住；TCP 丢包重传还会让整条连接一起等，更顽固。</div>
+  </div>
+</section>
+
+<section class="slide" data-narration="第四个例子把视角搬到真实网络：客户端、代理、源站三点两跳，看逐跳首部怎么处理。客户端发给代理的请求里，Connection 除了 keep-alive 还列了自定义 X-Debug，声明它只对这一跳有效，Keep-Alive 写 timeout=5、max=100。代理按规范走三步：读 Connection 得出逐跳名单，剥离这三个首部不让它们越过这一跳，再按自己与源站的策略重写一套，并追加 Via。于是转发给源站的请求里 timeout 从五改三十、max 从一百改一千，X-Debug 消失。这说明连接管理是逐跳的事。">
+  <div class="slide-head"><span class="sec">例子④ · 逐跳</span><h3>Connection 与 Keep-Alive 在代理处被剥离重建</h3></div>
+  <div class="slide-body">
+    <div class="wire sm"><em>【第 1 跳：客户端 C → 代理 P，客户端发出】</em>
+<b>GET /index.html HTTP/1.1</b>
+<i>Host</i>: www.example.com
+<i>Connection</i>: keep-alive, X-Debug
+<i>Keep-Alive</i>: timeout=5, max=100
+<i>X-Debug</i>: trace-me</div>
+    <div class="wire-cap">客户端到代理这一跳：希望 keep-alive，timeout=5、max=100；X-Debug 被 Connection 列为逐跳首部。</div>
+    <div class="wire sm"><em>【第 2 跳：代理 P → 源站 S，代理重建后发出】</em>
+<b>GET /index.html HTTP/1.1</b>
+<i>Host</i>: www.example.com
+<i>Via</i>: 1.1 proxy-1.example.com
+<i>Connection</i>: keep-alive
+<i>Keep-Alive</i>: timeout=30, max=1000</div>
+    <div class="wire-cap">代理重建：timeout 从 5 改 30、max 从 100 改 1000，因为这是代理到源站的策略；X-Debug 已剥离，Via 逐跳追加。</div>
+    <div class="deep"><strong>逐跳首部</strong>（hop-by-hop header）只对当前一跳有效，须在此消费、按本跳重建；<strong>端到端首部</strong>（end-to-end header）如 Host 应原样传到最终接收方。</div>
+  </div>
+</section>
+
+<section class="slide" data-narration="代理若偷懒，把客户端的 Connection 和 Keep-Alive 原样塞给源站，有四类后果。第一，timeout=5 被当成代理到源站的策略，源站以为闲置五秒就关，代理却按三十秒复用，写请求收到 RST、请求失败。第二，Connection: close 被原样转发，源站关掉它与代理的连接，可客户端到代理那跳还开着，两跳状态不一致，留下半死连接。第三，X-Debug 被当成端到端首部，源站执行不该执行的调试逻辑，信息泄露到日志。第四，Connection: Upgrade 误转发给不支持的下一跳，升级状态混乱。一句话：逐跳首部天生不能被继承。">
+  <div class="slide-head"><span class="sec">专题 · 故障链</span><h3>误转发逐跳首部：四类后果</h3></div>
+  <div class="slide-body">
+    <table class="small">
+      <thead><tr><th>误转发的内容</th><th>源站的误解</th><th>实际故障</th></tr></thead>
+      <tbody>
+        <tr><td class="l"><strong>Keep-Alive: timeout=5</strong></td><td class="l">以为这条连接闲置 5 秒就关</td><td class="l">代理按 30 秒复用却已被关，写请求收到 RST，请求失败</td></tr>
+        <tr><td class="l"><strong>Connection: close</strong> 被原样转发</td><td class="l">关闭它与代理的连接</td><td class="l">客户端到代理这一跳还开着，两跳状态不一致，留下半死连接</td></tr>
+        <tr><td class="l"><strong>X-Debug: trace-me</strong></td><td class="l">执行不该执行的调试逻辑</td><td class="l">调试信息泄露到源站日志，或触发额外行为</td></tr>
+        <tr><td class="l"><strong>Connection: Upgrade</strong></td><td class="l">尝试协议切换</td><td class="l">升级状态混乱、连接不可用，第 11 讲展开</td></tr>
+      </tbody>
+    </table>
+    <div class="mmd mmd-sm">
+      <div class="mermaid">
+flowchart LR
+  C["客户端"] --> P["中间代理"]
+  P -->|"剥离逐跳首部并重建"| S["源站"]
+  P --> D["逐跳首部到此消费"]
+  S -->|"按新首部响应"| P
+  P -->|"按另一套首部响应"| C
+      </div>
+    </div>
+    <div class="deep"><strong>Via</strong> 恰好相反：它是端到端地<strong>逐跳追加</strong>，每跳把自己的标识加到列表末尾，用来追踪经过了哪些代理；一个被剥离重建，一个被追加保留，方向相反。</div>
+  </div>
+</section>
+
+<section class="slide" data-narration="把三种模型的关系按空格逐步推一遍，每步都问为什么可以这样变。第一步，短连接的成本来自反复新建，握手加慢启动每个请求都重新付一遍启动费，对策不是优化某个包，而是让连接活得久一点。第二步，持久连接复用同一条 TCP，省掉三次握手，可请求仍发一个等一个，四个空等的 RTT 一个不少。第三步，流水线让请求背靠背发出，把等待压成一个 RTT，代价是响应必须按请求顺序回来。第四步，按序立刻带来队头阻塞，队首一慢堵住全部，说明流水线挖到头了，得换模型。这条约束、对策、新约束的链，正是 HTTP/2 出场的理由。">
+  <div class="slide-head"><span class="sec">推导</span><h3>约束 → 对策 → 新约束，按空格逐步展开</h3></div>
+  <div class="slide-body">
+    <div class="step"><p><strong>① 成本来自反复新建</strong>：握手 1 RTT 加慢启动数 RTT 每个请求付一遍，对策是让连接活得久一点。</p></div>
+    <div class="step"><p><strong>② 持久连接复用 TCP</strong>：省掉反复握手，但仍是发一个等一个，等待的 RTT 一个不少。</p></div>
+    <div class="step"><p><strong>③ 流水线连发请求</strong>：把等待压成一个 RTT，代价是响应必须按请求顺序返回。</p></div>
+    <div class="step"><p><strong>④ 按序带来队头阻塞</strong>：队首慢堵住全部，流水线挖到头，必须换模型。</p></div>
+    <div class="step"><div class="formula formula-concl">每拆一层约束，性能上一台阶，代价是实现更复杂、对中间层要求更高</div></div>
+    <p class="step-hint">按空格 / → 逐步展开推导</p>
+  </div>
+</section>
+
+<section class="slide" data-narration="轮到你了。屏幕上给了一组新参数，请你自己把账算一遍：RTT 四十毫秒，用短连接、长连接、流水线三种模型依次取五个小资源，分别写出握手开销、传输开销和总耗时，并说清相邻两种模型之间差的那些 RTT 到底来自握手还是等待。先暂停视频自己推一遍。推出来了吗？好，对答案。短连接每个资源握手四十加传输四十，五条共十个 RTT、四百毫秒；长连接握手一次四十，加五个串行往返两百，共六个 RTT、两百四十毫秒；流水线握手四十，五个请求背靠背约零，最后一个响应一个 RTT 末到，共两个 RTT、八十毫秒。短到长省四次握手，长到流水线省四个空等，来源完全不同。">
+  <div class="slide-head"><span class="sec">演练</span><h3>换一组参数，自己把三种模型算一遍</h3></div>
+  <div class="slide-body">
+    <div class="wire sm"><em>[参数] RTT = 40 ms · 三次握手 1 RTT · 每个请求响应往返 1 RTT · 取 5 个小资源</em>
+<b>任务</b>：列出短连接 / 持久连接 / 流水线的 握手开销、传输开销、总耗时
+<b>再答</b>：相邻两模型之间的差值，省的是握手还是等待？</div>
+    <div class="step"><p>① <strong>短连接</strong>：5 ×（握手 40 + 传输 40）= <strong>10 RTT = 400 ms</strong>。</p></div>
+    <div class="step"><p>② <strong>持久连接</strong>：握手 40 + 5 个串行往返 200 = <strong>6 RTT = 240 ms</strong>。</p></div>
+    <div class="step"><p>③ <strong>流水线</strong>：握手 40 + 末个响应 40 = <strong>2 RTT = 80 ms</strong>；短到长省 4 次握手，长到流水线省 4 个空等。</p></div>
+    <div class="pause"><div class="icon">✍️</div><div class="txt"><b>暂停推导</b><p>合上答案，自己写出三种模型的总耗时，并标出每段差值来自握手还是等待。</p></div></div>
+    <p class="step-hint">按空格 / → 逐步揭示答案</p>
+  </div>
+</section>
+
+<section class="slide" data-narration="队头阻塞最后怎么治，这页讲透层次，否则容易从一个极端走到另一个。HTTP/2 引入流和帧：每条请求响应映射到一个有编号的流，消息拆成帧，帧在同一条 TCP 上交错发送，接收方按流编号归位，于是第二条的帧能在第一条没发完时插进去，响应不必按序，快流不用等慢流，应用层队头阻塞被打破。但务必记住，它解决的是应用层也就是 HTTP 层的，没解决传输层也就是 TCP 层的。所有流仍复用同一条 TCP，一旦某个包丢失，TCP 的按序交付会让整条连接的后续字节都等重传，所有流一起卡住。这最后一次解放要等 HTTP/3 换用 QUIC，它在传输层就把流分开。">
+  <div class="slide-head"><span class="sec">专题 · HTTP/2</span><h3>多路复用解决应用层，TCP 层留待 HTTP/3</h3></div>
+  <div class="slide-body">
+    <div class="mmd mmd-sm">
+      <div class="mermaid">
+flowchart LR
+  A["流水线 响应一 慢"] -->|"必须等它发完"| B["响应二 已就绪被堵"]
+  B -->|"依次排队"| C["响应三 被堵"]
+  D["HTTP2 流一 慢"] -->|"帧可交错"| E["HTTP2 流二 先行"]
+  E -->|"互不阻塞"| F["HTTP2 流三 先行"]
+      </div>
+    </div>
+    <div class="cols">
+      <div class="col"><div class="card">✅ <strong>应用层已解决</strong><br><strong>多路复用</strong>（multiplexing）把消息拆成带编号的流与可交错的帧，响应不必按序，快流不等慢流。</div></div>
+      <div class="col"><div class="card">⚠️ <strong>传输层仍在</strong><br>所有流共享一条 TCP，一个包丢失就整条连接等重传，要等 <strong>HTTP/3 的 QUIC</strong> 才把流在传输层分开。</div></div>
+    </div>
+    <div class="deep"><strong>队头阻塞</strong>（head-of-line blocking）：流水线按序堵应用层，HTTP/2 治应用层，HTTP/3 的 QUIC 治 TCP 层。靠多开域名凑并发的<strong>域名分片</strong>（domain sharding）在 HTTP/2 下反而损害连接聚合，是过时技巧。</div>
+  </div>
+</section>
+
+<section class="slide" data-narration="把 MDN 的工程口径和 RFC 的规范口径对一次，看 HTTP/1.1 连接管理归谁管。二零二二年 IETF 把 HTTP 规范重整为 RFC 9110 系列，9110 管通用语义，9112 管 HTTP/1.1 的线上格式与连接管理，是本讲主战场。MDN 说默认长连接，对应 9112 第九点六节；说 Connection 与 Keep-Alive 是逐跳首部，对应 9110 第七点六点一节；说响应必须按序，对应 9112 第九点五点二节；说只有幂等方法能流水线化，对应 9110 第九点二点二节。平时查 MDN 更快，判断合规时条文才是裁判。">
+  <div class="slide-head"><span class="sec">规范对照</span><h3>MDN 的说法 → RFC 怎么写 → 为什么值得知道</h3></div>
+  <div class="slide-body">
+    <table class="small">
+      <thead><tr><th>MDN 的说法</th><th>RFC 怎么写</th><th>为什么值得知道</th></tr></thead>
+      <tbody>
+        <tr><td class="l">HTTP/1.1 默认长连接，除非写 Connection: close</td><td class="l">RFC 9112 §9.6：默认持久，带 close 的一方在该响应后不得再复用连接</td><td class="l">close 是强制信号，连接池收到就该立即回收</td></tr>
+        <tr><td class="l">Connection、Keep-Alive 是逐跳首部，值可被中间节点修改</td><td class="l">RFC 9110 §7.6.1：代理必须移除 Connection 列出的首部与 Connection 本身，再逐跳重建</td><td class="l">代理的强制步骤，漏做剥离会让参数泄漏到下一跳</td></tr>
+        <tr><td class="l">空闲会被关闭，Keep-Alive 可指定保持时间</td><td class="l">RFC 9112 §9.6：timeout 与 max 是 advisory 建议性，接收方不保证遵守</td><td class="l">不能当精确契约，客户端要有自己的超时与重连</td></tr>
+        <tr><td class="l">响应必须按请求顺序返回，于是有队头阻塞</td><td class="l">RFC 9112 §9.5.2：响应按接收顺序发送，且不推荐新实现启用流水线</td><td class="l">按序是规范要求，框架内绕不过，只能换 HTTP/2 模型</td></tr>
+        <tr><td class="l">只有<strong>幂等</strong>（idempotent）方法能安全地流水线化</td><td class="l">RFC 9110 §9.2.2 定义幂等；RFC 9112 §9.5.2 禁止对非幂等方法用流水线</td><td class="l">把幂等从概念变成合规约束，写入型 API 不能假设低时延</td></tr>
+      </tbody>
+    </table>
+    <div class="deep">读法：MDN 说通常或可以，而你需要确定的对错时，去 RFC 9110 系列找 MUST、SHOULD、MAY 这层规范性措辞。</div>
+  </div>
+</section>
+
+<section class="slide" data-narration="扫三个最常见的雷，都是把不同层次混为一谈。第一个，以为流水线把队头阻塞解决了，其实它只是把请求提前发出，响应依旧按序返回，队头阻塞原封不动，真正解决应用层这层的是 HTTP/2 的多路复用。第二个，以为长连接等于永不关闭、连接越多越好，其实长连接空闲时照样烧服务器资源，高负载下大量闲置连接甚至可能成为拒绝服务攻击的载体，而且浏览器对同一域名的并发连接数有上限，不是想开多少开多少。第三个，以为逐跳首部应当被代理原样转发到源站，其实它是「在此消费、按本跳重建」，原样转发正是上一页那四类故障的根因。把这三件事分开，配置才不会踩空。">
+  <div class="slide-head"><span class="sec">避坑</span><h3>三个把层次混为一谈的误解</h3></div>
+  <div class="slide-body">
+    <div class="trap">❌ <strong>流水线解决了队头阻塞</strong><br>✅ 它只是把请求提前发，响应仍按序，队头阻塞原封不动；解决应用层这层的是 HTTP/2 多路复用。</div>
+    <div class="trap">❌ <strong>长连接永不关闭，连接越多越好</strong><br>✅ 空闲也占服务器资源，可能被当成<strong>拒绝服务攻击</strong>（Denial of Service，DoS）的载体；同域名并发连接数有上限，尽快关空闲反而有利。</div>
+    <div class="trap">❌ <strong>逐跳首部应原样转发到源站</strong><br>✅ 它是「在此消费、按本跳重建」；原样转发会造成参数错配、连接被意外关闭等连锁故障。</div>
+  </div>
+</section>
+
+<section class="slide" data-narration="这一讲和下一讲怎么分工，说清楚才不会重复用功。第 4 讲和第 5 讲同属连接与缓存这一组，是同一个性能优化问题的两种解法：本讲少建连接，把反复握手和等待的时延压下去；第 5 讲少传字节，让一部分请求干脆不必发、或者只回一个三百零四。本讲连接复用的细节到此为止，怎么判断一份响应能不能复用交给第 5 讲。另外逐跳首部、Via 和 Upgrade 这一串中间层概念，要到第 11 讲代理、隧道与协议升级才展开；队头阻塞在传输层的最后解放，留到演进概览和 HTTP/3 回望。下一讲，我们从少建连接转向少传字节。">
+  <div class="slide-head"><span class="sec">接口</span><h3>第 4 讲少建连接，第 5 讲少传字节</h3></div>
+  <div class="slide-body">
+    <table>
+      <thead><tr><th></th><th>第 4 讲 · 连接管理</th><th>第 5 讲 · HTTP 缓存</th></tr></thead>
+      <tbody>
+        <tr><td class="l"><strong>提速维度</strong></td><td class="l">少建连接，压时延</td><td class="l">少传字节，省往返</td></tr>
+        <tr><td class="l"><strong>核心对象</strong></td><td class="l">TCP 连接、RTT、cwnd、Connection 首部</td><td class="l">Cache-Control、Age、Date、Vary、新鲜度</td></tr>
+        <tr><td class="l"><strong>关键动作</strong></td><td class="l">复用连接、连发请求、逐跳剥离重建</td><td class="l">命中缓存键、判定新鲜、陈旧再验证</td></tr>
+        <tr><td class="l"><strong>留下的账</strong></td><td class="l">逐跳与升级给第 11 讲，传输层队头阻塞给 HTTP/3</td><td class="l">响应能否复用当场判定，Vary 串味是典型事故</td></tr>
+      </tbody>
+    </table>
+    <div class="tip">钩子：连接已经养热了，下一讲换个思路，让一部分请求根本不必发出去。</div>
+  </div>
+</section>
+
+<section class="slide" data-narration="用三句话收束第 4 讲。解决什么：算清建一条连接到底多贵，讲清 HTTP/1.x 用短连接、持久连接、流水线三种模型把三次握手与慢启动的成本摊到更多请求上，还交代 Connection、Keep-Alive 这类逐跳首部在代理处怎么被剥离重建。核心机制：握手与慢启动让短连接最贵，长连接复用一条 TCP 省握手，流水线连发请求省等待，但响应必须按序、留下队头阻塞，连接管理只在相邻两跳间生效。承上启下：第 3 讲讲传什么，本讲讲怎么传，第 5、6 讲转向少传字节，逐跳与升级留给第 11 讲。记住口诀：长连接省握手，流水线省等待，按序留下病。">
+  <div class="slide-head"><span class="sec">小结</span><h3>三句话讲完第 4 讲</h3></div>
+  <div class="slide-body">
+    <div class="chain">
+      <div class="link"><span class="no">1</span><span class="txt"><strong>解决什么</strong>：算清建连接成本，三种模型摊薄它，逐跳首部剥离重建</span></div>
+      <div class="link"><span class="no">2</span><span class="txt"><strong>核心机制</strong>：长连接省握手，流水线省等待，响应按序留下队头阻塞</span></div>
+      <div class="link"><span class="no">3</span><span class="txt"><strong>承上启下</strong>：第 3 讲传什么，第 5、6 讲少传字节，逐跳与升级给第 11 讲</span></div>
+    </div>
+    <div class="formula formula-concl">长连接省握手，流水线省等待，按序留下病 —— 合上书也要能默写</div>
+  </div>
+</section>
+
+<section class="slide slide-cover" data-narration="第 4 讲到这儿结束。给你留四项毕业挑战，合上书拿一张纸完成：第一，用具体 RTT 算出三种模型取四个资源的总耗时，说清每段省的是握手还是等待；第二，给出 RTT 与初始 cwnd，逐轮推演三次握手与慢启动，算一条冷连接传大对象要几个 RTT；第三，画流水线队头阻塞的时序，说明慢响应怎样把已就绪的响应一一堵住，讲清 TCP 丢包为何更糟；第四，写一条带 Connection 与 Keep-Alive 的请求经过代理后的变化，说明剥离重建三步和误转发后果。全做出来，再点讲义底部的完成按钮。下一讲，我们换一种提速：缓存。">
+  <div class="kicker">第 4 讲 结束</div>
+  <h1>长连接省握手，流水线省等待</h1>
+  <div class="sub">毕业挑战：合上书，拿一张纸</div>
+  <div class="divider"></div>
+  <div class="meta">
+    ☑ 用 RTT 算三种模型取 4 个资源的总耗时　　☑ 逐轮推演握手与慢启动的冷连接成本<br>
+    ☑ 画流水线队头阻塞的逐拍时序　　　　　　☑ 写逐跳首部经代理的剥离重建与误转发后果<br><br>
+    下一讲 · 第 5 讲 HTTP 缓存：另一种提速，少传字节
+  </div>
+</section>
+
+  <!-- 页脚：brand 改为本章标题；总页数改 pagenum 初值 -->
+  <div id="footer">
+    <span class="brand">第4讲 HTTP/1.x 的连接管理 · HTTP 精通 课件　<a class="to-lec" href="../http-guide/index.html">讲义首页 ↗</a></span>
+    <span id="pagenum">1 / 1</span>
+  </div>
+
+  <!-- 导航 -->
+  <div class="nav">
+    <button id="prev" title="上一页 (←)">‹</button>
+    <button id="next" title="下一页 (→ / 空格)">›</button>
+  </div>
+  <div id="hint">← → 翻页 · 空格下一页 · 推导页逐步显示 · 点击左右半屏翻页</div>
+
+</div>
+
+<!-- mermaid 本地引用，保证离线可用；初始化参数全套课件统一，勿改 -->
+<script src="assets/mermaid.min.js"></script>
+<script>
+mermaid.initialize({
+  startOnLoad: false,   // 必须为 false：display:none 的隐藏页渲染会得到 0 宽高的退化 SVG，
+                        // 改为页面激活时懒渲染（见 renderMermaid）
+  theme: "base",
+  themeVariables: {
+    primaryColor: "#ebf8ff",
+    primaryBorderColor: "#2b6cb0",
+    primaryTextColor: "#1a365d",
+    lineColor: "#718096",
+    fontFamily: "-apple-system, PingFang SC, sans-serif",
+    fontSize: "15px"
+  },
+  flowchart: { curve: "linear", htmlLabels: false }
+});
+</script>
+<script>
+(function(){
+  const slides = Array.from(document.querySelectorAll('.slide'));
+  const total = slides.length;
+  let idx = 0;
+
+  const params = new URLSearchParams(location.search);
+  const startSlide = parseInt(params.get('slide'), 10);
+  if (params.get('autohide') === '1') document.body.classList.add('autohide');
+  if (!isNaN(startSlide) && startSlide >= 1 && startSlide <= total) idx = startSlide - 1;
+
+  const progress = document.getElementById('progress');
+  const pagenum = document.getElementById('pagenum');
+  const prevBtn = document.getElementById('prev');
+  const nextBtn = document.getElementById('next');
+
+  // 推导分步：每页记住已展开的步数；autohide（截图）模式下 CSS 强制全显
+  const stepState = new Map();
+  function stepsOf(i){ return Array.from(slides[i].querySelectorAll('.step')); }
+  function applySteps(){
+    stepsOf(idx).forEach((el, k)=> el.classList.toggle('on', k < (stepState.get(idx) || 0)));
+  }
+  // 前进一步：先展开本页下一步，全部展开后才翻页
+  function forward(){
+    const steps = stepsOf(idx);
+    const shown = stepState.get(idx) || 0;
+    if (shown < steps.length){ stepState.set(idx, shown + 1); applySteps(); return; }
+    go(idx + 1);
+  }
+  // 后退一步：先收起本页最后一步，收完才回上一页
+  function backward(){
+    const steps = stepsOf(idx);
+    const shown = stepState.get(idx) || 0;
+    if (shown > 0){ stepState.set(idx, shown - 1); applySteps(); return; }
+    go(idx - 1);
+  }
+
+  // mermaid 懒渲染：只在页面激活（有真实宽高）时渲染该页的图，渲染后打 data-done 防重复
+  function renderMermaid(slide){
+    if (typeof mermaid === 'undefined') return;
+    const nodes = Array.from(slide.querySelectorAll('.mermaid:not([data-done])'));
+    if (!nodes.length) return;
+    nodes.forEach(n => n.setAttribute('data-done', ''));
+    mermaid.run({ nodes }).catch(err => {
+      nodes.forEach(n => n.removeAttribute('data-done'));
+      console.error('mermaid 渲染失败：', err);
+    });
+  }
+
+  function render(){
+    slides.forEach((s,i)=> s.classList.toggle('active', i===idx));
+    progress.style.width = ((idx+1)/total*100) + '%';
+    pagenum.textContent = (idx+1) + ' / ' + total;
+    prevBtn.disabled = (idx===0);
+    nextBtn.disabled = (idx===total-1);
+    applySteps();
+    renderMermaid(slides[idx]);
+  }
+  function go(n){ idx = Math.max(0, Math.min(total-1, n)); render(); }
+
+  prevBtn.addEventListener('click', e=>{ e.stopPropagation(); backward(); });
+  nextBtn.addEventListener('click', e=>{ e.stopPropagation(); forward(); });
+
+  document.addEventListener('keydown', e=>{
+    if(e.key==='ArrowRight'||e.key===' '||e.key==='PageDown'){ e.preventDefault(); forward(); }
+    else if(e.key==='ArrowLeft'||e.key==='PageUp'){ e.preventDefault(); backward(); }
+    else if(e.key==='Home'){ stepState.set(idx, 0); go(0); }
+    else if(e.key==='End'){ go(total-1); }
+  });
+
+  document.getElementById('stage').addEventListener('click', e=>{
+    if(e.target.closest('.nav') || e.target.closest('a')) return;
+    const x = e.clientX;
+    if(x < window.innerWidth*0.5) backward(); else forward();
+  });
+
+  function fit(){
+    const s = Math.min(window.innerWidth/1280, window.innerHeight/720);
+    document.getElementById('stage').style.transform = 'translate(-50%,-50%) scale(' + s + ')';
+  }
+  window.addEventListener('resize', fit);
+  fit();
+  render();
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,701 @@
+<!DOCTYPE html>
+<!--
+  ======================================================================
+  HTTP 精通 · 课件外壳（deck-shell.html）
+  由 build-slides.mjs 把 slides/NN.html 注入幻灯片区域，
+  输出 public/http-guide-slides/NN-xxx-课件.html。
+  骨架来自站内通用 1280×720 课件模板；本套额外增加 .wire 协议报文块。
+  每页必须写 data-narration（180–280 字口语稿，禁半角双引号、禁换行、禁小于号）。
+  ======================================================================
+-->
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第1讲 HTTP 概述与典型会话 · HTTP 精通 课件</title>
+<script>
+window.MathJax = {
+  tex: {
+    inlineMath: [['$', '$'], ['\\(', '\\)']],
+    displayMath: [['$$', '$$'], ['\\[', '\\]']],
+    processEscapes: true,
+    tags: 'none'
+  },
+  svg: { fontCache: 'global', scale: 1.05 },
+  options: { skipHtmlTags: ['script','noscript','style','textarea','pre','code'] }
+};
+</script>
+<!-- MathJax 本地引用（tex-svg 单文件全量组件，约2MB，自带字体数据），file:// 与断网均可用 -->
+<script src="assets/tex-svg.js" async></script>
+<style>
+  :root{
+    --primary:#1a365d; --accent:#2b6cb0; --accent-light:#ebf8ff; --accent-border:#bee3f8;
+    --text:#2d3748; --muted:#718096; --border:#e2e8f0; --bg-light:#f7fafc;
+    --success:#38a169; --danger:#e53e3e; --warning:#dd6b20; --warn-bg:#fffaf0;
+  }
+  *{margin:0;padding:0;box-sizing:border-box;}
+  html,body{width:100%;height:100%;overflow:hidden;background:#0f172a;}
+  body{
+    font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Hiragino Sans GB","Microsoft YaHei","WenQuanYi Micro Hei",sans-serif;
+    color:var(--text);
+  }
+  #stage{
+    position:absolute; left:50%; top:50%;
+    width:1280px; height:720px;
+    transform:translate(-50%,-50%) scale(1);
+    transform-origin:center center;
+    background:#ffffff;
+    box-shadow:0 0 40px rgba(0,0,0,.4);
+    overflow:hidden;
+  }
+  .slide{
+    position:absolute; inset:0;
+    padding:36px 60px 52px;
+    display:none;
+    flex-direction:column;
+    background:#ffffff;
+    opacity:0;
+    transition:opacity .35s ease;
+  }
+  .slide.active{ display:flex; opacity:1; }
+
+  #progress{ position:absolute; top:0; left:0; height:6px; background:var(--accent); width:0; z-index:50; transition:width .35s; }
+
+  /* 封面 / 结束页 */
+  .slide-cover{ justify-content:center; align-items:center; text-align:center; }
+  .slide-cover{ background:linear-gradient(135deg,#1a365d 0%,#2b6cb0 100%); color:#fff; }
+  .slide-cover .kicker{ font-size:22px; letter-spacing:6px; opacity:.85; margin-bottom:18px;}
+  .slide-cover h1{ font-size:64px; font-weight:800; line-height:1.2; margin-bottom:22px; letter-spacing:2px;}
+  .slide-cover .sub{ font-size:26px; opacity:.92; margin-bottom:36px;}
+  .slide-cover .meta{ font-size:19px; opacity:.85; line-height:2;}
+  .slide-cover .divider{ width:160px;height:5px;background:#fff;opacity:.6;margin:0 auto 30px;border-radius:3px;}
+  .slide-cover .question{ font-size:24px; background:rgba(255,255,255,.12); border:1px solid rgba(255,255,255,.35); border-radius:12px; padding:12px 28px; margin-bottom:30px;}
+
+  /* 页头：结论式标题 */
+  .slide-head{ display:flex; align-items:baseline; gap:16px; border-bottom:3px solid var(--accent); padding-bottom:9px; margin-bottom:12px;}
+  .slide-head .sec{ font-size:17px; color:var(--accent); font-weight:700; background:var(--accent-light); padding:3px 11px; border-radius:6px; white-space:nowrap;}
+  .slide-head h3{ font-size:29px; color:var(--primary); font-weight:700;}
+  .slide-body{ flex:1; display:flex; flex-direction:column; justify-content:center; min-height:0; }
+
+  p{ font-size:21px; line-height:1.65; margin-bottom:8px;}
+  .lead{ font-size:23px; color:#374151; line-height:1.75;}
+  ul,ol{ margin:0 0 8px 26px; font-size:21px; line-height:1.7;}
+  li{ margin-bottom:5px;}
+  strong{ color:var(--primary); }
+
+  /* 公式块 */
+  .formula{ background:var(--accent-light); border-left:5px solid var(--accent); border-radius:0 10px 10px 0; padding:9px 22px; margin:9px 0; text-align:center; font-size:23px;}
+  .formula-concl{ background:#fffaf0; border-left:5px solid var(--warning);}
+  .MathJax{ font-size:1.05em !important; }
+  mjx-container[display="true"]{ margin:6px 0 !important; }
+
+  /* 表格 */
+  table{ width:100%; border-collapse:collapse; margin:10px 0; font-size:20px;}
+  th{ background:var(--accent); color:#fff; padding:8px 12px; text-align:center; font-weight:600;}
+  td{ padding:7px 12px; border:1px solid var(--border); text-align:center; vertical-align:middle;}
+  tr:nth-child(even) td{ background:var(--bg-light);}
+  td.l{ text-align:left; }
+  table.small{ font-size:18px; }
+  table.small td, table.small th{ padding:6px 10px; }
+
+  /* 组件 */
+  .card{ background:var(--accent-light); border:1px solid var(--accent-border); border-radius:12px; padding:12px 20px; margin:10px 0;}
+  .tip{ background:#ebf8ff; border-left:5px solid var(--accent); border-radius:0 10px 10px 0; padding:10px 20px; margin:10px 0; font-size:20px; color:#2c5282;}
+  .deep{ background:#f0fff4; border-left:5px solid var(--success); border-radius:0 10px 10px 0; padding:10px 20px; margin:10px 0; font-size:20px; color:#22543d;}
+  .warn{ background:var(--warn-bg); border-left:5px solid var(--warning); border-radius:0 10px 10px 0; padding:10px 20px; margin:10px 0; font-size:20px; color:#744210;}
+  .trap{ background:#fef2f2; border-left:5px solid var(--danger); border-radius:0 10px 10px 0; padding:10px 20px; margin:10px 0; font-size:20px; color:#7f1d1d;}
+
+  .pause{
+    background:var(--warn-bg); border:2px dashed var(--warning); border-radius:14px;
+    padding:10px 22px; margin:10px 0; display:flex; align-items:center; gap:16px;
+  }
+  .pause .icon{ font-size:36px; line-height:1; }
+  .pause .txt b{ color:var(--warning); font-size:21px; }
+  .pause .txt p{ font-size:18px; color:#744210; margin:3px 0 0; }
+
+  .cols{ display:flex; gap:28px; align-items:stretch; }
+  .col{ flex:1; min-width:0; }
+
+  /* 推导分步：仅互动模式隐藏，截图(autohide)模式全部可见——此规则不可删 */
+  .step{ opacity:0; transform:translateY(8px); transition:opacity .3s ease, transform .3s ease; }
+  .step.on{ opacity:1; transform:none; }
+  body.autohide .step{ opacity:1 !important; transform:none !important; }
+  .step-hint{ font-size:14px; color:var(--muted); margin-top:4px;}
+  body.autohide .step-hint{ display:none; }
+
+  /* HTTP 精通课件专用：协议报文原文块 */
+  .wire{background:#0f172a;color:#e2e8f0;border-radius:10px;padding:12px 18px;margin:8px 0;
+    font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:17px;line-height:1.55;
+    white-space:pre-wrap;overflow-wrap:anywhere;}
+  .wire b{color:#7dd3fc;font-weight:700;}
+  .wire i{color:#fde68a;font-style:normal;}
+  .wire em{color:#86efac;font-style:normal;}
+  .wire.sm{font-size:15px;line-height:1.45;}
+  .wire-cap{font-size:15px;color:var(--muted);margin:0 0 8px;}
+  .to-lec{color:#bee3f8;text-decoration:none;font-size:15px;margin-left:12px;}
+  .to-lec:hover{text-decoration:underline;}
+  .badge{display:inline-block;background:var(--accent-light);color:var(--accent);border:1px solid var(--accent-border);
+    border-radius:6px;padding:2px 10px;font-size:17px;font-weight:700;margin-right:8px;}
+
+  /* 因果链 */
+  .chain{ margin:6px 0; }
+  .chain .link{ display:flex; align-items:center; gap:14px; margin:6px 0;}
+  .chain .no{ width:34px; height:34px; border-radius:50%; background:var(--accent); color:#fff; font-size:18px; font-weight:700; display:flex; align-items:center; justify-content:center; flex-shrink:0;}
+  .chain .txt{ font-size:21px; line-height:1.5;}
+  .chain .txt strong{ color:var(--primary); }
+
+  /* mermaid 容器：高度封顶，防止溢出 720px 舞台 */
+  .mmd{ background:var(--bg-light); border:1px solid var(--border); border-radius:12px; padding:10px 14px; display:flex; justify-content:center; align-items:center; margin:8px 0;}
+  .mmd .mermaid{ display:flex; justify-content:center; width:100%; visibility:hidden; }
+  .mmd .mermaid[data-done]{ visibility:visible; }
+  .mmd .mermaid svg{ max-width:100%; height:auto; max-height:230px; }
+  .mmd.mmd-tall .mermaid svg{ max-height:330px; }
+  .mmd.mmd-sm svg{ max-height:150px; }
+  .mmd-row{ display:flex; gap:18px; }
+  .mmd-row .mmd{ flex:1; flex-direction:column; }
+  .mmd .cap{ font-size:17px; color:var(--muted); margin-top:6px; text-align:center;}
+  .mmd .cap b{ color:var(--text); }
+
+  #footer{ position:absolute; bottom:0; left:0; right:0; height:40px; display:flex; align-items:center; justify-content:space-between; padding:0 30px; font-size:15px; color:#94a3b8; background:rgba(247,250,252,.85); border-top:1px solid var(--border); z-index:40;}
+  #footer .brand{ font-weight:600; color:var(--accent); }
+
+  .nav{ position:absolute; bottom:48px; right:40px; display:flex; gap:12px; z-index:45;}
+  .nav button{ width:54px; height:54px; border-radius:50%; border:none; background:var(--accent); color:#fff; font-size:24px; cursor:pointer; box-shadow:0 3px 10px rgba(43,108,176,.4); display:flex; align-items:center; justify-content:center;}
+  .nav button:hover{ background:var(--primary); }
+  .nav button:disabled{ background:#cbd5d0; cursor:default; box-shadow:none;}
+
+  #hint{ position:absolute; bottom:48px; left:40px; font-size:14px; color:#94a3b8; z-index:45;}
+
+  body.autohide #progress, body.autohide #footer, body.autohide .nav, body.autohide #hint{ display:none !important; }
+</style>
+</head>
+<body>
+<div id="stage">
+
+  <div id="progress"></div>
+
+<!-- 第 1 讲：课程导论 + HTTP 概述与典型会话（本套课件黄金样例） -->
+<section class="slide slide-cover active" data-narration="欢迎来到 HTTP 精通。这是一套十二讲的互动课程，配套的讲义和课件都是可以直接打开的网页。在开始讲协议之前，我先用几页把整门课交代清楚：它解决什么问题，为什么这样编排，十二讲分别讲什么，以及你应该怎么用。如果你写过接口、调过请求，却总觉得 HTTP 像一团记住了又忘的零散规则，这套课就是替你把这团规则理成一条线。第一讲结束的时候，你要能对着一条真实报文，逐行说出每个字段在做什么。我们从封面上的那个问题出发：地址栏敲下一个网址，页面为什么会出来。">
+  <div class="kicker">HTTP 精通 · 12 讲互动课程</div>
+  <h1>HTTP 精通</h1>
+  <div class="sub">从一次请求出发，把 Web 通信讲透</div>
+  <div class="question">为什么地址栏敲下一个网址，页面就出来了？</div>
+  <div class="meta">
+    依据 MDN Web Docs《HTTP 指南》22 篇整理 · 12 讲讲义 + 12 份课件<br>
+    第 1 讲先介绍整门课程，再进入 HTTP 概述与典型会话<br>
+    ← → 翻页 · 空格逐步展开推导 · 双击 HTML 即可离线观看
+  </div>
+</section>
+
+<section class="slide" data-narration="先说这门课是什么，不是什么。它是给写过代码、调过接口、但没系统读过协议的人准备的，目标有三个：能逐行读懂一条真实报文，能判断一次线上故障出在哪一层，能查到规范里对应的条文。它不教某个框架的 API 怎么用，也不带大家背状态码表，更不按时间顺序去讲协议史。原因是这类知识换个框架就失效，背下来的表遇到缓存和跨域的实际组合仍然不会用。我们只做一件事：把一次请求经历的每个环节拆成可以命名的对象，再给每个对象补上规则。听懂这条主线，后面的细节才有地方挂。">
+  <div class="slide-head"><span class="sec">课程 · 定位</span><h3>这门课练的是「读懂协议」，不是「记住词条」</h3></div>
+  <div class="slide-body">
+    <div class="cols">
+      <div class="col"><div class="card">✅ <strong>要练会的三件事</strong><br>逐行读懂报文；判断故障出在哪一层；查到规范条文。</div></div>
+      <div class="col"><div class="card">❌ <strong>不做的三件事</strong><br>不讲框架 API；不背状态码表；不做协议考古。</div></div>
+    </div>
+    <div class="tip">面向：写过代码、调过接口，但没系统读过协议的人。不需要会运维，也不需要数学。</div>
+    <div class="deep">判断标准：拿到一条 curl 的详细输出，你能不能逐行说清它在干什么。</div>
+  </div>
+</section>
+
+<section class="slide" data-narration="为什么用 MDN 的二十二篇指南当唯一主线，而不是照着 RFC 或者某本教材讲。规范是定义书，它的顺序服务于无歧义，不服务于学习；教材按历史写，会把大量篇幅花在已经退场的实现上；按接口清单讲，得到的又是一堆没有因果的词条。MDN 的每一篇解决一个真实问题，口径和今天的浏览器一致，缺点是篇目彼此平行、缺少递进。所以我们的做法是把二十二篇按教学逻辑合并成十二讲，分四组推进，每讲只回答主线上的一个问题。这一页的表格把三种常见组织法和它们的毛病列出来，你可以对照自己以前学 HTTP 时踩过的坑。">
+  <div class="slide-head"><span class="sec">课程 · 设计思路 ①</span><h3>组织法决定了知识有没有地方挂</h3></div>
+  <div class="slide-body">
+    <table class="small">
+      <thead><tr><th>组织法</th><th>顺序依据</th><th>学习时的毛病</th></tr></thead>
+      <tbody>
+        <tr><td class="l"><strong>照 RFC 章节</strong></td><td class="l">定义无歧义</td><td class="l">概念互相引用，第一页就撞上未定义术语</td></tr>
+        <tr><td class="l"><strong>照协议史</strong></td><td class="l">时间线</td><td class="l">大量篇幅给已退场的实现，今天用不上</td></tr>
+        <tr><td class="l"><strong>照接口清单</strong></td><td class="l">字母或分类</td><td class="l">记住一堆词，遇到组合问题仍不会判断</td></tr>
+        <tr><td class="l"><strong>本课程</strong></td><td class="l">一次请求的三阶段</td><td class="l">每讲都是往骨架上插一条规则</td></tr>
+      </tbody>
+    </table>
+    <div class="tip">MDN 22 篇是「查询式」的，一篇解决一个问题；课程要改成「递进式」，于是合并为 12 讲、分 4 组。</div>
+  </div>
+</section>
+
+<section class="slide" data-narration="十二讲不是十二个孤立主题，它们共用一条骨架：一次请求经历三个阶段，先建立连接，再交换报文，最后复用连接或者结束。缓存、cookie、认证、跨域、代理和重定向，全都是在这条主线上某个位置插入的一条规则。比如缓存在发请求之前就可能把请求截住，cookie 在请求首部里补上身份，代理插在客户端和源站之间，重定向让三阶段再走一遍。所以每讲开头都有本讲在主线上的位置，结尾都有指向下一讲的接口页。你只要始终问自己一句：这条规则插在哪两个阶段之间，就不会迷失在细节里。">
+  <div class="slide-head"><span class="sec">课程 · 设计思路 ②</span><h3>一条主线：建立连接 → 交换报文 → 复用或结束</h3></div>
+  <div class="slide-body">
+    <div class="mmd mmd-sm">
+      <div class="mermaid">
+flowchart LR
+  A["建立连接"] --> B["交换报文"] --> C["复用或结束"]
+  A --> A1["DNS TCP TLS"]
+  B --> B1["方法 首部 主体"]
+  B1 --> B2["缓存在此截住"]
+  B1 --> B3["cookie 认证跨域"]
+  C --> C1["代理与重定向改道"]
+      </div>
+    </div>
+    <p style="text-align:center;">每讲只做一件事：说清<strong>某条规则插在骨架的哪个位置</strong>，以及它为什么必须在那儿。</p>
+    <div class="deep">读任何一讲时都问：它改的是连接、报文，还是收尾？答案就是这一讲的坐标。</div>
+  </div>
+</section>
+
+<section class="slide" data-narration="先看前六讲。第一组是基础与表示，第一讲把一次会话拆成可命名的阶段，第二讲逐行拆开请求和响应报文并交代 MIME 类型，第三讲讲同一个网址为什么能返回不同表示，包括内容协商、压缩和客户端提示。第二组是连接与缓存，第四讲算清楚建一条连接到底多贵，以及持久连接和流水线省下了什么，第五讲讲缓存怎么判断一份副本还新不新鲜，第六讲用条件请求和范围请求把重传的字节省下来。这两组合起来回答同一个问题：请求怎么被组织出来，又怎么变快。表格里是每讲的一句话定位。">
+  <div class="slide-head"><span class="sec">课程 · 内容地图 ①</span><h3>第 1–6 讲：把请求组织出来，再让它变快</h3></div>
+  <div class="slide-body">
+    <table class="small">
+      <thead><tr><th>讲</th><th>主题</th><th>一句话定位</th></tr></thead>
+      <tbody>
+        <tr><td>1</td><td class="l">HTTP 概述与典型会话</td><td class="l">把一次旅程拆成三阶段，建立全课骨架</td></tr>
+        <tr><td>2</td><td class="l">HTTP 消息与 MIME 类型</td><td class="l">逐行拆报文，说清主体怎么定界、怎么解释</td></tr>
+        <tr><td>3</td><td class="l">内容协商、压缩与客户端提示</td><td class="l">同一网址凭什么返回不同表示</td></tr>
+        <tr><td>4</td><td class="l">HTTP/1.x 的连接管理</td><td class="l">算清握手成本，看复用省了什么</td></tr>
+        <tr><td>5</td><td class="l">HTTP 缓存</td><td class="l">不发请求也能拿到可用副本的判定规则</td></tr>
+        <tr><td>6</td><td class="l">条件请求与范围请求</td><td class="l">只确认有没有变，只取回需要的那一段</td></tr>
+      </tbody>
+    </table>
+    <div class="tip"><span class="badge">第①组</span>基础与表示（1–3）　<span class="badge">第②组</span>连接与缓存（4–6）</div>
+  </div>
+</section>
+
+<section class="slide" data-narration="后六讲从状态讲到分发。第三组状态与安全，第七讲让无状态协议记住用户，第八讲用挑战响应证明你是你，第九讲划出浏览器允许跨源读取的边界，第十讲反过来限制页面能加载什么、能调用什么能力。第四组中间层与分发，第十一讲讲代理、隧道和协议升级，也就是客户端与源站之间那些看不见的跳，第十二讲用重定向收束全程。这六讲看起来主题分散，其实都在回答同一类问题：一次请求经过别人的地盘时，谁能改它，谁又能证明它没被改。学到第十二讲你会发现，它其实就是第一讲那三阶段再走一遍。">
+  <div class="slide-head"><span class="sec">课程 · 内容地图 ②</span><h3>第 7–12 讲：状态、边界，以及请求经过谁的地盘</h3></div>
+  <div class="slide-body">
+    <table class="small">
+      <thead><tr><th>讲</th><th>主题</th><th>一句话定位</th></tr></thead>
+      <tbody>
+        <tr><td>7</td><td class="l">Cookie</td><td class="l">给无状态协议加上记忆，也说清它的作用域</td></tr>
+        <tr><td>8</td><td class="l">HTTP 身份验证</td><td class="l">认出你是谁，与证明你是你并不相同</td></tr>
+        <tr><td>9</td><td class="l">跨源资源共享 CORS</td><td class="l">默认拒绝跨源读取，再由服务器逐个开口子</td></tr>
+        <tr><td>10</td><td class="l">CSP、权限策略与 Fetch 元数据</td><td class="l">反过来限制页面能加载什么、能调用什么</td></tr>
+        <tr><td>11</td><td class="l">代理、隧道与协议升级</td><td class="l">中间那一跳能改写什么，又看不到什么</td></tr>
+        <tr><td>12</td><td class="l">HTTP 重定向</td><td class="l">让三阶段再走一遍，收束全程</td></tr>
+      </tbody>
+    </table>
+    <div class="tip"><span class="badge">第③组</span>状态与安全（7–10）　<span class="badge">第④组</span>中间层与分发（11–12）</div>
+  </div>
+</section>
+
+<section class="slide" data-narration="接下来交代每一讲内部怎么展开，这决定了你该怎么学。每讲正文按问题推进，每一节开头是回忆卡，先逼你把上一节的东西从脑子里取出来，再看答案；概念卡正面是术语，背面固定五个字段，定义、解决什么问题、直觉、常见误区、什么时候用。之后是分三层的习题，两道基础、两道进阶、一道综合，每道都带提示和完整解答。再往后是五道自测，解析会逐个说清其它选项错在哪。最后是三句话复述、按一三七十五天安排的间隔复习，以及合上书挑战。这套结构是按检索式学习设计的，不是把文字搬到网页上就算互动。">
+  <div class="slide-head"><span class="sec">课程 · 每讲结构</span><h3>互动不是加个按钮，是逼你反复检索</h3></div>
+  <div class="slide-body">
+    <div class="chain">
+      <div class="link"><span class="no">1</span><span class="txt"><strong>回忆卡</strong>：每节开头先自己答，再翻面</span></div>
+      <div class="link"><span class="no">2</span><span class="txt"><strong>概念卡</strong>：背面五字段，定义 / 解决问题 / 直觉 / 误区 / 何时用</span></div>
+      <div class="link"><span class="no">3</span><span class="txt"><strong>分层习题 + 自测</strong>：L1 两题、L2 两题、L3 一题，逐项给完整解答</span></div>
+      <div class="link"><span class="no">4</span><span class="txt"><strong>复述 + 间隔复习 + 合上书挑战</strong>：一三七十五天回访</span></div>
+    </div>
+    <div class="deep">讲义负责可检索的细节与手算，课件负责主线、因果与误区；两者不是同一份内容的两种排版。</div>
+  </div>
+</section>
+
+<section class="slide" data-narration="这套课还有一条容易被忽略的线索：每一讲末尾都有延伸板块，叫规范怎么写，用三列表把 MDN 的说法、RFC 怎么写、为什么值得知道摆在一起。原因是文档有两套口径。MDN 讲工程口径，也就是浏览器和服务器实际上怎么做，遇到兼容问题该怎么写配置；RFC 9110 系列讲规范口径，也就是协议到底允许什么、禁止什么、某个状态码的准确定义是什么。平时查问题用 MDN 更快，但一旦出现各方实现不一致、或者你要判断某个行为算不算合规，就必须回到规范。两套口径对上了，你才既能把事做成，也能说清楚为什么。">
+  <div class="slide-head"><span class="sec">课程 · 双口径</span><h3>MDN 管怎么做，RFC 管为什么</h3></div>
+  <div class="slide-body">
+    <table class="small">
+      <thead><tr><th>口径</th><th>回答什么</th><th>什么时候查它</th></tr></thead>
+      <tbody>
+        <tr><td class="l"><strong>MDN 指南</strong></td><td class="l">浏览器与服务器实际怎么做</td><td class="l">写配置、排兼容、看示例</td></tr>
+        <tr><td class="l"><strong>RFC 9110 系列</strong></td><td class="l">协议允许什么、禁止什么</td><td class="l">实现不一致、要判断合规性</td></tr>
+        <tr><td class="l"><strong>延伸板块</strong></td><td class="l">把两者逐条对上</td><td class="l">每讲末尾固定一次</td></tr>
+      </tbody>
+    </table>
+    <div class="tip">RFC 9110 语义、9111 缓存、9112 HTTP/1.1、9113 HTTP/2、9114 HTTP/3，另有 6265 cookie 等专题。</div>
+  </div>
+</section>
+
+<section class="slide" data-narration="最后说用法。建议按讲序来：先读讲义，把报文和手算跟着推一遍，再看课件抓主线和误区，课件里出现暂停演练时真的停下来自己算，别等答案。每讲自测五题全对再进下一讲，答错的题回到对应概念卡重看。讲义底部有个完成按钮，点一下会把进度存在你本机浏览器里，并按一三七十五天给出复习提醒，换设备不会同步，这是刻意不接后台的代价。课件是单个 HTML 文件，双击就能离线打开，左右方向键翻页，空格逐步展开推导，地址后加参数可以隐藏控件全显分步，方便截图。">
+  <div class="slide-head"><span class="sec">课程 · 怎么用</span><h3>先讲义，后课件；暂停要真暂停</h3></div>
+  <div class="slide-body">
+    <div class="cols">
+      <div class="col"><div class="card">📖 <strong>学习顺序</strong><br>讲义手算 → 课件主线 → 暂停演练 → 自测全对 → 下一讲</div></div>
+      <div class="col"><div class="card">🛠 <strong>操作</strong><br>← → 翻页；空格展开推导；?slide=N 指定起始页；?autohide=1 全显分步便于截图</div></div>
+    </div>
+    <div class="warn">进度保存在本机浏览器，换设备不同步；自测解析会逐个说明其它选项为什么错，别跳过。</div>
+  </div>
+</section>
+
+<section class="slide" data-narration="把导论收成三句话。第一句，这门课以一次请求的三阶段为骨架，十二讲都是往骨架上插规则。第二句，每讲用回忆、手算、自测和间隔复习逼你真正检索，而不是读完就算。第三句，MDN 管怎么做，RFC 管为什么，两条口径在每讲末尾汇合。学完之后，给你一条 curl 的详细输出，你应该能逐行说清它在干什么；遇到缓存不更新、跨域被拦、重定向打转这类问题，你应该能指出是哪一层的规则在起作用。现在进入第一讲，我们把地址栏里那一次点击，从头到尾拆开看。">
+  <div class="slide-head"><span class="sec">课程 · 导论收束</span><h3>三句话记住整门课</h3></div>
+  <div class="slide-body">
+    <div class="chain">
+      <div class="link"><span class="no">1</span><span class="txt"><strong>骨架</strong>：建立连接 → 交换报文 → 复用或结束</span></div>
+      <div class="link"><span class="no">2</span><span class="txt"><strong>学法</strong>：回忆、手算、自测、间隔复习、合上书挑战</span></div>
+      <div class="link"><span class="no">3</span><span class="txt"><strong>口径</strong>：MDN 说怎么做，RFC 说为什么，每讲末尾对齐</span></div>
+    </div>
+    <div class="formula formula-concl">先有骨架，再挂规则</div>
+  </div>
+</section>
+
+<section class="slide slide-cover" data-narration="第一讲，HTTP 概述与典型会话。这一讲不急着讲任何一个首部的细节，任务是把整次旅程拆成可以命名的对象，给后面十一讲留出挂载点。本讲要回答的问题是：一次典型 HTTP 会话分几个阶段，为什么无状态的 HTTP 仍然能支撑登录和购物车。学完你应该能画出从用户输入网址到拿到响应的完整链路，说清每一层各自解决什么，解释无状态和有会话为什么不矛盾，并且按时间顺序说出 HTTP 从零点九到三的关键变化。对应的 MDN 原文是 HTTP 概述、典型的 HTTP 会话和 HTTP 的发展三篇。">
+  <div class="kicker">第 1 讲 · 第①组 基础与表示</div>
+  <h1>HTTP 概述与典型会话</h1>
+  <div class="sub">把一次请求拆成可命名的阶段</div>
+  <div class="question">一次典型会话分几个阶段，为什么无状态的 HTTP 仍能支撑登录和购物车？</div>
+  <div class="meta">
+    配套讲义：HTTP 精通 第 1 讲 · 依据 MDN《HTTP 概述》《典型的 HTTP 会话》《HTTP 的发展》<br>
+    ← → 翻页 · 推导页按空格逐步显示
+  </div>
+</section>
+
+<section class="slide" data-narration="看这一讲在十二讲主线上的位置。第一讲是整条链的起点，它把一次会话切成三段，后面所有规则都挂在这三段上。第二讲和第三讲展开中间那段的报文与表示，第四到第六讲在首尾两段之间插入连接复用与缓存，第七到第十讲补上状态与身份，第十一和第十二讲处理请求经过中间层和改道的情况。图上高亮的是第一讲，它不解决任何具体故障，但没有它，后面每一讲讨论的规则都会变成没有坐标的名词。所以这一讲的目标不是记住多少字段，而是建立一张能反复回来查的地图。">
+  <div class="slide-head"><span class="sec">定位</span><h3>第 1 讲是全课骨架，不是第一个知识点</h3></div>
+  <div class="slide-body">
+    <div class="mmd mmd-sm">
+      <div class="mermaid">
+flowchart LR
+  A["第1讲 会话骨架"]:::here --> B["第2到3讲 报文与表示"] --> C["第4到6讲 连接与缓存"] --> D["第7到10讲 状态与安全"] --> E["第11到12讲 中间层与重定向"]
+  classDef here fill:#2b6cb0,color:#ffffff,stroke:#1a365d,stroke-width:3px
+      </div>
+    </div>
+    <p style="text-align:center;">本讲解决「<strong>命名</strong>」：把一次会话切成能指认的阶段，后面十一讲才有挂载点。</p>
+    <div class="tip">本讲对应的 MDN 原文：Overview / Session / Evolution of HTTP。</div>
+  </div>
+</section>
+
+<section class="slide" data-narration="本讲的主线是一条五环的因果链。第一环，用户在地址栏输入一个网址，表达的是想看某个资源。第二环，浏览器必须把这个名字翻译成能建立连接的目标，于是有 DNS、TCP 和 TLS。第三环，连接建好之后才开始真正属于 HTTP 的部分，客户端发请求，服务器回响应。第四环，一次页面往往要取很多子资源，连接于是被复用。第五环，协议本身不记住上一次请求，登录和购物车这类状态需求就成了一笔要还的债。后面 cookie、认证和缓存三讲分别还这笔债。这条链就是本讲的目录。">
+  <div class="slide-head"><span class="sec">主线</span><h3>一次会话的五环因果链</h3></div>
+  <div class="slide-body">
+    <div class="chain">
+      <div class="link"><span class="no">1</span><span class="txt"><strong>用户想看某个资源</strong>：输入一个 URL</span></div>
+      <div class="link"><span class="no">2</span><span class="txt"><strong>名字要变成可连接的目标</strong>：DNS → TCP → TLS</span></div>
+      <div class="link"><span class="no">3</span><span class="txt"><strong>HTTP 才登场</strong>：客户端发请求，服务器回响应</span></div>
+      <div class="link"><span class="no">4</span><span class="txt"><strong>页面要取很多子资源</strong>：连接被复用</span></div>
+      <div class="link"><span class="no">5</span><span class="txt"><strong>无状态留下债</strong>：登录和购物车要另外造状态</span></div>
+    </div>
+    <div class="tip">这条链就是本讲目录：链路 → 事务 → 演进 → 状态难题。</div>
+  </div>
+</section>
+
+<section class="slide" data-narration="先用一个具体场景逼出问题。你在地址栏敲下一个文档地址并回车，几百毫秒后页面出来了。最常见的解释是浏览器发了个请求，服务器回了页面。这个解释不算错，但它没法回答后面一连串问题：为什么第一次打开慢、刷新就快，为什么同一网址在手机上返回的是压缩过的表示，为什么换到公司网络就被拦在证书页上，为什么登录后关掉页面第二天还认得你。左边这张卡是过于简略的解释，右边是把它当成黑盒会遇到的问题。要回答这些，就得把黑盒拆成命名的阶段，并说清每一段谁负责什么。">
+  <div class="slide-head"><span class="sec">动机</span><h3>「发个请求、回个页面」解释不了四种常见现象</h3></div>
+  <div class="slide-body">
+    <div class="cols">
+      <div class="col"><div class="card">🙂 <strong>过于简略的解释</strong><br>浏览器发请求，服务器回页面。能说通一次点击，但仅此而已。</div></div>
+      <div class="col"><div class="card">🤔 <strong>解释不了的四个问题</strong><br>刷新为何变快；手机为何收到压缩表示；换网络为何卡在证书；关掉页面为何还认得你。</div></div>
+    </div>
+    <div class="tip">💡 本讲方案：把这次点击拆成<strong>连接建立 / 事务交换 / 复用收尾</strong>三段，每段指定负责的对象。</div>
+  </div>
+</section>
+
+<section class="slide" data-narration="给 HTTP 一个准确位置。它是应用层协议，规定客户端和服务器之间请求与响应的格式和语义，请求只能由客户端发起，服务器不会主动推来一条未经请求的内容，除非连接已经升级成别的协议。它下面是负责可靠字节流的 TCP，再下面是 IP，安全场景下中间还夹着 TLS。分层的意义是各管各的：TCP 只保证字节不丢不乱，不知道什么叫资源；TLS 只保证这段字节不被偷看和篡改，不知道里面是 GET 还是 POST；HTTP 才定义方法、首部、状态码和主体。把层分清楚，线上故障才能定位到该找谁。">
+  <div class="slide-head"><span class="sec">定义</span><h3>HTTP 在应用层：每层只解决一类问题</h3></div>
+  <div class="slide-body">
+    <div class="cols">
+      <div class="col"><div class="card">🧱 <strong>下层负责字节</strong><br>IP 找机器，TCP 保证不丢不乱，TLS 保证不被偷看与篡改。</div></div>
+      <div class="col"><div class="card">📨 <strong>HTTP 负责语义</strong><br>方法、请求目标、首部、状态码、主体，以及无状态这条约定。</div></div>
+    </div>
+    <div class="formula formula-concl">请求由客户端发起 · 响应由服务器返回 · 协议不记上一次</div>
+    <div class="deep">读法：下层不知道什么是资源，上层不关心字节怎么走；故障定位先判断坏在哪一层。</div>
+  </div>
+</section>
+
+<section class="slide" data-narration="第二个要拆开的概念是资源与表示。URL 指向的是资源，也就是一个被命名的对象，而这一次响应里真正发回来的字节是它的某种表示，可能是 HTML、JSON、图片，也可能是压缩过的版本。同一个资源可以有多种表示，靠 Content-Type 和 Content-Encoding 说明这次给的是哪一种，客户端用 Accept 系列首部表达偏好。这个区分看似咬文嚼字，却是第三讲内容协商、第五讲缓存键、第六讲范围请求共同的地基：缓存存的是表示而不是抽象的资源，Vary 首部列出的正是影响选哪种表示的请求首部。先把它们分开，后面才不会把缓存串味当成玄学。">
+  <div class="slide-head"><span class="sec">定义</span><h3>URL 指向资源，响应发回的是表示</h3></div>
+  <div class="slide-body">
+    <table class="small">
+      <thead><tr><th>概念</th><th>是什么</th><th>由谁说明</th></tr></thead>
+      <tbody>
+        <tr><td class="l"><strong>资源 Resource</strong></td><td class="l">被 URL 命名的对象</td><td class="l">请求目标</td></tr>
+        <tr><td class="l"><strong>表示 Representation</strong></td><td class="l">这次真正发回的字节</td><td class="l">Content-Type / Content-Encoding</td></tr>
+        <tr><td class="l"><strong>偏好</strong></td><td class="l">客户端想要哪种表示</td><td class="l">Accept 系列首部</td></tr>
+      </tbody>
+    </table>
+    <div class="tip">缓存里存的是<strong>表示</strong>，不是抽象资源；漏写 Vary 就会把一种表示发给要另一种的客户端。</div>
+  </div>
+</section>
+
+<section class="slide" data-narration="来看一条真实的请求和响应。为了看清结构，我只留最关键的几行。请求第一行是请求行，包含方法、请求目标和版本；后面每行一个首部，Host 说明要访问哪个主机，Accept 说明能接受什么表示；空行之后是主体，GET 通常没有主体。响应第一行是状态行，版本、状态码和原因短语；Content-Type 说明主体是 HTML 且字符集是 UTF-8；Content-Length 告诉接收方主体有多少字节；空行之后就是主体本身。蓝色标出起始行，黄色是首部名，绿色是主体。先建立整体形状，下一页再逐行拆开。">
+  <div class="slide-head"><span class="sec">例子 · 报文</span><h3>一次事务 = 一段请求 + 一段响应</h3></div>
+  <div class="slide-body">
+    <div class="wire sm"><b>GET /docs/guide HTTP/1.1</b>
+<i>Host</i>: www.example.com
+<i>Accept</i>: text/html
+<i>User-Agent</i>: DemoClient/1.0
+
+<em>空行之后没有主体</em></div>
+    <div class="wire-cap">请求：起始行 + 若干首部 + 空行 + 可选主体；空行是首部结束的唯一标志。</div>
+    <div class="wire sm"><b>HTTP/1.1 200 OK</b>
+<i>Content-Type</i>: text/html; charset=UTF-8
+<i>Content-Length</i>: 17
+<i>Cache-Control</i>: max-age=3600
+
+<em>&lt;p&gt;Hello HTTP&lt;/p&gt;</em></div>
+    <div class="wire-cap">响应：状态行 + 首部 + 空行 + 主体；主体正好 17 字节，与 Content-Length 一致。</div>
+  </div>
+</section>
+
+<section class="slide" data-narration="把上一页的报文逐行拆开。请求行三个要素各有职责：方法说想做什么，请求目标说要哪个资源，版本号说按哪套语法解析。Host 在 HTTP/1.1 里是必须的，因为一个 IP 上可能托管多个站点，服务器要靠它决定交给哪个虚拟主机。空行不是排版装饰，它是首部结束的唯一标志，接收方正是靠它知道主体从哪儿开始。响应侧的 Content-Length 给出主体字节数，写大了接收方会一直等剩下的字节直到超时，写小了会把下一条响应粘进来。这一页的表格把每行和它的职责对上，请特别记住最后两行的故障模式。">
+  <div class="slide-head"><span class="sec">例子 · 逐行</span><h3>每一行都有职责，空行和长度最容易出事</h3></div>
+  <div class="slide-body">
+    <table class="small">
+      <thead><tr><th>行</th><th>职责</th><th>写错会怎样</th></tr></thead>
+      <tbody>
+        <tr><td class="l"><strong>GET /docs/guide HTTP/1.1</strong></td><td class="l">方法 / 目标 / 版本</td><td class="l">目标形式错，代理无法转发</td></tr>
+        <tr><td class="l"><strong>Host</strong></td><td class="l">指定虚拟主机</td><td class="l">同 IP 多站点时会落到默认站</td></tr>
+        <tr><td class="l"><strong>空行</strong></td><td class="l">首部结束标志</td><td class="l">解析错位，主体被当成首部</td></tr>
+        <tr><td class="l"><strong>Content-Length: 17</strong></td><td class="l">主体定界</td><td class="l">写大等到超时，写小粘下一条</td></tr>
+      </tbody>
+    </table>
+    <div class="tip">口诀：<strong>起始行定动作，首部定条件，空行定边界，长度定主体</strong>。</div>
+  </div>
+</section>
+
+<section class="slide" data-narration="现在把一次会话按 MDN 的三阶段模型走一遍，按空格逐步展开。第一步，客户端建立连接：DNS 把主机名解析成 IP，TCP 完成三次握手，HTTPS 场景下再完成 TLS 握手，这一步还没发出任何 HTTP 字节。第二步，客户端发送请求并等待，这是真正属于 HTTP 的部分，请求一旦发出，客户端就进入等待。第三步，服务器处理请求并返回响应，状态行、首部、空行、主体按顺序回来。走完这三步，连接可以被复用继续取子资源，也可以关闭。注意无状态说的是服务器不记上一次请求，不是连接必须用一次就断。">
+  <div class="slide-head"><span class="sec">推导</span><h3>三阶段：建连 → 发请求并等待 → 返回响应</h3></div>
+  <div class="slide-body">
+    <div class="step"><p><strong>① 建立连接</strong>：DNS → TCP 三次握手 → TLS 握手；此时还没有 HTTP 字节。</p></div>
+    <div class="step"><p><strong>② 客户端发送请求并等待</strong>：起始行、首部、空行、可选主体；发完即进入等待。</p></div>
+    <div class="step"><p><strong>③ 服务器处理并返回响应</strong>：状态行、首部、空行、主体按顺序回传。</p></div>
+    <div class="step"><div class="formula formula-concl">三阶段走完后：复用连接取子资源，或关闭连接</div></div>
+    <p class="step-hint">按空格 / → 逐步展开推导</p>
+  </div>
+</section>
+
+<section class="slide" data-narration="把链路摊平看，一次点击跨过了好几层，每层只解决一个问题。DNS 回答目标在哪台机器，TCP 回答字节怎么可靠到达，TLS 回答这段字节有没有被偷看或篡改，HTTP 回答要哪个资源、以什么表示返回、结果如何，最后浏览器才解析并渲染。这张图的关键不在于记住顺序，而在于理解它是一条责任链：证书报错要找 TLS 那一层，404 要找 HTTP 这一层，首开慢往往卡在 DNS 和握手，而不是服务器算得慢。后面讲连接管理、缓存和 TLS 相关问题时，都会回到这张图定位。">
+  <div class="slide-head"><span class="sec">链路</span><h3>每层只解决一个问题，故障才能定位</h3></div>
+  <div class="slide-body">
+    <div class="mmd mmd-sm">
+      <div class="mermaid">
+flowchart LR
+  A["输入网址"] --> B["DNS 得到 IP"] --> C["TCP 三次握手"] --> D["TLS 协商密钥"] --> E["HTTP 请求与响应"] --> F["解析并渲染"]
+      </div>
+    </div>
+    <table class="small">
+      <thead><tr><th>层</th><th>解决的问题</th><th>典型故障</th></tr></thead>
+      <tbody>
+        <tr><td>DNS / TCP</td><td class="l">找到机器、可靠传字节</td><td class="l">首开慢、连接超时</td></tr>
+        <tr><td>TLS</td><td class="l">防偷看与篡改</td><td class="l">证书告警</td></tr>
+        <tr><td>HTTP</td><td class="l">资源、表示、结果</td><td class="l">404、304、跨域被拦</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section class="slide" data-narration="轮到你了。屏幕上给了一段响应，请先数一数首部有几行，空行之后主体从哪开始，按 Content-Length 判断接收方会不会多等字节，再说说为什么请求里必须有 Host。先暂停视频自己推一遍。推出来了吗？好，对答案。首部三行，空行在 Cache-Control 之后；主体是那段标签文本，正好十七字节，长度写得对，接收方读完就结束，不会等；Host 必须给，是因为同一 IP 上可能挂多个站点，服务器靠它选虚拟主机。如果你把空行当成了可有可无的排版，说明边界这个概念还没立住，回看上一页的逐行表。">
+  <div class="slide-head"><span class="sec">演练</span><h3>读一段响应，自己把边界数出来</h3></div>
+  <div class="slide-body">
+    <div class="wire sm"><b>HTTP/1.1 200 OK</b>
+<i>Content-Type</i>: text/html; charset=UTF-8
+<i>Content-Length</i>: 17
+<i>Cache-Control</i>: max-age=3600
+
+<em>&lt;p&gt;Hello HTTP&lt;/p&gt;</em></div>
+    <div class="step"><p>① 首部共 <strong>3 行</strong>，空行在 Cache-Control 之后，主体从下一行开始。</p></div>
+    <div class="step"><p>② 主体 <strong>17 字节</strong> 与 Content-Length 一致，接收方读完即结束，不会多等。</p></div>
+    <div class="step"><p>③ 请求必须带 <strong>Host</strong>：同一 IP 可能托管多个站点，服务器靠它选虚拟主机。</p></div>
+    <div class="pause"><div class="icon">✍️</div><div class="txt"><b>暂停推导</b><p>合上答案，自己数出首部行数、主体字节数，并写出 Host 的两个作用。</p></div></div>
+    <p class="step-hint">按空格 / → 逐步揭示答案</p>
+  </div>
+</section>
+
+<section class="slide" data-narration="现在回答封面留下的半个问题：无状态为什么还能有会话。无状态是协议层的约定，服务器不把上一次请求记在协议里，好处很明显：任何一台服务器都能处理任意一条请求，中间层可以放心转发和缓存，横向扩容不需要同步会话。代价是登录、购物车这类跨请求的状态得另外造。常见做法有三类：cookie 让浏览器每次把一小段标识带回来；认证机制证明这个标识属于谁；服务端或客户端存储保存真正的会话内容。第 7、8 讲会分别展开前两类，第五讲的缓存则会利用无状态带来的可缓存性。">
+  <div class="slide-head"><span class="sec">状态</span><h3>无状态是优点，会话是后来造出来的</h3></div>
+  <div class="slide-body">
+    <table class="small">
+      <thead><tr><th>手段</th><th>放在哪</th><th>解决的问题</th><th>哪一讲展开</th></tr></thead>
+      <tbody>
+        <tr><td class="l"><strong>Cookie</strong></td><td class="l">请求首部</td><td class="l">每次把标识带回来</td><td>第 7 讲</td></tr>
+        <tr><td class="l"><strong>认证</strong></td><td class="l">挑战响应</td><td class="l">证明标识属于谁</td><td>第 8 讲</td></tr>
+        <tr><td class="l"><strong>会话存储</strong></td><td class="l">服务端或客户端</td><td class="l">保存真正的内容</td><td>第 7 讲</td></tr>
+      </tbody>
+    </table>
+    <div class="deep">无状态带来的红利：任意服务器可处理任意请求，中间层可转发与缓存，扩容不必同步会话。</div>
+  </div>
+</section>
+
+<section class="slide" data-narration="最后看演进，重点不是背年份，而是分清哪一层在变。零点九只有一行 GET，一点零补上首部、状态码和版本，一点一要求 Host 并默认持久连接，二把文本报文换成二进制帧与多路复用，三把传输层从 TCP 换成基于 UDP 的 QUIC。请注意一个容易被忽略的事实：从一点一到三，方法、状态码、首部语义、缓存模型这些应用层语义基本没变，变的是报文怎么编码、连接怎么传。这正是第四讲和第十一讲要展开的话题，也是为什么学 HTTP 要先建立语义骨架，再去追传输层的版本。">
+  <div class="slide-head"><span class="sec">演进</span><h3>换的是地基，房子没换</h3></div>
+  <div class="slide-body">
+    <table class="small">
+      <thead><tr><th>版本</th><th>关键变化</th><th>变的是哪层</th></tr></thead>
+      <tbody>
+        <tr><td>HTTP/0.9</td><td class="l">单行 GET，只有 HTML</td><td>报文形态</td></tr>
+        <tr><td>HTTP/1.0</td><td class="l">首部、状态码、版本、MIME</td><td>语义扩充</td></tr>
+        <tr><td>HTTP/1.1</td><td class="l">Host 必需、持久连接、管道化</td><td>连接与语义</td></tr>
+        <tr><td>HTTP/2</td><td class="l">二进制帧、多路复用、首部压缩</td><td>编码</td></tr>
+        <tr><td>HTTP/3</td><td class="l">传输层换成 QUIC</td><td>传输</td></tr>
+      </tbody>
+    </table>
+    <div class="tip">不变的：方法、状态码、首部语义、缓存模型。所以本讲建立的骨架到 HTTP/3 仍然成立。</div>
+  </div>
+</section>
+
+<section class="slide" data-narration="按本课的固定动作，把 MDN 的工程口径和 RFC 的规范口径对一次。MDN 说 HTTP 是客户端服务器协议且无状态，RFC 9110 在开篇给出这套架构约束与无状态要求，知道它才能判断某个实现算不算合规。MDN 把报文拆成起始行、首部、空行和主体，RFC 9112 第二节给出严格的报文语法与空行规则，解析分歧时要回到这里。MDN 说 Host 必填，对应 RFC 9110 第七点二节的目标主机定义。状态码分类则在 RFC 9110 第十五节。平时用 MDN 更快，遇到各方行为不一致时，条文才是裁判。">
+  <div class="slide-head"><span class="sec">规范对照</span><h3>MDN 的说法 → RFC 怎么写 → 为什么值得知道</h3></div>
+  <div class="slide-body">
+    <table class="small">
+      <thead><tr><th>MDN 的说法</th><th>RFC 怎么写</th><th>为什么值得知道</th></tr></thead>
+      <tbody>
+        <tr><td class="l">客户端服务器、无状态</td><td class="l">RFC 9110 架构约束</td><td class="l">判断实现是否合规</td></tr>
+        <tr><td class="l">起始行 / 首部 / 空行 / 主体</td><td class="l">RFC 9112 第 2 节报文语法</td><td class="l">排查解析差异</td></tr>
+        <tr><td class="l">请求必须带 Host</td><td class="l">RFC 9110 第 7.2 节</td><td class="l">解释虚拟主机路由</td></tr>
+        <tr><td class="l">状态码分五类</td><td class="l">RFC 9110 第 15 节</td><td class="l">确定语义边界</td></tr>
+      </tbody>
+    </table>
+    <div class="deep">延伸板块在每讲末尾出现一次：两条口径对齐，才能既把事做成，又说清为什么。</div>
+  </div>
+</section>
+
+<section class="slide" data-narration="扫三个最常见的雷。第一个，以为无状态等于每次都要重新建连接，其实无状态说的是服务器不记上一次请求，连接复用是另一回事，HTTP/1.1 默认就复用。第二个，以为 Host 可以省，因为自己测试时只有一个站点也能通，但一个 IP 托管多个站点时，没有 Host 服务器只能落到默认站，这个坑在第十八讲讲虚拟主机时会再出现。第三个，以为 HTTP/2 改了方法或者状态码的含义，实际上它换的是报文编码与连接利用方式，语义层几乎原封不动。把这三件事分开，后面才不会把版本差异当成语义变化。">
+  <div class="slide-head"><span class="sec">避坑</span><h3>三个把不同层次混为一谈的误解</h3></div>
+  <div class="slide-body">
+    <div class="trap">❌ <strong>无状态 = 每次都新建连接</strong><br>✅ 无状态指服务器不记上次请求；连接复用是传输与连接管理的事，HTTP/1.1 默认复用。</div>
+    <div class="trap">❌ <strong>本机测试能通，Host 可以省</strong><br>✅ 同 IP 多站点时服务器靠 Host 选虚拟主机，缺了它只会落到默认站。</div>
+    <div class="trap">❌ <strong>HTTP/2 改了方法和状态码的含义</strong><br>✅ 换的是二进制帧与多路复用，方法、状态码、首部语义基本不变。</div>
+  </div>
+</section>
+
+<section class="slide" data-narration="这一讲和下一讲怎么分工，说清楚才不会重复用功。本讲负责整条链路的形状：三阶段、请求响应事务、无状态、资源与表示，抽象层次高，报文只用来建立整体观感。第 2 讲会钻进这段报文内部，把请求行的四种目标形式、首部的四类作用域、状态码五类、主体定界的两种办法，以及 MIME 类型和内容嗅探逐项拆开。所以本讲留下的两笔账，报文细节和 MIME 类型，都交给第 2 讲偿还；而本讲末尾提出的无状态难题，要等到第 7 讲才真正解决。">
+  <div class="slide-head"><span class="sec">接口</span><h3>第 1 讲画骨架，第 2 讲拆报文</h3></div>
+  <div class="slide-body">
+    <table>
+      <thead><tr><th></th><th>第 1 讲</th><th>第 2 讲</th></tr></thead>
+      <tbody>
+        <tr><td class="l"><strong>粒度</strong></td><td class="l">整次会话的三阶段</td><td class="l">一段报文的每一行</td></tr>
+        <tr><td class="l"><strong>核心对象</strong></td><td class="l">事务、资源、表示、无状态</td><td class="l">起始行、首部、主体、MIME、状态码</td></tr>
+        <tr><td class="l"><strong>留下的账</strong></td><td class="l">报文细节与状态难题</td><td class="l">报文细节当场还，状态难题留到第 7 讲</td></tr>
+      </tbody>
+    </table>
+    <div class="tip">钩子：骨架搭好了，下一讲把中间那段交换的报文逐行拆开。</div>
+  </div>
+</section>
+
+<section class="slide" data-narration="用三句话收束第一讲。解决什么：把地址栏里一次看不出内部的点击，拆成建立连接、交换报文、复用或结束这三段，让后面每一条规则都有坐标。核心机制：客户端发起请求，服务器返回响应，协议本身不保存上一次请求的状态，资源与表示分开，报文靠空行和长度定界。承上启下：报文细节交给第 2 讲，无状态留下的状态难题要等第 7 讲和第 8 讲才还。请记住这句口诀，先有骨架，再挂规则；后面十一讲都只是在这张骨架上补条款。">
+  <div class="slide-head"><span class="sec">小结</span><h3>三句话讲完第 1 讲</h3></div>
+  <div class="slide-body">
+    <div class="chain">
+      <div class="link"><span class="no">1</span><span class="txt"><strong>解决什么</strong>：把一次会话拆成可命名的三阶段</span></div>
+      <div class="link"><span class="no">2</span><span class="txt"><strong>核心机制</strong>：请求响应事务 + 无状态 + 资源与表示分离</span></div>
+      <div class="link"><span class="no">3</span><span class="txt"><strong>承上启下</strong>：报文细节给第 2 讲，状态难题给第 7、8 讲</span></div>
+    </div>
+    <div class="formula formula-concl">先有骨架，再挂规则 —— 合上书也要能默写</div>
+  </div>
+</section>
+
+<section class="slide slide-cover" data-narration="第一讲到这儿结束。给你留四项毕业挑战，合上书拿一张纸完成：第一，不看资料画出一次典型会话的三阶段，并标出 DNS、TCP 和 TLS 各在哪一段；第二，默写一段最小 GET 请求和一段带 Content-Length 的响应，说清空行和长度分别定的是什么边界；第三，用一句话解释无状态和有会话为什么不矛盾，并列出补状态的三类手段；第四，按时间顺序写出五个 HTTP 版本各自改了哪一层。全做出来，再点讲义底部的完成按钮，让复习提醒开始计时。下一讲，我们把报文逐行拆开。">
+  <div class="kicker">第 1 讲 结束</div>
+  <h1>先有骨架，再挂规则</h1>
+  <div class="sub">毕业挑战：合上书，拿一张纸</div>
+  <div class="divider"></div>
+  <div class="meta">
+    ☑ 画出会话三阶段并标出各层位置　　☑ 默写请求与响应并说清两种边界<br>
+    ☑ 解释无状态与会话为何不矛盾　　☑ 排五个版本各自改了哪一层<br><br>
+    下一讲 · 第 2 讲 HTTP 消息与 MIME 类型：把这段交换的报文逐行拆开
+  </div>
+</section>
+
+  <!-- 页脚：brand 改为本章标题；总页数改 pagenum 初值 -->
+  <div id="footer">
+    <span class="brand">第1讲 HTTP 概述与典型会话 · HTTP 精通 课件　<a class="to-lec" href="../http-guide/index.html">讲义首页 ↗</a></span>
+    <span id="pagenum">1 / 1</span>
+  </div>
+
+  <!-- 导航 -->
+  <div class="nav">
+    <button id="prev" title="上一页 (←)">‹</button>
+    <button id="next" title="下一页 (→ / 空格)">›</button>
+  </div>
+  <div id="hint">← → 翻页 · 空格下一页 · 推导页逐步显示 · 点击左右半屏翻页</div>
+
+</div>
+
+<!-- mermaid 本地引用，保证离线可用；初始化参数全套课件统一，勿改 -->
+<script src="assets/mermaid.min.js"></script>
+<script>
+mermaid.initialize({
+  startOnLoad: false,   // 必须为 false：display:none 的隐藏页渲染会得到 0 宽高的退化 SVG，
+                        // 改为页面激活时懒渲染（见 renderMermaid）
+  theme: "base",
+  themeVariables: {
+    primaryColor: "#ebf8ff",
+    primaryBorderColor: "#2b6cb0",
+    primaryTextColor: "#1a365d",
+    lineColor: "#718096",
+    fontFamily: "-apple-system, PingFang SC, sans-serif",
+    fontSize: "15px"
+  },
+  flowchart: { curve: "linear", htmlLabels: false }
+});
+</script>
+<script>
+(function(){
+  const slides = Array.from(document.querySelectorAll('.slide'));
+  const total = slides.length;
+  let idx = 0;
+
+  const params = new URLSearchParams(location.search);
+  const startSlide = parseInt(params.get('slide'), 10);
+  if (params.get('autohide') === '1') document.body.classList.add('autohide');
+  if (!isNaN(startSlide) && startSlide >= 1 && startSlide <= total) idx = startSlide - 1;
+
+  const progress = document.getElementById('progress');
+  const pagenum = document.getElementById('pagenum');
+  const prevBtn = document.getElementById('prev');
+  const nextBtn = document.getElementById('next');
+
+  // 推导分步：每页记住已展开的步数；autohide（截图）模式下 CSS 强制全显
+  const stepState = new Map();
+  function stepsOf(i){ return Array.from(slides[i].querySelectorAll('.step')); }
+  function applySteps(){
+    stepsOf(idx).forEach((el, k)=> el.classList.toggle('on', k < (stepState.get(idx) || 0)));
+  }
+  // 前进一步：先展开本页下一步，全部展开后才翻页
+  function forward(){
+    const steps = stepsOf(idx);
+    const shown = stepState.get(idx) || 0;
+    if (shown < steps.length){ stepState.set(idx, shown + 1); applySteps(); return; }
+    go(idx + 1);
+  }
+  // 后退一步：先收起本页最后一步，收完才回上一页
+  function backward(){
+    const steps = stepsOf(idx);
+    const shown = stepState.get(idx) || 0;
+    if (shown > 0){ stepState.set(idx, shown - 1); applySteps(); return; }
+    go(idx - 1);
+  }
+
+  // mermaid 懒渲染：只在页面激活（有真实宽高）时渲染该页的图，渲染后打 data-done 防重复
+  function renderMermaid(slide){
+    if (typeof mermaid === 'undefined') return;
+    const nodes = Array.from(slide.querySelectorAll('.mermaid:not([data-done])'));
+    if (!nodes.length) return;
+    nodes.forEach(n => n.setAttribute('data-done', ''));
+    mermaid.run({ nodes }).catch(err => {
+      nodes.forEach(n => n.removeAttribute('data-done'));
+      console.error('mermaid 渲染失败：', err);
+    });
+  }
+
+  function render(){
+    slides.forEach((s,i)=> s.classList.toggle('active', i===idx));
+    progress.style.width = ((idx+1)/total*100) + '%';
+    pagenum.textContent = (idx+1) + ' / ' + total;
+    prevBtn.disabled = (idx===0);
+    nextBtn.disabled = (idx===total-1);
+    applySteps();
+    renderMermaid(slides[idx]);
+  }
+  function go(n){ idx = Math.max(0, Math.min(total-1, n)); render(); }
+
+  prevBtn.addEventListener('click', e=>{ e.stopPropagation(); backward(); });
+  nextBtn.addEventListener('click', e=>{ e.stopPropagation(); forward(); });
+
+  document.addEventListener('keydown', e=>{
+    if(e.key==='ArrowRight'||e.key===' '||e.key==='PageDown'){ e.preventDefault(); forward(); }
+    else if(e.key==='ArrowLeft'||e.key==='PageUp'){ e.preventDefault(); backward(); }
+    else if(e.key==='Home'){ stepState.set(idx, 0); go(0); }
+    else if(e.key==='End'){ go(total-1); }
+  });
+
+  document.getElementById('stage').addEventListener('click', e=>{
+    if(e.target.closest('.nav') || e.target.closest('a')) return;
+    const x = e.clientX;
+    if(x < window.innerWidth*0.5) backward(); else forward();
+  });
+
+  function fit(){
+    const s = Math.min(window.innerWidth/1280, window.innerHeight/720);
+    document.getElementById('stage').style.transform = 'translate(-50%,-50%) scale(' + s + ')';
+  }
+  window.addEventListener('resize', fit);
+  fit();
+  render();
+})();
+</script>
+</body>
+</html>

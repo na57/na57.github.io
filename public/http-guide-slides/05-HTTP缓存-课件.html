@@ -1,0 +1,647 @@
+<!DOCTYPE html>
+<!--
+  ======================================================================
+  HTTP 精通 · 课件外壳（deck-shell.html）
+  由 build-slides.mjs 把 slides/NN.html 注入幻灯片区域，
+  输出 public/http-guide-slides/NN-xxx-课件.html。
+  骨架来自站内通用 1280×720 课件模板；本套额外增加 .wire 协议报文块。
+  每页必须写 data-narration（180–280 字口语稿，禁半角双引号、禁换行、禁小于号）。
+  ======================================================================
+-->
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第5讲 HTTP 缓存 · HTTP 精通 课件</title>
+<script>
+window.MathJax = {
+  tex: {
+    inlineMath: [['$', '$'], ['\\(', '\\)']],
+    displayMath: [['$$', '$$'], ['\\[', '\\]']],
+    processEscapes: true,
+    tags: 'none'
+  },
+  svg: { fontCache: 'global', scale: 1.05 },
+  options: { skipHtmlTags: ['script','noscript','style','textarea','pre','code'] }
+};
+</script>
+<!-- MathJax 本地引用（tex-svg 单文件全量组件，约2MB，自带字体数据），file:// 与断网均可用 -->
+<script src="assets/tex-svg.js" async></script>
+<style>
+  :root{
+    --primary:#1a365d; --accent:#2b6cb0; --accent-light:#ebf8ff; --accent-border:#bee3f8;
+    --text:#2d3748; --muted:#718096; --border:#e2e8f0; --bg-light:#f7fafc;
+    --success:#38a169; --danger:#e53e3e; --warning:#dd6b20; --warn-bg:#fffaf0;
+  }
+  *{margin:0;padding:0;box-sizing:border-box;}
+  html,body{width:100%;height:100%;overflow:hidden;background:#0f172a;}
+  body{
+    font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Hiragino Sans GB","Microsoft YaHei","WenQuanYi Micro Hei",sans-serif;
+    color:var(--text);
+  }
+  #stage{
+    position:absolute; left:50%; top:50%;
+    width:1280px; height:720px;
+    transform:translate(-50%,-50%) scale(1);
+    transform-origin:center center;
+    background:#ffffff;
+    box-shadow:0 0 40px rgba(0,0,0,.4);
+    overflow:hidden;
+  }
+  .slide{
+    position:absolute; inset:0;
+    padding:36px 60px 52px;
+    display:none;
+    flex-direction:column;
+    background:#ffffff;
+    opacity:0;
+    transition:opacity .35s ease;
+  }
+  .slide.active{ display:flex; opacity:1; }
+
+  #progress{ position:absolute; top:0; left:0; height:6px; background:var(--accent); width:0; z-index:50; transition:width .35s; }
+
+  /* 封面 / 结束页 */
+  .slide-cover{ justify-content:center; align-items:center; text-align:center; }
+  .slide-cover{ background:linear-gradient(135deg,#1a365d 0%,#2b6cb0 100%); color:#fff; }
+  .slide-cover .kicker{ font-size:22px; letter-spacing:6px; opacity:.85; margin-bottom:18px;}
+  .slide-cover h1{ font-size:64px; font-weight:800; line-height:1.2; margin-bottom:22px; letter-spacing:2px;}
+  .slide-cover .sub{ font-size:26px; opacity:.92; margin-bottom:36px;}
+  .slide-cover .meta{ font-size:19px; opacity:.85; line-height:2;}
+  .slide-cover .divider{ width:160px;height:5px;background:#fff;opacity:.6;margin:0 auto 30px;border-radius:3px;}
+  .slide-cover .question{ font-size:24px; background:rgba(255,255,255,.12); border:1px solid rgba(255,255,255,.35); border-radius:12px; padding:12px 28px; margin-bottom:30px;}
+
+  /* 页头：结论式标题 */
+  .slide-head{ display:flex; align-items:baseline; gap:16px; border-bottom:3px solid var(--accent); padding-bottom:9px; margin-bottom:12px;}
+  .slide-head .sec{ font-size:17px; color:var(--accent); font-weight:700; background:var(--accent-light); padding:3px 11px; border-radius:6px; white-space:nowrap;}
+  .slide-head h3{ font-size:29px; color:var(--primary); font-weight:700;}
+  .slide-body{ flex:1; display:flex; flex-direction:column; justify-content:center; min-height:0; }
+
+  p{ font-size:21px; line-height:1.65; margin-bottom:8px;}
+  .lead{ font-size:23px; color:#374151; line-height:1.75;}
+  ul,ol{ margin:0 0 8px 26px; font-size:21px; line-height:1.7;}
+  li{ margin-bottom:5px;}
+  strong{ color:var(--primary); }
+
+  /* 公式块 */
+  .formula{ background:var(--accent-light); border-left:5px solid var(--accent); border-radius:0 10px 10px 0; padding:9px 22px; margin:9px 0; text-align:center; font-size:23px;}
+  .formula-concl{ background:#fffaf0; border-left:5px solid var(--warning);}
+  .MathJax{ font-size:1.05em !important; }
+  mjx-container[display="true"]{ margin:6px 0 !important; }
+
+  /* 表格 */
+  table{ width:100%; border-collapse:collapse; margin:10px 0; font-size:20px;}
+  th{ background:var(--accent); color:#fff; padding:8px 12px; text-align:center; font-weight:600;}
+  td{ padding:7px 12px; border:1px solid var(--border); text-align:center; vertical-align:middle;}
+  tr:nth-child(even) td{ background:var(--bg-light);}
+  td.l{ text-align:left; }
+  table.small{ font-size:18px; }
+  table.small td, table.small th{ padding:6px 10px; }
+
+  /* 组件 */
+  .card{ background:var(--accent-light); border:1px solid var(--accent-border); border-radius:12px; padding:12px 20px; margin:10px 0;}
+  .tip{ background:#ebf8ff; border-left:5px solid var(--accent); border-radius:0 10px 10px 0; padding:10px 20px; margin:10px 0; font-size:20px; color:#2c5282;}
+  .deep{ background:#f0fff4; border-left:5px solid var(--success); border-radius:0 10px 10px 0; padding:10px 20px; margin:10px 0; font-size:20px; color:#22543d;}
+  .warn{ background:var(--warn-bg); border-left:5px solid var(--warning); border-radius:0 10px 10px 0; padding:10px 20px; margin:10px 0; font-size:20px; color:#744210;}
+  .trap{ background:#fef2f2; border-left:5px solid var(--danger); border-radius:0 10px 10px 0; padding:10px 20px; margin:10px 0; font-size:20px; color:#7f1d1d;}
+
+  .pause{
+    background:var(--warn-bg); border:2px dashed var(--warning); border-radius:14px;
+    padding:10px 22px; margin:10px 0; display:flex; align-items:center; gap:16px;
+  }
+  .pause .icon{ font-size:36px; line-height:1; }
+  .pause .txt b{ color:var(--warning); font-size:21px; }
+  .pause .txt p{ font-size:18px; color:#744210; margin:3px 0 0; }
+
+  .cols{ display:flex; gap:28px; align-items:stretch; }
+  .col{ flex:1; min-width:0; }
+
+  /* 推导分步：仅互动模式隐藏，截图(autohide)模式全部可见——此规则不可删 */
+  .step{ opacity:0; transform:translateY(8px); transition:opacity .3s ease, transform .3s ease; }
+  .step.on{ opacity:1; transform:none; }
+  body.autohide .step{ opacity:1 !important; transform:none !important; }
+  .step-hint{ font-size:14px; color:var(--muted); margin-top:4px;}
+  body.autohide .step-hint{ display:none; }
+
+  /* HTTP 精通课件专用：协议报文原文块 */
+  .wire{background:#0f172a;color:#e2e8f0;border-radius:10px;padding:12px 18px;margin:8px 0;
+    font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:17px;line-height:1.55;
+    white-space:pre-wrap;overflow-wrap:anywhere;}
+  .wire b{color:#7dd3fc;font-weight:700;}
+  .wire i{color:#fde68a;font-style:normal;}
+  .wire em{color:#86efac;font-style:normal;}
+  .wire.sm{font-size:15px;line-height:1.45;}
+  .wire-cap{font-size:15px;color:var(--muted);margin:0 0 8px;}
+  .to-lec{color:#bee3f8;text-decoration:none;font-size:15px;margin-left:12px;}
+  .to-lec:hover{text-decoration:underline;}
+  .badge{display:inline-block;background:var(--accent-light);color:var(--accent);border:1px solid var(--accent-border);
+    border-radius:6px;padding:2px 10px;font-size:17px;font-weight:700;margin-right:8px;}
+
+  /* 因果链 */
+  .chain{ margin:6px 0; }
+  .chain .link{ display:flex; align-items:center; gap:14px; margin:6px 0;}
+  .chain .no{ width:34px; height:34px; border-radius:50%; background:var(--accent); color:#fff; font-size:18px; font-weight:700; display:flex; align-items:center; justify-content:center; flex-shrink:0;}
+  .chain .txt{ font-size:21px; line-height:1.5;}
+  .chain .txt strong{ color:var(--primary); }
+
+  /* mermaid 容器：高度封顶，防止溢出 720px 舞台 */
+  .mmd{ background:var(--bg-light); border:1px solid var(--border); border-radius:12px; padding:10px 14px; display:flex; justify-content:center; align-items:center; margin:8px 0;}
+  .mmd .mermaid{ display:flex; justify-content:center; width:100%; visibility:hidden; }
+  .mmd .mermaid[data-done]{ visibility:visible; }
+  .mmd .mermaid svg{ max-width:100%; height:auto; max-height:230px; }
+  .mmd.mmd-tall .mermaid svg{ max-height:330px; }
+  .mmd.mmd-sm svg{ max-height:150px; }
+  .mmd-row{ display:flex; gap:18px; }
+  .mmd-row .mmd{ flex:1; flex-direction:column; }
+  .mmd .cap{ font-size:17px; color:var(--muted); margin-top:6px; text-align:center;}
+  .mmd .cap b{ color:var(--text); }
+
+  #footer{ position:absolute; bottom:0; left:0; right:0; height:40px; display:flex; align-items:center; justify-content:space-between; padding:0 30px; font-size:15px; color:#94a3b8; background:rgba(247,250,252,.85); border-top:1px solid var(--border); z-index:40;}
+  #footer .brand{ font-weight:600; color:var(--accent); }
+
+  .nav{ position:absolute; bottom:48px; right:40px; display:flex; gap:12px; z-index:45;}
+  .nav button{ width:54px; height:54px; border-radius:50%; border:none; background:var(--accent); color:#fff; font-size:24px; cursor:pointer; box-shadow:0 3px 10px rgba(43,108,176,.4); display:flex; align-items:center; justify-content:center;}
+  .nav button:hover{ background:var(--primary); }
+  .nav button:disabled{ background:#cbd5d0; cursor:default; box-shadow:none;}
+
+  #hint{ position:absolute; bottom:48px; left:40px; font-size:14px; color:#94a3b8; z-index:45;}
+
+  body.autohide #progress, body.autohide #footer, body.autohide .nav, body.autohide #hint{ display:none !important; }
+</style>
+</head>
+<body>
+<div id="stage">
+
+  <div id="progress"></div>
+
+<section class="slide slide-cover active" data-narration="欢迎回到 HTTP 精通第五讲。上一讲摊薄了建连接的成本，这一讲换个方向省钱，少传字节。封面留了两个问题：一份响应能不能被复用、由谁说了算，为什么两个用户访问同一个网址会拿到不同的副本。背后是同一套规则，缓存。学完这一讲，你要能区分浏览器缓存和 CDN 缓存，用 Date、Age、max-age 手算副本还新不新鲜，看穿 no-cache 和 no-store 的区别，还能为静态资源和登录后的接口各配一套能直接抄用的首部。我们先把本讲放回十二讲主线，看它站在哪。">
+  <div class="kicker">第 5 讲 · 第②组 连接与缓存</div>
+  <h1>HTTP 缓存</h1>
+  <div class="sub">少传字节，就是最划算的提速</div>
+  <div class="question">一份响应能不能被复用，由谁说了算？为什么两个用户同一个 URL 会拿到不同的缓存副本？</div>
+  <div class="meta">
+    配套讲义：HTTP 精通 第 5 讲 · 依据 MDN《HTTP 缓存》<br>
+    ← → 翻页 · 推导页按空格逐步显示
+  </div>
+</section>
+
+<section class="slide" data-narration="看这一讲在十二讲主线上的位置。第二组连接与缓存，三讲回答同一个问题，怎么让请求变快。第 4 讲少建连接，让 TCP 反复复用，省握手；本讲少传字节，让响应不必重复送，省带宽；第 6 讲用条件请求连主体字节都省掉。图上高亮的就是第五讲，前接连接复用、后接条件请求，正好居中。再往后第七到第十讲补状态与安全，最后两讲处理代理与重定向。记住这个坐标，本讲插在发请求之前、可能把请求截住的那一环。下一页把决策链摊开。">
+  <div class="slide-head"><span class="sec">定位</span><h3>第 5 讲在连接与缓存这一组的正中间</h3></div>
+  <div class="slide-body">
+    <div class="mmd mmd-sm">
+      <div class="mermaid">
+flowchart LR
+  A["第1到3讲 基础与表示"] --> B["第4讲 少建连接"] --> C["第5讲 缓存"]:::here --> D["第6讲 条件请求"] --> E["第7到10讲 状态与安全"] --> F["第11到12讲 中间层与重定向"]
+  classDef here fill:#2b6cb0,color:#ffffff,stroke:#1a365d,stroke-width:3px
+      </div>
+    </div>
+    <p style="text-align:center;">第 4、5、6 讲回答同一个问题，<strong>怎么让请求变快</strong>；本讲的主角是<strong>缓存</strong>（Cache），它插在发请求之前。</p>
+    <div class="tip">本讲对应的 MDN 原文：Caching。</div>
+  </div>
+</section>
+
+<section class="slide" data-narration="本讲主线是一条六环因果链，也是目录。第一环，请求算出缓存键，不只是网址，还要加 Vary 列出的首部值。第二环，查有没有存过的副本，没有就老实回源。第三环是心脏，按年龄判定新鲜度，把已活多久和能活多久比一比。第四环，新鲜就直接把副本交出去，连请求都不用发，这是最省钱的一刻。第五环，陈旧就带验证器问源站，没变继续用、变了才重取。第六环是陷阱，键漏写 Vary 就会把一种表示错发给要另一种的客户端。先看一个具体场景，配错首部会闯多大的祸。">
+  <div class="slide-head"><span class="sec">主线</span><h3>缓存决策：先找键，再判新鲜度</h3></div>
+  <div class="slide-body">
+    <div class="chain">
+      <div class="link"><span class="no">1</span><span class="txt"><strong>请求命中缓存键</strong>：用 URL 加 Vary 列出的首部值算出一把钥匙</span></div>
+      <div class="link"><span class="no">2</span><span class="txt"><strong>查有没有存储副本</strong>：有副本才有资格谈复用</span></div>
+      <div class="link"><span class="no">3</span><span class="txt"><strong>按年龄判定新鲜度</strong>：比较 age 与 freshness_lifetime</span></div>
+      <div class="link"><span class="no">4</span><span class="txt"><strong>新鲜就直接返回</strong>：一个请求都不用发</span></div>
+      <div class="link"><span class="no">5</span><span class="txt"><strong>陈旧则再验证或重取</strong>：先问源站有没有变</span></div>
+      <div class="link"><span class="no">6</span><span class="txt"><strong>缓存键漏写导致错发</strong>：把一种表示递给要另一种的客户端</span></div>
+    </div>
+    <div class="tip">这条链就是本讲目录：分类 → 指令 → 手算 → Vary → 落地配置。</div>
+  </div>
+</section>
+
+<section class="slide" data-narration="先用一个反例逼出问题。某站点登录后返回带用户名的页面，响应里是给 Alice 一个人的问候，源站却只写了 max-age=600 存十分钟，唯独没写 private。路径上的共享缓存按网址把副本存了下来。十分钟内 Bob 请求同一网址，缓存一查网址一样、副本还新鲜，就把 Alice 的页面原样递给了他。没有黑客、没有注入，只是一条配错的首部，换来一次实打实的信息泄露。MDN 说得很直白，个性化内容一旦进了私有缓存以外的缓存，别的用户就可能取到。所以第一个要钉死的不是存多久，而是副本放在谁手里。下一页先分类。">
+  <div class="slide-head"><span class="sec">动机</span><h3>一份漏写 private 的响应，把 Alice 的页面递给了 Bob</h3></div>
+  <div class="slide-body">
+    <div class="cols">
+      <div class="col"><div class="card">🙂 <strong>看起来没问题的配置</strong><br>登录后返回带用户名的页面，只写了 max-age=600 让缓存存十分钟，省事又提速。</div></div>
+      <div class="col"><div class="card">😱 <strong>十分钟后的事故</strong><br>另一个用户 Bob 请求同一网址，共享缓存把给 Alice 的问候原样递给了他。</div></div>
+    </div>
+    <div class="tip">没有黑客、没有注入，只是一条配错的 Cache-Control，就换来一次货真价实的信息泄露。</div>
+    <div class="deep">同一个网址为何给出两种答案？因为副本放错了地方：个性化内容进了共享缓存。</div>
+  </div>
+</section>
+
+<section class="slide" data-narration="要钉住谁能看到副本，先给缓存分类。MDN 按是否与特定客户端绑定分成两类。私有缓存绑定单个客户端，典型是浏览器缓存，只服务这一个用户，可以安全存个性化响应，要显式写 private。共享缓存在客户端和源站之间，可被多用户共享，代理缓存与 CDN 都算。判据一句话，内容因用户身份而不同就只进私有缓存，人人拿到一样才进共享缓存。还有个坑，cookie 出现本身不等于响应私有，缓存不会看见 Set-Cookie 就自动隔离。下一页把管这件事的五个首部摆齐。">
+  <div class="slide-head"><span class="sec">定义</span><h3>先分私有与共享：谁可以存这份副本</h3></div>
+  <div class="slide-body">
+    <div class="cols">
+      <div class="col"><div class="card">🏠 <strong>私有缓存</strong>（Private Cache）。<br>绑定单个客户端，典型是<strong>浏览器缓存</strong>（Browser Cache），只为这一个用户服务，可以存个性化响应。</div></div>
+      <div class="col"><div class="card">🏢 <strong>共享缓存</strong>（Shared Cache）。<br>位于客户端与源站之间，可被多用户共享；代理缓存与<strong>内容分发网络</strong>（CDN, Content Delivery Network）都属此类。</div></div>
+    </div>
+    <div class="formula formula-concl">因用户身份而不同 → 只能进私有缓存，写 private；人人一样 → 可进共享缓存</div>
+    <div class="deep">判据：<strong>缓存</strong>（Cache）按是否与特定客户端绑定分类；cookie 出现不等于响应私有，必须由 private 显式声明。</div>
+  </div>
+</section>
+
+<section class="slide" data-narration="分类定了谁可存，接下来定存多久、验不验、怎么找，靠五个首部。Cache-Control 是主角，声明存多久、验不验、谁能存；Expires 是早期绝对时刻，max-age 优先；Date 是生成时刻，Age 是已存活秒数、逐跳累计，两者是手算的起点和减数；Vary 列出哪些首部参与建键。三问连起来，谁可存、存多久、怎么找，策略就成形。还有个默认值，既无 Cache-Control 也无 Expires 时，缓存不会不缓存，而是退回启发式缓存去猜，约取存储后时间的百分之十。所以每份响应都该显式写，别把更新交给一个猜字。下一页看两条真实响应。">
+  <div class="slide-head"><span class="sec">定义</span><h3>五个首部各管一件事</h3></div>
+  <div class="slide-body">
+    <table class="small">
+      <thead><tr><th>首部</th><th>回答什么</th><th>本讲用处</th></tr></thead>
+      <tbody>
+        <tr><td class="l"><strong>Cache-Control</strong></td><td class="l">存多久、验不验、谁能存</td><td class="l">整讲的主角</td></tr>
+        <tr><td class="l"><strong>Expires</strong></td><td class="l">绝对 GMT 过期时刻</td><td class="l">与 max-age 的优先级</td></tr>
+        <tr><td class="l"><strong>Date</strong></td><td class="l">响应生成时刻</td><td class="l">手算的起点</td></tr>
+        <tr><td class="l"><strong>Age</strong></td><td class="l">已存活秒数，逐跳累计</td><td class="l">手算的减数</td></tr>
+        <tr><td class="l"><strong>Vary</strong></td><td class="l">哪些请求首部参与建键</td><td class="l">决定是不是同一份</td></tr>
+      </tbody>
+    </table>
+    <div class="formula formula-concl">谁可存 → 存多久 → 怎么找，三问定一份缓存策略</div>
+    <div class="deep">没有显式 Cache-Control 时，缓存会退回<strong>启发式缓存</strong>（Heuristic Caching）去猜，规范建议约取存储后时间的百分之十，所以每份响应都应显式写明。</div>
+  </div>
+</section>
+
+<section class="slide" data-narration="看两条响应，把首部读成意图。第一条是登录后的 dashboard，带了 Set-Cookie 和 max-age=600，主体是给 Alice 的问候，蓝色标状态行、黄色标首部名、绿色标主体。问题就在只有 max-age 没有 private，共享缓存会按网址存下这份个性化内容，正是上一页那场泄露。第二条写着 no-cache，还带了三个验证器。别被名字骗了，它不阻止存储，响应照样存，只是每次复用前必须回源再验证，没变回 304、变了才回新主体，省的是主体字节不是那次请求。两条放一起，正好把存和用拆开。下一页把四条最易混的指令摆进一张表。">
+  <div class="slide-head"><span class="sec">例子 · 报文</span><h3>两条真实响应，把首部读成意图</h3></div>
+  <div class="slide-body">
+    <div class="wire sm"><b>HTTP/1.1 200 OK</b>
+<i>Content-Type</i>: text/html; charset=utf-8
+<i>Set-Cookie</i>: session=alice-token; HttpOnly; Secure
+<i>Cache-Control</i>: max-age=600
+
+<em>&lt;h1&gt;你好，Alice&lt;/h1&gt;</em></div>
+    <div class="wire-cap">危险配置：个性化内容只写了 max-age，没有 private，共享缓存会按 URL 存下它。</div>
+    <div class="wire sm"><b>HTTP/1.1 200 OK</b>
+<i>Date</i>: Tue, 22 Feb 2022 22:22:22 GMT
+<i>Last-Modified</i>: Tue, 22 Feb 2022 22:00:00 GMT
+<i>ETag</i>: "deadbeef"
+<i>Cache-Control</i>: no-cache
+
+<em>&lt;!doctype html&gt;…</em></div>
+    <div class="wire-cap">no-cache 并不阻止存储：这份响应会存进缓存，只是每次复用前都必须先回源再验证。</div>
+  </div>
+</section>
+
+<section class="slide" data-narration="四条指令摆进一张判定表一次钉死。no-cache 是存，但每次复用前必须验证；no-store 是不存，任何缓存都不存，也不删除旧副本；must-revalidate 是存，新鲜期照常用、一旦过期必须验证；immutable 也是存，新鲜期连重新加载都不验证，专给带散列的静态资源。读成一句话，no-cache 管「用前问」、no-store 管「根本别存」、must-revalidate 管「过期别放行」、immutable 管「新鲜期别来问」。四条作用在存储与复用时间轴的不同点上，不是近义词。下一页解决 Expires 和 max-age 谁优先。">
+  <div class="slide-head"><span class="sec">例子 · 判定表</span><h3>四条最容易混淆的指令，摆到一张表里</h3></div>
+  <div class="slide-body">
+    <table class="small">
+      <thead><tr><th>指令</th><th>存不存</th><th>用不用再验证</th><th>典型场景</th></tr></thead>
+      <tbody>
+        <tr><td class="l"><strong>no-cache</strong></td><td class="l">存</td><td class="l">每次复用前都必须验证</td><td class="l">主资源 HTML、频繁变化的接口</td></tr>
+        <tr><td class="l"><strong>no-store</strong></td><td class="l">不存，任何缓存都不存</td><td class="l">不存就谈不上复用，且不删除旧副本</td><td class="l">高敏感数据、隐私内容</td></tr>
+        <tr><td class="l"><strong>must-revalidate</strong></td><td class="l">存</td><td class="l">新鲜期直接用，一旦过期必须验证</td><td class="l">严格时效、不接受陈旧副本</td></tr>
+        <tr><td class="l"><strong>immutable</strong></td><td class="l">存</td><td class="l">新鲜期内连重新加载都不验证</td><td class="l">带散列、永不改变的静态 JS / CSS</td></tr>
+      </tbody>
+    </table>
+    <div class="tip">一句话：<strong>no-cache 用前问、no-store 根本别存、must-revalidate 过期别放行、immutable 新鲜期别来问</strong>。</div>
+    <div class="deep">把存储和复用拆成两段：no-store 卡在存储阶段，其余三条作用在复用阶段的不同时点。</div>
+  </div>
+</section>
+
+<section class="slide" data-narration="还有个高频问题，Expires 与 max-age 打架听谁的。这条响应 Date 是 2 月 22 日，Expires 写到 28 日，可 Cache-Control 是 max-age=604800 一周。规范定义以 max-age 为准，Expires 那行直接忽略。而且 22 日加一周落在 3 月 1 日附近，照 max-age 算才不会错。Expires 是早期绝对时间点，难解析、怕时钟被拨动；max-age 是相对秒数，不怕对钟。既然一点一已普及，MDN 结论很干脆，无需再写。下一页进入最硬的一块，新鲜度手算。">
+  <div class="slide-head"><span class="sec">例子 · 优先级</span><h3>两条过期时间打架，听 max-age</h3></div>
+  <div class="slide-body">
+    <div class="wire sm"><b>HTTP/1.1 200 OK</b>
+<i>Date</i>: Tue, 22 Feb 2022 22:22:22 GMT
+<i>Expires</i>: Tue, 28 Feb 2022 22:22:22 GMT
+<i>Cache-Control</i>: max-age=604800
+
+<em>&lt;!doctype html&gt;…</em></div>
+    <div class="wire-cap">两条都给出时以 max-age=604800 为准，Expires 那行被忽略；22 日加一周落在 3 月 1 日附近，与写的 28 日并不一致。</div>
+    <table class="small">
+      <thead><tr><th></th><th>Expires</th><th>max-age</th></tr></thead>
+      <tbody>
+        <tr><td class="l"><strong>年代</strong></td><td class="l">HTTP/1.0</td><td class="l">HTTP/1.1 随 Cache-Control 引入</td></tr>
+        <tr><td class="l"><strong>形式</strong></td><td class="l">绝对 GMT 时间点</td><td class="l">相对秒数，从生成起能活多久</td></tr>
+        <tr><td class="l"><strong>毛病</strong></td><td class="l">格式难解析，怕系统时钟被拨动</td><td class="l">不怕对钟</td></tr>
+      </tbody>
+    </table>
+    <div class="tip">规范定义两者同时出现时 max-age 优先；HTTP/1.1 已普及，MDN 的结论是无需再写 Expires。</div>
+  </div>
+</section>
+
+<section class="slide" data-narration="把新鲜度当一道算术题，用 MDN 经典例子一步不跳地算。这条响应 Date 是 2022 年 2 月 22 日 22:22:22，max-age 是一周，Age 是一天，这是共享缓存告诉客户端副本已活了一天。第一步换算，一周就是七天。第二步求绝对过期时刻，Date 加七天，注意 2 月只有 28 天要跨月，落在 3 月 1 日 22:22:22，写成 2 月 29 日就错了。第三步求剩余，一周减一天得 518400 秒，正好 6 天。客户端收到时，这份副本还能当新鲜用整整六天。下一页写全判定式并交叉验证。">
+  <div class="slide-head"><span class="sec">例子 · 手算</span><h3>一道算术题：这份副本还能新鲜多久</h3></div>
+  <div class="slide-body">
+    <div class="wire sm"><b>HTTP/1.1 200 OK</b>
+<i>Content-Type</i>: text/html
+<i>Content-Length</i>: 1024
+<i>Date</i>: Tue, 22 Feb 2022 22:22:22 GMT
+<i>Cache-Control</i>: max-age=604800
+<i>Age</i>: 86400
+
+<em>&lt;!doctype html&gt;…</em></div>
+    <div class="wire-cap">MDN 的经典例子：max-age=604800 是一周，Age=86400 是共享缓存告知已存活的一天，用来判定<strong>新鲜</strong>（Fresh）还是<strong>过期</strong>（Stale）。</div>
+    <table class="small">
+      <thead><tr><th>步</th><th>算什么</th><th>结果</th></tr></thead>
+      <tbody>
+        <tr><td class="l"><strong>① 换算</strong></td><td class="l">604800 ÷ 86400</td><td class="l">7 天，确实一周</td></tr>
+        <tr><td class="l"><strong>② 过期时刻</strong></td><td class="l">Date + 7 天，2 月只有 28 天要跨月</td><td class="l">2022-03-01 22:22:22 GMT</td></tr>
+        <tr><td class="l"><strong>③ 剩余</strong></td><td class="l">604800 − 86400</td><td class="l">518400 秒 = 6 天</td></tr>
+      </tbody>
+    </table>
+    <div class="tip">注意 2 月只有 28 天，写成 2 月 29 日就错了；Age 是逐跳累计的总存活时间，不能重置。</div>
+  </div>
+</section>
+
+<section class="slide" data-narration="把上一页的算术收成可复用的判定，按空格一步步展开。第一步定过期时刻，Date 加 max-age 得 3 月 1 日 22:22:22。第二步读当前年龄，age 由 Age 给出，本例 86400 秒，每过一跳都继续累加，不能重置。第三步写判定式，age 小于 freshness_lifetime 为新鲜可复用，大于或等于为过期需再验证，本例当前新鲜，剩余 518400 秒。第四步交叉验证，再过 6 天 age 恰等于 max-age，落在过期一侧，与 3 月 1 日吻合。记住，等号落在过期一侧。下一页轮到你亲手推。">
+  <div class="slide-head"><span class="sec">推导</span><h3>把已活多久与能活多久比大小</h3></div>
+  <div class="slide-body">
+    <div class="step"><p><strong>① 定过期时刻</strong>：expiration = Date + max-age = 2022-02-22 22:22:22 + 7 天 = 2022-03-01 22:22:22。</p></div>
+    <div class="step"><p><strong>② 读当前年龄</strong>：age 由 Age 首部给出，本例 86400 秒；每过一跳、每过一秒都继续累加。</p></div>
+    <div class="step"><p><strong>③ 写判定式</strong>：age 小于 freshness_lifetime 为新鲜可复用；大于或等于为过期需再验证；本例 86400 小于 604800，当前新鲜。</p></div>
+    <div class="step"><div class="wire sm"><em>age &lt; freshness_lifetime  →  新鲜，可直接复用</em>
+<em>age ≥ freshness_lifetime  →  过期，需再验证或重取</em>
+<em>本例：86400 &lt; 604800  →  当前新鲜</em>
+<em>剩余 = 604800 − 86400 = 518400 秒 = 6 天</em></div></div>
+    <div class="step"><p><strong>④ 交叉验证</strong>：再过 518400 秒，age = 86400 + 518400 = 604800，恰等于 max-age，落入过期一侧，与 3 月 1 日吻合。</p></div>
+    <p class="step-hint">按空格 / → 逐步展开推导</p>
+  </div>
+</section>
+
+<section class="slide" data-narration="轮到你了。这条响应 Date 是 2 月 22 日 22:22:22，max-age 604800，Age 86400。先别看答案，自己推三样：过期时刻落在哪天、剩余多少秒、写出新鲜度判定式。先暂停视频自己推一遍。推出来了吗？好，对答案。604800 秒是 7 天，2 月只有 28 天，加 7 天跨到 3 月 1 日 22:22:22；剩余 518400 秒，正好 6 天；age 小于 freshness_lifetime 为新鲜，大于或等于为过期，本例当前新鲜。把相等也算新鲜的同学回看上一页。下一页换个坑，Vary。">
+  <div class="slide-head"><span class="sec">演练</span><h3>换一组数，自己把剩余寿命算出来</h3></div>
+  <div class="slide-body">
+    <div class="wire sm"><b>HTTP/1.1 200 OK</b>
+<i>Date</i>: Tue, 22 Feb 2022 22:22:22 GMT
+<i>Cache-Control</i>: max-age=604800
+<i>Age</i>: 86400
+
+<em>&lt;!doctype html&gt;…</em></div>
+    <div class="step"><p>① max-age 是 <strong>604800 秒</strong>，除以 86400 得 <strong>7 天</strong>；过期时刻是 <strong>2022-03-01 22:22:22</strong>。</p></div>
+    <div class="step"><p>② 剩余 = 604800 − 86400 = <strong>518400 秒</strong>，也就是 <strong>6 天</strong>。</p></div>
+    <div class="step"><p>③ 判定式：age 小于 freshness_lifetime 为新鲜，大于或等于为过期；86400 小于 604800，<strong>当前新鲜</strong>。</p></div>
+    <div class="pause"><div class="icon">✍️</div><div class="txt"><b>暂停推导</b><p>合上答案，自己写出过期时刻、剩余秒数，以及 age 与 freshness_lifetime 的判定式。</p></div></div>
+    <p class="step-hint">按空格 / → 逐步揭示答案</p>
+  </div>
+</section>
+
+<section class="slide" data-narration="前面都默认一个网址对应一份响应，可同一网址，服务器会看 Accept-Encoding 返回不同表示，缓存凭什么知道有好几个版本？答案是 Vary。正确配置五步。第一步，客户端 A 取 app.js 带 br 偏好，未命中回源。第二步，源站返回 br 压缩的 JS，写明 Vary: Accept-Encoding。第三步，缓存把键记成网址加这个首部的值，指向 br 版本，关键就在值成了键的一部分。第四步，客户端 B 只接受未压缩内容，键与 A 不同，回源单独存一份。第五步，支持 br 的 C 键与 A 相同，直接命中。下一页看漏写这行会怎样。">
+  <div class="slide-head"><span class="sec">专题 · Vary</span><h3>正确配置：Vary 把首部的值编进缓存键</h3></div>
+  <div class="slide-body">
+    <div class="wire sm"><b>HTTP/1.1 200 OK</b>
+<i>Content-Encoding</i>: br
+<i>Vary</i>: Accept-Encoding
+<i>Cache-Control</i>: max-age=3600</div>
+    <div class="wire-cap">源站声明 Vary: Accept-Encoding，缓存键从 URL 变成 URL 加这个首部的值。</div>
+    <div class="chain">
+      <div class="link"><span class="no">1</span><span class="txt"><strong>请求 A</strong>：GET /app.js 带 Accept-Encoding: gzip, br，未命中，回源</span></div>
+      <div class="link"><span class="no">2</span><span class="txt"><strong>源站标注</strong>：返回 br 版本，写明 Content-Encoding: br 与 Vary: Accept-Encoding</span></div>
+      <div class="link"><span class="no">3</span><span class="txt"><strong>组合键存储</strong>：记为 (/app.js, gzip, br) 到 br 版本，首部的值成了键的一部分</span></div>
+      <div class="link"><span class="no">4</span><span class="txt"><strong>请求 B</strong>：Accept-Encoding: identity，键不同，未命中，回源单独存未压缩版</span></div>
+      <div class="link"><span class="no">5</span><span class="txt"><strong>后续命中</strong>：支持 br 的客户端 C 键与 A 相同，直接命中 br 副本</span></div>
+    </div>
+    <div class="tip"><strong>缓存键</strong>（Cache Key）= URL + Vary 列出的请求首部值；<strong>内容协商</strong>（Content Negotiation）才让一个 URL 有多种表示。</div>
+  </div>
+</section>
+
+<section class="slide" data-narration="把上一页的 Vary 一行删掉，故障链立刻展开，五步把页面推到白屏。第一步，源站图省事只回 br 内容，Vary 没写。第二步，缓存没 Vary 指路，退化成只按网址建键，把 br 字节记成唯一副本。第三步，只认未压缩的 B 来了，网址相同，缓存把 br 字节发给它。第四步，B 按未压缩 JS 解析 br 字节流，得到一堆乱码，脚本语法错误，白屏、按钮全失灵。第五步，定位极难，刷新或清缓存可能碰巧好用，因为下一次命中哪份副本取决于谁先请求，根因不在 JS 而在一个缺失的首部。修复只需补回 Vary。下一页装成两套配置。">
+  <div class="slide-head"><span class="sec">专题 · 故障链</span><h3>漏写一行 Vary，五步把页面推到白屏</h3></div>
+  <div class="slide-body">
+    <div class="chain">
+      <div class="link"><span class="no">1</span><span class="txt"><strong>源站图省事</strong>：只回了 br 压缩内容，Content-Encoding: br 有，Vary 没写</span></div>
+      <div class="link"><span class="no">2</span><span class="txt"><strong>键退化</strong>：缓存只按 /app.js 建键，把 br 字节记成唯一副本</span></div>
+      <div class="link"><span class="no">3</span><span class="txt"><strong>错发</strong>：只接受 identity 的客户端 B 命中同一键，收到 br 字节</span></div>
+      <div class="link"><span class="no">4</span><span class="txt"><strong>解码失败</strong>：B 按未压缩 JS 解析 br 字节流，脚本语法错误，页面白屏、按钮失灵</span></div>
+      <div class="link"><span class="no">5</span><span class="txt"><strong>极难定位</strong>：刷新或清缓存可能碰巧好用，根因不在 JS 而在一个缺失的首部</span></div>
+    </div>
+    <div class="deep">修复只需补 <strong>Vary: Accept-Encoding</strong>；判据是哪几个请求首部改变了响应体，就把哪几个写进 Vary。</div>
+    <div class="tip">别用 Vary: Cookie 保护个性化内容，那是把 cookie 值编进键、共享缓存照样存；身份隔离要用 private。</div>
+  </div>
+</section>
+
+<section class="slide" data-narration="看追求久缓存的一端，带内容哈希的静态 JS。文件名刻着散列，内容一变网址就变，这就是缓存破坏，于是网址唯一对应一份永不变的内容。这套首部里，max-age=31536000 是一年，内容不变越久越省带宽；public 允许共享缓存 CDN 存储；immutable 连重新加载都不验证，前提是网址一变内容就变严格成立；ETag 与 Last-Modified 作为验证器仍保留，照顾爬虫和降级场景；Content-Type 带 charset 避免编码猜测，呼应第 2 讲。逻辑就一句，内容随网址变且永不变，能存多久存多久。下一页看相反的另一端。">
+  <div class="slide-head"><span class="sec">例子 · 落地配置</span><h3>其一：带内容哈希的静态 JS，能存多久存多久</h3></div>
+  <div class="slide-body">
+    <div class="wire sm"><b>HTTP/1.1 200 OK</b>
+<i>Content-Type</i>: text/javascript; charset=utf-8
+<i>Content-Length</i>: 1024
+<i>Date</i>: Tue, 22 Feb 2022 20:20:20 GMT
+<i>Last-Modified</i>: Tue, 22 Feb 2022 20:20:20 GMT
+<i>ETag</i>: "YsAIAAAA-QG4G6kCMAMBAAAAAAAoK"
+<i>Cache-Control</i>: public, max-age=31536000, immutable
+
+<em>/* bundle content */</em></div>
+    <div class="wire-cap">文件名带内容散列，内容一变网址就变，这就是<strong>缓存破坏</strong>（Cache Busting）。</div>
+    <table class="small">
+      <thead><tr><th>首部</th><th>理由</th></tr></thead>
+      <tbody>
+        <tr><td class="l"><strong>max-age=31536000</strong></td><td class="l">一年，内容永不变，越久越省带宽</td></tr>
+        <tr><td class="l"><strong>public</strong></td><td class="l">明确允许共享缓存 CDN 存储</td></tr>
+        <tr><td class="l"><strong>immutable</strong></td><td class="l">连重新加载都不必验证，前提是 URL 一变内容就变</td></tr>
+        <tr><td class="l"><strong>ETag / Last-Modified</strong></td><td class="l">保留<strong>验证器</strong>（Validator），照顾爬虫、CMS 与降级场景</td></tr>
+      </tbody>
+    </table>
+    <div class="tip">Content-Type 带 charset，避免编码猜测，呼应第 2 讲。</div>
+  </div>
+</section>
+
+<section class="slide" data-narration="另一端是登录后的个性化接口，内容随身份变化且敏感，追求绝不外泄、总是最新。no-store 是主指令，禁止任何缓存留存；private 是第二道防线，即便写了 no-store 也要补，防共享缓存意外留存；Pragma 只是兼容早期实现的补充；Vary: Accept-Encoding 不是身份隔离，而是让压缩版本正确分键，身份交给 private，别写成 Vary Cookie。为什么不用 no-cache，它允许存储、只是用前验证，敏感数据仍会落盘。两套配置是同一判断推向两个极端，先看内容与什么绑定。下一页对照规范。">
+  <div class="slide-head"><span class="sec">例子 · 落地配置</span><h3>其二：登录后的个性化接口，一点别存</h3></div>
+  <div class="slide-body">
+    <div class="wire sm"><b>GET /api/account HTTP/1.1</b>
+<b>Host:</b> app.example.com
+<b>Cookie:</b> session=alice-token
+
+<i>HTTP/1.1 200 OK</i>
+<i>Content-Type</i>: application/json; charset=utf-8
+<i>Cache-Control</i>: no-store, private
+<i>Pragma</i>: no-cache
+<i>Vary</i>: Accept-Encoding
+
+<em>{"balance": 12345}</em></div>
+    <div class="wire-cap">内容随身份变化且敏感：no-store 禁止任何存储，private 兜底，Vary 只管压缩协商。</div>
+    <table class="small">
+      <thead><tr><th>首部</th><th>理由</th></tr></thead>
+      <tbody>
+        <tr><td class="l"><strong>no-store</strong></td><td class="l">主指令，含敏感数据的响应不该留副本</td></tr>
+        <tr><td class="l"><strong>private</strong></td><td class="l">第二道防线，防共享缓存意外留存</td></tr>
+        <tr><td class="l"><strong>Pragma: no-cache</strong></td><td class="l">兼容旧实现，现代以 Cache-Control 为准</td></tr>
+        <tr><td class="l"><strong>Vary: Accept-Encoding</strong></td><td class="l">不为身份隔离，只为 gzip / br 版本正确分键</td></tr>
+      </tbody>
+    </table>
+    <div class="tip">为什么不用 no-cache：它允许存储、只是用前验证，余额这类敏感数据会落盘；身份隔离别写成 Vary: Cookie。</div>
+  </div>
+</section>
+
+<section class="slide" data-narration="按固定动作，把 MDN 工程口径和 RFC 规范口径对一次。现行缓存规范是 RFC 9111，取代早期 RFC 7234，早先资料都要改口。MDN 一句剩余等于 max-age 减 Age，RFC 9111 给的其实是一整套 current_age 校正公式，因节点时钟不同步、链路有延迟，排查 Age 忽大忽小要看的正是它。immutable 由 RFC 8246 独立成规范，陈旧期优化由 RFC 5861 补上，RFC 9211 的 Cache-Status 直接报告命中还是回源。MDN 管怎么做，RFC 管为什么。下一页扫三个雷。">
+  <div class="slide-head"><span class="sec">规范对照</span><h3>MDN 的说法 → RFC 怎么写 → 为什么值得知道</h3></div>
+  <div class="slide-body">
+    <table class="small">
+      <thead><tr><th>MDN 的说法</th><th>RFC 怎么写</th><th>为什么值得知道</th></tr></thead>
+      <tbody>
+        <tr><td class="l">现行缓存规范与新鲜度算法</td><td class="l">RFC 9111 取代 RFC 7234，给出 current_age 校正公式</td><td class="l">时钟不同步，排查 Age 忽大忽小</td></tr>
+        <tr><td class="l">immutable 表示内容永不改变</td><td class="l">RFC 8246 独立成规范，新鲜期内不应再验证</td><td class="l">把谁承诺不变写进标准</td></tr>
+        <tr><td class="l">MDN 未展开陈旧期的优化</td><td class="l">RFC 5861 定义 stale-while-revalidate 与 stale-if-error</td><td class="l">弱网或源站抖动时体验不断档</td></tr>
+        <tr><td class="l">MDN 未列命中诊断首部</td><td class="l">RFC 9211 定义 Cache-Status，报告 hit、miss、stale 等</td><td class="l">线上排障不必靠刷新碰运气</td></tr>
+      </tbody>
+    </table>
+    <div class="deep">RFC 9111 还给出 s-maxage 给共享缓存单独定寿命、no-cache 可带字段名、允许启发式过期但不得覆盖显式信息。</div>
+  </div>
+</section>
+
+<section class="slide" data-narration="扫三个最贵的雷。第一，把 no-cache 读成不缓存。它存，只是每次复用前必须验证；真正不存的是 no-store，也不删旧副本，当「撤销键」会失望，强制回源验证得用 no-cache。第二，以为 Vary Cookie 或 User-Agent 能护住个性化内容。要用 private 禁止共享存储，Vary Cookie 只是按 cookie 分键照样存副本，User-Agent 变体太多压垮命中率。第三，以为 Age 转发归零、或相等还算新鲜。Age 是逐跳累计的总存活时间，等号落在过期一侧。三处分开才不会反咬你。下一页说清与第 6 讲分工。">
+  <div class="slide-head"><span class="sec">避坑</span><h3>三个最贵的误读</h3></div>
+  <div class="slide-body">
+    <div class="trap">❌ <strong>no-cache 就是不缓存</strong><br>✅ 它存，只是每次复用前必须先验证；真正不存的是 no-store，而且 no-store 不会删除同网址已存的旧副本。</div>
+    <div class="trap">❌ <strong>用 Vary: Cookie 或往 Vary 塞 User-Agent 就安全了</strong><br>✅ 个性化内容要用 private 直接禁止共享缓存存储；User-Agent 变体太多会把命中率压垮，优先用特性检测。</div>
+    <div class="trap">❌ <strong>Age 转发时归零，或 age 等于 max-age 还算新鲜</strong><br>✅ Age 是逐跳累计的总存活时间；判定式里等号落在过期一侧，恰好相等时已经不新鲜。</div>
+  </div>
+</section>
+
+<section class="slide" data-narration="这一讲和下一讲怎么分工。本讲判断副本能不能复用、存多久、存谁那里；第 6 讲接手陈旧之后的事，怎么确认变没变、怎么只取一段。交界一句话，本讲判为陈旧把请求交给再验证，第 6 讲让这次验证只传首部不传主体。这里只把条件请求引到门口，过期时缓存带 If-None-Match 问源站，没变就回 304 继续用旧副本；验证器怎么选、强弱差别、乐观锁和 206 分段全留到第 6 讲，本讲不抢。记住这个钩子，缓存负责少传，条件请求把不传做到极致。下一页三句话收束。">
+  <div class="slide-head"><span class="sec">接口</span><h3>第 5 讲判能不能复用，第 6 讲讲怎么验证</h3></div>
+  <div class="slide-body">
+    <table>
+      <thead><tr><th></th><th>第 5 讲 缓存</th><th>第 6 讲 条件请求与范围请求</th></tr></thead>
+      <tbody>
+        <tr><td class="l"><strong>回答什么</strong></td><td class="l">副本能不能复用、存多久、存谁那里</td><td class="l">陈旧后怎么确认变没变、怎么只取一段</td></tr>
+        <tr><td class="l"><strong>核心首部</strong></td><td class="l">Cache-Control、Age、Vary</td><td class="l">ETag、If-None-Match、Range、206</td></tr>
+        <tr><td class="l"><strong>交界</strong></td><td class="l">判为陈旧，交给再验证</td><td class="l">用 304 只传首部，不传主体</td></tr>
+      </tbody>
+    </table>
+    <div class="tip">钩子：本讲只把<strong>条件请求</strong>（Conditional Request）引到门口——过期时会用 If-None-Match 向源站确认，没变就回 304 Not Modified；完整报文、验证器选择与范围请求留到第 6 讲展开。</div>
+  </div>
+</section>
+
+<section class="slide" data-narration="用三句话收束第五讲。解决什么，决定响应能不能复用、存多久、存谁手里，少传字节的同时既不泄露、也不发错表示。核心机制，先按私有共享分类定谁可存，再用 Cache-Control 和 Expires 定存多久验不验，用 Date、Age 手算新鲜度，用 Vary 把首部编进缓存键，缺一不可。承上启下，第 4 讲少建连接，本讲少传字节，第 6 讲用条件请求把不传主体做到极致，三讲是同一性能问题的三种解法。记住口诀，先定内容与什么绑定再定首部组合，合上书也要能默写两套配置和那道算术题。最后留四项毕业挑战。">
+  <div class="slide-head"><span class="sec">小结</span><h3>三句话讲完第 5 讲</h3></div>
+  <div class="slide-body">
+    <div class="chain">
+      <div class="link"><span class="no">1</span><span class="txt"><strong>解决什么</strong>：决定响应能不能复用、存多久、存谁手里，既省字节又不泄露、不发错表示</span></div>
+      <div class="link"><span class="no">2</span><span class="txt"><strong>核心机制</strong>：私有共享分类 + Cache-Control 指令 + Date/Age 手算新鲜度 + Vary 建键</span></div>
+      <div class="link"><span class="no">3</span><span class="txt"><strong>承上启下</strong>：第 4 讲少建连接，本讲少传字节，第 6 讲用条件请求把不传主体做到极致</span></div>
+    </div>
+    <div class="formula formula-concl">先定内容与什么绑定，再定首部组合 —— 合上书也要能默写</div>
+  </div>
+</section>
+
+<section class="slide slide-cover" data-narration="第五讲到这儿结束，留四项毕业挑战，合上书拿一张纸完成。第一，用四列表写清 no-cache、no-store、must-revalidate、immutable 的存不存、用不用验证、典型场景。第二，给定 Date、Age、max-age 手算过期时刻与剩余寿命，写全判定式。第三，画出 Vary: Accept-Encoding 参与建键的步骤和漏写时的五环故障链。第四，闭卷写出带散列静态 JS 与个性化接口两套完整首部并逐条说明。全做出来再点讲义底部完成按钮。下一讲第 6 讲条件请求与范围请求，用一次轻量请求确认资源没变，或只取回一段。">
+  <div class="kicker">第 5 讲 结束</div>
+  <h1>先定绑定，再定首部</h1>
+  <div class="sub">毕业挑战：合上书，拿一张纸</div>
+  <div class="divider"></div>
+  <div class="meta">
+    ☑ 用一张四列表写清 no-cache / no-store / must-revalidate / immutable　　☑ 手算过期时刻、剩余寿命，写全 age 与 freshness_lifetime 判定式<br>
+    ☑ 画出 Vary: Accept-Encoding 参与建键与漏写时的五环故障链　　☑ 闭卷写出静态 JS 与个性化接口两套完整首部并逐条说明<br><br>
+    下一讲 · 第 6 讲 条件请求与范围请求：用一次轻量请求确认资源没变，或只取回文件的某一段
+  </div>
+</section>
+
+  <!-- 页脚：brand 改为本章标题；总页数改 pagenum 初值 -->
+  <div id="footer">
+    <span class="brand">第5讲 HTTP 缓存 · HTTP 精通 课件　<a class="to-lec" href="../http-guide/index.html">讲义首页 ↗</a></span>
+    <span id="pagenum">1 / 1</span>
+  </div>
+
+  <!-- 导航 -->
+  <div class="nav">
+    <button id="prev" title="上一页 (←)">‹</button>
+    <button id="next" title="下一页 (→ / 空格)">›</button>
+  </div>
+  <div id="hint">← → 翻页 · 空格下一页 · 推导页逐步显示 · 点击左右半屏翻页</div>
+
+</div>
+
+<!-- mermaid 本地引用，保证离线可用；初始化参数全套课件统一，勿改 -->
+<script src="assets/mermaid.min.js"></script>
+<script>
+mermaid.initialize({
+  startOnLoad: false,   // 必须为 false：display:none 的隐藏页渲染会得到 0 宽高的退化 SVG，
+                        // 改为页面激活时懒渲染（见 renderMermaid）
+  theme: "base",
+  themeVariables: {
+    primaryColor: "#ebf8ff",
+    primaryBorderColor: "#2b6cb0",
+    primaryTextColor: "#1a365d",
+    lineColor: "#718096",
+    fontFamily: "-apple-system, PingFang SC, sans-serif",
+    fontSize: "15px"
+  },
+  flowchart: { curve: "linear", htmlLabels: false }
+});
+</script>
+<script>
+(function(){
+  const slides = Array.from(document.querySelectorAll('.slide'));
+  const total = slides.length;
+  let idx = 0;
+
+  const params = new URLSearchParams(location.search);
+  const startSlide = parseInt(params.get('slide'), 10);
+  if (params.get('autohide') === '1') document.body.classList.add('autohide');
+  if (!isNaN(startSlide) && startSlide >= 1 && startSlide <= total) idx = startSlide - 1;
+
+  const progress = document.getElementById('progress');
+  const pagenum = document.getElementById('pagenum');
+  const prevBtn = document.getElementById('prev');
+  const nextBtn = document.getElementById('next');
+
+  // 推导分步：每页记住已展开的步数；autohide（截图）模式下 CSS 强制全显
+  const stepState = new Map();
+  function stepsOf(i){ return Array.from(slides[i].querySelectorAll('.step')); }
+  function applySteps(){
+    stepsOf(idx).forEach((el, k)=> el.classList.toggle('on', k < (stepState.get(idx) || 0)));
+  }
+  // 前进一步：先展开本页下一步，全部展开后才翻页
+  function forward(){
+    const steps = stepsOf(idx);
+    const shown = stepState.get(idx) || 0;
+    if (shown < steps.length){ stepState.set(idx, shown + 1); applySteps(); return; }
+    go(idx + 1);
+  }
+  // 后退一步：先收起本页最后一步，收完才回上一页
+  function backward(){
+    const steps = stepsOf(idx);
+    const shown = stepState.get(idx) || 0;
+    if (shown > 0){ stepState.set(idx, shown - 1); applySteps(); return; }
+    go(idx - 1);
+  }
+
+  // mermaid 懒渲染：只在页面激活（有真实宽高）时渲染该页的图，渲染后打 data-done 防重复
+  function renderMermaid(slide){
+    if (typeof mermaid === 'undefined') return;
+    const nodes = Array.from(slide.querySelectorAll('.mermaid:not([data-done])'));
+    if (!nodes.length) return;
+    nodes.forEach(n => n.setAttribute('data-done', ''));
+    mermaid.run({ nodes }).catch(err => {
+      nodes.forEach(n => n.removeAttribute('data-done'));
+      console.error('mermaid 渲染失败：', err);
+    });
+  }
+
+  function render(){
+    slides.forEach((s,i)=> s.classList.toggle('active', i===idx));
+    progress.style.width = ((idx+1)/total*100) + '%';
+    pagenum.textContent = (idx+1) + ' / ' + total;
+    prevBtn.disabled = (idx===0);
+    nextBtn.disabled = (idx===total-1);
+    applySteps();
+    renderMermaid(slides[idx]);
+  }
+  function go(n){ idx = Math.max(0, Math.min(total-1, n)); render(); }
+
+  prevBtn.addEventListener('click', e=>{ e.stopPropagation(); backward(); });
+  nextBtn.addEventListener('click', e=>{ e.stopPropagation(); forward(); });
+
+  document.addEventListener('keydown', e=>{
+    if(e.key==='ArrowRight'||e.key===' '||e.key==='PageDown'){ e.preventDefault(); forward(); }
+    else if(e.key==='ArrowLeft'||e.key==='PageUp'){ e.preventDefault(); backward(); }
+    else if(e.key==='Home'){ stepState.set(idx, 0); go(0); }
+    else if(e.key==='End'){ go(total-1); }
+  });
+
+  document.getElementById('stage').addEventListener('click', e=>{
+    if(e.target.closest('.nav') || e.target.closest('a')) return;
+    const x = e.clientX;
+    if(x < window.innerWidth*0.5) backward(); else forward();
+  });
+
+  function fit(){
+    const s = Math.min(window.innerWidth/1280, window.innerHeight/720);
+    document.getElementById('stage').style.transform = 'translate(-50%,-50%) scale(' + s + ')';
+  }
+  window.addEventListener('resize', fit);
+  fit();
+  render();
+})();
+</script>
+</body>
+</html>
